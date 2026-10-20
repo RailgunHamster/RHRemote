@@ -1,0 +1,35 @@
+[package]
+name = "rhremote-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lib]
+name = "rhremote"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "RHRemote"
+path = "src/main.rs"
+
+[dependencies]
+rhremote-core = { path = "../rhremote-core" }
+serde.workspace = true
+serde_json.workspace = true
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "accessibility"] }
+ureq = { version = "2.12", default-features = false, features = ["json", "tls", "native-certs"] }
+url = "2.5"
+base64 = "0.22"
+keyring = { version = "3.6.3", features = ["windows-native"] }
+velopack = { version = "=1.2.110-ge826545", features=["public-utils"] }
+roxmltree = "0.20"
+image = {version="0.25",default-features=false,features=["png"]}
+
+[build-dependencies]
+slint-build = "=1.18.1"
+embed-resource = "=3.0.11"
+
+[dev-dependencies]
+tiny_http = "0.12"
+

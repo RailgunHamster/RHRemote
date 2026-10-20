@@ -1,0 +1,770 @@
+diff --git a/app/cli/quitstream.cpp b/app/cli/quitstream.cpp
+index 0083865..bb7fd3f 100644
+--- a/app/cli/quitstream.cpp
++++ b/app/cli/quitstream.cpp
+@@ -43,7 +43,7 @@ class LauncherPrivate
+     Q_DECLARE_PUBLIC(Launcher)
+ 
+ public:
+-    LauncherPrivate(Launcher *q) : q_ptr(q) {}
++    LauncherPrivate(Launcher *q) : q_ptr(q), m_QuitPolling(false) {}
+ 
+     void handleEvent(Event event)
+     {
+@@ -81,6 +81,11 @@ public:
+             if (m_State == StateSeekComputer) {
+                 if (event.computer->pairState == NvComputer::PS_PAIRED) {
+                     m_State = StateQuitApp;
++                    // ComputerSeeker relinquishes its polling reference when the
++                    // computer is found. Own one until currentGameId confirms exit,
++                    // including when the CLI Qt window is hidden/inactive.
++                    m_ComputerManager->startPolling();
++                    m_QuitPolling = true;
+                     emit q->quittingApp();
+                     m_ComputerManager->quitRunningApp(event.computer);
+                 } else {
+@@ -95,6 +100,10 @@ public:
+         // Occurs when app quit completed (error message is set if failed)
+         case Event::AppQuitCompleted:
+             if (m_State == StateQuitApp) {
++                if (m_QuitPolling) {
++                    m_QuitPolling = false;
++                    m_ComputerManager->stopPollingAsync();
++                }
+                 if (event.errorMessage.isEmpty()) {
+                     QCoreApplication::exit(0);
+                 } else {
+@@ -112,6 +121,7 @@ public:
+     ComputerSeeker *m_ComputerSeeker;
+     State m_State;
+     QTimer *m_TimeoutTimer;
++    bool m_QuitPolling;
+ };
+ 
+ Launcher::Launcher(QString computer, QObject *parent)
+diff --git a/app/streaming/input/input.cpp b/app/streaming/input/input.cpp
+index 95db06e..b22440d 100644
+--- a/app/streaming/input/input.cpp
++++ b/app/streaming/input/input.cpp
+@@ -21,6 +21,7 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
+       m_PointerRegionLockToggledByUser(false),
+       m_FakeCaptureActive(false),
+       m_CaptureSystemKeysMode(prefs.captureSysKeysMode),
++      m_BenchmarkNoInput(qEnvironmentVariableIntValue("RHREMOTE_BENCHMARK_NO_INPUT") == 1),
+       m_MouseCursorCapturedVisibilityState(SDL_DISABLE),
+       m_LongPressTimer(0),
+       m_StreamWidth(streamWidth),
+@@ -38,9 +39,14 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
+     if (!WMUtils::isRunningDesktopEnvironment()) {
+         m_CaptureSystemKeysMode = StreamingPreferences::CSK_ALWAYS;
+     }
++    if (m_BenchmarkNoInput) {
++        m_CaptureSystemKeysMode = StreamingPreferences::CSK_OFF;
++        m_GamepadMouse = false;
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote benchmark input disabled");
++    }
+ 
+     // Allow gamepad input when the app doesn't have focus if requested
+-    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, prefs.backgroundGamepad ? "1" : "0");
++    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, !m_BenchmarkNoInput && prefs.backgroundGamepad ? "1" : "0");
+ 
+ #if !SDL_VERSION_ATLEAST(2, 0, 15)
+     // For older versions of SDL (2.0.14 and earlier), use SDL_HINT_GRAB_KEYBOARD
+@@ -364,6 +370,7 @@ bool SdlInputHandler::isSystemKeyCaptureActive()
+ 
+ void SdlInputHandler::setCaptureActive(bool active)
+ {
++    if (active && m_BenchmarkNoInput) return;
+     if (active) {
+         // If we're in relative mode, try to activate SDL's relative mouse mode
+         if (m_AbsoluteMouseMode || SDL_SetRelativeMouseMode(SDL_TRUE) < 0) {
+diff --git a/app/streaming/input/input.h b/app/streaming/input/input.h
+index ec24070..68ec780 100644
+--- a/app/streaming/input/input.h
++++ b/app/streaming/input/input.h
+@@ -186,6 +186,7 @@ private:
+     QString m_OldIgnoreDevicesExcept;
+     QStringList m_IgnoreDeviceGuids;
+     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
++    const bool m_BenchmarkNoInput;
+     int m_MouseCursorCapturedVisibilityState;
+ 
+     struct {
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+index 80fb921..cd51bb8 100644
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -1302,6 +1302,29 @@ void Session::getWindowDimensions(int& x, int& y,
+         }
+     }
+ 
++    // Explicit placement for secondary-screen tests. Do not depend on Qt window
++    // geometry or DPI-coordinate conversion to choose the SDL video display.
++    const QString clientOrigin = qEnvironmentVariable("RHREMOTE_CLIENT_DISPLAY_ORIGIN");
++    if (!clientOrigin.isEmpty() && SDL_GetNumVideoDisplays() > 0) {
++        const QStringList coordinates = clientOrigin.split(',');
++        bool xOk = false, yOk = false;
++        int originX = coordinates.value(0).toInt(&xOk);
++        int originY = coordinates.value(1).toInt(&yOk);
++        int match = -1, matches = 0;
++        if (coordinates.size() == 2 && xOk && yOk) {
++            for (int i = 0; i < SDL_GetNumVideoDisplays(); i++) {
++                SDL_Rect bounds;
++                if (SDL_GetDisplayBounds(i, &bounds) == 0 && bounds.x == originX && bounds.y == originY) {
++                    match = i; matches++;
++                }
++            }
++        }
++        if (matches != 1) qFatal("RHRemote client display origin is absent or ambiguous; refusing fallback placement");
++        displayIndex = match;
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
++                    "RHRemote selected client display: origin=%d,%d index=%d name=%s",
++                    originX, originY, displayIndex, SDL_GetDisplayName(displayIndex));
++    }
+     SDL_Rect usableBounds;
+     if (SDL_GetDisplayUsableBounds(displayIndex, &usableBounds) == 0) {
+         // Don't use more than 80% of the display to leave room for system UI
+@@ -1848,6 +1871,11 @@ void Session::execInternal()
+         }
+     }
+ 
++    if (qEnvironmentVariableIntValue("RHREMOTE_BENCHMARK_TOPMOST") == 1) {
++        SDL_SetWindowAlwaysOnTop(m_Window, SDL_TRUE);
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote benchmark window topmost enabled");
++    }
++
+     // HACK: Remove once proper Dark Mode support lands in SDL
+ #ifdef Q_OS_WIN32
+     if (m_QtWindow != nullptr) {
+@@ -1955,6 +1983,21 @@ void Session::execInternal()
+     // (m_UnexpectedTermination is set back to true).
+     m_UnexpectedTermination = false;
+ 
++#ifdef Q_OS_WIN32
++    // Explicit opt-in control for the local benchmark runner. No external port,
++    // keyboard injection, or forced termination: take the normal SDL quit path.
++    HANDLE runnerStopEvent = nullptr;
++    const QString runnerStopName = qEnvironmentVariable("RHREMOTE_STOP_EVENT");
++    if (runnerStopName.startsWith("Local\\RHRemote.Stop.") && runnerStopName.size() < 160) {
++        runnerStopEvent = CreateEventW(nullptr, TRUE, FALSE,
++                                      reinterpret_cast<LPCWSTR>(runnerStopName.utf16()));
++        if (runnerStopEvent != nullptr) {
++            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote stop event registered: %s",
++                        runnerStopName.toUtf8().constData());
++        }
++    }
++#endif
++
+     // Start rich presence to indicate we're in game
+     RichPresenceManager presence(*m_Preferences, m_App.name);
+ 
+@@ -1964,7 +2007,14 @@ void Session::execInternal()
+     // Hijack this thread to be the SDL main thread. We have to do this
+     // because we want to suspend all Qt processing until the stream is over.
+     SDL_Event event;
++    const bool benchmarkNoInput = qEnvironmentVariableIntValue("RHREMOTE_BENCHMARK_NO_INPUT") == 1;
+     for (;;) {
++#ifdef Q_OS_WIN32
++        if (runnerStopEvent != nullptr && WaitForSingleObject(runnerStopEvent, 0) == WAIT_OBJECT_0) {
++            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote runner requested graceful stop");
++            goto DispatchDeferredCleanup;
++        }
++#endif
+ #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
+         // SDL 2.0.18 has a proper wait event implementation that uses platform
+         // support to block on events rather than polling on Windows, macOS, X11,
+@@ -1996,6 +2046,20 @@ void Session::execInternal()
+             continue;
+         }
+ #endif
++        // A presentation-only benchmark must not capture or forward the user's
++        // keyboard, pointer, touch or controller input from the secondary screen.
++        if (benchmarkNoInput && ((event.type >= SDL_KEYDOWN && event.type <= SDL_MOUSEWHEEL) ||
++                (event.type >= SDL_JOYAXISMOTION && event.type <= SDL_JOYBUTTONUP) ||
++                event.type == SDL_CONTROLLERAXISMOTION || event.type == SDL_CONTROLLERBUTTONDOWN ||
++                event.type == SDL_CONTROLLERBUTTONUP || event.type == SDL_FINGERDOWN ||
++                event.type == SDL_FINGERUP || event.type == SDL_FINGERMOTION
++#if SDL_VERSION_ATLEAST(2, 0, 14)
++                || event.type == SDL_CONTROLLERTOUCHPADDOWN || event.type == SDL_CONTROLLERTOUCHPADUP ||
++                event.type == SDL_CONTROLLERTOUCHPADMOTION || event.type == SDL_CONTROLLERSENSORUPDATE
++#endif
++                )) {
++            continue;
++        }
+         switch (event.type) {
+         case SDL_QUIT:
+             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+@@ -2297,6 +2361,9 @@ void Session::execInternal()
+     }
+ 
+ DispatchDeferredCleanup:
++#ifdef Q_OS_WIN32
++    if (runnerStopEvent != nullptr) CloseHandle(runnerStopEvent);
++#endif
+     // Uncapture the mouse and hide the window immediately,
+     // so we can return to the Qt GUI ASAP.
+     m_InputHandler->setCaptureActive(false);
+diff --git a/app/streaming/video/ffmpeg-renderers/d3d11va.cpp b/app/streaming/video/ffmpeg-renderers/d3d11va.cpp
+index 201eb7a..0e55d6b 100644
+--- a/app/streaming/video/ffmpeg-renderers/d3d11va.cpp
++++ b/app/streaming/video/ffmpeg-renderers/d3d11va.cpp
+@@ -94,6 +94,7 @@ D3D11VARenderer::D3D11VARenderer(int decoderSelectionPass)
+       m_LastFullRange(false),
+       m_LastColorTrc(AVCOL_TRC_UNSPECIFIED),
+       m_AllowTearing(false),
++      m_SyncInterval(0),
+       m_OverlayLock(0),
+       m_HwDeviceContext(nullptr),
+       m_HwFramesContext(nullptr)
+@@ -304,6 +305,21 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
+     HRESULT hr;
+ 
+     m_DecoderParams = *params;
++    m_SyncInterval = params->enableVsync && qEnvironmentVariableIntValue("RHREMOTE_PRESENT_VSYNC") == 1 ? 1 : 0;
++    if (m_SyncInterval != 0 && !params->testOnly) {
++        const int requestedInterval = qEnvironmentVariableIntValue("RHREMOTE_PRESENT_INTERVAL");
++        if (requestedInterval > 1) {
++            SDL_DisplayMode mode;
++            if (requestedInterval > 4 || params->frameRate <= 0 ||
++                SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(params->window), &mode) != 0 ||
++                mode.refresh_rate != requestedInterval * params->frameRate) {
++                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "RHRemote Present interval requires a matched refresh ratio between 1 and 4");
++                return false;
++            }
++            m_SyncInterval = requestedInterval;
++        }
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote synchronized Present: SyncInterval=%u", m_SyncInterval);
++    }
+ 
+     if (qgetenv("D3D11VA_ENABLED") == "0") {
+         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+@@ -359,13 +375,43 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
+         }
+     }
+ 
++    // Optional, device-scoped relative scheduling experiment. Leave capability
++    // probes and normal sessions unchanged; no process-wide/realtime class change.
++    if (!params->testOnly && !qgetenv("RHREMOTE_D3D11_GPU_PRIORITY").isEmpty()) {
++        bool validPriority = false;
++        const int requestedPriority = qEnvironmentVariableIntValue("RHREMOTE_D3D11_GPU_PRIORITY", &validPriority);
++        if (!validPriority || requestedPriority < 1 || requestedPriority > 7) {
++            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "RHRemote D3D11 GPU priority must be relative 1..7");
++            return false;
++        }
++        ComPtr<IDXGIDevice> priorityDevice;
++        int beforePriority = 0, actualPriority = 0;
++        hr = m_Device.As(&priorityDevice);
++        if (SUCCEEDED(hr)) hr = priorityDevice->GetGPUThreadPriority(&beforePriority);
++        if (SUCCEEDED(hr)) hr = priorityDevice->SetGPUThreadPriority(requestedPriority);
++        if (SUCCEEDED(hr)) hr = priorityDevice->GetGPUThreadPriority(&actualPriority);
++        if (FAILED(hr) || actualPriority != requestedPriority) {
++            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "RHRemote D3D11 GPU priority request failed: hr=%x actual=%d", hr, actualPriority);
++            return false;
++        }
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote D3D11 GPU relative priority: requested=%d actual=%d before=%d",
++                    requestedPriority, actualPriority, beforePriority);
++    }
++
+     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
++    // Diagnostic SDR path for separating independent-flip/overlay presentation
++    // from application pacing. Keep the normal flip model as the default.
++    const bool composedBlit = !params->testOnly && qEnvironmentVariableIntValue("RHREMOTE_D3D11_COMPOSED_BLIT") == 1;
++    if (composedBlit && (!params->enableVsync || (params->videoFormat & VIDEO_FORMAT_MASK_10BIT))) {
++        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "RHRemote composed blit requires VSync and SDR");
++        return false;
++    }
+     swapChainDesc.Stereo = FALSE;
+     swapChainDesc.SampleDesc.Count = 1;
+     swapChainDesc.SampleDesc.Quality = 0;
+     swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+     swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
+-    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
++    swapChainDesc.SwapEffect = composedBlit ? DXGI_SWAP_EFFECT_DISCARD : DXGI_SWAP_EFFECT_FLIP_DISCARD;
+     swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
+     swapChainDesc.Flags = 0;
+ 
+@@ -385,7 +431,7 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
+     //
+     // NB: 3 total buffers seems sufficient on NVIDIA hardware but
+     // causes performance issues (buffer starvation) on AMD GPUs.
+-    swapChainDesc.BufferCount = 3 + 1 + 1;
++    swapChainDesc.BufferCount = composedBlit ? 1 : 3 + 1 + 1;
+ 
+     // Use the current window size as the swapchain size
+     SDL_GetWindowSize(params->window, (int*)&swapChainDesc.Width, (int*)&swapChainDesc.Height);
+@@ -457,6 +503,10 @@ bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)
+         return false;
+     }
+ 
++    if (composedBlit) {
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote D3D11 composed blit activated: buffers=1, SDR");
++    }
++
+     hr = swapChain.As(&m_SwapChain);
+     if (FAILED(hr)) {
+         SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+@@ -658,7 +708,7 @@ void D3D11VARenderer::renderFrame(AVFrame* frame)
+     }
+ 
+     // Present according to the decoder parameters
+-    hr = m_SwapChain->Present(0, flags);
++    hr = m_SwapChain->Present(m_SyncInterval, flags);
+ 
+     // Release the context lock
+     unlockContext(this);
+diff --git a/app/streaming/video/ffmpeg-renderers/d3d11va.h b/app/streaming/video/ffmpeg-renderers/d3d11va.h
+index f37b815..e2f0c65 100644
+--- a/app/streaming/video/ffmpeg-renderers/d3d11va.h
++++ b/app/streaming/video/ffmpeg-renderers/d3d11va.h
+@@ -79,6 +79,7 @@ private:
+     AVColorTransferCharacteristic m_LastColorTrc;
+ 
+     bool m_AllowTearing;
++    UINT m_SyncInterval;
+ 
+     std::array<Microsoft::WRL::ComPtr<ID3D11PixelShader>, PixelShaders::_COUNT> m_VideoPixelShaders;
+     Microsoft::WRL::ComPtr<ID3D11Buffer> m_VideoVertexBuffer;
+diff --git a/app/streaming/video/ffmpeg-renderers/pacer/StableCadence.h b/app/streaming/video/ffmpeg-renderers/pacer/StableCadence.h
+new file mode 100644
+index 0000000..7d53acd
+--- /dev/null
++++ b/app/streaming/video/ffmpeg-renderers/pacer/StableCadence.h
+@@ -0,0 +1,51 @@
++#pragma once
++
++#include <cstdint>
++
++// Optional cadence for an integer refresh/stream ratio. Keep one frame in reserve
++// before starting so small arrival-time variations do not move each frame between
++// adjacent VBlanks. Call only from the VSync thread, with the frame queue locked.
++// This never creates or repeats a frame and cannot hide a real queue underflow.
++class StableCadence {
++public:
++    StableCadence() : m_step(0), m_reserve(1), m_tick(0), m_next(0), m_started(false) {}
++
++    bool configure(int displayFps, int streamFps, unsigned reserve = 1) {
++        m_step = reserve >= 1 && reserve <= 2 && displayFps > streamFps && streamFps > 0 && displayFps % streamFps == 0
++                ? static_cast<unsigned>(displayFps / streamFps) : 0;
++        m_tick = m_next = 0;
++        m_reserve = reserve;
++        m_started = false;
++        return enabled();
++    }
++
++    bool enabled() const { return m_step != 0; }
++    unsigned reserve() const { return m_reserve; }
++
++    bool shouldRender(unsigned queuedFrames, bool lateWake = false) {
++        const std::uint64_t tick = m_tick++;
++        if (!enabled()) return false;
++        if (!m_started) {
++            if (queuedFrames < m_reserve + 1) return false;
++            m_started = true;
++        } else if (tick < m_next && !lateWake) {
++            return false;
++        }
++        if (queuedFrames == 0) {
++            // A real underflow remains visible. Resume with the first arriving frame,
++            // rather than extending the stall while rebuilding the startup reserve.
++            return false;
++        }
++        // A late wake may represent missed native VBlanks. Render at most one
++        // queued frame now, then resume the usual spacing; never replay a burst.
++        m_next = tick + m_step;
++        return true;
++    }
++
++private:
++    unsigned m_step;
++    unsigned m_reserve;
++    std::uint64_t m_tick;
++    std::uint64_t m_next;
++    bool m_started;
++};
+diff --git a/app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp b/app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp
+index 2686c54..d3d9fce 100644
+--- a/app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp
++++ b/app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp
+@@ -32,18 +32,47 @@ Pacer::Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats) :
+     m_RenderThread(nullptr),
+     m_VsyncThread(nullptr),
+     m_Stopping(false),
++    m_TraceStalls(qEnvironmentVariableIntValue("RHREMOTE_TRACE_STALLS") == 1),
++    m_TraceFrequency(SDL_GetPerformanceFrequency()),
++    m_TraceEvents(0),
++    m_TraceLastVsync(0),
++    m_TraceLastDecoded(0),
++    m_TraceLastRender(0),
++    m_RecoverMissedVsync(qEnvironmentVariableIntValue("RHREMOTE_WAKE_RECOVERY") == 1),
++    m_RecoveryLastVsync(0),
+     m_VsyncSource(nullptr),
+     m_VsyncRenderer(renderer),
+     m_MaxVideoFps(0),
+     m_DisplayFps(0),
+     m_VideoStats(videoStats)
+ {
++    if (m_TraceStalls) {
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
++                    "RHRemote stall trace enabled: clock_frequency=%llu, pacer_limit=256",
++                    static_cast<unsigned long long>(m_TraceFrequency));
++    }
++}
+ 
++void Pacer::traceStall(const char* stage, Uint64 duration, Uint64 at, int pacingQueue, int renderQueue)
++{
++    // Only anomalies are logged; a bounded budget limits diagnostic overhead.
++    if (m_TraceEvents.fetch_add(1, std::memory_order_relaxed) >= 256) return;
++    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
++                "RHRemote stall: stage=%s qpc=%llu gap_ms=%.3f pacing_q=%d render_q=%d",
++                stage, static_cast<unsigned long long>(at),
++                1000.0 * duration / m_TraceFrequency, pacingQueue, renderQueue);
+ }
+ 
+ Pacer::~Pacer()
+ {
++    // Pair the stop transition and notifications with the mutex used by waiters.
++    // Otherwise a waiter can check false, miss wakeAll(), then sleep indefinitely.
++    m_FrameQueueLock.lock();
+     m_Stopping = true;
++    m_PacingQueueNotEmpty.wakeAll();
++    m_VsyncSignalled.wakeAll();
++    m_RenderQueueNotEmpty.wakeAll();
++    m_FrameQueueLock.unlock();
+ 
+     // Stop the V-sync thread
+     if (m_VsyncThread != nullptr) {
+@@ -118,7 +147,14 @@ int Pacer::vsyncThread(void *context)
+         }
+         else {
+             // Let the VSync source wait in the context of our thread
++            Uint64 sourceWaitStart = me->m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+             me->m_VsyncSource->waitForVsync();
++            if (me->m_TraceStalls) {
++                Uint64 now = SDL_GetPerformanceCounter();
++                if (1000.0 * (now - sourceWaitStart) / me->m_TraceFrequency > 1500.0 / me->m_DisplayFps) {
++                    me->traceStall("vsync-source-wait", now - sourceWaitStart, now, -1, -1);
++                }
++            }
+         }
+ 
+         if (me->m_Stopping) {
+@@ -143,13 +179,21 @@ int Pacer::renderThread(void* context)
+ 
+     while (!me->m_Stopping) {
+         // Wait for the renderer to be ready for the next frame
++        Uint64 readyStart = me->m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+         me->m_VsyncRenderer->waitToRender();
++        if (me->m_TraceStalls) {
++            Uint64 now = SDL_GetPerformanceCounter();
++            if (1000.0 * (now - readyStart) / me->m_TraceFrequency > 50.0) {
++                me->traceStall("render-ready-wait", now - readyStart, now, -1, -1);
++            }
++        }
+ 
+         // Acquire the frame queue lock to protect the queue and
+         // the not empty condition
+         me->m_FrameQueueLock.lock();
+ 
+         // Wait for a frame to be ready to render
++        Uint64 queueWaitStart = me->m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+         while (!me->m_Stopping && me->m_RenderQueue.isEmpty()) {
+             me->m_RenderQueueNotEmpty.wait(&me->m_FrameQueueLock);
+         }
+@@ -161,7 +205,15 @@ int Pacer::renderThread(void* context)
+         }
+ 
+         AVFrame* frame = me->m_RenderQueue.dequeue();
++        int pacingCount = me->m_PacingQueue.count();
++        int renderCount = me->m_RenderQueue.count();
+         me->m_FrameQueueLock.unlock();
++        if (me->m_TraceStalls) {
++            Uint64 now = SDL_GetPerformanceCounter();
++            if (1000.0 * (now - queueWaitStart) / me->m_TraceFrequency > 50.0) {
++                me->traceStall("render-queue-wait", now - queueWaitStart, now, pacingCount, renderCount);
++            }
++        }
+ 
+         me->renderFrame(frame);
+     }
+@@ -200,8 +252,48 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
+     // Make sure initialize() has been called
+     SDL_assert(m_MaxVideoFps != 0);
+ 
++    Uint64 lockStart = m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+     m_FrameQueueLock.lock();
+ 
++    if (m_TraceStalls) {
++        Uint64 now = SDL_GetPerformanceCounter();
++        if (1000.0 * (now - lockStart) / m_TraceFrequency > 1500.0 / m_DisplayFps) {
++            traceStall("vsync-lock-wait", now - lockStart, now, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        if (m_TraceLastVsync && 1000.0 * (now - m_TraceLastVsync) / m_TraceFrequency > 1500.0 / m_DisplayFps) {
++            traceStall("vsync-gap", now - m_TraceLastVsync, now, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        m_TraceLastVsync = now;
++    }
++
++    if (m_StableCadence.enabled()) {
++        bool lateWake = false;
++        Uint64 recoveryNow = 0;
++        Uint64 recoveryGap = 0;
++        if (m_RecoverMissedVsync) {
++            recoveryNow = SDL_GetPerformanceCounter();
++            recoveryGap = m_RecoveryLastVsync ? recoveryNow - m_RecoveryLastVsync : 0;
++            lateWake = 1000.0 * recoveryGap / m_TraceFrequency > 1500.0 / m_DisplayFps;
++            m_RecoveryLastVsync = recoveryNow;
++        }
++        // Keep the newest frame plus the configured arrival-time reserve.
++        // Bound the delay when the source delivers a burst rather than accumulating it.
++        while (m_PacingQueue.count() > static_cast<int>(m_StableCadence.reserve() + 1)) {
++            AVFrame* oldFrame = m_PacingQueue.dequeue();
++            m_VideoStats->pacerDroppedFrames++;
++            av_frame_free(&oldFrame);
++        }
++        if (!m_StableCadence.shouldRender(m_PacingQueue.count(), lateWake)) {
++            m_FrameQueueLock.unlock();
++            return;
++        }
++        if (lateWake && m_TraceStalls) {
++            traceStall("late-wake-recovery", recoveryGap, recoveryNow, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        enqueueFrameForRenderingAndUnlock(m_PacingQueue.dequeue());
++        return;
++    }
++
+     // If the queue length history entries are large, be strict
+     // about dropping excess frames.
+     int frameDropTarget = 1;
+@@ -261,6 +353,18 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps, bool enablePacing)
+     m_MaxVideoFps = maxVideoFps;
+     m_DisplayFps = StreamUtils::getDisplayRefreshRate(window);
+     m_RendererAttributes = m_VsyncRenderer->getRendererAttributes();
++    int reserve = qEnvironmentVariableIntValue("RHREMOTE_PACING_RESERVE");
++    if (reserve == 0) reserve = 1;
++    if (enablePacing && qEnvironmentVariableIntValue("RHREMOTE_STABLE_PACING") == 1 &&
++            m_StableCadence.configure(m_DisplayFps, m_MaxVideoFps, reserve)) {
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
++                    "RHRemote stable cadence: %d Hz / %d FPS, arrival reserve %d frame(s)",
++                    m_DisplayFps, m_MaxVideoFps, reserve);
++        m_RecoveryLastVsync = 0;
++        if (m_RecoverMissedVsync) {
++            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote late-wake recovery enabled");
++        }
++    }
+ 
+     if (enablePacing) {
+         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+@@ -335,10 +439,23 @@ void Pacer::renderFrame(AVFrame* frame)
+     // Count time spent in Pacer's queues
+     Uint32 beforeRender = SDL_GetTicks();
+     m_VideoStats->totalPacerTime += beforeRender - frame->pkt_dts;
++    Uint64 renderStart = m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
++    if (m_TraceStalls) {
++        if (m_TraceLastRender && 1000.0 * (renderStart - m_TraceLastRender) / m_TraceFrequency > 50.0) {
++            traceStall("render-gap", renderStart - m_TraceLastRender, renderStart, -1, -1);
++        }
++        m_TraceLastRender = renderStart;
++    }
+ 
+     // Render it
+     m_VsyncRenderer->renderFrame(frame);
+     Uint32 afterRender = SDL_GetTicks();
++    if (m_TraceStalls) {
++        Uint64 now = SDL_GetPerformanceCounter();
++        if (1000.0 * (now - renderStart) / m_TraceFrequency > 50.0) {
++            traceStall("render-call", now - renderStart, now, -1, -1);
++        }
++    }
+ 
+     m_VideoStats->totalRenderTime += afterRender - beforeRender;
+     m_VideoStats->renderedFrames++;
+@@ -403,6 +520,13 @@ void Pacer::submitFrame(AVFrame* frame)
+ 
+     // Queue the frame and possibly wake up the render thread
+     m_FrameQueueLock.lock();
++    if (m_TraceStalls) {
++        Uint64 now = SDL_GetPerformanceCounter();
++        if (m_TraceLastDecoded && 1000.0 * (now - m_TraceLastDecoded) / m_TraceFrequency > 50.0) {
++            traceStall("decoded-gap", now - m_TraceLastDecoded, now, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        m_TraceLastDecoded = now;
++    }
+     if (m_VsyncSource != nullptr) {
+         dropFrameForEnqueue(m_PacingQueue);
+         m_PacingQueue.enqueue(frame);
+diff --git a/app/streaming/video/ffmpeg-renderers/pacer/pacer.h b/app/streaming/video/ffmpeg-renderers/pacer/pacer.h
+index 11963a5..a1b82bb 100644
+--- a/app/streaming/video/ffmpeg-renderers/pacer/pacer.h
++++ b/app/streaming/video/ffmpeg-renderers/pacer/pacer.h
+@@ -6,6 +6,8 @@
+ #include <QQueue>
+ #include <QMutex>
+ #include <QWaitCondition>
++#include <atomic>
++#include "StableCadence.h"
+ 
+ class IVsyncSource {
+ public:
+@@ -50,6 +52,8 @@ private:
+ 
+     void dropFrameForEnqueue(QQueue<AVFrame*>& queue);
+ 
++    void traceStall(const char* stage, Uint64 duration, Uint64 at, int pacingQueue, int renderQueue);
++
+     QQueue<AVFrame*> m_RenderQueue;
+     QQueue<AVFrame*> m_PacingQueue;
+     QQueue<int> m_PacingQueueHistory;
+@@ -60,7 +64,16 @@ private:
+     QWaitCondition m_VsyncSignalled;
+     SDL_Thread* m_RenderThread;
+     SDL_Thread* m_VsyncThread;
+-    bool m_Stopping;
++    std::atomic<bool> m_Stopping;
++    StableCadence m_StableCadence;
++    const bool m_TraceStalls;
++    const Uint64 m_TraceFrequency;
++    std::atomic<unsigned> m_TraceEvents;
++    Uint64 m_TraceLastVsync;
++    Uint64 m_TraceLastDecoded;
++    Uint64 m_TraceLastRender;
++    const bool m_RecoverMissedVsync;
++    Uint64 m_RecoveryLastVsync;
+ 
+     IVsyncSource* m_VsyncSource;
+     IFFmpegRenderer* m_VsyncRenderer;
+diff --git a/app/streaming/video/ffmpeg.cpp b/app/streaming/video/ffmpeg.cpp
+index 6e1f806..ecdb69c 100644
+--- a/app/streaming/video/ffmpeg.cpp
++++ b/app/streaming/video/ffmpeg.cpp
+@@ -3,10 +3,13 @@
+ #include "streaming/session.h"
+ 
+ #include <h264_stream.h>
++#include <QFile>
++#include <QImage>
+ 
+ extern "C" {
+ #include <libavutil/mastering_display_metadata.h>
+ #include <libavutil/pixdesc.h>
++#include <libswscale/swscale.h>
+ }
+ 
+ #include "ffmpeg-renderers/sdlvid.h"
+@@ -222,6 +225,12 @@ FFmpegVideoDecoder::FFmpegVideoDecoder(bool testOnly)
+       m_LastFrameNumber(0),
+       m_StreamFps(0),
+       m_VideoFormat(0),
++      m_TraceStalls(!testOnly && qEnvironmentVariableIntValue("RHREMOTE_TRACE_STALLS") == 1),
++      m_TraceLastReceive(0),
++      m_TraceLastPacketReceive(0),
++      m_TraceLastEnqueue(0),
++      m_TraceReceiveEvents(0),
++      m_SnapshotAttempted(false),
+       m_NeedsSpsFixup(false),
+       m_TestOnly(testOnly),
+       m_DecoderThread(nullptr)
+@@ -1673,6 +1682,11 @@ void FFmpegVideoDecoder::decoderThreadProc()
+ 
+                     m_ActiveWndVideoStats.decodedFrames++;
+ 
++                    if (m_FramesOut == 90 && !m_SnapshotAttempted && !qgetenv("RHREMOTE_DECODED_SNAPSHOT").isEmpty()) {
++                        m_SnapshotAttempted = true;
++                        saveDiagnosticSnapshot(frame);
++                    }
++
+                     // Queue the frame for rendering (or render now if pacer is disabled)
+                     m_Pacer->submitFrame(frame);
+                 }
+@@ -1728,6 +1742,47 @@ void FFmpegVideoDecoder::decoderThreadProc()
+     }
+ }
+ 
++void FFmpegVideoDecoder::saveDiagnosticSnapshot(AVFrame* frame)
++{
++    // One opt-in decoded-image check during warmup, independent of desktop
++    // occlusion and Windows window-capture behavior. Never overwrite a file.
++    const QString path = qEnvironmentVariable("RHREMOTE_DECODED_SNAPSHOT");
++    AVFrame* software = av_frame_alloc();
++    if (!software) return;
++    AVFrame* pixels = frame;
++    if (frame->hw_frames_ctx) {
++        if (av_hwframe_transfer_data(software, frame, 0) < 0) {
++            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "RHRemote decoded snapshot transfer failed");
++            av_frame_free(&software);
++            return;
++        }
++        pixels = software;
++    }
++    if (pixels->width <= 0 || pixels->height <= 0 || pixels->width > 8192 || pixels->height > 8192) {
++        av_frame_free(&software);
++        return;
++    }
++    SwsContext* conversion = sws_getContext(pixels->width, pixels->height, static_cast<AVPixelFormat>(pixels->format),
++                                            pixels->width, pixels->height, AV_PIX_FMT_BGRA, SWS_POINT, nullptr, nullptr, nullptr);
++    if (conversion) {
++        QImage image(pixels->width, pixels->height, QImage::Format_ARGB32);
++        if (!image.isNull()) {
++            uint8_t* destination[4] = {image.bits(), nullptr, nullptr, nullptr};
++            int stride[4] = {static_cast<int>(image.bytesPerLine()), 0, 0, 0};
++            int rows = sws_scale(conversion, pixels->data, pixels->linesize, 0, pixels->height, destination, stride);
++            QFile output(path);
++            if (rows == pixels->height && output.open(QIODevice::WriteOnly | QIODevice::NewOnly) && image.save(&output, "PNG")) {
++                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote decoded snapshot saved: %dx%d pts=%lld path=%s",
++                            pixels->width, pixels->height, static_cast<long long>(frame->pts), qPrintable(path));
++            } else {
++                SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "RHRemote decoded snapshot save failed");
++            }
++        }
++        sws_freeContext(conversion);
++    }
++    av_frame_free(&software);
++}
++
+ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
+ {
+     PLENTRY entry = du->bufferList;
+@@ -1735,6 +1790,26 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
+ 
+     SDL_assert(!m_TestOnly);
+ 
++    if (m_TraceStalls) {
++        Uint64 now = SDL_GetPerformanceCounter();
++        double gap = m_TraceLastReceive ? 1000.0 * (now - m_TraceLastReceive) / SDL_GetPerformanceFrequency() : 0.0;
++        Uint64 packetGap = m_TraceLastPacketReceive && du->receiveTimeMs >= m_TraceLastPacketReceive ? du->receiveTimeMs - m_TraceLastPacketReceive : 0;
++        Uint64 enqueueGap = m_TraceLastEnqueue && du->enqueueTimeMs >= m_TraceLastEnqueue ? du->enqueueTimeMs - m_TraceLastEnqueue : 0;
++        Uint64 commonNow = LiGetMillis();
++        Uint64 queueAge = commonNow >= du->enqueueTimeMs ? commonNow - du->enqueueTimeMs : 0;
++        Uint64 reassembly = du->enqueueTimeMs >= du->receiveTimeMs ? du->enqueueTimeMs - du->receiveTimeMs : 0;
++        if ((gap > 50.0 || packetGap > 50 || enqueueGap > 50 || queueAge > 50) && m_TraceReceiveEvents++ < 256) {
++            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
++                        "RHRemote stall: stage=decode-unit-timing qpc=%llu gap_ms=%.3f frame=%d host_latency_100us=%u first_packet_gap_ms=%llu complete_gap_ms=%llu reassembly_ms=%llu decode_queue_age_ms=%llu",
++                        static_cast<unsigned long long>(now), gap, du->frameNumber, du->frameHostProcessingLatency,
++                        static_cast<unsigned long long>(packetGap), static_cast<unsigned long long>(enqueueGap),
++                        static_cast<unsigned long long>(reassembly), static_cast<unsigned long long>(queueAge));
++        }
++        m_TraceLastReceive = now;
++        m_TraceLastPacketReceive = du->receiveTimeMs;
++        m_TraceLastEnqueue = du->enqueueTimeMs;
++    }
++
+     // If this is the first frame, reject anything that's not an IDR frame
+     if (m_FramesIn == 0 && du->frameType != FRAME_TYPE_IDR) {
+         return DR_NEED_IDR;
+diff --git a/app/streaming/video/ffmpeg.h b/app/streaming/video/ffmpeg.h
+index 7dbcd50..49ed0b5 100644
+--- a/app/streaming/video/ffmpeg.h
++++ b/app/streaming/video/ffmpeg.h
+@@ -106,6 +106,13 @@ private:
+     int m_LastFrameNumber;
+     int m_StreamFps;
+     int m_VideoFormat;
++    const bool m_TraceStalls;
++    Uint64 m_TraceLastReceive;
++    Uint64 m_TraceLastPacketReceive;
++    Uint64 m_TraceLastEnqueue;
++    unsigned m_TraceReceiveEvents;
++    bool m_SnapshotAttempted;
++    void saveDiagnosticSnapshot(AVFrame* frame);
+     bool m_NeedsSpsFixup;
+     bool m_TestOnly;
+     SDL_Thread* m_DecoderThread;

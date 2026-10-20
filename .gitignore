@@ -1,0 +1,13 @@
+# Snapshots and raw session logs may contain addresses, hostnames or pairing details; keep them local.
+results/
+*.log
+__pycache__/
+*.pyc
+dist/
+.deps/
+*.apk
+target/
+*.so
+*.dll
+design/previews/
+

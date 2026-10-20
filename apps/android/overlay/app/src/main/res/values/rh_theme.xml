@@ -1,0 +1,12 @@
+<resources>
+    <style name="RhTheme" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#5274e8</item>
+        <item name="android:windowBackground">#f4f7fc</item>
+        <item name="android:colorControlNormal">#69778e</item>
+        <item name="android:statusBarColor">#f4f7fc</item>
+        <item name="android:navigationBarColor">#ffffff</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>
