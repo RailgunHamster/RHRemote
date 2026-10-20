@@ -37,7 +37,11 @@ try{
   try{
    $parameters=@{Uri=($api+$Path);Method=$Method;Headers=$headers;TimeoutSec=30;MaximumRedirection=0}
    if($null -ne $Body){
-    if($Provider -eq 'gitee'){$form=@{};foreach($key in $Body.Keys){$form[$key]=if($Body[$key] -is [bool]){$Body[$key].ToString().ToLowerInvariant()}else{[string]$Body[$key]}};$parameters.ContentType='application/x-www-form-urlencoded';$parameters.Body=$form}
+    if($Provider -eq 'gitee'){
+     $form=@{access_token=$token};foreach($key in $Body.Keys){$form[$key]=if($Body[$key] -is [bool]){$Body[$key].ToString().ToLowerInvariant()}else{[string]$Body[$key]}}
+     $encoded=($form.GetEnumerator()|ForEach-Object {[Uri]::EscapeDataString([string]$_.Key)+'='+[Uri]::EscapeDataString([string]$_.Value)}) -join '&'
+     $parameters.ContentType='application/x-www-form-urlencoded; charset=utf-8';$parameters.Body=[Text.Encoding]::UTF8.GetBytes($encoded)
+    }
     else{$parameters.ContentType='application/json';$parameters.Body=[Text.Encoding]::UTF8.GetBytes(($Body|ConvertTo-Json -Depth 8 -Compress))}
    }
    Invoke-RestMethod @parameters
@@ -72,7 +76,7 @@ try{
  if($SourceOnly){Write-Output "$Provider audited source mirror updated: $Commit";return}
  $notes=[IO.File]::ReadAllText((Join-Path $candidate 'RELEASE-NOTES.md'))
  $release=Api GET ('/releases/tags/'+$tag) $null -Allow404
- if(-not $release){$body=@{tag_name=$tag;target_commitish='main';name=$releaseTitle;body=$notes;prerelease=$false};if($Provider -eq 'github'){$body.draft=$true};$release=Api POST '/releases' $body}
+ if(-not $release){$body=@{tag_name=$tag;target_commitish=$Commit;name=$releaseTitle;body=$notes;prerelease=$false};if($Provider -eq 'github'){$body.draft=$true;$body.target_commitish='main'};$release=Api POST '/releases' $body}
  if(-not $release.id){throw 'Release API did not return a release ID'}
  Add-Type -AssemblyName System.Net.Http
  $client=New-Object Net.Http.HttpClient;$client.Timeout=[TimeSpan]::FromMinutes(10)

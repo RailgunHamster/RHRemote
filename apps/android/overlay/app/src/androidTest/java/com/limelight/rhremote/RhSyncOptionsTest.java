@@ -21,8 +21,8 @@ public final class RhSyncOptionsTest {
   for(Object value:new Object[]{0,10,"15",JSONObject.NULL}){try{RhSync.interval(RhActions.obj("intervalMinutes",value),5);fail("invalid interval accepted");}catch(java.io.IOException expected){}}
  }
  @Test public void httpRoundTripPersistsIntervalWithoutTouchingRealAccount()throws Exception{
-  Context base=InstrumentationRegistry.getInstrumentation().getTargetContext();File dir=new File(base.getCacheDir(),"rhremote-http-test-"+UUID.randomUUID());assertTrue(dir.mkdir());
-  Context context=new ContextWrapper(base){@Override public File getFilesDir(){return dir;}@Override public Context getApplicationContext(){return this;}};
+  Context base=InstrumentationRegistry.getInstrumentation().getTargetContext();String prefix="rhremote-http-test-"+UUID.randomUUID();File dir=new File(base.getCacheDir(),prefix);assertTrue(dir.mkdir());
+  Context context=new ContextWrapper(base){@Override public File getFilesDir(){return dir;}@Override public Context getApplicationContext(){return this;}@Override public android.content.SharedPreferences getSharedPreferences(String name,int mode){return base.getSharedPreferences(prefix+name,mode);}};
   try(ServerSocket server=new ServerSocket(0,4,InetAddress.getByName("127.0.0.1"))){
    server.setSoTimeout(10000);final Throwable[] failure={null};
    Thread fixture=new Thread(()->{byte[] document=null;try{for(int n=0;n<4;n++)try(Socket socket=server.accept()){
@@ -37,7 +37,7 @@ public final class RhSyncOptionsTest {
    JSONObject result=sync.run(RhShared.read(context),"review");assertEquals(0,result.getJSONArray("conflicts").length());
    sync.configure(RhActions.obj("url",address,"username","fixture","automatic",false,"intervalMinutes",60));assertEquals(60,sync.state().getInt("intervalMinutes"));
    result=sync.run(RhShared.read(context),"review");assertEquals(0,result.getJSONArray("conflicts").length());fixture.join(10000);assertFalse(fixture.isAlive());if(failure[0]!=null)throw new AssertionError(failure[0]);
-  }finally{delete(dir);}
+  }finally{for(String name:new String[]{"rhremote.global","rhremote.devices"})base.getSharedPreferences(prefix+name,0).edit().clear().commit();delete(dir);}
  }
  private static String line(InputStream input)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();int b;while((b=input.read())!=-1){if(b=='\n')break;if(b!='\r')out.write(b);if(out.size()>8192)throw new IOException("header too large");}return out.toString("US-ASCII");}
  private static void delete(File file){File[] children=file.listFiles();if(children!=null)for(File child:children)delete(child);file.delete();}

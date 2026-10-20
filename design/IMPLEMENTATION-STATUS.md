@@ -36,3 +36,6 @@ Windows 原生输入 API 在上一轮 2520×1680 功能回归连续三轮通过�
 v0.2.1 增加双端设备上移/下移与 device.move 接口。共享 devices 数组携带顺序，三方合并把并发不同顺序列为 deviceOrder 冲突；刷新、重启、配置保存不重排。旧客户端首次升级按原界面排序迁移，后续新设备追加。排序测试包含单端改变、双端冲突、保留其他端新增主机、移动本机和离线条目、持久化及刷新。
 
 v0.2.0 已公开发布到 GitHub 与 Gitee，两个镜像各 10 项资源及 latest 的两个更新清单均通过匿名下载校验，APK/安装包/源码 SHA256 与发布候选一致。Android 实际更新检查返回已是最新版本；Windows 包装应用的在线检查避免与启动自动检查并发，继续在发布后核验。
+
+
+v0.2.1 发布后核验：GitHub 与 Gitee 各 10 项匿名下载及两份 latest 清单均校验通过；Windows Velopack 实际在线检查返回已是最新版本。真实账号的双向 WebDAV 排序测试通过：Windows→OPPO、OPPO→Windows、各端连接配置不变、刷新保序、原顺序恢复，结果仅保存在本地 results/clients-v2/device-order-sync.json。Android 新增测试共 20 项通过，HTTP 隔离测试修正了测试 Context 的偏好命名空间，另复测 3 项通过。发布脚本随后修正 Gitee 表单 UTF-8 编码与精确目标提交；安装包及已发布标签保持不变。
