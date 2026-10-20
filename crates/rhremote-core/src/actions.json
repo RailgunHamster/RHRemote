@@ -3,6 +3,7 @@
  {"id":"statistics.configure","label":"测试模式逐帧统计","args":{"enabled":"boolean; local only; change while disconnected"}},
  {"id":"statistics.state","label":"测试统计文件状态","args":{}},
  {"id":"devices.refresh","label":"刷新设备","args":{}},
+ {"id":"device.move","label":"调整设备顺序","args":{"uuid":"string","direction":"up / down"}},
  {"id":"device.add.open","label":"添加电脑","args":{}},
  {"id":"device.add.submit","label":"添加","args":{"address":"string"}},
  {"id":"device.add.cancel","label":"取消添加","args":{}},

@@ -53,8 +53,15 @@ public final class RhShared {
         if(!prefs.edit().putInt("profileSchemaVersion",2).commit())throw new IOException("profile migration write failed");
     }
     public static synchronized JSONObject read(Context c) {
-        try { initialize(c); return normalize(rawRead(c)); }
+        try { initialize(c);initializeOrder(c); return normalize(rawRead(c)); }
         catch(Exception e) { throw new IllegalStateException("连接配置读取失败",e); }
+    }
+    private static void initializeOrder(Context c)throws Exception {
+        SharedPreferences prefs=c.getSharedPreferences("rhremote.global",0);if(prefs.getBoolean("deviceOrderInitialized",false))return;
+        JSONObject shared=normalize(rawRead(c));JSONArray saved=shared.getJSONArray("devices");List<JSONObject> rows=new ArrayList<>();for(int i=0;i<saved.length();i++)rows.add(saved.getJSONObject(i));
+        rows.sort(Comparator.comparing((JSONObject d)->!d.optString("name").equalsIgnoreCase("winserver")).thenComparing(d->d.optString("name").toLowerCase(Locale.ROOT)));
+        JSONArray ordered=new JSONArray();for(JSONObject row:rows)ordered.put(row);shared.put("devices",ordered);write(file(c),shared);
+        if(!prefs.edit().putBoolean("deviceOrderInitialized",true).commit())throw new IOException("device order migration write failed");
     }
     public static void write(File file,JSONObject value)throws IOException {
         AtomicFile atomic=new AtomicFile(file);FileOutputStream out=atomic.startWrite();
@@ -114,7 +121,7 @@ public final class RhShared {
         return RhActions.obj("uuid",d.uuid,"name",d.name==null?d.uuid:d.name,"address",a.address.contains(":")&&!a.address.startsWith("[")?"["+a.address+"]":a.address,"swapButtons",swap,"displayName",displayName);
     }
     public static synchronized JSONObject capture(Context c,Collection<ComputerDetails> computers)throws Exception {
-        JSONObject shared=read(c);TreeMap<String,JSONObject> devices=new TreeMap<>();JSONArray old=shared.getJSONArray("devices");
+        JSONObject shared=read(c);LinkedHashMap<String,JSONObject> devices=new LinkedHashMap<>();JSONArray old=shared.getJSONArray("devices");
         for(int i=0;i<old.length();i++){JSONObject d=old.getJSONObject(i);devices.put(d.getString("uuid"),d);}
         for(ComputerDetails d:computers){JSONObject previous=devices.get(d.uuid);JSONObject item=metadata(d,swap(shared,d.uuid),previous==null?"":previous.optString("displayName"));if(item!=null)devices.put(d.uuid,item);}
         JSONArray list=new JSONArray();JSONObject group=new JSONObject();
@@ -129,6 +136,20 @@ public final class RhShared {
         for(int i=0;i<devices.length();i++)if(d.uuid.equals(devices.getJSONObject(i).getString("uuid"))){devices.getJSONObject(i).put("swapButtons",p.swapButtons).put("displayName",displayName);found=true;}
         if(!found)throw new IOException("host address unavailable");
         shared.getJSONObject("profiles").getJSONObject(clientId(c)).put(d.uuid,p.clientJson());validate(shared);write(file(c),shared);
+    }
+    public static List<ComputerDetails> ordered(Context c,Collection<ComputerDetails> computers) {
+        JSONArray saved=read(c).optJSONArray("devices");Map<String,Integer> rank=new HashMap<>();
+        for(int i=0;i<saved.length();i++)rank.put(saved.optJSONObject(i).optString("uuid"),i);
+        List<ComputerDetails> rows=new ArrayList<>(computers);rows.sort(Comparator.comparingInt(d->rank.getOrDefault(d.uuid,Integer.MAX_VALUE)));return rows;
+    }
+    public static synchronized void move(Context c,Collection<ComputerDetails> computers,String uuid,String direction)throws Exception {
+        if(!Arrays.asList("up","down").contains(direction))throw new IllegalArgumentException("direction must be up or down");
+        List<ComputerDetails> rows=ordered(c,computers);int index=-1;for(int i=0;i<rows.size();i++)if(uuid.equals(rows.get(i).uuid))index=i;
+        if(index<0)throw new IllegalArgumentException("unknown device");
+        int target=direction.equals("up")?Math.max(0,index-1):Math.min(rows.size()-1,index+1);
+        JSONObject shared=capture(c,rows);JSONArray list=shared.getJSONArray("devices");int a=-1,b=-1;
+        for(int i=0;i<list.length();i++){String id=list.getJSONObject(i).getString("uuid");if(id.equals(uuid))a=i;if(id.equals(rows.get(target).uuid))b=i;}
+        if(a<0||b<0)throw new IOException("host address unavailable");Object before=list.get(a);list.put(a,list.get(b));list.put(b,before);validate(shared);write(file(c),shared);
     }
     public static synchronized void apply(Context c,JSONObject shared)throws Exception {
         shared=normalize(shared);File backups=new File(c.getFilesDir(),"sync-backups");if(!backups.exists()&&!backups.mkdirs())throw new IOException("backup directory unavailable");

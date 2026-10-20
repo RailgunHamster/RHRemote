@@ -69,13 +69,12 @@ public final class RhHome implements RhActions.Target {
     public void showDevices(){pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);}
     private void renderDevices(boolean resetScroll){
         profileVisible=false;content.removeAllViews();heading("远程设备","");
-        List<ComputerDetails> list=new ArrayList<>(computers.values());list.sort(Comparator.comparing(d->d.name==null?"":d.name.toLowerCase(Locale.ROOT)));
-        list.sort(Comparator.comparingInt(d->d.name!=null&&d.name.equalsIgnoreCase("winserver")?0:1));
+        List<ComputerDetails> list=RhShared.ordered(activity,computers.values());
         if(list.isEmpty()){TextView hint=text("正在发现局域网电脑，也可以直接添加地址。",14,muted,false);hint.setPadding(dp(18),dp(36),dp(18),dp(36));content.addView(hint);}
-        for(ComputerDetails d:list)card(d);
+        for(int i=0;i<list.size();i++)card(list.get(i),i>0,i<list.size()-1);
         if(resetScroll)scroll.post(()->scroll.scrollTo(0,0));
     }
-    private void card(ComputerDetails d){
+    private void card(ComputerDetails d,boolean canMoveUp,boolean canMoveDown){
         boolean preferred=d.name!=null&&d.name.equalsIgnoreCase("winserver");boolean online=d.state==ComputerDetails.State.ONLINE;
         boolean paired=d.pairState==PairingManager.PairState.PAIRED;
         LinearLayout card=column();card.setPadding(dp(18),dp(15),dp(18),dp(15));card.setBackground(bg(preferred?blueSoft:surface,preferred?blue:line,18));
@@ -85,6 +84,8 @@ public final class RhHome implements RhActions.Target {
         String state=d.state==ComputerDetails.State.UNKNOWN?"正在检查":(!online?"离线":paired?"● 已配对":"待配对");TextView st=text(state,12,paired&&online?green:muted,false);names.addView(st);
         names.addView(text(RhProfile.load(activity,d.uuid).summary(),12,muted,false));info.addView(names,new LinearLayout.LayoutParams(0,-2,1));card.addView(info);
         LinearLayout operations=row();operations.setGravity(Gravity.END);operations.setPadding(0,dp(8),0,0);
+        Button up=button("↑",false,()->invoke("device.move",RhActions.obj("uuid",d.uuid,"direction","up")));up.setContentDescription("上移 "+RhShared.displayName(activity,d.uuid,d.name));up.setEnabled(canMoveUp);operations.addView(up);
+        Button down=button("↓",false,()->invoke("device.move",RhActions.obj("uuid",d.uuid,"direction","down")));down.setContentDescription("下移 "+RhShared.displayName(activity,d.uuid,d.name));down.setEnabled(canMoveDown);operations.addView(down);
         operations.addView(button("连接设置",false,()->invoke("device.settings.open",RhActions.obj("uuid",d.uuid))));
         Button connect=button(!online?"检查状态":paired?"连接":"配对",preferred,()->invoke(paired?"device.connect":"device.pair",RhActions.obj("uuid",d.uuid)));
         if(!paired&&online){connect.setBackground(bg(purpleSoft,0,24));connect.setTextColor(purple);}operations.addView(connect);card.addView(operations);
@@ -117,12 +118,12 @@ public final class RhHome implements RhActions.Target {
     private void invoke(String id,org.json.JSONObject args){RhActions.click(id,args);}
     private void set(String key,Object value){invoke("settings.set",RhActions.obj("key",key,"value",value));}
     public org.json.JSONObject state()throws Exception{
-        org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:computers.values()){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
+        org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(activity,computers.values())){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
         org.json.JSONObject shared=RhShared.read(activity);
         return RhActions.obj("platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?"":selected.uuid,"draftDisplayName",draftDisplayName,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
-        if(syncBusy&&(id.startsWith("sync.")||id.equals("device.settings.open")||id.startsWith("settings.")||id.equals("appearance.toggle")||id.equals("device.add.submit")))throw new IllegalStateException("同步进行中，请稍后保存");
+        if(syncBusy&&(id.startsWith("sync.")||id.equals("device.move")||id.equals("device.settings.open")||id.startsWith("settings.")||id.equals("appearance.toggle")||id.equals("device.add.submit")))throw new IllegalStateException("同步进行中，请稍后保存");
         if(pairing&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("appearance.toggle")))throw new IllegalStateException("请先取消当前配对");
         if(draft!=null&&displayNameEditor!=null&&id.startsWith("settings."))draftDisplayName=displayNameEditor.getText().toString();
         if(draft!=null&&id.startsWith("settings.")&&!id.equals("settings.cancel")){org.json.JSONObject pending=draft.json();for(Map.Entry<String,EditText> entry:numberEditors.entrySet()){try{pending.put(entry.getKey(),Integer.parseInt(entry.getValue().getText().toString()));}catch(NumberFormatException e){throw new IllegalArgumentException("请输入有效的数字");}}draft=RhProfile.fromJson(selected.uuid,pending);}
@@ -131,6 +132,7 @@ public final class RhHome implements RhActions.Target {
             case "statistics.configure":if(!(args.get("enabled") instanceof Boolean))throw new IllegalArgumentException("enabled must be boolean");org.json.JSONObject tracing=RhStatistics.configure(args.getBoolean("enabled"));if(pageId.equals("global-settings"))showGlobal();return tracing;
             case "devices.open":case "settings.cancel":showDevices();break;
             case "devices.refresh":actions.refresh();break;
+            case "device.move":if(!pageId.equals("devices"))throw new IllegalStateException("请先返回设备列表");RhShared.move(activity,computers.values(),args.getString("uuid"),args.getString("direction"));renderDevices(false);message("设备顺序已保存");break;
             case "device.add.open":addDialog();break;
             case "device.add.cancel":if(adding!=null)adding.dismiss();break;
             case "device.add.submit":String address=args.getString("address");if(address.isEmpty())throw new IllegalArgumentException("address required");actions.add(address);if(adding!=null)adding.dismiss();break;

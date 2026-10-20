@@ -128,6 +128,7 @@ pub struct Device {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Saved {
+    pub device_order_initialized: bool,
     pub profiles: BTreeMap<String, Profile>,
     pub dark: bool,
     pub devices: Vec<sync_model::SharedDevice>,
@@ -198,6 +199,16 @@ impl Controller {
             }
         }
         saved.initialize_client(platform_name)?;
+        if !saved.device_order_initialized {
+            // Older versions sorted the cards independently of the stored UUID array.
+            saved.devices.sort_by_key(|d| {
+                (
+                    !d.name.eq_ignore_ascii_case("winserver"),
+                    d.name.to_lowercase(),
+                )
+            });
+            saved.device_order_initialized = true;
+        }
         let controller = Arc::new(Self {
             state: Mutex::new(State {
                 platform: platform_name.into(),
@@ -260,13 +271,14 @@ impl Controller {
                 .map(|h| h.display_name.clone())
                 .unwrap_or_default();
         }
-        s.devices = devices;
-        s.devices.sort_by_key(|d| {
-            (
-                !d.name.eq_ignore_ascii_case("winserver"),
-                d.name.to_lowercase(),
-            )
+        let saved = &s.saved.devices;
+        devices.sort_by_key(|d| {
+            saved
+                .iter()
+                .position(|h| h.uuid == d.uuid)
+                .unwrap_or(usize::MAX)
         });
+        s.devices = devices;
         s.revision += 1;
     }
     pub fn stream_state(&self, streaming: bool, statistics: Value) {
@@ -333,6 +345,7 @@ impl Controller {
                     | "settings.save"
                     | "appearance.toggle"
                     | "device.add.submit"
+                    | "device.move"
             )
         {
             return Err("同步进行中，请稍后保存".into());
@@ -341,6 +354,39 @@ impl Controller {
             return Err("更新操作进行中，请稍后连接".into());
         }
         match id {
+            "device.move" => {
+                if s.page != "devices" {
+                    return Err("请先返回设备列表".into());
+                }
+                let uuid = args["uuid"].as_str().ok_or("uuid required")?;
+                let index = s
+                    .devices
+                    .iter()
+                    .position(|d| d.uuid == uuid)
+                    .ok_or("unknown device")?;
+                let target = match args["direction"].as_str() {
+                    Some("up") => index.saturating_sub(1),
+                    Some("down") => (index + 1).min(s.devices.len() - 1),
+                    _ => return Err("direction must be up or down".into()),
+                };
+                let mut next = s.saved.clone();
+                next.devices = sync_model::from_state(&s).devices;
+                let a = next
+                    .devices
+                    .iter()
+                    .position(|d| d.uuid == s.devices[index].uuid)
+                    .unwrap();
+                let b = next
+                    .devices
+                    .iter()
+                    .position(|d| d.uuid == s.devices[target].uuid)
+                    .unwrap();
+                next.devices.swap(a, b);
+                self.persist(&next)?;
+                s.saved = next;
+                s.devices.swap(index, target);
+                s.status = "设备顺序已保存".into();
+            }
             "devices.open" | "device.add.cancel" | "settings.cancel" => {
                 s.page = "devices".into();
                 s.draft = None;
@@ -554,8 +600,12 @@ impl Controller {
                                     .map(|h| h.display_name.clone())
                                     .unwrap_or_default();
                             }
-                            s.devices
-                                .sort_by_key(|d| (d.is_self, !d.paired, d.name.to_lowercase()));
+                            s.devices.sort_by_key(|d| {
+                                saved_devices
+                                    .iter()
+                                    .position(|h| h.uuid == d.uuid)
+                                    .unwrap_or(usize::MAX)
+                            });
                         }
                         if id == "device.add.submit" {
                             let mut next = s.saved.clone();

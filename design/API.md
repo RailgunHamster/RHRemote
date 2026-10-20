@@ -25,7 +25,10 @@ Android 应用运行时监听 `127.0.0.1:48752`，64 字符随机令牌保存在
 {"id":"settings.set","args":{"key":"displayName","value":"开发机"}}
 {"id":"settings.save","args":{}}
 {"id":"device.connect","args":{"uuid":"<Sunshine UUID>"}}
+{"id":"device.move","args":{"uuid":"<Sunshine UUID>","direction":"up"}}
 ```
+
+设备卡片的上移、下移按钮调用 `device.move`，direction 只能是 `up` 或 `down`；到达边界保持原位。顺序立即保存，刷新和重启不重排。共享文档 `devices` 数组的顺序就是显示顺序，不另加依赖本机分辨率的排序字段；WebDAV 对顺序做三方合并，同时更改为不同顺序时返回 `deviceOrder` 冲突。离线和本机设备同样参与排序。同步过程中拒绝移动，避免覆盖正在合并的数据。
 
 设备配置支持尺寸、帧率、码率、编码、鼠标主副键补偿、触控板模式及统计。先编辑草稿，保存才持久化；取消保留原值。`displayName` 是可同步的设备别名，留空恢复原始主机名；不改变 Sunshine 主机名、UUID、地址或配对身份。`settings.save` 也可直接传入可选 displayName。
 

@@ -15,7 +15,7 @@ Windows 与 Android 远程桌面客户端，兼容 Sunshine，串流复用 Moonl
 
 Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运行。Android 使用 arm64-v8a APK，包名为 `com.rhremote.client`，可与原版 Moonlight 并存。升级保留同一应用身份和签名，不要先卸载。
 
-当前 v0.2.0 是开发预览版。Android 暂用开发签名；Windows 尚无代码签名证书。连接成功不代表稳定 30 / 60 FPS 验收，首次连接的主机编码检测耗时仍在排查。
+当前 v0.2.1 是开发预览版。Android 暂用开发签名；Windows 尚无代码签名证书。连接成功不代表稳定 30 / 60 FPS 验收，首次连接的主机编码检测耗时仍在排查。
 
 ## 构建与接口
 
@@ -33,3 +33,5 @@ Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运�
 ## 许可
 
 基于 Moonlight Qt、Moonlight Android 及其依赖，保留原有版权和 GPL v3 许可。服务端 Sunshine 单独安装和配置。许可文本见 [LICENSE](LICENSE)。本项目不代表 Moonlight 或 Sunshine 官方构建。
+
+设备卡片的 ↑ / ↓ 按钮调整显示顺序，立即保存，并随 WebDAV 配置同步到其他客户端。刷新和重启保持顺序；同时修改产生冲突时可选择保留哪一端。

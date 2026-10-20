@@ -104,16 +104,41 @@ pub fn merge(
             .collect::<BTreeMap<_, _>>()
     };
     let bd = base.map(|b| map(&b.devices));
-    let devices = merge_map(
+    let mut devices = merge_map(
         &map(&local.devices),
         &map(&remote.devices),
         bd.as_ref(),
         "devices",
         resolution,
         &mut conflicts,
-    )
-    .into_values()
-    .collect();
+    );
+    let ids = |rows: &[SharedDevice]| rows.iter().map(|d| d.uuid.clone()).collect::<Vec<_>>();
+    let lo = ids(&local.devices);
+    let ro = ids(&remote.devices);
+    let bo = base.map(|b| ids(&b.devices));
+    let order = if lo.is_empty() {
+        ro.clone()
+    } else if ro.is_empty() {
+        lo.clone()
+    } else {
+        choose(
+            Some(&lo),
+            Some(&ro),
+            bo.as_ref(),
+            "deviceOrder".into(),
+            resolution,
+            &mut conflicts,
+        )
+        .unwrap()
+    };
+    // The chosen ordering never deletes hosts added by the other client.
+    let mut ordered = Vec::new();
+    for id in order {
+        if let Some(d) = devices.remove(&id) {
+            ordered.push(d);
+        }
+    }
+    ordered.extend(devices.into_values());
     let clients = merge_map(
         &local.clients,
         &remote.clients,
@@ -134,7 +159,7 @@ pub fn merge(
     MergeResult {
         merged: SharedConfig {
             schema_version: 2,
-            devices,
+            devices: ordered,
             clients,
             profiles,
             dark,
@@ -469,9 +494,22 @@ pub(crate) fn from_state(s: &State) -> SharedConfig {
             .map(|(id, p)| (id.clone(), ClientProfile::from_profile(p)))
             .collect(),
     );
+    let mut ordered = Vec::new();
+    for id in s
+        .saved
+        .devices
+        .iter()
+        .map(|d| &d.uuid)
+        .chain(s.devices.iter().map(|d| &d.uuid))
+    {
+        if let Some(d) = devices.remove(id) {
+            ordered.push(d);
+        }
+    }
+    ordered.extend(devices.into_values());
     SharedConfig {
         schema_version: 2,
-        devices: devices.into_values().collect(),
+        devices: ordered,
         clients: s.saved.clients.clone(),
         profiles,
         dark: s.saved.dark,
@@ -571,6 +609,76 @@ mod tests {
         saved.apply_shared(&merged.merged);
         assert_eq!(saved.effective_profile("self").width, 1920);
         assert!(saved.effective_profile("self").swap_buttons);
+    }
+    #[test]
+    fn device_order_merges_and_conflicts_without_losing_hosts() {
+        let mut base = sample();
+        for id in ["b", "c"] {
+            let mut d = base.devices[0].clone();
+            d.uuid = id.into();
+            base.devices.push(d);
+        }
+        let mut local = base.clone();
+        local.devices.swap(0, 1);
+        let result = merge(&local, &base, Some(&base), Resolution::Review);
+        assert!(result.conflicts.is_empty());
+        assert_eq!(result.merged.devices, local.devices);
+        let mut remote = base.clone();
+        remote.devices.swap(1, 2);
+        assert_eq!(
+            merge(&local, &remote, Some(&base), Resolution::Review).conflicts,
+            vec!["deviceOrder"]
+        );
+        assert_eq!(
+            merge(&local, &remote, Some(&base), Resolution::Remote)
+                .merged
+                .devices,
+            remote.devices
+        );
+        let mut extra = remote.devices[0].clone();
+        extra.uuid = "new".into();
+        remote.devices.push(extra);
+        let result = merge(&local, &remote, Some(&base), Resolution::Local);
+        assert_eq!(result.merged.devices.len(), 4);
+        assert_eq!(result.merged.devices[0].uuid, "b");
+        assert_eq!(result.merged.devices[3].uuid, "new");
+    }
+    #[test]
+    fn moving_devices_survives_refresh_export_and_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "rhremote-order-{}.json",
+            crate::random_token().unwrap()
+        ));
+        let rows: Vec<_> = ["offline", "self", "remote"]
+            .iter()
+            .map(|id| Device {
+                uuid: (*id).into(),
+                name: (*id).into(),
+                address: "local".into(),
+                display_name: String::new(),
+                online: *id != "offline",
+                paired: false,
+                is_self: *id == "self",
+            })
+            .collect();
+        let c = Controller::new("windows", path.clone(), Arc::new(Stub)).unwrap();
+        c.replace_devices(rows.clone());
+        assert_eq!(
+            c.dispatch("device.move", json!({"uuid":"self","direction":"up"}))["ok"],
+            true
+        );
+        assert_eq!(c.export_shared().devices[0].uuid, "self");
+        c.replace_devices(rows.clone());
+        assert_eq!(c.state()["devices"][0]["uuid"], "self");
+        assert_eq!(
+            c.dispatch("device.move", json!({"uuid":"self","direction":"bad"}))["ok"],
+            false
+        );
+        let restarted = Controller::new("windows", path.clone(), Arc::new(Stub)).unwrap();
+        restarted.replace_devices(rows);
+        assert_eq!(restarted.state()["devices"][0]["uuid"], "self");
+        assert_eq!(restarted.export_shared().devices.len(), 3);
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn same_client_host_conflict_requires_explicit_choice() {

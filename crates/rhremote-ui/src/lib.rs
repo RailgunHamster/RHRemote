@@ -10,6 +10,10 @@ slint::include_modules!();
 
 fn args_for(id: &str, arg: &str, state: &Value) -> Value {
     match id {
+        "device.move" => {
+            let (uuid, direction) = arg.split_once('|').unwrap_or(("", ""));
+            json!({"uuid":uuid,"direction":direction})
+        }
         "statistics.configure" => json!({"enabled":arg=="true"}),
         "app.settings.tab" | "settings.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),

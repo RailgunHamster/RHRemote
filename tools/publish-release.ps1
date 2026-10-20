@@ -2,14 +2,15 @@
 param(
  [ValidateSet('github','gitee')][string]$Provider,
  [string]$CandidateDirectory,[string]$Commit,[string]$BundlePath='',
- [switch]$MakePublic
+ [switch]$MakePublic,[switch]$SourceOnly
 )
 $ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
 if($Commit -notmatch '^[a-f0-9]{40}$'){throw 'Expected an exact release commit'}
 $candidate=[IO.Path]::GetFullPath($CandidateDirectory)
 $plan=Get-Content -LiteralPath (Join-Path $candidate 'publish-plan.json') -Raw|ConvertFrom-Json
-if($plan.version -ne '0.2.0' -or $plan.tag -ne 'v0.2.0'){throw 'Unexpected release identity'}
+if($plan.version -notmatch '^\d+\.\d+\.\d+$' -or $plan.tag -ne ('v'+$plan.version)){throw 'Unexpected release identity'}
+$tag=[string]$plan.tag;$tagRef='refs/tags/'+$tag;$releaseTitle='RHRemote '+$tag
 foreach($asset in $plan.artifacts){
  if($asset.fileName -notmatch '^[A-Za-z0-9._-]+$'){throw 'Invalid asset filename'}
  $file=Join-Path $candidate $asset.fileName
@@ -35,9 +36,12 @@ try{
  function Api([string]$Method,[string]$Path,[object]$Body=$null,[switch]$Allow404){
   try{
    $parameters=@{Uri=($api+$Path);Method=$Method;Headers=$headers;TimeoutSec=30;MaximumRedirection=0}
-   if($null -ne $Body){$parameters.ContentType='application/json';$parameters.Body=[Text.Encoding]::UTF8.GetBytes(($Body|ConvertTo-Json -Depth 8 -Compress))}
+   if($null -ne $Body){
+    if($Provider -eq 'gitee'){$form=@{};foreach($key in $Body.Keys){$form[$key]=if($Body[$key] -is [bool]){$Body[$key].ToString().ToLowerInvariant()}else{[string]$Body[$key]}};$parameters.ContentType='application/x-www-form-urlencoded';$parameters.Body=$form}
+    else{$parameters.ContentType='application/json';$parameters.Body=[Text.Encoding]::UTF8.GetBytes(($Body|ConvertTo-Json -Depth 8 -Compress))}
+   }
    Invoke-RestMethod @parameters
-  }catch{$code=if($_.Exception.Response){[int]$_.Exception.Response.StatusCode}else{0};if($Allow404 -and $code -eq 404){return $null};throw "$Provider API $Method $Path failed (HTTP $code; response and credentials suppressed)"}
+  }catch{$code=if($_.Exception.Response){[int]$_.Exception.Response.StatusCode}else{0};if($Allow404 -and $code -eq 404){return $null};$message='';try{$parsed=$_.ErrorDetails.Message|ConvertFrom-Json;$message=[string]$parsed.message;if($message.Length -gt 240 -or $message -match '(?i)token|password|secret|authorization'){$message=''};$message=$message.Replace($token,'[redacted]')}catch{};throw "$Provider API $Method $Path failed (HTTP $code; $message; credentials suppressed)"}
  }
  $accountUri=if($Provider -eq 'github'){'https://api.github.com/user'}else{'https://gitee.com/api/v5/user'}
  try{$account=Invoke-RestMethod -Uri $accountUri -Headers $headers -TimeoutSec 20}catch{throw 'Publisher account verification failed'}
@@ -59,21 +63,24 @@ try{
   if(-not(Test-Path -LiteralPath $BundlePath)){throw 'Curated source bundle is required on Gitee publisher host'}
   $sourceRoot=Join-Path $env:USERPROFILE ('RHRemote-publish\'+$Commit.Substring(0,12)+'.git')
   if(-not(Test-Path -LiteralPath $sourceRoot)){$null=New-Item -ItemType Directory -Force -Path $sourceRoot;$null=RunGit -Arguments @('init','--bare',$sourceRoot)}
-  $null=RunGit -Arguments @('-C',$sourceRoot,'fetch',$BundlePath,'refs/heads/main:refs/heads/main','refs/tags/v0.2.0:refs/tags/v0.2.0')
+  $null=RunGit -Arguments @('-C',$sourceRoot,'fetch',$BundlePath,'refs/heads/main:refs/heads/main',($tagRef+':'+$tagRef))
  }else{$sourceRoot=Split-Path $PSScriptRoot -Parent}
  $head=RunGit -Arguments @('-C',$sourceRoot,'rev-parse','refs/heads/main');if($head -ne $Commit){throw 'Source commit differs from audited release'}
- $null=RunGit -Arguments @('-C',$sourceRoot,'push',$gitUrl,'refs/heads/main:refs/heads/main','refs/tags/v0.2.0:refs/tags/v0.2.0')
+ $null=RunGit -Arguments @('-C',$sourceRoot,'push',$gitUrl,'refs/heads/main:refs/heads/main',($tagRef+':'+$tagRef))
  Write-Output "$Provider source uploaded: $Commit"
- if($MakePublic){$repository=Api PATCH '' @{private=$false;default_branch='main'};if($repository.private){throw 'Repository remained private'}}
+ if($MakePublic){$null=Api PATCH '' @{name='RHRemote';private=$false;default_branch='main'};$repository=Api GET '';if($repository.private){throw 'Repository remained private'}}
+ if($SourceOnly){Write-Output "$Provider audited source mirror updated: $Commit";return}
  $notes=[IO.File]::ReadAllText((Join-Path $candidate 'RELEASE-NOTES.md'))
- $release=Api GET '/releases/tags/v0.2.0' $null -Allow404
- if(-not $release){$body=@{tag_name='v0.2.0';target_commitish=$Commit;name='RHRemote v0.2.0';body=$notes;prerelease=$false};if($Provider -eq 'github'){$body.draft=$true};$release=Api POST '/releases' $body}
+ $release=Api GET ('/releases/tags/'+$tag) $null -Allow404
+ if(-not $release){$body=@{tag_name=$tag;target_commitish='main';name=$releaseTitle;body=$notes;prerelease=$false};if($Provider -eq 'github'){$body.draft=$true};$release=Api POST '/releases' $body}
+ if(-not $release.id){throw 'Release API did not return a release ID'}
  Add-Type -AssemblyName System.Net.Http
  $client=New-Object Net.Http.HttpClient;$client.Timeout=[TimeSpan]::FromMinutes(10)
  $client.DefaultRequestHeaders.Authorization=New-Object Net.Http.Headers.AuthenticationHeaderValue('Bearer',$token)
  $client.DefaultRequestHeaders.UserAgent.ParseAdd('RHRemote-publisher')
  function Upload([object]$Release,[object]$Asset){
-  $existing=@($Release.assets|Where-Object {$_.name -eq $Asset.fileName})
+  $available=if($Provider -eq 'gitee'){Api GET ('/releases/'+$Release.id+'/attach_files?per_page=100')}else{$Release.assets}
+  $existing=@($available|Where-Object {$_.name -eq $Asset.fileName})
   if($existing.Count -gt 0){if($existing[0].size -and $existing[0].size -ne $Asset.size){throw 'Existing release asset size differs; immutable asset not overwritten'};Write-Output "$Provider already has $($Asset.fileName)";return}
   $file=Join-Path $candidate $Asset.fileName;$stream=[IO.File]::OpenRead($file);$multipart=$null;$content=$null
   try{
@@ -91,14 +98,14 @@ try{
   }finally{if($multipart){$multipart.Dispose()}elseif($content){$content.Dispose()};$stream.Dispose()}
  }
  try{foreach($asset in $plan.artifacts){Upload $release $asset}
-  if($Provider -eq 'github'){$release=Api PATCH ('/releases/'+$release.id) @{draft=$false;prerelease=$false;make_latest='true'}}
+  if($Provider -eq 'github'){$release=Api PATCH ('/releases/'+$release.id) @{draft=$false;prerelease=$false;make_latest='true';name=$releaseTitle;body=$notes}}
   else{
-   # Gitee download/latest is a named tag, not GitHub's latest/download redirect.
-   $latest=Api GET '/releases/tags/latest' $null -Allow404
-   if(-not $latest){$latest=Api POST '/releases' @{tag_name='latest';target_commitish=$Commit;name='RHRemote update manifests';body='Update manifests. Binaries are pinned to v0.2.0.';prerelease=$false}}
-   foreach($asset in @($plan.artifacts|Where-Object {$_.fileName -in @('releases.win.json','releases.android.json')})){Upload $latest $asset}
+   $null=Api PATCH ('/releases/'+$release.id) @{tag_name=$tag;name=$releaseTitle;body=$notes;prerelease=$false}
+   # Gitee supports download/latest without a separately named latest tag.
+   $release=Api GET ('/releases/tags/'+$tag)
+   if(-not $release.id){throw 'Published release could not be read back'}
   }
  }finally{$client.Dispose()}
- $result=[ordered]@{provider=$Provider;repository=$repository.html_url;private=[bool]$repository.private;tag='v0.2.0';release_id=$release.id;assets=$plan.artifacts.Count;commit=$Commit;published=$true}
+ $result=[ordered]@{provider=$Provider;repository=$repository.html_url;private=[bool]$repository.private;tag=$tag;release_id=$release.id;assets=$plan.artifacts.Count;commit=$Commit;published=$true}
  if($Provider -eq 'gitee'){'B64:'+ [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($result|ConvertTo-Json -Compress)))}else{$result|ConvertTo-Json -Compress}
 }finally{if($pointer -ne [IntPtr]::Zero){[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)};$token=$null;$headers=$null;$credentialOutput=$null;$secret=$null}

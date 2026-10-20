@@ -57,8 +57,12 @@ public final class RhSync {
         left=RhShared.normalize(left);right=RhShared.normalize(right);if(base!=null)base=RhShared.normalize(base);
         JSONObject lp=left.getJSONObject("profiles"),rp=right.getJSONObject("profiles"),bp=base==null?new JSONObject():base.getJSONObject("profiles"),profiles=new JSONObject();Set<String> ids=new TreeSet<>();lp.keys().forEachRemaining(ids::add);rp.keys().forEachRemaining(ids::add);
         for(String id:ids)profiles.put(id,mergeMap(lp.has(id)?lp.getJSONObject(id):new JSONObject(),rp.has(id)?rp.getJSONObject(id):new JSONObject(),bp.optJSONObject(id),"profiles."+id,resolution,conflicts));
-        Map<String,JSONObject> ld=devices(left),rd=devices(right),bd=devices(base);ids=new TreeSet<>();ids.addAll(ld.keySet());ids.addAll(rd.keySet());JSONArray ds=new JSONArray();for(String id:ids)ds.put(choose(ld.get(id),rd.get(id),bd.get(id),"devices."+id,resolution,conflicts));
+        Map<String,JSONObject> ld=devices(left),rd=devices(right),bd=devices(base);ids=new TreeSet<>();ids.addAll(ld.keySet());ids.addAll(rd.keySet());Map<String,JSONObject> hosts=new TreeMap<>();for(String id:ids)hosts.put(id,(JSONObject)choose(ld.get(id),rd.get(id),bd.get(id),"devices."+id,resolution,conflicts));
+        JSONArray lo=order(left),ro=order(right),bo=base==null?null:order(base);
+        JSONArray sequence=lo.length()==0?ro:ro.length()==0?lo:(JSONArray)choose(lo,ro,bo,"deviceOrder",resolution,conflicts);
+        JSONArray ds=new JSONArray();for(int i=0;i<sequence.length();i++){JSONObject host=hosts.remove(sequence.getString(i));if(host!=null)ds.put(host);}for(JSONObject host:hosts.values())ds.put(host);
         JSONObject clients=mergeMap(left.getJSONObject("clients"),right.getJSONObject("clients"),base==null?null:base.getJSONObject("clients"),"clients",resolution,conflicts);
         Object dark=choose(left.get("dark"),right.get("dark"),base==null?null:base.get("dark"),"appearance.dark",resolution,conflicts);return RhActions.obj("schemaVersion",2,"devices",ds,"clients",clients,"profiles",profiles,"dark",dark);
     }
+    private static JSONArray order(JSONObject config)throws JSONException {JSONArray out=new JSONArray(),rows=config.getJSONArray("devices");for(int i=0;i<rows.length();i++)out.put(rows.getJSONObject(i).getString("uuid"));return out;}
 }

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Directory)
+param([Parameter(Mandatory)][string]$Directory,[switch]$CheckOnlineUpdates)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $zip=Join-Path $Directory 'RHRemote-win-Portable.zip'
@@ -18,6 +18,14 @@ try{
  $null=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Port 48755 -Action 'device.add.submit' -Arguments @{address='192.168.0.104'}
  $state=State;$device=@($state.devices|Where-Object name -eq 'winserver');if($device.Count -ne 1 -or -not $device[0].online -or $device[0].paired){throw 'Packaged native adapter did not probe a fresh unpaired winserver'}
  $result=[ordered]@{result='PASS';private_configuration_excluded=$true;velopack_managed=$state.updates.managed;fresh_host_probe=$true;directory=$root}
+ if($CheckOnlineUpdates){
+  $deadline=(Get-Date).AddSeconds(60);do{$state=State;if(-not $state.updatesBusy){break};Start-Sleep -Milliseconds 300}while((Get-Date)-lt $deadline)
+  if($state.updatesBusy){throw 'Automatic update check did not finish'}
+  $null=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Port 48755 -Action 'updates.check'
+  $deadline=(Get-Date).AddSeconds(60);do{Start-Sleep -Milliseconds 300;$state=State}while($state.updatesBusy -and (Get-Date)-lt $deadline)
+  if($state.updatesBusy -or $state.updates.status -ne '已是最新版本'){throw ('Live update check failed: '+$state.updates.status)}
+  $result.anonymous_online_update_check=$state.updates.status
+ }
  [IO.File]::WriteAllText((Join-Path $repo 'results/clients-v2/windows-package-smoke.json'),($result|ConvertTo-Json));$result|ConvertTo-Json
 }finally{
  try{$null=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Port 48755 -Action 'window.close'}catch{}
