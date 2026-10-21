@@ -17,13 +17,15 @@ Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运�
 
 当前 v0.2.1 是开发预览版。Android 暂用开发签名；Windows 尚无代码签名证书。连接成功不代表稳定 30 / 60 FPS 验收，首次连接的主机编码检测耗时仍在排查。
 
-开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制栏悬浮在串流窗口顶部，可收起为小开关；Android 使用串流工具栏。每个操作都有对应动作接口。
+开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制栏悬浮在串流窗口顶部，可收起为小开关；Android 顶部固定开关展开“操作 / 屏幕 / 声音”分类面板，按钮按宽度排列为两列或三列，长内容纵向滚动。每个操作都有对应动作接口。
 
 Windows 对已经显示过首帧的意外中断自动恢复，最多连续尝试 3 次、限时 60 秒；主动断开或关闭窗口不会重连。重试保留连接参数和实时声音设置，第一次重试复用选屏信息，后续失败再重新查询主机。受控客户端不会等待底层错误对话框确认。
 
 被控端保留 Sunshine，新增可选 Rust 辅助服务 RHRemoteHost，用于安全操作序列、屏幕清单和自有虚拟屏尺寸管理。构建运行 `tools/build-host.ps1`，在被控端管理员 PowerShell 运行 `dist/host/install-host.ps1 -SourceDirectory <组件目录> -EnableSecureAttention`。它使用已有 Sunshine 配对证书，不增加账号密码；安装目录和操作文件仅 SYSTEM / 管理员可写，47995 端口仅允许局域网。卸载使用同目录 `uninstall-host.ps1`，保留备份和数据。
 
 虚拟屏需要已安装的 Amyuni IDD 驱动；不会接管其他程序的虚拟屏。自动选择依赖 Windows 报告的屏幕可用状态：有些显示器关电源后仍被 Windows 视为连接，此时需要手动选择虚拟屏。实体屏的分辨率、位置和主屏状态不随客户端调整。
+
+只安装 Sunshine 可以连接其默认捕获画面，但枚举物理屏、自动选屏和虚拟屏管理需要上述 RHRemoteHost。Android 屏幕页显示服务端返回的物理屏与虚拟屏；组件缺失或连接失败时显示具体错误。旧版平板部署的虚拟屏归属记录会从系统盘或组件所在工具盘迁移，不假设工具都安装在 C 盘。
 
 ## 构建与接口
 

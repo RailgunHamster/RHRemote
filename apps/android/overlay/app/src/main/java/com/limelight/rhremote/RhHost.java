@@ -37,6 +37,10 @@ public final class RhHost {
             if(body!=null){byte[] bytes=body.toString().getBytes(StandardCharsets.UTF_8);connection.setRequestMethod("POST");connection.setDoOutput(true);connection.setFixedLengthStreamingMode(bytes.length);connection.setRequestProperty("Content-Type","application/json");try(OutputStream out=connection.getOutputStream()){out.write(bytes);}}
             int code=connection.getResponseCode();InputStream source=code>=400?connection.getErrorStream():connection.getInputStream();if(source==null)throw new IOException("主机辅助服务响应为空");
             try(InputStream in=source){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1){if(out.size()+n>131072)throw new IOException("主机响应过大");out.write(b,0,n);}JSONObject result=new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));if(!result.optBoolean("ok"))throw new IOException(result.optString("error","主机操作失败"));return result;}
+        } catch(ConnectException e){
+            throw new IOException("无法连接主机辅助服务（"+host+":47995），请在目标电脑安装或启动 RHRemoteHost",e);
+        } catch(SocketTimeoutException e){
+            throw new IOException("主机辅助服务响应超时，请检查 RHRemoteHost 和局域网连接",e);
         } finally {connection.disconnect();}
     }
 }

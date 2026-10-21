@@ -9,7 +9,7 @@ try {
     $proxy=[Net.WebRequest]::GetSystemWebProxy().GetProxy([uri]'https://repo.maven.apache.org/maven2/')
     $proxyArgs=@()
     if($proxy.Host -ne 'repo.maven.apache.org'){$proxyArgs=@("-Dhttps.proxyHost=$($proxy.Host)","-Dhttps.proxyPort=$($proxy.Port)","-Dhttp.proxyHost=$($proxy.Host)","-Dhttp.proxyPort=$($proxy.Port)",'-Dhttp.nonProxyHosts=localhost')}
-    $tasks=@(':app:assembleNonRootDebug');if($BuildTests){$tasks+=':app:assembleNonRootDebugAndroidTest'}
+    $tasks=@(':app:assembleNonRootDebug');if($BuildTests){$tasks+=@(':app:assembleNonRootDebugAndroidTest',':app:testNonRootDebugUnitTest')}
     & $gradle --no-daemon --console=plain @proxyArgs @tasks
     if($LASTEXITCODE -ne 0){throw 'Android build failed.'}
     $repo=Split-Path $PSScriptRoot -Parent;$out=Join-Path $repo 'dist/android'

@@ -24,7 +24,19 @@ Edit-Source 'app/build.gradle' {
     # Build only the actual OPPO architecture; don't spend time building unused ABIs.
     $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters 'arm64-v8a' }")
     $s=$s.Replace('targetSdk 36',"targetSdk 36`n        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'")
-    $s=$s.Replace("dependencies {","dependencies {`n    implementation 'androidx.core:core:1.16.0'`n    androidTestImplementation 'androidx.test:runner:1.6.2'`n    androidTestImplementation 'androidx.test.ext:junit:1.2.1'")
+    $s=$s.Replace('    compileOptions {',@'
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
+            ['https.proxyHost','https.proxyPort','http.proxyHost','http.proxyPort','http.nonProxyHosts'].each { key ->
+                if(System.getProperty(key) != null)systemProperty key, System.getProperty(key)
+            }
+        }
+    }
+    compileOptions {
+'@)
+    $s=$s.Replace("dependencies {","dependencies {`n    implementation 'androidx.core:core:1.16.0'`n    testImplementation 'junit:junit:4.13.2'`n    testImplementation 'org.robolectric:robolectric:4.17'`n    androidTestImplementation 'androidx.test:runner:1.6.2'`n    androidTestImplementation 'androidx.test.ext:junit:1.2.1'")
     return $s
 }
 Edit-Source 'app/src/main/AndroidManifest.xml' {param($s)

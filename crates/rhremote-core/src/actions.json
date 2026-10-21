@@ -31,6 +31,7 @@
  {"id":"updates.download","label":"下载更新","args":{}},
  {"id":"updates.install","label":"重启并安装","args":{}},
  {"id":"stream.controls.toggle","label":"控制","args":{}},
+ {"id":"stream.controls.tab","label":"串流控制分类","platforms":["android"],"args":{"tab":"input / displays / audio"}},
  {"id":"stream.menu.open","label":"打开悬浮选择列表","args":{"menu":"shortcuts / displays"}},
  {"id":"stream.menu.close","label":"关闭悬浮选择列表","args":{}},
  {"id":"stream.mode.toggle","label":"直接点击 / 触控板","args":{}},

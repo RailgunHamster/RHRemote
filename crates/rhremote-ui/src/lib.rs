@@ -396,6 +396,9 @@ mod tests {
             include_str!(
                 "../../../apps/android/overlay/app/src/main/java/com/limelight/rhremote/RhStreamControls.java"
             ),
+            include_str!(
+                "../../../apps/android/overlay/app/src/main/java/com/limelight/rhremote/RhStreamPanel.java"
+            ),
         ] {
             for value in source.split('"').skip(1).step_by(2) {
                 if [

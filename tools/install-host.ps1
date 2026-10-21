@@ -13,13 +13,18 @@ foreach($path in @($install,$data)){
     Set-Acl -LiteralPath $path -AclObject $acl
 }
 [IO.File]::WriteAllText((Join-Path $data 'host-settings.json'),(@{sunshineConfig=$SunshineConfig}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+if(-not(Test-Path -LiteralPath (Join-Path $data 'owned-monitor.json'))){
+    # Older tablet setup used the tools drive, which is not always the system drive.
+    $legacyFiles=@(@((Join-Path $env:SystemDrive 'RHRemoteTools\tablet-display\owned-monitor.json'),(Join-Path ([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($SourceDirectory))) 'RHRemoteTools\tablet-display\owned-monitor.json'))|Select-Object -Unique|Where-Object {Test-Path -LiteralPath $_})
+    $legacyIds=@($legacyFiles|ForEach-Object {$owned=[IO.File]::ReadAllText($_)|ConvertFrom-Json;if($owned.device_id -notmatch '^DISPLAY\\'){throw 'Unexpected legacy virtual monitor ownership.'};[string]$owned.device_id}|Select-Object -Unique)
+    if($legacyIds.Count -gt 1){throw 'Conflicting legacy virtual monitor ownership; no service was stopped.'}
+    if($legacyIds.Count -eq 1){[IO.File]::WriteAllText((Join-Path $data 'owned-monitor.json'),(@{device_id=$legacyIds[0]}|ConvertTo-Json -Compress))}
+}
 $service=Get-Service RHRemoteHost -ErrorAction SilentlyContinue
 if($service){Stop-Service RHRemoteHost;$service.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))}
 Copy-Item -LiteralPath (Join-Path $SourceDirectory 'RHRemoteHost.exe') -Destination $install -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $install 'scripts')|Out-Null
 Get-ChildItem -LiteralPath (Join-Path $SourceDirectory 'scripts') -File|ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $install 'scripts') -Force}
-$legacy='C:\RHRemoteTools\tablet-display\owned-monitor.json'
-if(-not(Test-Path -LiteralPath (Join-Path $data 'owned-monitor.json')) -and (Test-Path -LiteralPath $legacy)){$owned=[IO.File]::ReadAllText($legacy)|ConvertFrom-Json;if($owned.device_id -notmatch '^DISPLAY\\'){throw 'Unexpected legacy virtual monitor ownership.'};[IO.File]::WriteAllText((Join-Path $data 'owned-monitor.json'),(@{device_id=[string]$owned.device_id}|ConvertTo-Json -Compress))}
 $policyPath='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 if($EnableSecureAttention){
     $policy=Get-ItemProperty -LiteralPath $policyPath -Name SoftwareSASGeneration -ErrorAction SilentlyContinue
