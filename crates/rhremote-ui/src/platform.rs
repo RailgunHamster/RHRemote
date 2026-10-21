@@ -20,6 +20,75 @@ struct Recovery {
 mod recovery_transport_tests {
     use super::*;
     #[test]
+    fn released_transport_retires_a_live_process_after_its_control_port_closes() {
+        let root = std::env::temp_dir().join(format!(
+            "rhremote-release-{}",
+            rhremote_core::random_token().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let worker = std::thread::spawn(move || {
+            let request = server.recv().unwrap();
+            request
+                .respond(tiny_http::Response::from_string(
+                    r#"{"streaming":true,"firstFrame":true,"retryEligible":true}"#,
+                ))
+                .unwrap();
+        });
+        let mut p = NativePlatform::new(
+            PathBuf::from("missing-test-engine.exe"),
+            "test-local-token".into(),
+            root.clone(),
+        )
+        .unwrap();
+        p.port = port;
+        let child = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 20",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x08000000)
+            .spawn()
+            .unwrap();
+        *p.child.lock().unwrap() = Some(child);
+        *p.recovery.lock().unwrap() = Some(Recovery {
+            args: json!({"profile":{}}),
+            policy: crate::recovery::Policy::default(),
+        });
+        p.state().unwrap();
+        worker.join().unwrap();
+        fs::write(
+            &p.session_status,
+            br#"{"streaming":false,"retryEligible":true,"transportReleased":false}"#,
+        )
+        .unwrap();
+        p.state().unwrap();
+        assert!(p.retiring.lock().unwrap().is_empty());
+        fs::write(
+            &p.session_status,
+            br#"{"streaming":false,"retryEligible":true,"transportReleased":true,"phase":"transport_closed"}"#,
+        )
+        .unwrap();
+        p.state().unwrap();
+        std::thread::sleep(Duration::from_millis(550));
+        p.state().unwrap();
+        assert!(p.child.lock().unwrap().is_none());
+        assert_eq!(p.retiring.lock().unwrap().len(), 1);
+        assert_eq!(
+            p.recovery.lock().unwrap().as_ref().unwrap().policy.attempts,
+            1
+        );
+        p.stop_owned().unwrap();
+        assert!(p.retiring.lock().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn live_http_state_arms_recovery_and_disconnect_cancels_it() {
         let root = std::env::temp_dir().join(format!(
             "rhremote-recovery-{}",
@@ -81,6 +150,8 @@ pub struct NativePlatform {
     session_status: PathBuf,
     pub devices: Mutex<Vec<Device>>,
     child: Mutex<Option<Child>>,
+    retiring: Mutex<Vec<(Child, Instant)>>,
+    state_agent: ureq::Agent,
     pairing: Mutex<Option<(u64, Device)>>,
     recovery: Mutex<Option<Recovery>>,
     token: String,
@@ -151,6 +222,15 @@ impl NativePlatform {
             session_status: data.join("session-status.json"),
             devices: Mutex::new(devices),
             child: Mutex::new(None),
+            retiring: Mutex::new(Vec::new()),
+            state_agent: ureq::AgentBuilder::new()
+                .try_proxy_from_env(false)
+                .redirects(0)
+                .timeout_connect(Duration::from_millis(100))
+                .timeout_read(Duration::from_millis(400))
+                .timeout_write(Duration::from_millis(400))
+                .timeout(Duration::from_millis(500))
+                .build(),
             pairing: Mutex::new(None),
             recovery: Mutex::new(None),
             token,
@@ -443,12 +523,16 @@ impl NativePlatform {
             .map_err(|e| e.to_string())
     }
     pub fn state(&self) -> Result<Value, String> {
-        let mut value: Value = ureq::get(&format!("http://127.0.0.1:{}/v1/state", self.port))
+        let http_state: Option<Value> = self
+            .state_agent
+            .get(&format!("http://127.0.0.1:{}/v1/state", self.port))
             .set("Authorization", &format!("Bearer {}", self.token))
             .timeout(Duration::from_millis(500))
             .call()
             .ok()
-            .and_then(|r| r.into_json().ok())
+            .and_then(|r| r.into_json().ok());
+        let http_unavailable = http_state.is_none();
+        let mut value = http_state
             .or_else(|| {
                 fs::read(&self.session_status)
                     .ok()
@@ -460,6 +544,26 @@ impl NativePlatform {
         let alive = slot
             .as_mut()
             .is_some_and(|c| c.try_wait().ok().flatten().is_none());
+        // The adapter publishes this only after LiStopConnection and session cleanup.
+        // Its HTTP listener must also be gone before the replacement reuses the port.
+        let released = alive
+            && http_unavailable
+            && value["transportReleased"] == true
+            && value["phase"] == "transport_closed";
+        {
+            let mut retired = self.retiring.lock().unwrap();
+            retired.retain_mut(|(child, since)| {
+                if child.try_wait().ok().flatten().is_some() {
+                    return false;
+                }
+                if since.elapsed() >= Duration::from_secs(15) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                true
+            });
+        }
         if let Some(child) = slot.as_ref() {
             value["streamProcessId"] = json!(child.id());
         }
@@ -480,14 +584,18 @@ impl NativePlatform {
             }
             match r.policy.observe(
                 rhremote_core::now_ms(),
-                alive,
+                alive && !released,
                 alive && value["streaming"] == true && value["firstFrame"] == true,
                 value["retryEligible"] == true,
             ) {
                 crate::recovery::Decision::Launch => {
                     r.args["recoveryAttempt"] = json!(r.policy.attempts);
                     if let Some(mut old) = slot.take() {
-                        let _ = old.wait();
+                        if old.try_wait().ok().flatten().is_some() {
+                            let _ = old.wait();
+                        } else {
+                            self.retiring.lock().unwrap().push((old, Instant::now()));
+                        }
                     }
                     match self.spawn_stream(&r.args) {
                         Ok(child) => {
@@ -541,6 +649,10 @@ impl NativePlatform {
     fn stop_owned(&self) -> Result<Value, String> {
         self.recovery.lock().unwrap().take();
         if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        for (mut child, _) in self.retiring.lock().unwrap().drain(..) {
             let _ = child.kill();
             let _ = child.wait();
         }

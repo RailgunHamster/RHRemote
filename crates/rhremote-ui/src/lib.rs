@@ -20,6 +20,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "app.settings.tab" | "settings.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
         "stream.shortcut" => json!({"shortcut":arg}),
+        "stream.menu.open" => json!({"menu":arg}),
         "stream.window.move" => json!({"direction":arg}),
         "stream.display.select" => json!({"displayId":arg}),
         "sync.configure" => {
@@ -116,6 +117,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .select()?;
     let ui = MainWindow::new()?;
     let toolbar = StreamToolbar::new()?;
+    let picker = StreamPicker::new()?;
     let shortcuts = rhremote_core::shortcuts();
     ui.set_shortcut_labels(ModelRc::new(VecModel::from(
         shortcuts
@@ -163,6 +165,35 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     toolbar
         .window()
         .on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+    let picker_sender = sender.clone();
+    let picker_actions = controller.clone();
+    picker.global::<Commands>().on_trigger(move |id, arg| {
+        if picker_sender
+            .try_send((id.to_string(), arg.to_string()))
+            .is_err()
+        {
+            picker_actions.message("操作队列已满".into());
+        }
+    });
+    let dismiss = controller.clone();
+    picker.on_dismiss(move || {
+        dismiss.dispatch("stream.menu.close", json!({}));
+    });
+    let dismiss = controller.clone();
+    picker.window().on_close_requested(move || {
+        dismiss.dispatch("stream.menu.close", json!({}));
+        slint::CloseRequestResponse::KeepWindowShown
+    });
+    {
+        use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
+        let dismiss = controller.clone();
+        picker.window().on_winit_window_event(move |_, event| {
+            if matches!(event, WindowEvent::Focused(false)) {
+                dismiss.dispatch("stream.menu.close", json!({}));
+            }
+            EventResult::Propagate
+        });
+    }
     let queue = controller.clone();
     ui.global::<Commands>().on_trigger(move |id, arg| {
         if sender.try_send((id.to_string(), arg.to_string())).is_err() {
@@ -180,6 +211,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let timer = slint::Timer::default();
     let weak = ui.as_weak();
     let toolbar_weak = toolbar.as_weak();
+    let picker_weak = picker.as_weak();
     let view = controller.clone();
     let preview = data.join("preview.png");
     let mut revision = u64::MAX;
@@ -235,11 +267,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 toolbar.set_display_labels(ModelRc::new(VecModel::from(ui.get_remote_displays().iter().map(|d|d.label).collect::<Vec<_>>())));
                 if let Some(index)=ui.get_remote_displays().iter().position(|d|d.chosen){toolbar.set_display_index(index as i32);}
             }
-            view.toolbar_state(overlay::follow(&toolbar,&state));
+            let mut toolbar_state=overlay::follow(&toolbar,&state);
+            if let Some(picker)=picker_weak.upgrade(){
+                let kind=state["streamMenu"].as_str().unwrap_or("");
+                if !kind.is_empty() && kind!=picker.get_kind().as_str(){
+                    picker.set_kind(kind.into());
+                    if kind=="shortcuts" {picker.set_labels(toolbar.get_shortcut_labels());picker.set_values(toolbar.get_shortcut_ids());}
+                }
+                if kind=="displays" {
+                    picker.set_labels(toolbar.get_display_labels());
+                    picker.set_values(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.id).collect::<Vec<_>>())));
+                }
+                picker.global::<Palette>().set_dark(state["saved"]["dark"]==true);
+                toolbar_state["picker"]=overlay::follow_picker(&picker,&state,&toolbar_state);
+            }
+            view.toolbar_state(toolbar_state);
         }
         match view.take_window_action().as_str(){
             "window.minimize"=>ui.window().set_minimized(true),"window.maximize"=>ui.window().set_maximized(!ui.window().is_maximized()),"window.close"=>{let _=slint::quit_event_loop();},
-            action @ ("view.snapshot"|"view.toolbar.snapshot")=>{let toolbar=toolbar_weak.upgrade();let snapshot=if action=="view.toolbar.snapshot" {toolbar.as_ref().ok_or(slint::PlatformError::Other("控制栏不可用".into())).and_then(|t|t.window().take_snapshot())}else{ui.window().take_snapshot()};let preview=if action=="view.toolbar.snapshot" {preview.with_file_name("toolbar-preview.png")}else{preview.clone()};match snapshot{Ok(pixels)=>{let pending=preview.with_file_name("preview.pending.png");let result=image::save_buffer(&pending,pixels.as_bytes(),pixels.width(),pixels.height(),image::ColorType::Rgba8).map_err(|e|e.to_string()).and_then(|_|std::fs::rename(&pending,&preview).map_err(|e|e.to_string()));view.preview_complete(match result{Ok(_)=>json!({"ok":true,"path":preview,"completedAtMs":rhremote_core::now_ms()}),Err(e)=>json!({"ok":false,"error":e,"completedAtMs":rhremote_core::now_ms()})});},Err(e)=>view.message(format!("导出失败：{e}"))}},_=>{}
+            action @ ("view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot")=>{let toolbar=toolbar_weak.upgrade();let picker=picker_weak.upgrade();let snapshot=if action=="view.toolbar.snapshot" {toolbar.as_ref().ok_or(slint::PlatformError::Other("控制栏不可用".into())).and_then(|t|t.window().take_snapshot())}else if action=="view.picker.snapshot" {picker.as_ref().ok_or(slint::PlatformError::Other("选择列表不可用".into())).and_then(|t|t.window().take_snapshot())}else{ui.window().take_snapshot()};let preview=if action=="view.toolbar.snapshot" {preview.with_file_name("toolbar-preview.png")}else if action=="view.picker.snapshot" {preview.with_file_name("picker-preview.png")}else{preview.clone()};match snapshot{Ok(pixels)=>{let pending=preview.with_file_name("preview.pending.png");let result=image::save_buffer(&pending,pixels.as_bytes(),pixels.width(),pixels.height(),image::ColorType::Rgba8).map_err(|e|e.to_string()).and_then(|_|std::fs::rename(&pending,&preview).map_err(|e|e.to_string()));view.preview_complete(match result{Ok(_)=>json!({"ok":true,"path":preview,"completedAtMs":rhremote_core::now_ms()}),Err(e)=>json!({"ok":false,"error":e,"completedAtMs":rhremote_core::now_ms()})});},Err(e)=>view.message(format!("导出失败：{e}"))}},_=>{}
         }
     });
     let poll = controller.clone();

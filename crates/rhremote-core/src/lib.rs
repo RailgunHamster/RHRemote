@@ -163,6 +163,7 @@ pub struct State {
     pub volume: u32,
     pub statistics: Value,
     pub controls: bool,
+    pub stream_menu: String,
     pub trackpad: bool,
     pub pan: bool,
     pub keyboard: bool,
@@ -239,6 +240,7 @@ impl Controller {
                 volume: 100,
                 statistics: Value::Null,
                 controls: false,
+                stream_menu: String::new(),
                 trackpad: false,
                 pan: false,
                 keyboard: false,
@@ -304,6 +306,9 @@ impl Controller {
             s.status = "已断开".into();
         }
         s.streaming = streaming;
+        if !streaming {
+            s.stream_menu.clear();
+        }
         s.audio_enabled = statistics["audioEnabled"] == true;
         if let Some(v) = statistics["volume"].as_u64() {
             s.volume = v as u32;
@@ -565,7 +570,19 @@ impl Controller {
             }
             "stream.controls.toggle" => {
                 s.controls = !s.controls;
+                s.stream_menu.clear();
             }
+            "stream.menu.open" => {
+                if !s.streaming || !s.controls {
+                    return Err("请先展开活动串流的控制栏".into());
+                }
+                let menu = args["menu"].as_str().unwrap_or("");
+                if !["shortcuts", "displays"].contains(&menu) {
+                    return Err("unknown stream menu".into());
+                }
+                s.stream_menu = menu.into();
+            }
+            "stream.menu.close" => s.stream_menu.clear(),
             "stream.shortcuts.list" => return Ok(shortcuts()),
             "stream.shortcuts.open" => s.controls = true,
             "stream.displays.open" => s.controls = true,
@@ -573,7 +590,8 @@ impl Controller {
             | "window.maximize"
             | "window.close"
             | "view.snapshot"
-            | "view.toolbar.snapshot" => {
+            | "view.toolbar.snapshot"
+            | "view.picker.snapshot" => {
                 if id == "window.close" && s.streaming {
                     drop(s);
                     self.platform.execute("stream.disconnect", &json!({}))?;
@@ -868,6 +886,31 @@ mod tests {
             },
         ]);
         c
+    }
+    #[test]
+    fn stream_picker_requires_active_controls_and_closes_with_stream() {
+        let c = controller();
+        assert_eq!(
+            c.dispatch("stream.menu.open", json!({"menu":"shortcuts"}))["ok"],
+            false
+        );
+        c.stream_state(true, json!({"firstFrame":true}));
+        c.dispatch("stream.controls.toggle", json!({}));
+        assert_eq!(
+            c.dispatch("stream.menu.open", json!({"menu":"unknown"}))["ok"],
+            false
+        );
+        assert_eq!(
+            c.dispatch("stream.menu.open", json!({"menu":"shortcuts"}))["ok"],
+            true
+        );
+        assert_eq!(c.state()["streamMenu"], "shortcuts");
+        c.dispatch("stream.controls.toggle", json!({}));
+        assert_eq!(c.state()["streamMenu"], "");
+        c.dispatch("stream.controls.toggle", json!({}));
+        c.dispatch("stream.menu.open", json!({"menu":"displays"}));
+        c.stream_state(false, json!({}));
+        assert_eq!(c.state()["streamMenu"], "");
     }
     #[test]
     fn pairing_completion_returns_to_devices_and_stale_completion_is_ignored() {

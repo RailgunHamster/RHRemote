@@ -66,35 +66,73 @@ export component StreamToolbar inherits Window {
     in-out property <int> shortcut-index:5;
     in-out property <int> display-index:0;
     preferred-width:expanded ? 1020px : 72px;
-    preferred-height:expanded ? 116px : 28px;
-    min-width:1px;min-height:expanded ? 116px : 28px;
-    max-width:expanded ? 1020px : 72px;max-height:expanded ? 116px : 28px;
+    preferred-height:expanded ? 144px : 28px;
+    min-width:1px;min-height:expanded ? 144px : 28px;
+    max-width:expanded ? 1020px : 72px;max-height:expanded ? 144px : 28px;
+    // Keep the toggle at the same screen coordinate in both states.
     Rectangle {
+        x:(parent.width - self.width)/2;y:0px;width:72px;height:28px;
+        background:Palette.surface;border-radius:10px;border-width:1px;border-color:Palette.line;
+        Text {text:root.expanded ? "收起" : "控制";color:Palette.blue;horizontal-alignment:center;vertical-alignment:center;font-size:12px;}
+        TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger("stream.controls.toggle","");}}
+        accessible-role:button;accessible-label:root.expanded ? "收起" : "控制";
+        accessible-action-default=>{Commands.trigger("stream.controls.toggle","");}
+    }
+    if root.expanded: Rectangle {
+        y:28px;height:116px;
         background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
-        if !root.expanded: TouchArea { mouse-cursor:pointer;clicked=>{Commands.trigger("stream.controls.toggle","");} }
-        if !root.expanded: Text {text:"控制";color:Palette.blue;horizontal-alignment:center;vertical-alignment:center;font-size:12px;}
-        if root.expanded: VerticalLayout {
+        VerticalLayout {
             padding:8px;spacing:6px;
             HorizontalLayout {spacing:6px;
                 Text {text:root.device-name;color:Palette.ink;vertical-alignment:center;overflow:elide;max-width:120px;}
                 ActionButton {text:"Ctrl+Alt+Del";action-id:"stream.shortcut";argument:"ctrl-alt-delete";}
-                ComboBox {model:root.shortcut-labels;current-index <=> root.shortcut-index;min-width:110px;}
-                ActionButton {text:"发送";action-id:"stream.shortcut";argument:root.shortcut-ids[root.shortcut-index];}
+                ActionButton {text:"快捷键 ▾";action-id:"stream.menu.open";argument:"shortcuts";}
                 ActionButton {text:root.audio-enabled ? "声音：开" : "声音：关";action-id:"stream.audio.toggle";chosen:root.audio-enabled;}
                 SpinBox {minimum:0;maximum:100;value:root.audio-volume;max-width:90px;edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
                 ActionButton {text:"统计";action-id:"stream.stats.toggle";chosen:root.stats-enabled;}
                 ActionButton {text:"断开";action-id:"stream.disconnect";}
-                ActionButton {text:"收起";action-id:"stream.controls.toggle";}
             }
             HorizontalLayout {spacing:6px;
                 ActionButton {text:"自动选屏";action-id:"stream.display.select";argument:"auto";}
                 ActionButton {text:"虚拟屏";action-id:"stream.display.select";argument:"virtual";}
-                ComboBox {model:root.display-labels;current-index <=> root.display-index;min-width:130px;}
-                ActionButton {text:"切换";action-id:"stream.display.select";argument:root.displays[root.display-index].id;disabled:root.displays.length==0;}
+                ActionButton {text:root.display-labels.length > 0 ? root.display-labels[root.display-index] + " ▾" : "屏幕 ▾";action-id:"stream.menu.open";argument:"displays";disabled:root.displays.length==0;}
                 ActionButton {text:"刷新";action-id:"stream.displays.refresh";}
                 ActionButton {text:"窗口 ←";action-id:"stream.window.move";argument:"left";}
                 ActionButton {text:"窗口 →";action-id:"stream.window.move";argument:"right";}
                 Text {text:root.status;color:Palette.muted;vertical-alignment:center;overflow:elide;}
+            }
+        }
+    }
+}
+export component StreamPicker inherits Window {
+    title:"RHRemote · 选择";no-frame:true;
+    background:Palette.surface;default-font-family:"Microsoft YaHei UI";default-font-size:13px;
+    in property <string> kind;
+    in property <[string]> labels;
+    in property <[string]> values;
+    preferred-width:420px;preferred-height:400px;min-width:180px;min-height:80px;
+    callback dismiss();
+    forward-focus:focus;
+    focus := FocusScope {
+        key-pressed(event)=>{if(event.text==Key.Escape){root.dismiss();return accept;}return reject;}
+        VerticalLayout {
+            padding:8px;spacing:6px;
+            HorizontalLayout {
+                Text {text:root.kind=="shortcuts" ? "快捷键" : "屏幕";color:Palette.ink;vertical-alignment:center;}
+                ActionButton {text:"关闭";action-id:"stream.menu.close";max-width:80px;}
+            }
+            ScrollView {
+                vertical-stretch:1;horizontal-stretch:1;
+                VerticalLayout {
+                    spacing:2px;alignment:start;
+                    for label[index] in root.labels: Rectangle {
+                        height:40px;border-radius:8px;background:touch.has-hover ? Palette.soft : transparent;
+                        Text {x:10px;width:parent.width - 20px;text:label;color:Palette.ink;vertical-alignment:center;overflow:elide;}
+                        touch := TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);Commands.trigger("stream.menu.close","");}}
+                        accessible-role:button;accessible-label:label;
+                        accessible-action-default=>{Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);Commands.trigger("stream.menu.close","");}
+                    }
+                }
             }
         }
     }

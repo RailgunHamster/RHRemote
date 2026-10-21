@@ -1,5 +1,6 @@
 #pragma once
 #include <QObject>
+#include <QCoreApplication>
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -33,15 +34,16 @@ struct RhRuntime {
     QJsonArray displays;QJsonObject selectedDisplay;QString displayError;int initialDisplay=0;
     std::atomic<bool> firstFrame{false};
     std::atomic<quintptr> streamWindow{0};
-    std::atomic<bool> localDisconnect{false},retryEligible{false};
+    std::atomic<bool> localDisconnect{false},retryEligible{false},transportReleased{false};
     std::atomic<int> terminationCode{0};
     std::atomic<bool> audioEnabled{true};std::atomic<int> volume{100};std::atomic<quint64> audioPackets{0};
     RhRuntime(){audioEnabled=qEnvironmentVariable("RHREMOTE_AUDIO_ENABLED")!="0";bool ok=false;int v=qEnvironmentVariableIntValue("RHREMOTE_AUDIO_VOLUME",&ok);if(ok)volume=qBound(0,v,100);}
     static RhRuntime& get(){static RhRuntime value;return value;}
     static void status(const QString& phase,const QString& error=QString()){
         auto& r=get();QMutexLocker lock(&r.mutex);r.phase=phase;r.error=error;
+        if(phase=="transport_closed")r.transportReleased=true;
         const auto path=qEnvironmentVariable("RHREMOTE_SESSION_STATUS");
-        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"phase",phase},{"error",error},{"streaming",r.streaming},{"firstFrame",r.firstFrame.load()},{"retryEligible",r.retryEligible.load()},{"terminationCode",r.terminationCode.load()}}).toJson(QJsonDocument::Compact));file.commit();}}
+        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"phase",phase},{"error",error},{"streaming",r.streaming},{"firstFrame",r.firstFrame.load()},{"retryEligible",r.retryEligible.load()},{"terminationCode",r.terminationCode.load()},{"transportReleased",r.transportReleased.load()}}).toJson(QJsonDocument::Compact));file.commit();}}
     }
     static void terminated(int code){auto& r=get();r.terminationCode=code;r.retryEligible=r.firstFrame.load()&&!r.localDisconnect.load()&&code!=ML_ERROR_PROTECTED_CONTENT;status("interrupted",QString("串流中断 (%1)").arg(code));}
     static void stream(bool value){auto& r=get();{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;}}if(value)status("connected");else{QString error;{QMutexLocker lock(&r.mutex);error=r.error;}status(error.isEmpty()?"disconnected":"error",error);}}
@@ -98,7 +100,7 @@ class RhControl : public QObject {
         if(method=="GET"&&(path=="/v1/state"||path=="/v1/stats")){
             QMutexLocker lock(&r.mutex);auto result=path=="/v1/state"?r.home:QJsonObject();
             result["ok"]=true;result["streaming"]=r.streaming;result["activeProfile"]=r.profile;
-            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["terminationCode"]=r.terminationCode.load();return result;
+            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["terminationCode"]=r.terminationCode.load();result["transportReleased"]=r.transportReleased.load();return result;
         }
         if(method!="POST"){status=404;return {{"ok",false},{"error","unknown endpoint"}};}
         bool streaming;QJsonObject profile;{QMutexLocker lock(&r.mutex);streaming=r.streaming;profile=r.profile;}
@@ -179,8 +181,13 @@ public:
     explicit RhControl(QObject* parent=nullptr):QObject(parent){
         bool ok=false;int port=qEnvironmentVariableIntValue("RHREMOTE_CONTROL_PORT",&ok);auto token=qgetenv("RHREMOTE_CONTROL_TOKEN");
         if(ok&&port>1024&&port<65536&&token.size()>=32){server=new Server(this,quint16(port),token);server->start();}
+        QObject::connect(QCoreApplication::instance(),&QCoreApplication::aboutToQuit,this,[this]{
+            bool cleaned;{auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);cleaned=r.phase=="cleanup_complete";}
+            if(cleaned){stopServer();RhRuntime::status("transport_closed");}
+        });
     }
-    ~RhControl(){if(server){server->requestInterruption();server->wait();delete server;}}
+    void stopServer(){if(server){server->requestInterruption();server->wait();delete server;server=nullptr;}}
+    ~RhControl(){stopServer();}
     Q_INVOKABLE void publish(const QVariantMap& value){auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.home=QJsonObject::fromVariantMap(value);}
     Q_INVOKABLE void complete(const QString& id,const QVariantMap& result){auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.lastCommand={{"id",id},{"result",QJsonObject::fromVariantMap(result)}};}
 signals:
