@@ -22,7 +22,8 @@ jobs:
         shell: bash
         run: |
           git -C sunshine submodule update --init --depth 1 third-party/build-deps third-party/libdisplaydevice third-party/libvirtualhid third-party/lizardbyte-common third-party/moonlight-common-c third-party/nvapi third-party/Simple-Web-Server third-party/ViGEmClient
-          git -C sunshine/third-party/moonlight-common-c submodule update --init --depth 1 enet
+          git -C sunshine/third-party/moonlight-common-c submodule update --init --recursive --depth 1
+          git -C sunshine/third-party/libvirtualhid submodule update --init --recursive --depth 1
       - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
         with:
           msystem: ucrt64
