@@ -46,6 +46,8 @@ jobs:
         run: python tools/prepare-sunshine.py sunshine
       - name: Build instrumented baseline
         shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
         run: |
           cmake -S sunshine -B sunshine/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=OFF -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
           cmake --build sunshine/build --target sunshine --parallel 3
@@ -56,6 +58,8 @@ jobs:
         run: python tools/prepare-sunshine.py sunshine --optimized
       - name: Build optimized server
         shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
         run: |
           cmake --build sunshine/build --target sunshine --parallel 3
           mkdir -p artifacts/optimized
