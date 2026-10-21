@@ -23,6 +23,16 @@ Edit-Source 'app/main.cpp' {param($s)
     QQuickStyle::setStyle("Material");
     QGuiApplication::setWindowIcon(QIcon(":/res/rhremote.svg"));
 '@
+    $s=Replace-Once $s '            auto launcher = new CliPair::Launcher(pairParser.getHost(), pairParser.getPredefinedPin(), &app);' @'
+            auto launcher = new CliPair::Launcher(pairParser.getHost(), pairParser.getPredefinedPin(), &app);
+            if(qEnvironmentVariableIsSet("RHREMOTE_PAIR_OPERATION")) {
+                QObject::connect(launcher,&CliPair::Launcher::failed,&app,[&app](const QString& error){RhRuntime::status("pair_failed",error);app.exit(1);});
+                QObject::connect(launcher,&CliPair::Launcher::success,&app,[&app](){RhRuntime::status("paired",QString());app.quit();});
+                launcher->execute(new ComputerManager(StreamingPreferences::get()));
+                hasGUI=false;
+                break;
+            }
+'@
     return $s
 }
 Edit-Source 'app/gui/computermodel.h' {param($s)
@@ -65,9 +75,18 @@ int AppModel::rowCount
 '@)
 }
 Edit-Source 'app/qml.qrc' {param($s)return $s.Replace('        <file>gui/main.qml</file>',"        <file>gui/main.qml</file>`n        <file>gui/RhButton.qml</file>")}
-Edit-Source 'app/resources.qrc' {param($s)return $s.Replace('</qresource>',"    <file>res/rhremote.svg</file>`n    </qresource>")}
+Edit-Source 'app/resources.qrc' {param($s)return $s.Replace('</qresource>',"    <file>res/rhremote.svg</file>`n    <file>res/rhremote-shortcuts.json</file>`n    </qresource>")}
 Edit-Source 'app/gui/CliPair.qml' {param($s)
-    return $s.Replace('        pairCompleteDialog.open()',"        console.log(`"RHREMOTE_PAIR_SUCCESS`")`n        Qt.quit()")
+    $s="import RhProfiles 1.0`n"+$s
+    $s=Replace-Once $s '    function onFailed(message) {' @'
+    function onFailed(message) {
+        if(RhProfiles.pairingControlled()) {
+            RhProfiles.connectionStatus("pair_failed",message)
+            Qt.quit()
+            return
+        }
+'@
+    return $s.Replace('        pairCompleteDialog.open()',"        if(RhProfiles.pairingControlled())RhProfiles.connectionStatus(`"paired`",`"`")`n        console.log(`"RHREMOTE_PAIR_SUCCESS`")`n        Qt.quit()")
 }
 Edit-Source 'app/gui/CliStartStreamSegue.qml' {param($s)
     $s="import RhProfiles 1.0`n"+$s
@@ -77,6 +96,20 @@ Edit-Source 'app/gui/CliStartStreamSegue.qml' {param($s)
     function onLaunchFailed(message) {
         RhProfiles.connectionStatus("error",message)
         if(RhProfiles.apiControlled()){Qt.quit();return;}
+'@)
+}
+Edit-Source 'app/cli/listapps.cpp' {param($s)
+    $s="#include `"gui/rhhost.h`"`n#include <QFile>`n#include <QSaveFile>`n"+$s
+    return (Replace-Once $s '                if (event.computer->pairState == NvComputer::PS_PAIRED) {' @'
+                if (event.computer->pairState == NvComputer::PS_PAIRED) {
+                    if(qEnvironmentVariableIsSet("RHREMOTE_PROBE_OPERATION")){QCoreApplication::exit(0);return;}
+                    const auto requestPath=qEnvironmentVariable("RHREMOTE_HOST_REQUEST");
+                    if(!requestPath.isEmpty()) {
+                        QFile file(requestPath);QJsonObject result{{"ok",false},{"error","invalid host request"}};
+                        if(file.open(QIODevice::ReadOnly)&&file.size()<=4096){const auto request=QJsonDocument::fromJson(file.readAll()).object();const auto path=request["path"].toString();if(path=="/v1/displays"||path=="/v1/display/prepare")result=RhHost::request(event.computer->activeAddress.address(),event.computer->serverCert,path,request["body"].toObject());}
+                        QSaveFile output(qEnvironmentVariable("RHREMOTE_HOST_RESPONSE"));if(output.open(QIODevice::WriteOnly)){output.write(QJsonDocument(result).toJson(QJsonDocument::Compact));output.commit();}
+                        QCoreApplication::exit(result["ok"].toBool()?0:1);return;
+                    }
 '@)
 }
 # Only extend the bounded initial-frame grace period; steady-state pacing is unchanged.
@@ -101,10 +134,25 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
     $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`r`n{","void Session::clConnectionTerminated(int errorCode)`r`n{`r`n    if(errorCode!=0)RhRuntime::status(`"error`",QString(`"Stream interrupted (%1)`").arg(errorCode));")
     $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`n{","void Session::clConnectionTerminated(int errorCode)`n{`n    if(errorCode!=0)RhRuntime::status(`"error`",QString(`"Stream interrupted (%1)`").arg(errorCode));")
     $s=Replace-Once $s 'QString(m_Computer->name + " - Moonlight")' 'QString(m_Computer->name + " - RHRemote")'
+    $s=Replace-Once $s 'bool Session::startConnectionAsync()' 'bool Session::startConnectionAsync()'
+    $s=Replace-Once $s '    QString rtspSessionUrl;' @'
+    const auto displayMode=qEnvironmentVariable("RHREMOTE_DISPLAY_MODE");
+    if(!displayMode.isEmpty()){
+        auto reply=RhHost::request(m_Computer->activeAddress.address(),m_Computer->serverCert,"/v1/display/prepare",{{"mode",displayMode},{"width",m_Preferences->width},{"height",m_Preferences->height}});
+        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.firstFrame=false;
+            if(reply["ok"].toBool()){auto data=reply["result"].toObject();r.displays=data["displays"].toArray();r.selectedDisplay=data["selected"].toObject();int index=r.selectedDisplay["captureIndex"].toInt();r.initialDisplay=index==data["initialCaptureIndex"].toInt()?0:index;r.displayError.clear();}
+            else{r.displayError=reply["error"].toString();}
+        }
+        if(!reply["ok"].toBool()&&displayMode=="virtual"){const auto error=reply["error"].toString();RhRuntime::status("error",error);emit displayLaunchError(error);return false;}
+    }
+    QString rtspSessionUrl;
+'@
     $s=Replace-Once $s '    emit connectionStarted();' @'
     { auto& runtime=RhRuntime::get();QMutexLocker lock(&runtime.mutex);
+      runtime.hostAddress=m_Computer->activeAddress.address();runtime.hostCert=m_Computer->serverCert;
       runtime.profile={{"width",m_Preferences->width},{"height",m_Preferences->height},{"swapButtons",m_Preferences->swapMouseButtons}}; }
     RhRuntime::stream(true);
+    {int index;{auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);index=r.initialDisplay;}if(index>0)RhKeys::display(index);}
     emit connectionStarted();
 '@
     $s=$s.Replace('        execInternal();',"        execInternal();`n        RhRuntime::stream(false);")
@@ -146,7 +194,7 @@ Edit-Source 'app/streaming/audio/audio.cpp' {param($s)
 Edit-Source 'app/app.pro' {param($s)return $s+@'
 
 # RHRemote native shell; the existing streaming implementation remains intact.
-HEADERS += gui/rhprofiles.h gui/rhcontrol.h
+HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h
 win32 {
     TARGET = RHRemote
     QMAKE_TARGET_COMPANY = RHRemote
@@ -156,6 +204,7 @@ win32 {
 }
 '@}
 $overlay=Join-Path $repo 'apps/windows/overlay'
+Copy-Item -LiteralPath (Join-Path $repo 'apps/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/res/rhremote-shortcuts.json') -Force
 Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
     $relative=$_.FullName.Substring($overlay.Length+1);$target=Join-Path $SourceDir $relative
     if(Test-Path -LiteralPath $target){$original=Join-Path $backup $relative;if(-not(Test-Path -LiteralPath $original)){New-Item -ItemType Directory -Force -Path (Split-Path $original -Parent)|Out-Null;Copy-Item -LiteralPath $target -Destination $original}}

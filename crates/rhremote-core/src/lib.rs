@@ -17,6 +17,9 @@ pub fn settings_catalog() -> Value {
 pub fn catalog() -> Value {
     serde_json::from_str(ACTIONS).expect("compiled action catalog")
 }
+pub fn shortcuts() -> Value {
+    serde_json::from_str(include_str!("../../../apps/shared/shortcuts.json")).unwrap()
+}
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -56,6 +59,7 @@ pub struct Profile {
     pub packet_size: u32,
     pub on_screen_controller: bool,
     pub full_range: bool,
+    pub display_mode: String,
 }
 impl Default for Profile {
     fn default() -> Self {
@@ -84,6 +88,7 @@ impl Default for Profile {
             packet_size: 1392,
             on_screen_controller: false,
             full_range: false,
+            display_mode: "auto".into(),
         }
     }
 }
@@ -106,6 +111,7 @@ impl Profile {
             || !["never", "fullscreen", "always"].contains(&self.capture_sys_keys.as_str())
             || !["auto", "hardware", "software"].contains(&self.decoder.as_str())
             || !["windowed", "borderless", "fullscreen"].contains(&self.window_mode.as_str())
+            || !["auto", "virtual"].contains(&self.display_mode.as_str())
         {
             return Err("invalid stream profile".into());
         }
@@ -162,6 +168,8 @@ pub struct State {
     pub keyboard: bool,
     pub show_stats: bool,
     pub pair_pin: String,
+    #[serde(skip)]
+    pair_attempt: u64,
     pub revision: u64,
     pub last_action: Value,
     pub window_action: String,
@@ -171,6 +179,8 @@ pub struct State {
     pub sync_busy: bool,
     pub updates: Value,
     pub updates_busy: bool,
+    #[serde(skip)]
+    installing_update: bool,
 }
 pub trait Platform: Send + Sync {
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String>;
@@ -233,6 +243,7 @@ impl Controller {
                 keyboard: false,
                 show_stats: false,
                 pair_pin: String::new(),
+                pair_attempt: 0,
                 revision: 0,
                 last_action: Value::Null,
                 window_action: String::new(),
@@ -246,6 +257,7 @@ impl Controller {
                     .execute("updates.state", &json!({}))
                     .unwrap_or(json!({})),
                 updates_busy: false,
+                installing_update: false,
             }),
             storage,
             platform,
@@ -283,6 +295,7 @@ impl Controller {
     }
     pub fn stream_state(&self, streaming: bool, statistics: Value) {
         let mut s = self.state.lock().unwrap();
+        let was_connecting = s.connecting;
         if streaming && !s.streaming {
             s.status = String::new();
         } else if !streaming && s.streaming {
@@ -297,12 +310,39 @@ impl Controller {
             statistics["phase"].as_str(),
             Some("connecting" | "starting")
         );
+        if streaming && statistics["firstFrame"] == false {
+            s.connecting = true;
+        }
         if let Some(error) = statistics["error"].as_str().filter(|e| !e.is_empty()) {
             s.status = error.into();
         } else if s.connecting {
-            s.status = "正在建立串流…".into();
+            s.status = if streaming {
+                "等待主机首帧…"
+            } else {
+                "正在建立串流…"
+            }
+            .into();
+        } else if was_connecting && streaming {
+            s.status = String::new();
         }
         s.statistics = statistics;
+        s.revision += 1;
+    }
+    pub fn pairing_complete(&self, attempt: u64, device: Device, error: String) {
+        let mut s = self.state.lock().unwrap();
+        if s.page != "pair" || s.pair_attempt != attempt || s.selected != device.uuid {
+            return;
+        }
+        if let Some(row) = s.devices.iter_mut().find(|d| d.uuid == device.uuid) {
+            *row = device.clone();
+        }
+        s.page = "devices".into();
+        s.pair_pin.clear();
+        s.status = if device.paired {
+            "配对完成".into()
+        } else {
+            error
+        };
         s.revision += 1;
     }
     fn persist(&self, saved: &Saved) -> Result<(), String> {
@@ -350,7 +390,7 @@ impl Controller {
         {
             return Err("同步进行中，请稍后保存".into());
         }
-        if s.updates_busy && id == "device.connect" {
+        if s.installing_update && id == "device.connect" {
             return Err("更新操作进行中，请稍后连接".into());
         }
         match id {
@@ -515,6 +555,9 @@ impl Controller {
             "stream.controls.toggle" => {
                 s.controls = !s.controls;
             }
+            "stream.shortcuts.list" => return Ok(shortcuts()),
+            "stream.shortcuts.open" => s.controls = true,
+            "stream.displays.open" => s.controls = true,
             "window.minimize" | "window.maximize" | "window.close" | "view.snapshot" => {
                 if id == "window.close" && s.streaming {
                     drop(s);
@@ -529,6 +572,20 @@ impl Controller {
                 s.window_action = id.into();
             }
             _ => {
+                if id == "stream.shortcut"
+                    && !shortcuts()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|v| v["id"] == args["shortcut"] && args["shortcut"].is_string())
+                {
+                    return Err("unknown remote shortcut".into());
+                }
+                if id == "stream.window.move"
+                    && ![Some("left"), Some("right")].contains(&args["direction"].as_str())
+                {
+                    return Err("direction must be left or right".into());
+                }
                 if id == "pair.cancel" && s.page != "pair" {
                     return Err("no active pairing".into());
                 }
@@ -538,6 +595,9 @@ impl Controller {
                     }
                 }
                 if id == "device.connect" || id == "device.pair" {
+                    if s.page == "pair" {
+                        return Err("请先完成或取消当前配对".into());
+                    }
                     if s.streaming || s.connecting {
                         return Err("disconnect the current session first".into());
                     }
@@ -562,6 +622,8 @@ impl Controller {
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
                     if id == "device.pair" {
+                        s.pair_attempt += 1;
+                        args["attemptId"] = json!(s.pair_attempt);
                         let pin = args["pin"].as_str().map(str::to_owned).unwrap_or_else(|| {
                             let mut bytes = [0; 4];
                             getrandom::fill(&mut bytes).expect("OS random source");
@@ -585,7 +647,20 @@ impl Controller {
                     }
                 }
                 drop(s);
-                let result = self.platform.execute(id, &args)?;
+                let result = match self.platform.execute(id, &args) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        if id == "device.pair" {
+                            let mut state = self.state.lock().unwrap();
+                            if args["attemptId"].as_u64() == Some(state.pair_attempt) {
+                                state.page = "devices".into();
+                                state.pair_pin.clear();
+                                state.status = error.clone();
+                            }
+                        }
+                        return Err(error);
+                    }
+                };
                 let mut s = self.state.lock().unwrap();
                 match id {
                     "device.add.submit" | "devices.refresh" => {
@@ -622,6 +697,7 @@ impl Controller {
                         s.show_stats = args["profile"]["statistics"].as_bool().unwrap_or(false);
                     }
                     "pair.cancel" => {
+                        s.pair_attempt += 1;
                         s.page = "devices".into();
                         s.pair_pin.clear();
                     }
@@ -777,6 +853,78 @@ mod tests {
             },
         ]);
         c
+    }
+    #[test]
+    fn pairing_completion_returns_to_devices_and_stale_completion_is_ignored() {
+        let c = controller();
+        let mut device: Device = serde_json::from_value(c.state()["devices"][0].clone()).unwrap();
+        {
+            let mut s = c.state.lock().unwrap();
+            s.page = "pair".into();
+            s.selected = device.uuid.clone();
+            s.pair_pin = "1234".into();
+            s.pair_attempt = 2;
+        }
+        device.paired = true;
+        c.pairing_complete(1, device.clone(), String::new());
+        assert_eq!(c.state()["page"], "pair");
+        c.pairing_complete(2, device.clone(), String::new());
+        assert_eq!(c.state()["page"], "devices");
+        assert_eq!(c.state()["pairPin"], "");
+        assert_eq!(c.state()["status"], "配对完成");
+        {
+            let mut s = c.state.lock().unwrap();
+            s.page = "pair".into();
+            s.selected = device.uuid.clone();
+            s.pair_pin = "5678".into();
+            s.pair_attempt = 3;
+        }
+        device.paired = false;
+        c.pairing_complete(3, device, "配对码未被主机确认".into());
+        assert_eq!(c.state()["page"], "devices");
+        assert_eq!(c.state()["status"], "配对码未被主机确认");
+        assert_eq!(c.state()["pairPin"], "");
+    }
+    #[test]
+    fn failed_pair_launch_does_not_leave_a_waiting_pin() {
+        let c = controller();
+        assert_eq!(
+            c.dispatch("device.pair", json!({"uuid":"a","pin":"1234"}))["ok"],
+            false
+        );
+        assert_eq!(c.state()["page"], "devices");
+        assert_eq!(c.state()["pairPin"], "");
+    }
+    #[test]
+    fn update_checks_do_not_block_connect_but_installation_does() {
+        let c = controller();
+        {
+            let mut s = c.state.lock().unwrap();
+            s.updates_busy = true;
+            s.installing_update = false;
+        }
+        assert_eq!(
+            c.dispatch("device.connect", json!({"uuid":"a"}))["error"],
+            "no transport in unit tests"
+        );
+        {
+            let mut s = c.state.lock().unwrap();
+            s.installing_update = true;
+        }
+        assert_eq!(
+            c.dispatch("device.connect", json!({"uuid":"a"}))["error"],
+            "更新操作进行中，请稍后连接"
+        );
+    }
+    #[test]
+    fn handshake_does_not_report_first_frame_ready() {
+        let c = controller();
+        c.stream_state(true, json!({"phase":"connected","firstFrame":false}));
+        assert_eq!(c.state()["connecting"], true);
+        assert_eq!(c.state()["status"], "等待主机首帧…");
+        c.stream_state(true, json!({"phase":"connected","firstFrame":true}));
+        assert_eq!(c.state()["connecting"], false);
+        assert_eq!(c.state()["status"], "");
     }
     #[test]
     fn cancel_does_not_write_and_devices_are_isolated() {

@@ -1,4 +1,5 @@
 [
+ {"key":"displayMode","label":"远程屏幕","tab":"video","type":"select","options":[["auto","自动：优先现有屏幕"],["virtual","平板 / 客户端专用虚拟屏"]],"help":"自动模式无可用实体屏时启用虚拟屏。串流工具栏可切换单块屏幕，实体屏的分辨率和布局保持原样。"},
  {"key":"width","label":"画面宽度","tab":"video","type":"number","min":320,"max":8192,"step":2},
  {"key":"height","label":"画面高度","tab":"video","type":"number","min":320,"max":8192,"step":2},
  {"key":"fps","label":"帧率","tab":"video","type":"number","min":10,"max":240,"step":1},

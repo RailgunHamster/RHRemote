@@ -19,7 +19,7 @@ def edit(root, relative, changes):
     path.write_text("// RHREMOTE_STATISTICS_PATCH\n" + text, encoding="utf-8", newline="\n")
 
 def windows(root):
-    include = '#include "gui/rhstatistics.h"\n'
+    include = '#include "gui/rhstatistics.h"\n#include "gui/rhcontrol.h"\n'
     edit(root, "app/main.cpp", [("int main(int argc, char *argv[])", "int main(int argc, char *argv[])"), ("    QQuickStyle::setStyle(\"Material\");", '    RhStatistics::event("native_ui_ready");\n    QQuickStyle::setStyle("Material");')])
     # Include before any function definitions (the main signature can vary by compiler).
     for relative in ["app/main.cpp", "app/streaming/session.cpp", "app/backend/nvhttp.cpp", "app/streaming/video/ffmpeg.cpp", "app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp"]:
@@ -58,9 +58,20 @@ def windows(root):
         ("    m_VsyncRenderer->renderFrame(frame);", '''    const qint64 traceFrame=qint64(quintptr(frame->opaque));
     RhStatistics::event("render_submit",traceFrame);
     m_VsyncRenderer->renderFrame(frame);
-    RhStatistics::event("render_return",traceFrame);'''),
+    RhStatistics::event("render_return",traceFrame);
+    RhRuntime::get().firstFrame=true;'''),
         ("            AVFrame* oldFrame = m_PacingQueue.dequeue();", '            AVFrame* oldFrame = m_PacingQueue.dequeue();\n            RhStatistics::event("frame_drop",qint64(quintptr(oldFrame->opaque)),{{"reason","cadence_backlog"}});'),
         ("\n        m_VideoStats->pacerDroppedFrames++;", '\n        RhStatistics::event("frame_drop",qint64(quintptr(frame->opaque)),{{"reason","pacer_backlog"}});\n        m_VideoStats->pacerDroppedFrames++;')])
+
+    # Existing instrumentation backups can predate runtime state tracking.
+    pacer=root/"app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp"
+    text=pacer.read_text(encoding="utf-8")
+    if '#include "gui/rhcontrol.h"' not in text:text='#include "gui/rhcontrol.h"\n'+text
+    if 'RhRuntime::get().firstFrame=true;' not in text:
+        anchor='RhStatistics::event("render_return",traceFrame);'
+        if anchor not in text:raise RuntimeError("Native first-frame runtime tracking anchor missing")
+        text=text.replace(anchor,anchor+'\n    RhRuntime::get().firstFrame=true;')
+    pacer.write_text(text,encoding="utf-8",newline="\n")
 
 def android(root):
     prefix="app/src/main/"

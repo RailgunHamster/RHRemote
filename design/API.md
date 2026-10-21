@@ -78,3 +78,14 @@ GitHub 和 Gitee 作为互备下载源，不把发布令牌放到客户端。Win
 设备设置按画面、音频、输入、高级分类，共 24 个字段，使用 settings.catalog 查询平台支持、范围及选项。音频支持开关、音量、主机继续播放、声道；stream.audio.toggle 和 stream.audio.volume 实时控制当前会话，不修改系统音量，保存的连接偏好在下次连接生效。
 
 statistics.configure {enabled:true} 启用本机测试模式，每次连接自动记录逐帧文件；statistics.state 查询目录。完整协议、时间精度、显示时间含义和自动清理规则见 [STATISTICS.md](STATISTICS.md)。
+# 远程快捷键和屏幕
+
+`stream.shortcuts.list` 返回 Windows / Android 共用的快捷键清单。`stream.shortcut` 的 `shortcut` 参数使用清单中的 ID，例如 `ctrl-alt-delete`、`ctrl-alt-left`、`ctrl-alt-right`、`alt-tab`、`ctrl-shift-escape`。普通按键按顺序按下、反序释放，失败也释放本次操作按下的修饰键。
+
+`stream.window.move` 接受 `direction: left / right`，发送远端的 Win+Shift+方向键。它移动当前获得焦点的远程窗口。
+
+`stream.displays.refresh` 刷新屏幕；`stream.display.select` 接受 `displayId: auto / virtual / 屏幕列表中的 id`。一次仅捕获一块屏幕，通过 Sunshine 的 Ctrl+Alt+Shift+F1…F12 切换。自动模式优先可用实体屏；没有可用实体屏时准备客户端尺寸的自有虚拟屏。`displayMode` 是客户端×设备配置，参与 WebDAV 同步。
+
+屏幕清单和虚拟屏尺寸准备需要被控端的 RHRemoteHost。Ctrl+Alt+Delete 通过辅助服务调用 Windows SendSAS，不用普通键盘注入代替。辅助服务只接受 Sunshine 已启用配对客户端的双向 TLS 认证；客户端固定校验配对时保存的主机证书。每次操作重新检查配对启用状态，配对密钥不参加同步。
+
+Windows 在原有认证回环接口暴露这些操作；Android 工具栏和回环接口也使用同一动作分发器。Android 的网络操作异步返回接受状态，完成结果见 `stream.lastShortcut`、`stream.displayBusy`、`stream.displayError`。

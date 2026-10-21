@@ -17,6 +17,9 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "statistics.configure" => json!({"enabled":arg=="true"}),
         "app.settings.tab" | "settings.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
+        "stream.shortcut" => json!({"shortcut":arg}),
+        "stream.window.move" => json!({"direction":arg}),
+        "stream.display.select" => json!({"displayId":arg}),
         "sync.configure" => {
             let fields: Vec<_> = arg.splitn(5, '\n').collect();
             if fields.len() == 5 {
@@ -63,6 +66,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
 }
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let data = std::env::var_os("RHREMOTE_DATA_DIR")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote")
@@ -73,15 +77,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         rhremote_core::random_token()?
     };
-    let engine = std::env::var_os("RHREMOTE_NATIVE_ENGINE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::current_exe()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("engine/RHRemote.exe")
-        });
+    let engine = native_engine_path(
+        std::env::var_os("RHREMOTE_NATIVE_ENGINE"),
+        std::env::current_exe()?,
+    );
     let native = Arc::new(platform::NativePlatform::new(
         engine,
         token.clone(),
@@ -104,6 +103,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         rhremote_core::start_http(controller.clone(), port.parse()?, token)?;
     }
     let ui = MainWindow::new()?;
+    let shortcuts = rhremote_core::shortcuts();
+    ui.set_shortcut_labels(ModelRc::new(VecModel::from(
+        shortcuts
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| slint::SharedString::from(s["label"].as_str().unwrap()))
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_shortcut_ids(ModelRc::new(VecModel::from(
+        shortcuts
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| slint::SharedString::from(s["id"].as_str().unwrap()))
+            .collect::<Vec<_>>(),
+    )));
     native.statistics.lock().unwrap().mark("ui_created");
     let actions = controller.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, String)>(64);
@@ -152,6 +168,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_profile_tab(state["profileTab"].as_str().unwrap_or("video").into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);
             ui.set_audio_enabled(state["audioEnabled"]==true);ui.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
+            let remote:Vec<RemoteDisplay>=state["statistics"]["displays"].as_array().into_iter().flatten().map(|d|RemoteDisplay{id:d["id"].as_str().unwrap_or("").into(),label:format!("{} · {}×{}",if d["virtual"]==true{"虚拟屏"}else{d["name"].as_str().filter(|v|!v.is_empty()).unwrap_or("屏幕")},d["width"],d["height"]).into(),chosen:d["id"]==state["statistics"]["selectedDisplay"]["id"],available:d["available"]==true}).collect();
+            ui.set_remote_displays(ModelRc::new(VecModel::from(remote)));ui.set_display_error(state["statistics"]["displayError"].as_str().unwrap_or("").into());
             let fingerprint=format!("{}:{}",state["profileTab"],state["draft"]);
             if fingerprint!=profile_fingerprint {
                 profile_fingerprint=fingerprint;
@@ -182,6 +200,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(move || {
         poll.dispatch("devices.refresh", json!({}));
         loop {
+            if let Some((attempt, device, error)) = transport.pairing_result() {
+                poll.pairing_complete(attempt, device, error);
+            }
             if let Ok(value) = transport.state() {
                 poll.stream_state(value["streaming"] == true, value);
             } else {
@@ -243,8 +264,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     ui.run()?;
     Ok(())
 }
+fn native_engine_path(override_path: Option<std::ffi::OsString>, executable: PathBuf) -> PathBuf {
+    override_path
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| executable.parent().unwrap().join("engine/RHRemote.exe"))
+}
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn empty_native_engine_override_uses_packaged_engine() {
+        let exe = std::path::PathBuf::from("C:/RHRemote/current/RHRemote.exe");
+        let expected = exe.parent().unwrap().join("engine/RHRemote.exe");
+        assert_eq!(super::native_engine_path(None, exe.clone()), expected);
+        assert_eq!(
+            super::native_engine_path(Some(std::ffi::OsString::new()), exe.clone()),
+            expected
+        );
+        let custom = std::ffi::OsString::from("C:/custom/engine.exe");
+        assert_eq!(
+            super::native_engine_path(Some(custom.clone()), exe),
+            std::path::PathBuf::from(custom)
+        );
+    }
     #[test]
     fn android_product_action_ids_exist_in_shared_catalog() {
         let catalog = rhremote_core::catalog();

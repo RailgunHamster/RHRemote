@@ -3,6 +3,7 @@ import { ScrollView, LineEdit, CheckBox, SpinBox, ComboBox } from "std-widgets.s
 export global Commands { callback trigger(string,string); }
 export struct DeviceRow { uuid:string, name:string, status:string, summary:string, paired:bool, online:bool, is-self:bool }
 export struct ProfileSource { client-id:string, label:string }
+export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
 export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
 export global Palette {
     in property <bool> dark;
@@ -79,6 +80,10 @@ export component MainWindow inherits Window {
     in property <bool> connecting;
     in property <bool> controls;
     in property <string> stream-statistics;
+    in property <[string]> shortcut-labels;
+    in property <[string]> shortcut-ids;
+    in property <[RemoteDisplay]> remote-displays;
+    in property <string> display-error;
     in property <bool> compact:false;
     in property <string> settings-tab:"updates";
     in property <bool> test-mode:false;
@@ -125,7 +130,7 @@ export component MainWindow inherits Window {
                 content-width:self.width;
                 VerticalLayout {
                     padding:root.compact ? 20px : 34px;spacing:18px;
-                    if root.page=="devices": VerticalLayout {spacing:16px;vertical-stretch:0;
+                    if root.page=="devices" && !root.streaming && !root.connecting: VerticalLayout {spacing:16px;vertical-stretch:0;
                         HorizontalLayout {Text{text:"远程设备";font-size:23px;color:Palette.ink;font-weight:600;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}ActionButton{text:"刷新";action-id:"devices.refresh";}}
                         Rectangle {height:10px;}
                         if root.devices.length==0: Text {text:"尚未添加设备";color:Palette.muted;height:90px;vertical-alignment:center;horizontal-alignment:center;}
@@ -269,9 +274,39 @@ export component MainWindow inherits Window {
                     if root.streaming || root.connecting: VerticalLayout {spacing:12px;
                         Text{text:(root.connecting ? "连接中 · " : "已连接 · ")+root.selected-name;color:Palette.ink;font-size:20px;}
                         HorizontalLayout{spacing:8px;ActionButton{text:"控制";action-id:"stream.controls.toggle";}ActionButton{text:"断开";action-id:"stream.disconnect";primary:true;}Rectangle{horizontal-stretch:1;}}
-                        if root.controls: HorizontalLayout{spacing:6px;
+                        if root.controls: VerticalLayout{spacing:8px;
+                          HorizontalLayout{spacing:6px;
                             ActionButton{text:"统计";action-id:"stream.stats.toggle";} ActionButton{text:"声音";action-id:"stream.audio.toggle";chosen:root.audio-enabled;} SpinBox{value:root.audio-volume;minimum:0;maximum:100;preferred-width:120px;edited(value)=>{Commands.trigger("stream.audio.volume",value+"");}}
                             Rectangle{horizontal-stretch:1;}
+                          }
+                          HorizontalLayout{spacing:6px;
+                            ActionButton{text:"Ctrl+Alt+Delete";action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:!root.streaming;}
+                            ActionButton{text:"Ctrl+Alt+←";action-id:"stream.shortcut";argument:"ctrl-alt-left";disabled:!root.streaming;}
+                            ActionButton{text:"Ctrl+Alt+→";action-id:"stream.shortcut";argument:"ctrl-alt-right";disabled:!root.streaming;}
+                            Rectangle{horizontal-stretch:1;}
+                          }
+                          HorizontalLayout{spacing:6px;
+                            shortcuts:=ComboBox{model:root.shortcut-labels;current-index:5;preferred-width:300px;horizontal-stretch:0;}
+                            ActionButton{text:"发送";action-id:"stream.shortcut";argument:root.shortcut-ids[shortcuts.current-index];disabled:!root.streaming;}
+                            Rectangle{horizontal-stretch:1;}
+                          }
+                          HorizontalLayout{spacing:6px;
+                            ActionButton{text:"窗口移到左屏";action-id:"stream.window.move";argument:"left";disabled:!root.streaming;}
+                            ActionButton{text:"窗口移到右屏";action-id:"stream.window.move";argument:"right";disabled:!root.streaming;}
+                            Rectangle{horizontal-stretch:1;}
+                          }
+                          HorizontalLayout{spacing:6px;
+                            ActionButton{text:"自动选屏";action-id:"stream.display.select";argument:"auto";disabled:!root.streaming;}
+                            ActionButton{text:"专用虚拟屏";action-id:"stream.display.select";argument:"virtual";disabled:!root.streaming;}
+                            ActionButton{text:"刷新屏幕";action-id:"stream.displays.refresh";disabled:!root.streaming;}
+                            Rectangle{horizontal-stretch:1;}
+                          }
+                          for display in root.remote-displays: HorizontalLayout{spacing:8px;
+                            Text{text:display.label;color:Palette.ink;vertical-alignment:center;}
+                            Rectangle{horizontal-stretch:1;}
+                            ActionButton{text:display.chosen?"当前屏幕":"切换";chosen:display.chosen;action-id:"stream.display.select";argument:display.id;disabled:!display.available||!root.streaming;}
+                          }
+                          if root.display-error!="":Text{text:root.display-error;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
                         if root.statistics: Text{text:root.stream-statistics;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     }

@@ -18,8 +18,10 @@ public final class RhActions {
     private static final Handler MAIN=new Handler(Looper.getMainLooper());
     private static WeakReference<Target> home=new WeakReference<>(null),stream=new WeakReference<>(null);
     private static JSONArray catalog;private static String token;private static boolean started;
+    private static Context appContext;
     public static JSONObject obj(Object... pairs){JSONObject value=new JSONObject();try{for(int i=0;i<pairs.length;i+=2)value.put((String)pairs[i],pairs[i+1]);}catch(JSONException e){throw new IllegalArgumentException(e);}return value;}
     public static synchronized void initialize(Context context,Target target){
+        appContext=context.getApplicationContext();
         RhStatistics.initialize(context);
         if(target!=null)home=new WeakReference<>(target);if(started)return;
         try {
@@ -41,6 +43,7 @@ public final class RhActions {
         return obj("ok",false,"action",id,"error","UI dispatcher timeout");
     }
     private static JSONObject execute(String id,JSONObject args){
+        if(id.equals("stream.shortcuts.list")){try{return obj("ok",true,"action",id,"result",RhShortcuts.catalog(appContext));}catch(Exception e){return obj("ok",false,"error","shortcut catalog unavailable");}}
         try{boolean known=false;for(int i=0;i<catalog.length();i++)if(id.equals(catalog.getJSONObject(i).getString("id"))){known=true;break;}if(!known)throw new IllegalArgumentException("unknown action");
             if(stream.get()!=null&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("updates.install")))throw new IllegalStateException("请先断开当前连接");
             Target target=(id.startsWith("stream.")||id.equals("input.gesture"))?stream.get():home.get();if(target==null)throw new IllegalStateException("action target unavailable");

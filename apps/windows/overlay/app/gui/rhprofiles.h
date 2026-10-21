@@ -15,6 +15,7 @@ class RhProfiles : public QObject {
 public:
     explicit RhProfiles(QObject* parent=nullptr):QObject(parent){}
     Q_INVOKABLE bool apiControlled()const{return qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT");}
+    Q_INVOKABLE bool pairingControlled()const{return qEnvironmentVariableIsSet("RHREMOTE_PAIR_OPERATION");}
     Q_INVOKABLE void connectionStatus(const QString& phase,const QString& error=QString())const{RhRuntime::status(phase,error);}
     Q_INVOKABLE void placeWindow(QWindow* window) const {
         if(!window || qEnvironmentVariable("RHREMOTE_UI_SCREEN")!="secondary")return;

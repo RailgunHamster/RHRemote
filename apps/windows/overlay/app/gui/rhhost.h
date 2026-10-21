@@ -1,0 +1,26 @@
+#pragma once
+#include "backend/identitymanager.h"
+#include <QSslSocket>
+#include <QNetworkProxy>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QElapsedTimer>
+
+namespace RhHost {
+inline QJsonObject request(const QString& host,const QSslCertificate& pinned,const QString& path,const QJsonObject& body=QJsonObject()) {
+    if(host.isEmpty() || pinned.isNull()) return {{"ok",false},{"error","缺少主机配对信息"}};
+    QSslSocket socket;socket.setProxy(QNetworkProxy::NoProxy);socket.setSslConfiguration(IdentityManager::get()->getSslConfig());
+    QObject::connect(&socket,&QSslSocket::sslErrors,&socket,[&](const QList<QSslError>& errors){if(socket.peerCertificate()==pinned)socket.ignoreSslErrors(errors);});
+    socket.connectToHostEncrypted(host,47995);
+    if(!socket.waitForEncrypted(2500))return {{"ok",false},{"error","主机辅助服务不可用，请安装或启动 RHRemoteHost"}};
+    if(socket.peerCertificate()!=pinned){socket.abort();return {{"ok",false},{"error","主机证书与配对记录不一致"}};}
+    const auto payload=body.isEmpty()?QByteArray():QJsonDocument(body).toJson(QJsonDocument::Compact);
+    socket.write((payload.isEmpty()?"GET ":"POST ")+path.toUtf8()+" HTTP/1.1\r\nHost: RHRemoteHost\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);
+    QByteArray data;QElapsedTimer timer;timer.start();
+    while(timer.elapsed()<15000){if(!socket.bytesAvailable()&&!socket.waitForReadyRead(qMin(1000,int(15000-timer.elapsed())))){if(socket.state()==QAbstractSocket::UnconnectedState)break;continue;}data+=socket.readAll();if(data.size()>131072)return {{"ok",false},{"error","主机响应过大"}};}
+    const int split=data.indexOf("\r\n\r\n");if(split<0)return {{"ok",false},{"error","主机响应不完整"}};
+    QJsonParseError error;const auto reply=QJsonDocument::fromJson(data.mid(split+4),&error);
+    if(error.error!=QJsonParseError::NoError||!reply.isObject())return {{"ok",false},{"error","主机响应格式错误"}};
+    return reply.object();
+}
+}

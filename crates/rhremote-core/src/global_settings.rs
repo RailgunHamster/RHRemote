@@ -11,11 +11,13 @@ impl Controller {
             return Err("请先断开远程连接".into());
         }
         s.updates_busy = true;
+        s.installing_update = id == "updates.install";
         s.revision += 1;
         drop(s);
         let result = self.platform.execute(id, &json!({}));
         let mut s = self.state.lock().unwrap();
         s.updates_busy = false;
+        s.installing_update = false;
         s.revision += 1;
         let result = match result {
             Ok(v) => v,

@@ -146,7 +146,7 @@ Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
 '@
     $s=Replace-Once $s '        // Initialize touch contexts' @'
         rhTouch = new com.limelight.rhremote.RhTouchController(conn,streamView,rhProfile);
-        rhControls = com.limelight.rhremote.RhStreamControls.install(this,rhTouch,prefConfig,rhProfile);
+        rhControls = com.limelight.rhremote.RhStreamControls.install(this,rhTouch,prefConfig,rhProfile,conn.getRhDisplay());
         // Initialize touch contexts
 '@
     $s=Replace-Once $s '                if (virtualController != null &&' @'
@@ -156,12 +156,26 @@ Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
     $s=Replace-Once $s '    private void stopConnection() {' "    private void stopConnection() {`n        if(rhControls != null) rhControls.dispose();`n        if(rhTouch != null) rhTouch.cancel();"
     $s=Replace-Once $s '                connected = true;' "                connected = true;`n                if(rhControls != null) rhControls.markConnected();"
     $s=Replace-Once $s '.setMaxPacketSize(1392)' '.setMaxPacketSize(rhProfile.packetSize)'
+    $s=Replace-Once $s '        controllerHandler = new ControllerHandler(this, conn, this, prefConfig);' @'
+        conn.setRhDisplay(new com.limelight.rhremote.RhDisplay(this,host,getIntent().getByteArrayExtra(EXTRA_SERVER_CERT),rhProfile));
+        controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
+'@
     $s=Replace-Once $s 'new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx)' '(rhAudioRenderer = new com.limelight.rhremote.RhAudioRenderer(Game.this,prefConfig.enableAudioFx,rhProfile))'
     return $s
+}
+Edit-Source 'app/src/main/java/com/limelight/nvstream/NvConnection.java' {param($s)
+    $s=Replace-Once $s '    private String uniqueId;' @'
+    private String uniqueId;
+    private com.limelight.rhremote.RhDisplay rhDisplay;
+    public void setRhDisplay(com.limelight.rhremote.RhDisplay display){rhDisplay=display;}
+    public com.limelight.rhremote.RhDisplay getRhDisplay(){return rhDisplay;}
+'@
+    return (Replace-Once $s "        // If there's a game running, resume it" "        if(rhDisplay!=null)rhDisplay.prepare();`n        // If there's a game running, resume it")
 }
 $overlay=Join-Path $repo 'apps/android/overlay'
 New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/main/assets')|Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'crates/rhremote-core/src/actions.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-actions.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'apps/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-shortcuts.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'crates/rhremote-core/src/settings.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-settings.json') -Force
 Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
     $relative=$_.FullName.Substring($overlay.Length+1);$target=Join-Path $SourceDir $relative

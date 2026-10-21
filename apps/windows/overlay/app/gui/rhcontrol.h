@@ -17,6 +17,9 @@
 #include <atomic>
 #include <Limelight.h>
 #include <SDL_events.h>
+#include <QFile>
+#include "rhhost.h"
+#include "rhkeys.h"
 
 // Shared with the decoder; never reads live renderer buffers from the HTTP thread.
 struct RhRuntime {
@@ -26,15 +29,18 @@ struct RhRuntime {
     qint64 statsAt=0;
     bool streaming=false;
     QString phase,error;
+    QString hostAddress;QSslCertificate hostCert;
+    QJsonArray displays;QJsonObject selectedDisplay;QString displayError;int initialDisplay=0;
+    std::atomic<bool> firstFrame{false};
     std::atomic<bool> audioEnabled{true};std::atomic<int> volume{100};std::atomic<quint64> audioPackets{0};
     RhRuntime(){audioEnabled=qEnvironmentVariable("RHREMOTE_AUDIO_ENABLED")!="0";bool ok=false;int v=qEnvironmentVariableIntValue("RHREMOTE_AUDIO_VOLUME",&ok);if(ok)volume=qBound(0,v,100);}
     static RhRuntime& get(){static RhRuntime value;return value;}
     static void status(const QString& phase,const QString& error=QString()){
         auto& r=get();QMutexLocker lock(&r.mutex);r.phase=phase;r.error=error;
         const auto path=qEnvironmentVariable("RHREMOTE_SESSION_STATUS");
-        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"phase",phase},{"error",error},{"streaming",false}}).toJson(QJsonDocument::Compact));file.commit();}}
+        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"phase",phase},{"error",error},{"streaming",r.streaming},{"firstFrame",r.firstFrame.load()}}).toJson(QJsonDocument::Compact));file.commit();}}
     }
-    static void stream(bool value){auto& r=get();{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;}}if(value)status("connected");else{QMutexLocker lock(&r.mutex);if(!r.error.isEmpty())return;lock.unlock();status("disconnected");}}
+    static void stream(bool value){auto& r=get();{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;}}if(value)status("connected");else{QString error;{QMutexLocker lock(&r.mutex);error=r.error;}status(error.isEmpty()?"disconnected":"error",error);}}
     static void performance(const QString& text){auto& r=get();QMutexLocker lock(&r.mutex);r.stats=text;r.statsAt=QDateTime::currentMSecsSinceEpoch();}
 };
 
@@ -44,18 +50,14 @@ class RhControl : public QObject {
     public:
         RhControl* owner;quint16 port;QByteArray token;
         Server(RhControl* o,quint16 p,QByteArray t):owner(o),port(p),token(t){}
-        void run() override {
-            QTcpServer server;
-            if(!server.listen(QHostAddress::LocalHost,port)){qWarning("RHRemote control port unavailable");return;}
-            while(!isInterruptionRequested()){
-                if(!server.waitForNewConnection(200))continue;
-                QScopedPointer<QTcpSocket> socket(server.nextPendingConnection());
+        void handle(QTcpSocket* owned){
+            QScopedPointer<QTcpSocket> socket(owned);QElapsedTimer clock;clock.start();
                 QByteArray data;int split=-1;bool valid=true;
                 while((split=data.indexOf("\r\n\r\n"))<0){
-                    if(!socket->bytesAvailable()&&!socket->waitForReadyRead(2000)){valid=false;break;}
+                    if(clock.elapsed()>5000||(!socket->bytesAvailable()&&!socket->waitForReadyRead(1000))){valid=false;break;}
                     data+=socket->readAll();if(data.size()>16384){valid=false;break;}
                 }
-                if(!valid)continue;
+                if(!valid)return;
                 const auto lines=data.left(split).split('\n');const auto first=lines.value(0).trimmed().split(' ');
                 QByteArray auth;int length=0;bool origin=false;
                 for(const auto& raw:lines){auto line=raw.trimmed();int colon=line.indexOf(':');if(colon<0)continue;auto key=line.left(colon).toLower();auto value=line.mid(colon+1).trimmed();if(key=="authorization")auth=value;if(key=="origin")origin=true;if(key=="content-length"){bool ok=false;length=value.toInt(&ok);if(!ok)valid=false;}if(key=="transfer-encoding")valid=false;}
@@ -64,7 +66,7 @@ class RhControl : public QObject {
                 else if(!valid||length<0||length>8192||first.size()!=3){status=400;result={{"ok",false},{"error","invalid request"}};}
                 else {
                     QByteArray body=data.mid(split+4);
-                    while(body.size()<length){if(!socket->waitForReadyRead(2000)){valid=false;break;}body+=socket->readAll();if(body.size()>8192){valid=false;break;}}
+                    while(body.size()<length){if(clock.elapsed()>5000||!socket->waitForReadyRead(1000)){valid=false;break;}body+=socket->readAll();if(body.size()>8192){valid=false;break;}}
                     QJsonParseError error;auto document=length?QJsonDocument::fromJson(body.left(length),&error):QJsonDocument(QJsonObject());
                     if(!valid||(length&&(error.error!=QJsonParseError::NoError||!document.isObject()))){status=400;result={{"ok",false},{"error","invalid JSON body"}};}
                     else result=owner->route(first[0],first[1],document.object(),status);
@@ -72,7 +74,18 @@ class RhControl : public QObject {
                 auto payload=QJsonDocument(result).toJson(QJsonDocument::Compact);
                 socket->write("HTTP/1.1 "+QByteArray::number(status)+" Result\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);
                 socket->waitForBytesWritten(1000);socket->disconnectFromHost();
+        }
+        void run() override {
+            QTcpServer listener;QList<QThread*> workers;
+            if(!listener.listen(QHostAddress::LocalHost,port)){qWarning("RHRemote control port unavailable");return;}
+            while(!isInterruptionRequested()){
+                for(int i=workers.size()-1;i>=0;i--)if(workers[i]->isFinished()){auto thread=workers.takeAt(i);thread->wait();delete thread;}
+                if(!listener.waitForNewConnection(100))continue;
+                auto socket=listener.nextPendingConnection();if(!socket)continue;
+                if(workers.size()>=8){delete socket;continue;}
+                socket->setParent(nullptr);auto worker=QThread::create([this,socket]{handle(socket);});socket->moveToThread(worker);workers.append(worker);worker->start();
             }
+            listener.close();for(auto worker:workers){worker->wait();delete worker;}
         }
     };
     Server* server=nullptr;std::atomic<quint64> nextId{0};
@@ -81,7 +94,7 @@ class RhControl : public QObject {
         if(method=="GET"&&(path=="/v1/state"||path=="/v1/stats")){
             QMutexLocker lock(&r.mutex);auto result=path=="/v1/state"?r.home:QJsonObject();
             result["ok"]=true;result["streaming"]=r.streaming;result["activeProfile"]=r.profile;
-            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;return result;
+            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;return result;
         }
         if(method!="POST"){status=404;return {{"ok",false},{"error","unknown endpoint"}};}
         bool streaming;QJsonObject profile;{QMutexLocker lock(&r.mutex);streaming=r.streaming;profile=r.profile;}
@@ -104,6 +117,27 @@ class RhControl : public QObject {
             if(body.contains("volume")){volume=body["volume"].toInt(-1);if(volume<0||volume>100){status=400;return {{"ok",false},{"error","volume must be 0..100"}};}}
             r.volume=volume;r.audioEnabled=enabled;
             return {{"ok",true},{"enabled",r.audioEnabled.load()},{"volume",r.volume.load()}};
+        }
+        if(path=="/v1/shortcut"){
+            if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}
+            QFile file(":/res/rhremote-shortcuts.json");file.open(QIODevice::ReadOnly);const auto shortcuts=QJsonDocument::fromJson(file.readAll()).array();QJsonObject shortcut;
+            for(const auto& entry:shortcuts)if(entry.toObject()["id"]==body["shortcut"]&&body["shortcut"].isString()){shortcut=entry.toObject();break;}
+            if(shortcut.isEmpty()){status=400;return {{"ok",false},{"error","unknown remote shortcut"}};}
+            if(shortcut["secureAttention"].toBool()){
+                QString address;QSslCertificate cert;{QMutexLocker lock(&r.mutex);address=r.hostAddress;cert=r.hostCert;}
+                auto result=RhHost::request(address,cert,"/v1/input/secure-attention",QJsonObject{{"action","ctrl-alt-delete"}});if(!result["ok"].toBool())status=409;return result;
+            }
+            auto result=RhKeys::send(shortcut["keys"].toArray());if(!result["ok"].toBool())status=409;return result;
+        }
+        if(path=="/v1/displays"||path=="/v1/display"){
+            if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}
+            QString address;QSslCertificate cert;{QMutexLocker lock(&r.mutex);address=r.hostAddress;cert=r.hostCert;}
+            QJsonObject request;QString endpoint="/v1/displays";
+            if(path=="/v1/display") {const auto id=body["displayId"].toString();if(id.isEmpty()||id.size()>512){status=400;return {{"ok",false},{"error","displayId required"}};}endpoint="/v1/display/prepare";request={{"mode",id=="auto"?"auto":id=="virtual"?"virtual":"physical"},{"displayId",id=="auto"||id=="virtual"?"":id},{"width",profile["width"]},{"height",profile["height"]}};}
+            auto result=RhHost::request(address,cert,endpoint,request);if(!result["ok"].toBool()){status=409;return result;}
+            auto data=result["result"].toObject();{QMutexLocker lock(&r.mutex);r.displays=data["displays"].toArray();r.displayError.clear();}
+            if(path=="/v1/display"){auto selected=data["selected"].toObject();auto input=RhKeys::display(selected["captureIndex"].toInt());if(!input["ok"].toBool()){status=409;return input;}{QMutexLocker lock(&r.mutex);r.selectedDisplay=selected;}data["accepted"]=true;}
+            return {{"ok",true},{"result",data}};
         }
         if(path=="/v1/input"){
             if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}
@@ -135,7 +169,7 @@ public:
         bool ok=false;int port=qEnvironmentVariableIntValue("RHREMOTE_CONTROL_PORT",&ok);auto token=qgetenv("RHREMOTE_CONTROL_TOKEN");
         if(ok&&port>1024&&port<65536&&token.size()>=32){server=new Server(this,quint16(port),token);server->start();}
     }
-    ~RhControl(){if(server){server->requestInterruption();server->wait(5000);delete server;}}
+    ~RhControl(){if(server){server->requestInterruption();server->wait();delete server;}}
     Q_INVOKABLE void publish(const QVariantMap& value){auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.home=QJsonObject::fromVariantMap(value);}
     Q_INVOKABLE void complete(const QString& id,const QVariantMap& result){auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.lastCommand={{"id",id},{"result",QJsonObject::fromVariantMap(result)}};}
 signals:

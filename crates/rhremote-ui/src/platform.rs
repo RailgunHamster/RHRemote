@@ -17,6 +17,7 @@ pub struct NativePlatform {
     session_status: PathBuf,
     pub devices: Mutex<Vec<Device>>,
     child: Mutex<Option<Child>>,
+    pairing: Mutex<Option<(u64, Device)>>,
     token: String,
     port: u16,
     pub sync: Mutex<crate::config_sync::ConfigSync>,
@@ -85,6 +86,7 @@ impl NativePlatform {
             session_status: data.join("session-status.json"),
             devices: Mutex::new(devices),
             child: Mutex::new(None),
+            pairing: Mutex::new(None),
             token,
             port: std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
                 .and_then(|s| s.local_addr())
@@ -102,6 +104,10 @@ impl NativePlatform {
             .env_remove("RHREMOTE_CONTROL_PORT")
             .env_remove("RHREMOTE_CONTROL_TOKEN");
         command.current_dir(&self.native_data);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         #[cfg(windows)]
         command.creation_flags(0x08000000);
         command
@@ -151,22 +157,34 @@ impl NativePlatform {
             }
         }
         if d.online {
-            if let Ok(mut child) = self
+            let child = self
                 .command()
                 .args(["list", &d.address])
+                .env("RHREMOTE_PROBE_OPERATION", "1")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
-                .spawn()
-            {
+                .spawn();
+            if let Err(ref error) = child {
+                self.probe_diagnostic("spawn", &format!("{}: {}", self.engine.display(), error));
+            }
+            if let Ok(mut child) = child {
                 let end = Instant::now() + Duration::from_secs(5);
                 loop {
                     match child.try_wait() {
                         Ok(Some(status)) => {
                             if status.success() {
-                                if let Ok(output) = child.wait_with_output() {
-                                    d.paired =
-                                        String::from_utf8_lossy(&output.stdout).contains("Desktop");
+                                match child.wait_with_output() {
+                                    Ok(output) => {
+                                        // A successful authenticated app-list request establishes pairing.
+                                        // App names and an initially empty list do not define trust.
+                                        d.paired = output.status.success();
+                                    }
+                                    Err(error) => {
+                                        self.probe_diagnostic("read_output", &error.to_string())
+                                    }
                                 }
+                            } else {
+                                self.probe_diagnostic("exit", &format!("code={:?}", status.code()));
                             }
                             break;
                         }
@@ -174,6 +192,7 @@ impl NativePlatform {
                             std::thread::sleep(Duration::from_millis(25))
                         }
                         _ => {
+                            self.probe_diagnostic("timeout", "native list exceeded 5 seconds");
                             let _ = child.kill();
                             let _ = child.wait();
                             break;
@@ -183,6 +202,59 @@ impl NativePlatform {
             }
         }
         d
+    }
+    fn probe_diagnostic(&self, stage: &str, error: &str) {
+        use std::io::Write;
+        let path = self.native_data.join("probe-errors.log");
+        if fs::metadata(&path).is_ok_and(|m| m.len() > 1_000_000) {
+            let _ = fs::write(&path, "");
+        }
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(
+                file,
+                "{} stage={} {}",
+                rhremote_core::now_ms(),
+                stage,
+                error
+            );
+        }
+    }
+    pub fn pairing_result(&self) -> Option<(u64, Device, String)> {
+        let mut pending = self.pairing.lock().unwrap();
+        if pending.is_none() {
+            return None;
+        }
+        let mut child = self.child.lock().unwrap();
+        let status = child.as_mut()?.try_wait().ok()??;
+        let (attempt, device) = pending.take()?;
+        child.take();
+        drop(child);
+        drop(pending);
+        let outcome: Value = fs::read(&self.session_status)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(Value::Null);
+        let mut device = self.probe(&device);
+        if outcome["phase"] == "paired" {
+            device.paired = true;
+        }
+        let error = if device.paired {
+            String::new()
+        } else if let Some(message) = outcome["error"].as_str().filter(|s| !s.is_empty()) {
+            message.chars().take(512).collect()
+        } else if status.success() {
+            "主机尚未确认配对，请在目标电脑的 Sunshine 提交当前配对码后重试".into()
+        } else {
+            format!(
+                "配对进程退出（{}），请检查目标主机是否在线",
+                status.code().unwrap_or(-1)
+            )
+        };
+        let _ = fs::write(
+            &self.session_status,
+            b"{\"streaming\":false,\"phase\":\"idle\",\"error\":\"\"}",
+        );
+        Some((attempt, device, error))
     }
     pub fn state(&self) -> Result<Value, String> {
         let response = ureq::get(&format!("http://127.0.0.1:{}/v1/state", self.port))
@@ -200,14 +272,15 @@ impl NativePlatform {
             .unwrap_or(json!({"streaming":false}));
         let mut slot = self.child.lock().unwrap();
         if let Some(child) = slot.as_mut() {
-            if child.try_wait().map_err(|e| e.to_string())?.is_some()
-                && matches!(
+            if child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                value["streaming"] = json!(false);
+                if matches!(
                     value["phase"].as_str(),
                     Some("connecting" | "starting" | "connected")
-                )
-            {
-                value["phase"] = json!("error");
-                value["error"] = json!("串流进程已退出，请重新连接");
+                ) {
+                    value["phase"] = json!("error");
+                    value["error"] = json!("串流进程已退出，请重新连接");
+                }
             }
         }
         value["tracing"] = self.statistics.lock().unwrap().state();
@@ -228,7 +301,13 @@ impl NativePlatform {
     fn control(&self, path: &str, args: &Value) -> Result<Value, String> {
         let response = ureq::post(&format!("http://127.0.0.1:{}/v1/{path}", self.port))
             .set("Authorization", &format!("Bearer {}", self.token))
-            .timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(
+                if ["shortcut", "display", "displays"].contains(&path) {
+                    22
+                } else {
+                    3
+                },
+            ))
             .send_json(args.clone());
         match response {
             Ok(response) => response.into_json().map_err(|e| e.to_string()),
@@ -437,6 +516,7 @@ impl Platform for NativePlatform {
                     .env("RHREMOTE_CONTROL_PORT", self.port.to_string())
                     .env("RHREMOTE_CONTROL_TOKEN", &self.token)
                     .env("RHREMOTE_SESSION_STATUS", &self.session_status)
+                    .env("RHREMOTE_DISPLAY_MODE",p["displayMode"].as_str().unwrap_or("auto"))
                     .env(
                         "RHREMOTE_AUDIO_ENABLED",
                         if p["audioEnabled"] == true { "1" } else { "0" },
@@ -451,6 +531,7 @@ impl Platform for NativePlatform {
                 Ok(json!({"accepted":true}))
             }
             "device.pair" => {
+                let mut pending = self.pairing.lock().unwrap();
                 let mut slot = self.child.lock().unwrap();
                 if slot
                     .as_mut()
@@ -458,8 +539,18 @@ impl Platform for NativePlatform {
                 {
                     return Err("native operation is already running".into());
                 }
+                let attempt = args["attemptId"].as_u64().ok_or("attempt ID required")?;
+                let device: Device =
+                    serde_json::from_value(args["device"].clone()).map_err(|e| e.to_string())?;
+                fs::write(
+                    &self.session_status,
+                    b"{\"streaming\":false,\"phase\":\"pairing\",\"error\":\"\"}",
+                )
+                .map_err(|e| e.to_string())?;
                 *slot = Some(
                     self.command()
+                        .env("RHREMOTE_PAIR_OPERATION", "1")
+                        .env("RHREMOTE_SESSION_STATUS", &self.session_status)
                         .args([
                             "pair",
                             args["device"]["address"]
@@ -471,9 +562,11 @@ impl Platform for NativePlatform {
                         .spawn()
                         .map_err(|e| e.to_string())?,
                 );
+                *pending = Some((attempt, device));
                 Ok(json!({"accepted":true}))
             }
             "pair.cancel" => {
+                self.pairing.lock().unwrap().take();
                 if let Some(mut child) = self.child.lock().unwrap().take() {
                     let _ = child.kill();
                     let _ = child.wait();
@@ -488,6 +581,10 @@ impl Platform for NativePlatform {
                 }
             }
             "input.gesture" => self.control("input", args),
+            "stream.displays.refresh" => self.control("displays", &json!({})),
+            "stream.display.select" => self.control("display", args),
+            "stream.shortcut" => self.control("shortcut", args),
+            "stream.window.move" => self.control("shortcut", &json!({"shortcut": if args["direction"] == "left" {"win-shift-left"} else {"win-shift-right"}})),
             "stream.stats.toggle" => self.control("stats-toggle", &json!({})),
             "stream.audio.toggle" => {
                 let state = self.state()?;

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rhremote-core", "crates/rhremote-ui"]
+members = ["crates/rhremote-core", "crates/rhremote-ui", "crates/rhremote-host"]
 resolver = "3"
 
 [workspace.package]
