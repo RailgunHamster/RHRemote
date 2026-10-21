@@ -174,6 +174,7 @@ pub struct State {
     pub last_action: Value,
     pub window_action: String,
     pub preview: Value,
+    pub toolbar: Value,
     pub settings_tab: String,
     pub sync: Value,
     pub sync_busy: bool,
@@ -248,6 +249,7 @@ impl Controller {
                 last_action: Value::Null,
                 window_action: String::new(),
                 preview: Value::Null,
+                toolbar: Value::Null,
                 settings_tab: "updates".into(),
                 sync: platform
                     .execute("sync.state", &json!({}))
@@ -308,7 +310,7 @@ impl Controller {
         }
         s.connecting = matches!(
             statistics["phase"].as_str(),
-            Some("connecting" | "starting")
+            Some("connecting" | "starting" | "reconnecting")
         );
         if streaming && statistics["firstFrame"] == false {
             s.connecting = true;
@@ -316,7 +318,9 @@ impl Controller {
         if let Some(error) = statistics["error"].as_str().filter(|e| !e.is_empty()) {
             s.status = error.into();
         } else if s.connecting {
-            s.status = if streaming {
+            s.status = if statistics["phase"] == "reconnecting" {
+                "连接中断，正在自动恢复…"
+            } else if streaming {
                 "等待主机首帧…"
             } else {
                 "正在建立串流…"
@@ -327,6 +331,13 @@ impl Controller {
         }
         s.statistics = statistics;
         s.revision += 1;
+    }
+    pub fn toolbar_state(&self, value: Value) {
+        let mut s = self.state.lock().unwrap();
+        if s.toolbar != value {
+            s.toolbar = value;
+            s.revision += 1;
+        }
     }
     pub fn pairing_complete(&self, attempt: u64, device: Device, error: String) {
         let mut s = self.state.lock().unwrap();
@@ -558,7 +569,11 @@ impl Controller {
             "stream.shortcuts.list" => return Ok(shortcuts()),
             "stream.shortcuts.open" => s.controls = true,
             "stream.displays.open" => s.controls = true,
-            "window.minimize" | "window.maximize" | "window.close" | "view.snapshot" => {
+            "window.minimize"
+            | "window.maximize"
+            | "window.close"
+            | "view.snapshot"
+            | "view.toolbar.snapshot" => {
                 if id == "window.close" && s.streaming {
                     drop(s);
                     self.platform.execute("stream.disconnect", &json!({}))?;

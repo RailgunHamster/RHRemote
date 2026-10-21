@@ -91,18 +91,25 @@ def analyze(events,manifest):
     return summary,list(frames.values())
 
 def import_host(path,lo,hi):
-    data=json.loads(path.read_text(encoding="utf-8-sig"));offset=data.get("clockOffsetUs",0);zone=dt.timezone(dt.timedelta(minutes=data.get("utcOffsetMinutes",480)));result=[];probe=None;encoding=None
+    data=json.loads(path.read_text(encoding="utf-8-sig"));offset=data.get("clockOffsetUs",0);zone=dt.timezone(dt.timedelta(minutes=data.get("utcOffsetMinutes",480)));result=[];probe=None;encoding=None;scopes={}
     for line in data.get("log",[]):
         m=re.match(r"\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\]: \w+: (.*)",line)
         if not m:continue
         ts=int(dt.datetime.fromisoformat(m[1]).replace(tzinfo=zone).timestamp()*1e6)-offset
         if not lo-2e6<=ts<=hi+2e6:continue
         message=m[2];name="host_log"
+        phase=re.match(r"RHREMOTE_PHASE (begin|end) id=(\d+) name=(\w+) tick_us=(\d+)(?: elapsed_us=(\d+))?",message)
+        if phase:
+            if phase[1]=="begin":scopes[phase[2]]=(ts,phase[3])
+            elif phase[2] in scopes:
+                start,stage=scopes.pop(phase[2]);result.append({"event":"host_"+stage,"ts_us":start,"dur_us":int(phase[5]),"frame":-1,"thread":"Sunshine "+stage,"fields":{"measurement":"server steady clock; instrumented source","scopeId":phase[2]}})
+            continue
+        if "Trying encoder [" in message and probe is None:probe=ts;name="host_encoder_probe_begin"
         if "Encoder reenumeration is required" in message:probe=ts;name="host_encoder_probe_begin"
         if "Creating encoder" in message:encoding=(ts,message);name="host_encoder_create"
         if "Streaming bitrate" in message and encoding:
             start,encoder=encoding;result.append({"event":encoder,"ts_us":start,"dur_us":ts-start,"frame":-1,"thread":"Sunshine encoder","fields":{}});encoding=None
-        if "Executing [" in message and probe:
+        if ("Executing [" in message or "CLIENT CONNECTED" in message) and probe:
             result.append({"event":"host_encoder_reenumeration","ts_us":probe,"dur_us":ts-probe,"frame":-1,"thread":"Sunshine launch","fields":{}});probe=None
         result.append({"event":name,"ts_us":ts,"frame":-1,"thread":"Sunshine log","fields":{"message":message}})
     return result,{"offset_us":offset,"uncertainty_us":data.get("clockUncertaintyUs"),"alignment":"SSH midpoint estimate; host substage durations use host clock only"}

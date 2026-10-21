@@ -17,3 +17,8 @@ Windows 的 render_return 只表示 CPU 渲染/Present 提交返回，不代表�
 2026-10-21 实测：Windows 1920×1080/30/HEVC，去掉桌面鼠标模式的 3.5 秒提示等待和 RHRemote 连接前 1.5 秒等待后，连接至首帧渲染提交返回从 16.397 秒降到 9.817 秒；这是后续连接对照，不是冷启动或稳定帧率验收。之后仍有约 6.4 秒等待主机首包。Sunshine 重启后首连曾用 36.949 秒重测编码能力，需继续定位主机初始化；不能把该耗时归咎于 UI。
 
 OPPO 实测记录 206 帧、零统计丢记录，连接至系统呈现回调到达 6.552 秒。独立的 winserver 控制台 FFmpeg 合成视频测试中，H.264 / HEVC 均成功编码 60 帧，但开始出帧前等待约 7.2 / 8.2 秒；该路径不使用 RHRemote、Moonlight 或桌面捕获，支持将剩余启动等待继续定位到主机 QSV 初始化。另两次设备/帧上下文实验失败，不把它们的时间当作有效编码性能结论。
+# Sunshine 服务端诊断构建
+
+`tools/prepare-sunshine.py` 固定 Sunshine `cb72dffa3233c5815cd5ba88f09f049dd679ba75`，默认生成带计时的行为对照版，`--optimized` 生成优化版。诊断版在 Sunshine 日志输出 `RHREMOTE_PHASE`，使用服务端单调时钟测量编码器探测、格式验证、采集重建、DDA 设备与 duplication 创建、编码器创建和首帧编码；不记录像素或声音。
+
+`collect-statistics.ps1 -Platform windows -RunId <已结束的统计编号>` 可分析自动恢复之前的特定会话。服务端原生计时进入同一 timeline，服务端阶段耗时由单调时钟直接取得，跨机器对齐仍附带 SSH 估计误差。模拟中断结果和实际 Windows 解锁验收分别记录。

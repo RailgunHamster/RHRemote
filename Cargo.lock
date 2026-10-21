@@ -3840,6 +3840,7 @@ dependencies = [
  "embed-resource",
  "image",
  "keyring",
+ "raw-window-handle",
  "rhremote-core",
  "roxmltree 0.20.0",
  "serde",
@@ -3850,6 +3851,7 @@ dependencies = [
  "ureq 2.12.1",
  "url",
  "velopack",
+ "windows",
 ]
 
 [[package]]
@@ -4292,6 +4294,7 @@ dependencies = [
  "const-field-offset",
  "i-slint-backend-linuxkms",
  "i-slint-backend-selector",
+ "i-slint-backend-winit",
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",

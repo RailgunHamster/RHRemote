@@ -1,10 +1,22 @@
 import importlib.util
 import unittest
+import tempfile
+import json
 from pathlib import Path
 
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def test_instrumented_host_scopes_use_monotonic_duration(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/"host.json"
+            path.write_text(json.dumps({"utcOffsetMinutes":0,"log":[
+                "[2026-10-22 00:00:00.000]: Info: RHREMOTE_PHASE begin id=7 name=dda_device_init tick_us=1000",
+                "[2026-10-22 00:00:01.500]: Info: RHREMOTE_PHASE end id=7 name=dda_device_init tick_us=1401000 elapsed_us=1400000"
+            ]}),encoding="utf-8")
+            rows,_=a.import_host(path,0,10**18)
+            self.assertEqual(len(rows),1);self.assertEqual(rows[0]["dur_us"],1400000)
+            self.assertEqual(rows[0]["event"],"host_dda_device_init")
     def test_connection_origin_excludes_idle_and_phases_sum_to_first_frame(self):
         start=1_000_000_000
         rows=[e("application_start",start-240_446_959),e("connect_action",start),e("connection_begin",start+3_167_606),e("connection_ready",start+3_354_511),e("packet_first",start+9_765_653,1),e("decode_output",start+9_815_586,1),e("render_return",start+9_817_465,1),e("trace_end",start+20_000_000)]

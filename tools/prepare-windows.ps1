@@ -115,8 +115,12 @@ Edit-Source 'app/cli/listapps.cpp' {param($s)
 # Only extend the bounded initial-frame grace period; steady-state pacing is unchanged.
 Edit-Source 'app/gui/StreamSegue.qml' {param($s)
     $s="import RhProfiles 1.0`n"+$s
-    return (Replace-Once $s '    function displayLaunchError(text)' '    function displayLaunchError(text)').Replace('        streamSegueErrorDialog.text = text', '        RhProfiles.connectionStatus("error",text)
+    $s=(Replace-Once $s '    function displayLaunchError(text)' '    function displayLaunchError(text)').Replace('        streamSegueErrorDialog.text = text', '        RhProfiles.connectionStatus("error",text)
         streamSegueErrorDialog.text = text')
+    $s=$s.Replace("    function sessionFinished(portTestResult)`r`n    {","    function sessionFinished(portTestResult)`r`n    {`r`n        if(RhProfiles.apiControlled())return;")
+    $s=$s.Replace("    function sessionFinished(portTestResult)`n    {","    function sessionFinished(portTestResult)`n    {`n        if(RhProfiles.apiControlled())return;")
+    $s=$s.Replace("    function sessionReadyForDeletion()`r`n    {","    function sessionReadyForDeletion()`r`n    {`r`n        if(RhProfiles.apiControlled()){Qt.quit();return;}")
+    return $s.Replace("    function sessionReadyForDeletion()`n    {","    function sessionReadyForDeletion()`n    {`n        if(RhProfiles.apiControlled()){Qt.quit();return;}")
 }
 Edit-Source 'moonlight-common-c/moonlight-common-c/src/VideoStream.c' {param($s)
     return (Replace-Once $s '#define FIRST_FRAME_TIMEOUT_SEC 10' '#define FIRST_FRAME_TIMEOUT_SEC 30')
@@ -131,15 +135,20 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
     $s=$s.Replace("void Session::clStageFailed(int stage, int errorCode)`r`n{","void Session::clStageFailed(int stage, int errorCode)`r`n{`r`n    RhRuntime::status(`"error`",QString(`"%1 (%2)`").arg(QString::fromLocal8Bit(LiGetStageName(stage))).arg(errorCode));")
     $s=$s.Replace("void Session::clStageFailed(int stage, int errorCode)`n{","void Session::clStageFailed(int stage, int errorCode)`n{`n    RhRuntime::status(`"error`",QString(`"%1 (%2)`").arg(QString::fromLocal8Bit(LiGetStageName(stage))).arg(errorCode));")
     $s=$s.Replace('void Session::clConnectionTerminated(int errorCode)', 'void Session::clConnectionTerminated(int errorCode)')
-    $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`r`n{","void Session::clConnectionTerminated(int errorCode)`r`n{`r`n    if(errorCode!=0)RhRuntime::status(`"error`",QString(`"Stream interrupted (%1)`").arg(errorCode));")
-    $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`n{","void Session::clConnectionTerminated(int errorCode)`n{`n    if(errorCode!=0)RhRuntime::status(`"error`",QString(`"Stream interrupted (%1)`").arg(errorCode));")
+    $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`r`n{","void Session::clConnectionTerminated(int errorCode)`r`n{`r`n    RhRuntime::terminated(errorCode);")
+    $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`n{","void Session::clConnectionTerminated(int errorCode)`n{`n    RhRuntime::terminated(errorCode);")
+    $s=$s.Replace('LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags)','(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT") ? 0 : LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags))')
     $s=Replace-Once $s 'QString(m_Computer->name + " - Moonlight")' 'QString(m_Computer->name + " - RHRemote")'
     $s=Replace-Once $s 'bool Session::startConnectionAsync()' 'bool Session::startConnectionAsync()'
     $s=Replace-Once $s '    QString rtspSessionUrl;' @'
     const auto displayMode=qEnvironmentVariable("RHREMOTE_DISPLAY_MODE");
     if(!displayMode.isEmpty()){
-        auto reply=RhHost::request(m_Computer->activeAddress.address(),m_Computer->serverCert,"/v1/display/prepare",{{"mode",displayMode},{"width",m_Preferences->width},{"height",m_Preferences->height}});
-        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.firstFrame=false;
+        const auto cached=QJsonDocument::fromJson(qgetenv("RHREMOTE_RESUME_SELECTION")).object();
+        const int cachedIndex=cached["selected"].toObject()["captureIndex"].toInt();
+        auto reply=cachedIndex>=1&&cachedIndex<=12&&cached["displays"].isArray()
+            ? QJsonObject{{"ok",true},{"result",cached}}
+            : RhHost::request(m_Computer->activeAddress.address(),m_Computer->serverCert,"/v1/display/prepare",{{"mode",displayMode},{"width",m_Preferences->width},{"height",m_Preferences->height}});
+        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.firstFrame=false;r.localDisconnect=false;r.retryEligible=false;
             if(reply["ok"].toBool()){auto data=reply["result"].toObject();r.displays=data["displays"].toArray();r.selectedDisplay=data["selected"].toObject();int index=r.selectedDisplay["captureIndex"].toInt();r.initialDisplay=index==data["initialCaptureIndex"].toInt()?0:index;r.displayError.clear();}
             else{r.displayError=reply["error"].toString();}
         }
@@ -156,9 +165,22 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
     emit connectionStarted();
 '@
     $s=$s.Replace('        execInternal();',"        execInternal();`n        RhRuntime::stream(false);")
+    $s=Replace-Once $s '        case SDL_QUIT:' '        case SDL_QUIT:
+            if(!RhRuntime::get().retryEligible.load())RhRuntime::get().localDisconnect=true;'
+    $s=Replace-Once $s '    m_InputHandler->setWindow(m_Window);' @'
+#ifdef Q_OS_WIN32
+    {SDL_SysWMinfo info{};SDL_VERSION(&info.version);if(SDL_GetWindowWMInfo(m_Window,&info)&&info.subsystem==SDL_SYSWM_WINDOWS)RhRuntime::get().streamWindow=quintptr(info.info.win.window);}
+#endif
+    m_InputHandler->setWindow(m_Window);
+'@
+    $s=Replace-Once $s '    SDL_DestroyWindow(m_Window);' '    RhRuntime::get().streamWindow=0;
+    SDL_DestroyWindow(m_Window);'
     $s=Replace-Once $s '            case SDL_CODE_FRAME_READY:' @'
             case 0x52480001:
                 m_OverlayManager.setOverlayState(Overlay::OverlayDebug,!m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
+                break;
+            case 0x52480002:
+                clConnectionTerminated(ML_ERROR_UNEXPECTED_EARLY_TERMINATION);
                 break;
             case SDL_CODE_FRAME_READY:
 '@

@@ -46,9 +46,11 @@
  {"id":"stream.audio.toggle","label":"远程声音开关","args":{}},
  {"id":"stream.audio.volume","label":"串流音量","args":{"volume":"integer 0..100"}},
  {"id":"stream.disconnect","label":"断开","args":{}},
+ {"id":"stream.test.interrupt","label":"测试模式注入一次连接中断","args":{}},
  {"id":"input.gesture","label":"输入与手势","args":{"gesture":"tap / secondary / drag / scroll / pinch","x":"number","y":"number"}},
  {"id":"window.minimize","label":"最小化","args":{}},
  {"id":"window.maximize","label":"最大化 / 还原","args":{}},
  {"id":"window.close","label":"关闭","args":{}},
- {"id":"view.snapshot","label":"导出本应用界面预览","args":{}}
+ {"id":"view.snapshot","label":"导出本应用界面预览","args":{}},
+ {"id":"view.toolbar.snapshot","label":"导出串流悬浮控制栏预览","args":{}}
 ]

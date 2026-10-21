@@ -32,14 +32,18 @@ struct RhRuntime {
     QString hostAddress;QSslCertificate hostCert;
     QJsonArray displays;QJsonObject selectedDisplay;QString displayError;int initialDisplay=0;
     std::atomic<bool> firstFrame{false};
+    std::atomic<quintptr> streamWindow{0};
+    std::atomic<bool> localDisconnect{false},retryEligible{false};
+    std::atomic<int> terminationCode{0};
     std::atomic<bool> audioEnabled{true};std::atomic<int> volume{100};std::atomic<quint64> audioPackets{0};
     RhRuntime(){audioEnabled=qEnvironmentVariable("RHREMOTE_AUDIO_ENABLED")!="0";bool ok=false;int v=qEnvironmentVariableIntValue("RHREMOTE_AUDIO_VOLUME",&ok);if(ok)volume=qBound(0,v,100);}
     static RhRuntime& get(){static RhRuntime value;return value;}
     static void status(const QString& phase,const QString& error=QString()){
         auto& r=get();QMutexLocker lock(&r.mutex);r.phase=phase;r.error=error;
         const auto path=qEnvironmentVariable("RHREMOTE_SESSION_STATUS");
-        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"phase",phase},{"error",error},{"streaming",r.streaming},{"firstFrame",r.firstFrame.load()}}).toJson(QJsonDocument::Compact));file.commit();}}
+        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"phase",phase},{"error",error},{"streaming",r.streaming},{"firstFrame",r.firstFrame.load()},{"retryEligible",r.retryEligible.load()},{"terminationCode",r.terminationCode.load()}}).toJson(QJsonDocument::Compact));file.commit();}}
     }
+    static void terminated(int code){auto& r=get();r.terminationCode=code;r.retryEligible=r.firstFrame.load()&&!r.localDisconnect.load()&&code!=ML_ERROR_PROTECTED_CONTENT;status("interrupted",QString("串流中断 (%1)").arg(code));}
     static void stream(bool value){auto& r=get();{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;}}if(value)status("connected");else{QString error;{QMutexLocker lock(&r.mutex);error=r.error;}status(error.isEmpty()?"disconnected":"error",error);}}
     static void performance(const QString& text){auto& r=get();QMutexLocker lock(&r.mutex);r.stats=text;r.statsAt=QDateTime::currentMSecsSinceEpoch();}
 };
@@ -94,15 +98,22 @@ class RhControl : public QObject {
         if(method=="GET"&&(path=="/v1/state"||path=="/v1/stats")){
             QMutexLocker lock(&r.mutex);auto result=path=="/v1/state"?r.home:QJsonObject();
             result["ok"]=true;result["streaming"]=r.streaming;result["activeProfile"]=r.profile;
-            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;return result;
+            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["terminationCode"]=r.terminationCode.load();return result;
         }
         if(method!="POST"){status=404;return {{"ok",false},{"error","unknown endpoint"}};}
         bool streaming;QJsonObject profile;{QMutexLocker lock(&r.mutex);streaming=r.streaming;profile=r.profile;}
         if(path=="/v1/disconnect"){
+            r.localDisconnect=true;r.retryEligible=false;
             if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}
             SDL_Event event{};event.type=SDL_QUIT;
             if(SDL_PushEvent(&event)<0){status=503;return {{"ok",false},{"error","disconnect queue failed"}};}
             return {{"ok",true},{"accepted",true}};
+        }
+        if(path=="/v1/test-interrupt"){
+            if(!streaming||!qEnvironmentVariableIsSet("RHREMOTE_STATISTICS_FILE")){status=409;return {{"ok",false},{"error","requires an active test-mode stream"}};}
+            SDL_Event event{};event.type=SDL_USEREVENT;event.user.code=0x52480002;
+            if(SDL_PushEvent(&event)<0){status=503;return {{"ok",false},{"error","command queue failed"}};}
+            return {{"ok",true},{"accepted",true},{"synthetic",true}};
         }
         if(path=="/v1/stats-toggle"){
             if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}

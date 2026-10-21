@@ -3,7 +3,9 @@ use serde_json::{Value, json};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
+mod overlay;
 mod platform;
+mod recovery;
 mod statistics;
 mod updates;
 slint::include_modules!();
@@ -102,7 +104,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(port) = std::env::var("RHREMOTE_CONTROL_PORT") {
         rhremote_core::start_http(controller.clone(), port.parse()?, token)?;
     }
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .with_winit_window_attributes_hook(|attributes| {
+            if attributes.title == "RHRemote · 串流控制" {
+                attributes.with_active(false)
+            } else {
+                attributes
+            }
+        })
+        .select()?;
     let ui = MainWindow::new()?;
+    let toolbar = StreamToolbar::new()?;
     let shortcuts = rhremote_core::shortcuts();
     ui.set_shortcut_labels(ModelRc::new(VecModel::from(
         shortcuts
@@ -120,6 +133,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             .map(|s| slint::SharedString::from(s["id"].as_str().unwrap()))
             .collect::<Vec<_>>(),
     )));
+    toolbar.set_shortcut_labels(ui.get_shortcut_labels());
+    toolbar.set_shortcut_ids(ui.get_shortcut_ids());
     native.statistics.lock().unwrap().mark("ui_created");
     let actions = controller.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, String)>(64);
@@ -132,6 +147,22 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+    let toolbar_sender = sender.clone();
+    let toolbar_queue = controller.clone();
+    toolbar.global::<Commands>().on_trigger(move |id, arg| {
+        if toolbar_sender
+            .try_send((id.to_string(), arg.to_string()))
+            .is_err()
+        {
+            toolbar_queue.message("操作队列已满".into());
+        }
+        if id.as_str() != "stream.disconnect" {
+            overlay::focus_stream(&toolbar_queue.state());
+        }
+    });
+    toolbar
+        .window()
+        .on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
     let queue = controller.clone();
     ui.global::<Commands>().on_trigger(move |id, arg| {
         if sender.try_send((id.to_string(), arg.to_string())).is_err() {
@@ -148,12 +179,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let timer = slint::Timer::default();
     let weak = ui.as_weak();
+    let toolbar_weak = toolbar.as_weak();
     let view = controller.clone();
     let preview = data.join("preview.png");
     let mut revision = u64::MAX;
     let profile_model = std::rc::Rc::new(VecModel::<SettingRow>::default());
     ui.set_profile_fields(ModelRc::from(profile_model.clone()));
     let mut profile_fingerprint = String::new();
+    let mut toolbar_display_fingerprint = String::new();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade() else{return};let state=view.state();let next=state["revision"].as_u64().unwrap_or(0);
         ui.set_compact(ui.window().size().width as f32/ui.window().scale_factor()<760.0);
@@ -190,9 +223,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }).collect();ui.set_profile_sources(ModelRc::new(VecModel::from(sources)));
             let p:Profile=serde_json::from_value(state["draft"].clone()).unwrap_or_else(|_|view.profile(selected));ui.set_profile_width(p.width as i32);ui.set_profile_height(p.height as i32);ui.set_fps(p.fps as i32);ui.set_bitrate(p.bitrate_mbps as i32);ui.set_codec(p.codec.into());ui.set_swapped(p.swap_buttons);ui.set_trackpad(p.trackpad);ui.set_statistics(if state["streaming"]==true{state["showStats"]==true}else{p.statistics});ui.set_pair_pin(state["pairPin"].as_str().unwrap_or("").into());ui.set_streaming(state["streaming"]==true);ui.set_connecting(state["connecting"]==true);ui.set_controls(state["controls"]==true);ui.set_stream_statistics(state["statistics"]["statistics"].as_str().unwrap_or("").into());
         }
+        if let Some(toolbar)=toolbar_weak.upgrade(){
+            toolbar.set_expanded(state["controls"]==true);
+            toolbar.set_audio_enabled(state["audioEnabled"]==true);toolbar.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
+            toolbar.set_device_name(ui.get_selected_name());toolbar.set_status(state["status"].as_str().unwrap_or("").into());toolbar.set_stats_enabled(state["showStats"]==true);
+            toolbar.global::<Palette>().set_dark(state["saved"]["dark"]==true);
+            let display_fingerprint=format!("{}:{}",state["statistics"]["displays"],state["statistics"]["selectedDisplay"]["id"]);
+            if display_fingerprint!=toolbar_display_fingerprint {
+                toolbar_display_fingerprint=display_fingerprint;
+                toolbar.set_displays(ui.get_remote_displays());
+                toolbar.set_display_labels(ModelRc::new(VecModel::from(ui.get_remote_displays().iter().map(|d|d.label).collect::<Vec<_>>())));
+                if let Some(index)=ui.get_remote_displays().iter().position(|d|d.chosen){toolbar.set_display_index(index as i32);}
+            }
+            view.toolbar_state(overlay::follow(&toolbar,&state));
+        }
         match view.take_window_action().as_str(){
             "window.minimize"=>ui.window().set_minimized(true),"window.maximize"=>ui.window().set_maximized(!ui.window().is_maximized()),"window.close"=>{let _=slint::quit_event_loop();},
-            "view.snapshot"=>{match ui.window().take_snapshot(){Ok(pixels)=>{let pending=preview.with_file_name("preview.pending.png");let result=image::save_buffer(&pending,pixels.as_bytes(),pixels.width(),pixels.height(),image::ColorType::Rgba8).map_err(|e|e.to_string()).and_then(|_|std::fs::rename(&pending,&preview).map_err(|e|e.to_string()));view.preview_complete(match result{Ok(_)=>json!({"ok":true,"path":preview,"completedAtMs":rhremote_core::now_ms()}),Err(e)=>json!({"ok":false,"error":e,"completedAtMs":rhremote_core::now_ms()})});},Err(e)=>view.message(format!("导出失败：{e}"))}},_=>{}
+            action @ ("view.snapshot"|"view.toolbar.snapshot")=>{let toolbar=toolbar_weak.upgrade();let snapshot=if action=="view.toolbar.snapshot" {toolbar.as_ref().ok_or(slint::PlatformError::Other("控制栏不可用".into())).and_then(|t|t.window().take_snapshot())}else{ui.window().take_snapshot()};let preview=if action=="view.toolbar.snapshot" {preview.with_file_name("toolbar-preview.png")}else{preview.clone()};match snapshot{Ok(pixels)=>{let pending=preview.with_file_name("preview.pending.png");let result=image::save_buffer(&pending,pixels.as_bytes(),pixels.width(),pixels.height(),image::ColorType::Rgba8).map_err(|e|e.to_string()).and_then(|_|std::fs::rename(&pending,&preview).map_err(|e|e.to_string()));view.preview_complete(match result{Ok(_)=>json!({"ok":true,"path":preview,"completedAtMs":rhremote_core::now_ms()}),Err(e)=>json!({"ok":false,"error":e,"completedAtMs":rhremote_core::now_ms()})});},Err(e)=>view.message(format!("导出失败：{e}"))}},_=>{}
         }
     });
     let poll = controller.clone();
@@ -208,7 +255,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 poll.stream_state(false, Value::Null);
             }
-            std::thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(Duration::from_millis(250));
         }
     });
     let automatic = controller.clone();

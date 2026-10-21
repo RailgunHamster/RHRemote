@@ -1,4 +1,4 @@
-param([ValidateSet('windows','android')][string]$Platform='windows',[switch]$KeepRaw)
+param([ValidateSet('windows','android')][string]$Platform='windows',[switch]$KeepRaw,[string]$RunId='')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $params=@{Mode='action';Action='statistics.state'}
@@ -6,6 +6,11 @@ if($Platform -eq 'android'){$params.Port=48754;$params.TokenFile='D:\RHRemoteToo
 $s=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') @params
 if(-not $s.ok){throw 'Statistics state unavailable'}
 $path=[string]$s.result.latest;if(-not $path){throw 'No statistics run available'}
+if($RunId){
+ if($Platform-ne'windows'-or$RunId-notmatch'^\d+-[a-f0-9-]+$'){throw 'Explicit run selection requires a valid Windows run ID'}
+ $path=Join-Path (Split-Path -Parent $path) $RunId
+ if(-not(Test-Path -LiteralPath (Join-Path $path 'manifest.json'))){throw 'Selected Windows trace does not exist'}
+}
 if($Platform -eq 'android'){
  $prefix='/data/user/0/com.rhremote.client/files/statistics/'
  if(-not $path.StartsWith($prefix)){throw 'Unexpected app statistics path'}

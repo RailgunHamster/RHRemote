@@ -17,7 +17,9 @@ Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运�
 
 当前 v0.2.1 是开发预览版。Android 暂用开发签名；Windows 尚无代码签名证书。连接成功不代表稳定 30 / 60 FPS 验收，首次连接的主机编码检测耗时仍在排查。
 
-开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制区域在连接后显示；Android 使用串流工具栏。每个操作都有对应动作接口。
+开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制栏悬浮在串流窗口顶部，可收起为小开关；Android 使用串流工具栏。每个操作都有对应动作接口。
+
+Windows 对已经显示过首帧的意外中断自动恢复，最多连续尝试 3 次、限时 60 秒；主动断开或关闭窗口不会重连。重试保留连接参数和实时声音设置，第一次重试复用选屏信息，后续失败再重新查询主机。受控客户端不会等待底层错误对话框确认。
 
 被控端保留 Sunshine，新增可选 Rust 辅助服务 RHRemoteHost，用于安全操作序列、屏幕清单和自有虚拟屏尺寸管理。构建运行 `tools/build-host.ps1`，在被控端管理员 PowerShell 运行 `dist/host/install-host.ps1 -SourceDirectory <组件目录> -EnableSecureAttention`。它使用已有 Sunshine 配对证书，不增加账号密码；安装目录和操作文件仅 SYSTEM / 管理员可写，47995 端口仅允许局域网。卸载使用同目录 `uninstall-host.ps1`，保留备份和数据。
 

@@ -71,7 +71,7 @@ Android 自动检查并下载；用户发起下载后打开系统 APK 安装界�
 
 GitHub 和 Gitee 作为互备下载源，不把发布令牌放到客户端。Windows 使用 `releases.win.json`；Android 使用 schemaVersion 为 1、android 字段含 version/versionCode/packageName/tag/fileName/size/sha256 的 `releases.android.json`。包下载固定指向不可变版本 tag，先验证产物，再更新 latest 路由。
 
-目前两个仓库已创建为私有，安装包和 APK 还未正式发布。客户端不携带个人令牌；匿名自动更新需在公开发布完成并验证下载后才能验收。
+GitHub 和 Gitee 仓库均已公开，v0.2.1 安装包及 APK 已发布。开发分支的新功能不覆盖已有版本的安装包或更新索引；客户端不携带个人发布令牌。
 
 ## 设置与测试统计
 
@@ -89,3 +89,7 @@ statistics.configure {enabled:true} 启用本机测试模式，每次连接自�
 屏幕清单和虚拟屏尺寸准备需要被控端的 RHRemoteHost。Ctrl+Alt+Delete 通过辅助服务调用 Windows SendSAS，不用普通键盘注入代替。辅助服务只接受 Sunshine 已启用配对客户端的双向 TLS 认证；客户端固定校验配对时保存的主机证书。每次操作重新检查配对启用状态，配对密钥不参加同步。
 
 Windows 在原有认证回环接口暴露这些操作；Android 工具栏和回环接口也使用同一动作分发器。Android 的网络操作异步返回接受状态，完成结果见 `stream.lastShortcut`、`stream.displayBusy`、`stream.displayError`。
+
+Windows 的 `stream.controls.toggle` 展开／收起位于串流窗口顶部的悬浮栏；收起后保留可点击的开关。`state.toolbar` 返回显示状态、展开状态、位置、尺寸和所属串流窗口。`view.toolbar.snapshot` 导出本应用控制栏预览。
+
+Windows 意外中断后，`statistics.phase=reconnecting`、`connecting=true`，恢复首帧后回到 `connected`。`statistics.reconnectAttempts` 是当前连续恢复次数；主动 `stream.disconnect` 会取消待执行的恢复。仅有已渲染会话能够自动恢复，首次连接失败不会无限重试。`stream.test.interrupt` 仅在已启用逐帧统计的活动 Windows 会话中可用，注入一次明确标记的模拟中断，走完整的底层终止及恢复路径。

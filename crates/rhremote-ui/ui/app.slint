@@ -50,6 +50,55 @@ component IconActionButton inherits Rectangle {
     accessible-role:button;accessible-label:root.label;
     accessible-action-default=>{Commands.trigger(root.action-id,"");}
 }
+export component StreamToolbar inherits Window {
+    title:"RHRemote · 串流控制";no-frame:true;
+    background:transparent;default-font-family:"Microsoft YaHei UI";default-font-size:12px;
+    in property <bool> expanded:true;
+    in property <bool> audio-enabled;
+    in property <int> audio-volume:100;
+    in property <bool> stats-enabled;
+    in property <string> device-name;
+    in property <string> status;
+    in property <[RemoteDisplay]> displays;
+    in property <[string]> display-labels;
+    in property <[string]> shortcut-labels;
+    in property <[string]> shortcut-ids;
+    in-out property <int> shortcut-index:5;
+    in-out property <int> display-index:0;
+    preferred-width:expanded ? 1020px : 72px;
+    preferred-height:expanded ? 116px : 28px;
+    min-width:1px;min-height:expanded ? 116px : 28px;
+    max-width:expanded ? 1020px : 72px;max-height:expanded ? 116px : 28px;
+    Rectangle {
+        background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
+        if !root.expanded: TouchArea { mouse-cursor:pointer;clicked=>{Commands.trigger("stream.controls.toggle","");} }
+        if !root.expanded: Text {text:"控制";color:Palette.blue;horizontal-alignment:center;vertical-alignment:center;font-size:12px;}
+        if root.expanded: VerticalLayout {
+            padding:8px;spacing:6px;
+            HorizontalLayout {spacing:6px;
+                Text {text:root.device-name;color:Palette.ink;vertical-alignment:center;overflow:elide;max-width:120px;}
+                ActionButton {text:"Ctrl+Alt+Del";action-id:"stream.shortcut";argument:"ctrl-alt-delete";}
+                ComboBox {model:root.shortcut-labels;current-index <=> root.shortcut-index;min-width:110px;}
+                ActionButton {text:"发送";action-id:"stream.shortcut";argument:root.shortcut-ids[root.shortcut-index];}
+                ActionButton {text:root.audio-enabled ? "声音：开" : "声音：关";action-id:"stream.audio.toggle";chosen:root.audio-enabled;}
+                SpinBox {minimum:0;maximum:100;value:root.audio-volume;max-width:90px;edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
+                ActionButton {text:"统计";action-id:"stream.stats.toggle";chosen:root.stats-enabled;}
+                ActionButton {text:"断开";action-id:"stream.disconnect";}
+                ActionButton {text:"收起";action-id:"stream.controls.toggle";}
+            }
+            HorizontalLayout {spacing:6px;
+                ActionButton {text:"自动选屏";action-id:"stream.display.select";argument:"auto";}
+                ActionButton {text:"虚拟屏";action-id:"stream.display.select";argument:"virtual";}
+                ComboBox {model:root.display-labels;current-index <=> root.display-index;min-width:130px;}
+                ActionButton {text:"切换";action-id:"stream.display.select";argument:root.displays[root.display-index].id;disabled:root.displays.length==0;}
+                ActionButton {text:"刷新";action-id:"stream.displays.refresh";}
+                ActionButton {text:"窗口 ←";action-id:"stream.window.move";argument:"left";}
+                ActionButton {text:"窗口 →";action-id:"stream.window.move";argument:"right";}
+                Text {text:root.status;color:Palette.muted;vertical-alignment:center;overflow:elide;}
+            }
+        }
+    }
+}
 export component MainWindow inherits Window {
     icon:@image-url("../../../apps/shared/icons/rhremote.svg");
     title:"RHRemote";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;

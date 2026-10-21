@@ -17,7 +17,7 @@ path = "src/main.rs"
 rhremote-core = { path = "../rhremote-core" }
 serde.workspace = true
 serde_json.workspace = true
-slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "accessibility"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "unstable-winit-030", "renderer-femtovg", "accessibility"] }
 ureq = { version = "2.12", default-features = false, features = ["json", "tls", "native-certs"] }
 url = "2.5"
 base64 = "0.22"
@@ -25,6 +25,10 @@ keyring = { version = "3.6.3", features = ["windows-native"] }
 velopack = { version = "=1.2.110-ge826545", features=["public-utils"] }
 roxmltree = "0.20"
 image = {version="0.25",default-features=false,features=["png"]}
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
 
 [build-dependencies]
 slint-build = "=1.18.1"
