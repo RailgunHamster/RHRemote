@@ -16,8 +16,13 @@ jobs:
           repository: LizardByte/Sunshine
           ref: cb72dffa3233c5815cd5ba88f09f049dd679ba75
           path: sunshine
-          submodules: recursive
+          submodules: false
           persist-credentials: false
+      - name: Fetch Windows source dependencies
+        shell: bash
+        run: |
+          git -C sunshine submodule update --init --depth 1 third-party/build-deps third-party/libdisplaydevice third-party/libvirtualhid third-party/lizardbyte-common third-party/moonlight-common-c third-party/nvapi third-party/Simple-Web-Server third-party/ViGEmClient
+          git -C sunshine/third-party/moonlight-common-c submodule update --init --depth 1 enet
       - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
         with:
           msystem: ucrt64
