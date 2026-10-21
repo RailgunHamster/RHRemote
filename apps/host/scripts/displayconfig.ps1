@@ -2,6 +2,20 @@
 # [RhDisplayConfig]::Query() returns one RhDisplayPath per active path, or throws RhDisplayConfigException with
 # the Win32 error code (e.g. from a non-interactive session). Read-only.
 if (-not ('RhDisplayConfig' -as [type])) {
+    # The installer/build can precompile this exact source for Windows PowerShell.
+    # Keep source execution as a fallback for unpackaged or changed helpers.
+    $assembly=Join-Path $PSScriptRoot 'RhDisplayConfig.dll'
+    $manifest=Join-Path $PSScriptRoot 'RhDisplayConfig.assembly.json'
+    if((Test-Path -LiteralPath $assembly) -and (Test-Path -LiteralPath $manifest)){
+        try {
+            $compiled=[IO.File]::ReadAllText($manifest)|ConvertFrom-Json
+            if($compiled.sourceSha256 -eq (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash -and
+               $compiled.assemblySha256 -eq (Get-FileHash -LiteralPath $assembly -Algorithm SHA256).Hash){
+                Add-Type -Path $assembly
+                return
+            }
+        } catch { } # A stale/incompatible assembly must not block display discovery.
+    }
     Add-Type -TypeDefinition @"
 using System;
 using System.Collections.Generic;

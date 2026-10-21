@@ -2,11 +2,52 @@ import importlib.util
 import unittest
 import tempfile
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def test_refresh_reimports_host_evidence_after_raw_traces_were_deleted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);stamp=1_792_627_200_000_000
+            manifest={"schema":"rhremote.statistics/v1","platform":"windows","files":["native.jsonl"]}
+            rows=[e("connect_action",stamp),e("render_return",stamp+2_000_000,1),e("trace_end",stamp+3_000_000)]
+            summary,frames=a.analyze(rows,manifest)
+            summary["host_spans"]=[{"name":"host_encoder_reenumeration","ms":5000}]
+            rows.append(dict(e("host_encoder_reenumeration",stamp,dur_us=5_000_000),thread="Sunshine launch"))
+            (root/"manifest.json").write_text(json.dumps(manifest),encoding="utf-8")
+            (root/"report.html").write_text(a.report_html(summary,frames,rows),encoding="utf-8")
+            log_time=a.dt.datetime.fromtimestamp(stamp/1e6,a.dt.timezone.utc)
+            lines=[f"[{log_time.isoformat(sep=' ',timespec='milliseconds')[:23]}]: Info: RHREMOTE_PHASE begin id=1 name=encoder_probe tick_us=1000",
+                f"[{(log_time+a.dt.timedelta(seconds=1)).isoformat(sep=' ',timespec='milliseconds')[:23]}]: Info: RHREMOTE_PHASE end id=1 name=encoder_probe tick_us=1001000 elapsed_us=1000000"]
+            evidence=root/"host-evidence.json";evidence.write_text(json.dumps({"utcOffsetMinutes":0,"log":lines}),encoding="utf-8")
+            subprocess.run([sys.executable,str(Path(a.__file__)),str(root),"--refresh-report","--host-evidence",str(evidence)],check=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            refreshed=json.loads((root/"summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(refreshed["host_spans"],[{"name":"host_encoder_probe","ms":1000.0}])
+            self.assertEqual(refreshed["connection_measurement"]["total_ms"],2000)
+            self.assertFalse((root/"native.jsonl").exists())
+            timeline=json.loads((root/"timeline.json").read_text(encoding="utf-8"))
+            self.assertNotIn("host_encoder_reenumeration",[e["name"] for e in timeline["traceEvents"]])
+
+    def test_exact_host_scopes_replace_log_intervals_including_idle_wait(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/"host.json"
+            path.write_text(json.dumps({"utcOffsetMinutes":0,"log":[
+                "[2026-10-22 00:00:00.000]: Info: Encoder reenumeration is required",
+                "[2026-10-22 00:00:00.000]: Info: RHREMOTE_PHASE begin id=7 name=encoder_probe tick_us=1000",
+                "[2026-10-22 00:00:00.100]: Info: Creating encoder [libx264]",
+                "[2026-10-22 00:00:00.100]: Info: RHREMOTE_PHASE begin id=8 name=encoder_create tick_us=101000",
+                "[2026-10-22 00:00:00.110]: Info: Streaming bitrate: 25000000",
+                "[2026-10-22 00:00:00.120]: Info: RHREMOTE_PHASE end id=8 name=encoder_create tick_us=121000 elapsed_us=20000",
+                "[2026-10-22 00:00:01.000]: Info: RHREMOTE_PHASE end id=7 name=encoder_probe tick_us=1001000 elapsed_us=1000000",
+                "[2026-10-22 00:00:05.000]: Info: CLIENT CONNECTED"
+            ]}),encoding="utf-8")
+            rows,_=a.import_host(path,0,10**18)
+            spans=[e for e in rows if e.get("dur_us")]
+            self.assertEqual([(e["event"],e["dur_us"]) for e in spans],[("host_encoder_create",20000),("host_encoder_probe",1000000)])
+
     def test_instrumented_host_scopes_use_monotonic_duration(self):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/"host.json"

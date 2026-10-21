@@ -248,7 +248,8 @@ impl NativePlatform {
         let mut command = Command::new(&self.engine);
         command
             .env_remove("RHREMOTE_CONTROL_PORT")
-            .env_remove("RHREMOTE_CONTROL_TOKEN");
+            .env_remove("RHREMOTE_CONTROL_TOKEN")
+            .env_remove("RHREMOTE_TARGET_UUID");
         command.current_dir(&self.native_data);
         command
             .stdin(Stdio::null())
@@ -497,6 +498,12 @@ impl NativePlatform {
                 },
             ])
             .env("RHREMOTE_CONTROL_PORT", self.port.to_string())
+            .env(
+                "RHREMOTE_TARGET_UUID",
+                args["device"]["uuid"]
+                    .as_str()
+                    .ok_or("device UUID required")?,
+            )
             .env("RHREMOTE_CONTROL_TOKEN", &self.token)
             .env("RHREMOTE_SESSION_STATUS", &self.session_status)
             .env(

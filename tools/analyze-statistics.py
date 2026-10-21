@@ -108,10 +108,16 @@ def import_host(path,lo,hi):
         if "Encoder reenumeration is required" in message:probe=ts;name="host_encoder_probe_begin"
         if "Creating encoder" in message:encoding=(ts,message);name="host_encoder_create"
         if "Streaming bitrate" in message and encoding:
-            start,encoder=encoding;result.append({"event":encoder,"ts_us":start,"dur_us":ts-start,"frame":-1,"thread":"Sunshine encoder","fields":{}});encoding=None
+            start,encoder=encoding;result.append({"event":encoder,"ts_us":start,"dur_us":ts-start,"frame":-1,"thread":"Sunshine encoder","fields":{"measurement":"log marker interval; not complete encoder initialization"}});encoding=None
         if ("Executing [" in message or "CLIENT CONNECTED" in message) and probe:
-            result.append({"event":"host_encoder_reenumeration","ts_us":probe,"dur_us":ts-probe,"frame":-1,"thread":"Sunshine launch","fields":{}});probe=None
+            result.append({"event":"host_encoder_reenumeration","ts_us":probe,"dur_us":ts-probe,"frame":-1,"thread":"Sunshine launch","fields":{"measurement":"log marker interval; may include unrelated waiting"}});probe=None
         result.append({"event":name,"ts_us":ts,"frame":-1,"thread":"Sunshine log","fields":{"message":message}})
+    measured={e["event"] for e in result if e.get("fields",{}).get("scopeId")}
+    # A log interval can span idle time between startup and the first client.
+    # Do not present it as another encoder duration beside the exact scope.
+    result=[e for e in result if not (
+        e["event"]=="host_encoder_reenumeration" and "host_encoder_probe" in measured or
+        e["thread"]=="Sunshine encoder" and "host_encoder_create" in measured)]
     return result,{"offset_us":offset,"uncertainty_us":data.get("clockUncertaintyUs"),"alignment":"SSH midpoint estimate; host substage durations use host clock only"}
 
 def chrome(events):
@@ -137,10 +143,19 @@ def main():
         html=(root/"report.html").read_text(encoding="utf-8");match=re.search(r"<script>\s*const D=",html)
         if not match:raise ValueError("Report has no embedded trace data")
         previous,_=json.JSONDecoder().raw_decode(html[match.end():]);events=previous["events"]
+        if a.host_evidence:
+            events=[e for e in events if not str(e.get("thread","")).startswith("Sunshine")]
         summary,frames=analyze(events,manifest)
-        for key in ["host_clock","host_spans"]:
-            if key in previous["summary"]:summary[key]=previous["summary"][key]
+        if a.host_evidence and events:
+            first=next((e["ts_us"] for e in events if e["event"]=="connect_action"),min(e["ts_us"] for e in events))
+            host,alignment=import_host(a.host_evidence,first,max(e["ts_us"] for e in events));events+=host;events.sort(key=lambda e:e["ts_us"])
+            summary["host_clock"]=alignment
+            summary["host_spans"]=[{"name":e["event"],"ms":round(e["dur_us"]/1000,3)} for e in host if e.get("dur_us")]
+        else:
+            for key in ["host_clock","host_spans"]:
+                if key in previous["summary"]:summary[key]=previous["summary"][key]
         (root/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
+        (root/"timeline.json").write_text(json.dumps(chrome(events),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
         (root/"report.html").write_text(report_html(summary,frames,events),encoding="utf-8")
         print(json.dumps({"report":str(root/"report.html"),"measurement":summary["connection_measurement"],"phases":summary["connection_phases"]},ensure_ascii=False,indent=2));return
     events=[];raw=[];malformed=0

@@ -20,7 +20,8 @@ def edit(root, relative, changes):
 
 def windows(root):
     include = '#include "gui/rhstatistics.h"\n#include "gui/rhcontrol.h"\n'
-    edit(root, "app/main.cpp", [("int main(int argc, char *argv[])", "int main(int argc, char *argv[])"), ("    QQuickStyle::setStyle(\"Material\");", '    RhStatistics::event("native_ui_ready");\n    QQuickStyle::setStyle("Material");')])
+    edit(root, "app/main.cpp", [("int main(int argc, char *argv[])", "int main(int argc, char *argv[])"), ("    QQuickStyle::setStyle(\"Material\");", '    RhStatistics::event("native_ui_ready");\n    QQuickStyle::setStyle("Material");'),
+        ('        engine.load(QUrl(rhAdapter', '        RhStatistics::Scope traceQml("client_qml_load");\n        engine.load(QUrl(rhAdapter')])
     # Include before any function definitions (the main signature can vary by compiler).
     for relative in ["app/main.cpp", "app/streaming/session.cpp", "app/backend/nvhttp.cpp", "app/streaming/video/ffmpeg.cpp", "app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp"]:
         p=root/relative

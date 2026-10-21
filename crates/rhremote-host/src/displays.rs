@@ -117,6 +117,21 @@ pub fn capture_order() -> Result<Value, String> {
         let mut a = 0;
         while let Ok(adapter) = factory.EnumAdapters1(a) {
             a += 1;
+            // Creating a D3D device can be expensive. An adapter without attached
+            // outputs cannot contribute a capture target, so enumerate outputs first.
+            let mut outputs = Vec::new();
+            let mut o = 0;
+            while let Ok(output) = adapter.EnumOutputs(o) {
+                o += 1;
+                let desc = output.GetDesc().map_err(|e| e.to_string())?;
+                if desc.AttachedToDesktop.as_bool() {
+                    outputs.push(output);
+                }
+            }
+            if outputs.is_empty() {
+                continue;
+            }
+            let started = std::time::Instant::now();
             let mut device = None;
             let creation = D3D11CreateDevice(
                 &adapter,
@@ -139,17 +154,13 @@ pub fn capture_order() -> Result<Value, String> {
             );
             if let Err(error) = creation {
                 diagnostics
-                    .push(json!({"adapter":a-1,"createDevice":format!("{:08x}",error.code().0)}));
+                    .push(json!({"adapter":a-1,"createDevice":format!("{:08x}",error.code().0),"createDeviceMs":started.elapsed().as_millis() as u64}));
                 continue;
             }
+            diagnostics.push(json!({"adapter":a-1,"attachedOutputs":outputs.len(),"createDeviceMs":started.elapsed().as_millis() as u64}));
             let Some(device) = device else { continue };
-            let mut o = 0;
-            while let Ok(output) = adapter.EnumOutputs(o) {
-                o += 1;
+            for output in outputs {
                 let desc = output.GetDesc().map_err(|e| e.to_string())?;
-                if !desc.AttachedToDesktop.as_bool() {
-                    continue;
-                }
                 let Ok(output1) = output.cast::<IDXGIOutput1>() else {
                     continue;
                 };
@@ -162,7 +173,7 @@ pub fn capture_order() -> Result<Value, String> {
                         .unwrap_or(desc.DeviceName.len());
                     names.push(String::from_utf16_lossy(&desc.DeviceName[..count]));
                 } else if let Err(error) = duplicate {
-                    diagnostics.push(json!({"adapter":a-1,"output":o-1,"duplicateOutput":format!("{:08x}",error.code().0)}));
+                    diagnostics.push(json!({"adapter":a-1,"output":String::from_utf16_lossy(&desc.DeviceName).trim_end_matches('\0'),"duplicateOutput":format!("{:08x}",error.code().0)}));
                 }
             }
         }

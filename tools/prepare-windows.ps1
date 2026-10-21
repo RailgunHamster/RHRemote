@@ -33,6 +33,10 @@ Edit-Source 'app/main.cpp' {param($s)
                 break;
             }
 '@
+    $s=Replace-Once $s '        engine.load(QUrl(QStringLiteral("qrc:/gui/main.qml")));' @'
+        const bool rhAdapter=commandLineParserResult==GlobalCommandLineParser::StreamRequested && !qEnvironmentVariableIsEmpty("RHREMOTE_TARGET_UUID");
+        engine.load(QUrl(rhAdapter ? QStringLiteral("qrc:/gui/RhStreamAdapter.qml") : QStringLiteral("qrc:/gui/main.qml")));
+'@
     return $s
 }
 Edit-Source 'app/gui/computermodel.h' {param($s)
@@ -41,6 +45,49 @@ Edit-Source 'app/gui/computermodel.h' {param($s)
         AddressRole')
     $s=$s.Replace('    explicit ComputerModel(QObject* object = nullptr);',"    explicit ComputerModel(QObject* object = nullptr);`n    Q_INVOKABLE QVariantMap get(int row) const;")
     return "#include <QVariantMap>`n"+$s
+}
+Edit-Source 'app/backend/nvcomputer.h' {param($s)
+    return (Replace-Once $s '    // Ephemeral traits' "    // RHRemote: authenticated app list fetched during this engine process.`n    bool rhAppListFresh = false;`n    // Ephemeral traits")
+}
+Edit-Source 'app/backend/computermanager.cpp' {param($s)
+    $s=$s.Replace("`r`n","`n")
+    $s=Replace-Once $s '        changed = m_Computer->updateAppList(appList);' @'
+        changed = m_Computer->updateAppList(appList);
+        if(qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")){
+            m_Computer->rhAppListFresh=true;
+            changed=true; // Notify even when the freshly fetched list equals the disk cache.
+        }
+'@
+    $s=Replace-Once $s '    m_CompatFetcher.start();' '    if(!qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID"))m_CompatFetcher.start();'
+    $s=Replace-Once $s '    if (m_Prefs->enableMdns) {' '    if (m_Prefs->enableMdns && !qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")) {'
+    return (Replace-Once $s 'void ComputerManager::startPollingComputer(NvComputer* computer)
+{' @'
+void ComputerManager::startPollingComputer(NvComputer* computer)
+{
+    const auto target=qEnvironmentVariable("RHREMOTE_TARGET_UUID");
+    if(!target.isEmpty() && computer->uuid.compare(target,Qt::CaseInsensitive)!=0)return;
+'@)
+}
+Edit-Source 'app/cli/startstream.cpp' {param($s)
+    $s=$s.Replace("`r`n","`n")
+    $s="#include `"gui/rhstatistics.h`"`n"+$s
+    $s=Replace-Once $s '                    emit q->searchingApp();' @'
+                    RhStatistics::event("client_host_found");
+                    emit q->searchingApp();
+                    if(qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")){
+                        QTimer::singleShot(0,q,[this]{Event ready(Event::ComputerUpdated);ready.computer=m_Computer;handleEvent(ready);});
+                    }
+'@
+    $s=Replace-Once $s '                           q, &Launcher::onComputerUpdated);' '                           q, &Launcher::onComputerUpdated, qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID") ? Qt::QueuedConnection : Qt::AutoConnection);'
+    return (Replace-Once $s '        case Event::ComputerUpdated:
+            if (m_State == StateSeekApp) {' @'
+        case Event::ComputerUpdated:
+            if (m_State == StateSeekApp && event.computer==m_Computer) {
+                if(qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")){
+                    QReadLocker lock(&m_Computer->lock);if(!m_Computer->rhAppListFresh)break;
+                }
+                RhStatistics::event("client_apps_fresh");
+'@)
 }
 Edit-Source 'app/gui/computermodel.cpp' {param($s)
     $s=Replace-Once $s '    m_Computers = m_ComputerManager->getComputers();' "    beginResetModel();`n    m_Computers = m_ComputerManager->getComputers();`n    endResetModel();"
@@ -74,7 +121,7 @@ QVariantMap AppModel::get(int row) const {
 int AppModel::rowCount
 '@)
 }
-Edit-Source 'app/qml.qrc' {param($s)return $s.Replace('        <file>gui/main.qml</file>',"        <file>gui/main.qml</file>`n        <file>gui/RhButton.qml</file>")}
+Edit-Source 'app/qml.qrc' {param($s)return $s.Replace('        <file>gui/main.qml</file>',"        <file>gui/main.qml</file>`n        <file>gui/RhButton.qml</file>`n        <file>gui/RhStreamAdapter.qml</file>")}
 Edit-Source 'app/resources.qrc' {param($s)return $s.Replace('</qresource>',"    <file>res/rhremote.svg</file>`n    <file>res/rhremote-shortcuts.json</file>`n    </qresource>")}
 Edit-Source 'app/gui/CliPair.qml' {param($s)
     $s="import RhProfiles 1.0`n"+$s
