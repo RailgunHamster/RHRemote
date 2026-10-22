@@ -68,7 +68,7 @@ function Restore-Deployment([string]$Backup){
 }
 if($RestoreBackup){Restore-Deployment ([IO.Path]::GetFullPath($RestoreBackup));[pscustomobject]@{restored=$true;backup=$RestoreBackup;service=(Get-Service SunshineService).Status.ToString()};return}
 $source=[IO.Path]::GetFullPath($SourceDirectory).TrimEnd('\','/')
-$package=Test-RHRPackage $source
+$package=Test-RHRPackage $source -AllowRuntimeFiles:($source-eq$install)
 $oldSunshine=Service-State 'SunshineService';$oldHost=Service-State 'RHRemoteHost'
 if($oldSunshine-and($oldSunshine.startName-ne'LocalSystem'-or$oldSunshine.path-notmatch'(?i)(sunshinesvc|RHRemoteHost)\.exe')){throw 'The existing SunshineService does not match a supported SYSTEM installation'}
 if($oldHost-and$oldHost.startName-ne'LocalSystem'){throw 'The legacy host service does not use the expected SYSTEM account'}
@@ -107,6 +107,7 @@ try{
         Copy-Item -LiteralPath (Join-Path $source 'server-package.json') -Destination $install -Force
     }
     Protect-Directory (Join-Path $install 'host');Protect-Directory $data
+    $null=Test-RHRPackage $install -AllowRuntimeFiles
     [IO.File]::WriteAllText((Join-Path $data 'host-settings.json'),(@{sunshineConfig=$SunshineConfig}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
     if(-not(Test-Path -LiteralPath (Join-Path $data 'owned-monitor.json'))){
         $legacyPaths=@((Join-Path $env:SystemDrive 'RHRemoteTools\tablet-display\owned-monitor.json'),(Join-Path ([IO.Path]::GetPathRoot($source)) 'RHRemoteTools\tablet-display\owned-monitor.json'))|Select-Object -Unique

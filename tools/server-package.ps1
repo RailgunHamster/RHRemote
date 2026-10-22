@@ -23,7 +23,7 @@ function New-RHRPackageManifest([string]$Root,[string]$Commit,[string]$EngineCom
     [IO.File]::WriteAllText((Join-Path $base 'server-package.json'),($metadata|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
     $metadata
 }
-function Test-RHRPackage([string]$Root){
+function Test-RHRPackage([string]$Root,[switch]$AllowRuntimeFiles){
     $metadata=Get-Content -LiteralPath (Join-Path $Root 'server-package.json') -Raw|ConvertFrom-Json
     if($metadata.schema-ne'rhremote.server-package/v1'-or$metadata.product-ne'RHRemote-Sunshine'-or$metadata.serviceMode-ne'unified'){throw 'Unexpected server package identity'}
     $seen=@{}
@@ -35,7 +35,7 @@ function Test-RHRPackage([string]$Root){
     }
     foreach($required in @('sunshine.exe','host/RHRemoteHost.exe','host/scripts/display.ps1','host/scripts/RhDisplayConfig.dll','assets/web/index.html')){if(-not$seen.ContainsKey($required)){throw ('Incomplete package: '+$required)}}
     $base=[IO.Path]::GetFullPath($Root).TrimEnd('\','/')
-    foreach($file in (Get-ChildItem -LiteralPath $base -Recurse -File|Where-Object Name -ne 'server-package.json')){
+    foreach($file in @($(if(-not$AllowRuntimeFiles){Get-ChildItem -LiteralPath $base -Recurse -File|Where-Object Name -ne 'server-package.json'}))){
         $relative=$file.FullName.Substring($base.Length+1).Replace('\','/')
         if(-not$seen.ContainsKey($relative)){throw ('Unlisted package file: '+$relative)}
     }
