@@ -50,6 +50,20 @@ int run_device_probe_tests() {
   require(probes == 3 && !adapter_a);
   require(rhremote::probe_with_device(adapter_a, create, available));
   require(creates == 3 && probes == 4);
+  rhremote::device_handoff<int, std::unique_ptr<int>> handoff;
+  handoff.store(7, std::move(adapter_a));
+  require(!handoff.take(8, true));
+  auto captured = handoff.take(7, true);
+  require(captured && !handoff.take(7, true));
+  handoff.store(8, std::move(adapter_b));
+  require(!handoff.take(8, false));
+  require(!handoff.take(8, true));
+  handoff.store(7, std::move(captured));
+  handoff.store(7, std::make_unique<int>(42));
+  require(*handoff.take(7, true) == 42);
+  handoff.store(7, std::make_unique<int>(43));
+  handoff.clear();
+  require(!handoff.take(7, true));
   return EXIT_SUCCESS;
 }
 

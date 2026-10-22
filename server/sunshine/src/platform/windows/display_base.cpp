@@ -357,6 +357,9 @@ namespace platf::dxgi {
     return capture_e::ok;
   }
 
+  thread_local rhremote::device_handoff<std::pair<DWORD, LONG>, device_t> enumeration_devices;  ///< One-use devices from this thread's last output enumeration.
+  thread_local factory1_t enumeration_factory;  ///< Factory validating the one-use adapter identities.
+
   /**
    * @brief Tests to determine if the Desktop Duplication API can capture the given output.
    * @details When testing for enumeration only, we avoid resyncing the thread desktop.
@@ -505,7 +508,6 @@ namespace platf::dxgi {
     for (int tries = 0; tries < 2; ++tries) {
       for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
         dxgi::adapter_t adapter_tmp {adapter_p};
-        device_t candidate_device;
 
         DXGI_ADAPTER_DESC1 adapter_desc;
         adapter_tmp->GetDesc1(&adapter_desc);
@@ -513,6 +515,11 @@ namespace platf::dxgi {
         if (!adapter_name.empty() && adapter_desc.Description != adapter_name) {
           continue;
         }
+
+        auto candidate_device = enumeration_devices.take(
+          {adapter_desc.AdapterLuid.LowPart, adapter_desc.AdapterLuid.HighPart},
+          enumeration_factory && enumeration_factory->IsCurrent()
+        );
 
         dxgi::output_t::pointer output_p;
         for (int y = 0; adapter_tmp->EnumOutputs(y, &output_p) != DXGI_ERROR_NOT_FOUND; ++y) {
@@ -1035,6 +1042,8 @@ namespace platf {
 
   std::vector<std::string> display_names(mem_type_e) {
     rhremote::scope names_scope("dda_enumerate_outputs");
+    dxgi::enumeration_devices.clear();
+    dxgi::enumeration_factory.reset();
     std::vector<std::string> display_names;
 
     HRESULT status;
@@ -1097,8 +1106,11 @@ namespace platf {
           display_names.emplace_back(std::move(device_name));
         }
       }
+      if (probe_device) {
+        dxgi::enumeration_devices.store({adapter_desc.AdapterLuid.LowPart, adapter_desc.AdapterLuid.HighPart}, std::move(probe_device));
+      }
     }
-
+    dxgi::enumeration_factory = std::move(factory);
     return display_names;
   }
 
