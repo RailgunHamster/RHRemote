@@ -51,7 +51,7 @@ component IconActionButton inherits Rectangle {
     accessible-action-default=>{Commands.trigger(root.action-id,"");}
 }
 export component StreamToolbar inherits Window {
-    title:"RHRemote · 串流控制";no-frame:true;
+    title:"RHRemote-Moonlight · 串流控制";no-frame:true;
     background:transparent;default-font-family:"Microsoft YaHei UI";default-font-size:12px;
     in property <bool> expanded:true;
     in property <bool> audio-enabled;
@@ -105,7 +105,7 @@ export component StreamToolbar inherits Window {
     }
 }
 export component StreamPicker inherits Window {
-    title:"RHRemote · 选择";no-frame:true;
+    title:"RHRemote-Moonlight · 选择";no-frame:true;
     background:Palette.surface;default-font-family:"Microsoft YaHei UI";default-font-size:13px;
     in property <string> kind;
     in property <[string]> labels;
@@ -138,8 +138,8 @@ export component StreamPicker inherits Window {
     }
 }
 export component MainWindow inherits Window {
-    icon:@image-url("../../../apps/shared/icons/rhremote.svg");
-    title:"RHRemote";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
+    icon:@image-url("../../../shared/icons/rhremote.svg");
+    title:"RHRemote-Moonlight";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
     background:Palette.page;default-font-family:"Microsoft YaHei UI";default-font-size:14px;
     in property <[DeviceRow]> devices;
     in property <string> page:"devices";
@@ -194,7 +194,7 @@ export component MainWindow inherits Window {
         if !root.compact: Rectangle {
             width:70px;background:Palette.page;
             VerticalLayout {padding:18px;spacing:18px;
-                Image {height:32px;width:32px;source:@image-url("../../../apps/shared/icons/rhremote.svg");}
+                Image {height:32px;width:32px;source:@image-url("../../../shared/icons/rhremote.svg");}
                 IconActionButton{label:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices";}
                 IconActionButton{label:"添加电脑";icon:@image-url("icons/plus.svg");action-id:"device.add.open";}
                 Rectangle {vertical-stretch:1;}
@@ -205,7 +205,7 @@ export component MainWindow inherits Window {
             spacing:0px;
             Rectangle {height:60px;background:Palette.surface;
                 HorizontalLayout {padding-left:24px;padding-right:24px;spacing:14px;
-                    Text{text:"RHRemote";font-weight:600;color:Palette.ink;vertical-alignment:center;}
+                    Text{text:"RHRemote-Moonlight";font-weight:600;color:Palette.ink;vertical-alignment:center;}
                     Text{text:"v0.2.1";font-size:11px;color:Palette.muted;vertical-alignment:center;}
                     Rectangle {horizontal-stretch:1;}
                     ActionButton{text:root.dark ? "浅色" : "深色";action-id:"appearance.toggle";}
@@ -327,7 +327,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-tab=="updates": VerticalLayout{spacing:14px;
-                            Text{text:"RHRemote 0.2.0";color:Palette.ink;font-size:18px;}
+                            Text{text:"RHRemote-Moonlight 0.2.1";color:Palette.ink;font-size:18px;}
                             Text{text:root.updates-managed ? "自动检查更新 · GitHub / Gitee" : "开发预览版。安装 Velopack 版本后启用自动更新。";color:Palette.muted;wrap:word-wrap;}
                             Text{text:root.updates-available ? "可用版本："+root.update-version : "";color:Palette.ink;}
                             HorizontalLayout{spacing:10px;
@@ -339,7 +339,7 @@ export component MainWindow inherits Window {
                             Text{text:root.update-status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
                         if root.settings-tab=="about": VerticalLayout{spacing:14px;
-                            Text{text:"RHRemote";font-size:22px;color:Palette.ink;}
+                            Text{text:"RHRemote-Moonlight";font-size:22px;color:Palette.ink;}
                             Text{text:"Windows · Rust + Slint\n串流核心 · Moonlight\n协议服务端 · Sunshine\nGPL v3";color:Palette.muted;}
                             ActionButton{text:root.test-mode?"测试统计：开启":"测试统计：关闭";action-id:"statistics.configure";argument:root.test-mode?"false":"true";chosen:root.test-mode;disabled:root.streaming||root.connecting;}
                             Text{text:"测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。";color:Palette.muted;wrap:word-wrap;}

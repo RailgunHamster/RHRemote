@@ -18,7 +18,7 @@ pub fn catalog() -> Value {
     serde_json::from_str(ACTIONS).expect("compiled action catalog")
 }
 pub fn shortcuts() -> Value {
-    serde_json::from_str(include_str!("../../../apps/shared/shortcuts.json")).unwrap()
+    serde_json::from_str(include_str!("../../../shared/shortcuts.json")).unwrap()
 }
 pub fn now_ms() -> u64 {
     SystemTime::now()

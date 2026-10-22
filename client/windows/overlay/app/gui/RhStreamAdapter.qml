@@ -10,7 +10,7 @@ Window {
     width: 1180
     height: 780
     visible: false
-    title: "RHRemote"
+    title: "RHRemote-Moonlight"
     property var session: null
 
     Component.onCompleted: {

@@ -4,13 +4,13 @@ import xml.etree.ElementTree as ET
 from PIL import Image
 
 repo=Path(__file__).resolve().parents[1]
-icons=repo/'apps/shared/icons'
+icons=repo/'client/shared/icons'
 svg=ET.parse(icons/'rhremote.svg').getroot()
 ns={'s':'http://www.w3.org/2000/svg'}
 paths=svg.findall('s:path',ns)
 image=Image.open(icons/'rhremote.png')
 image.save(icons/'rhremote.ico',format='ICO',sizes=[(s,s) for s in (16,20,24,32,40,48,64,128,256)])
-resources=repo/'apps/android/overlay/app/src/main/res'
+resources=repo/'client/android/overlay/app/src/main/res'
 gradient='<aapt:attr name="android:fillColor"><gradient android:startX="0" android:startY="0" android:endX="256" android:endY="256" android:startColor="#5274e8" android:endColor="#8b5be2" android:type="linear"/></aapt:attr>'
 def vector(foreground=False):
     body=[]
@@ -26,6 +26,6 @@ def vector(foreground=False):
 (resources/'drawable/rh_icon_background.xml').write_text('<shape xmlns:android="http://schemas.android.com/apk/res/android"><gradient android:angle="315" android:startColor="#5274e8" android:endColor="#8b5be2"/></shape>\n',encoding='utf-8')
 adaptive=resources/'mipmap-anydpi-v26';adaptive.mkdir(exist_ok=True)
 (adaptive/'rh_launcher.xml').write_text('<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"><background android:drawable="@drawable/rh_icon_background"/><foreground android:drawable="@drawable/rh_icon_foreground"/></adaptive-icon>\n',encoding='utf-8')
-(repo/'apps/windows/overlay/app/res/rhremote.svg').write_bytes((icons/'rhremote.svg').read_bytes())
-(repo/'apps/windows/overlay/app/res/rhremote.ico').write_bytes((icons/'rhremote.ico').read_bytes())
+(repo/'client/windows/overlay/app/res/rhremote.svg').write_bytes((icons/'rhremote.svg').read_bytes())
+(repo/'client/windows/overlay/app/res/rhremote.ico').write_bytes((icons/'rhremote.ico').read_bytes())
 print('Derived one ICO, Android adaptive/legacy vectors and native SVG from the shared icon.')

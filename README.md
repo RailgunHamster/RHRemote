@@ -1,6 +1,8 @@
 # RHRemote
 
-Windows 与 Android 远程桌面客户端，兼容 Sunshine，串流复用 Moonlight 开源核心。
+RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 **RHRemote-Sunshine**，保留 Moonlight、Sunshine 的来源与许可。
+
+`client/` 包含 Windows、Android、共用资源与客户端 Rust crate；`server/` 包含 Sunshine 源码与 Rust 主机扩展。Sunshine 通过 Git subtree 纳入源码，官方更新使用三方合并，项目修改单独提交；Moonlight 保留固定参考版本和集成补丁。构建说明见 [客户端](client/NATIVE.md) 与 [服务端](server/README.md)。
 
 - Windows：Rust + Slint 界面，Moonlight Qt 接收、硬件解码与 SDL 渲染。
 - Android：原生 View + Java，MediaCodec 解码与 Surface 呈现。
@@ -29,7 +31,7 @@ Windows 对已经显示过首帧的意外中断自动恢复，最多连续尝试
 
 ## 构建与接口
 
-固定上游版本、依赖及构建说明见 [apps/README.md](apps/README.md) 和 [client/README.md](client/README.md)。Windows 需要 Rust 1.92.0、Qt 6.7.2 / MSVC；Android 使用原生 Java 与固定 Moonlight Android v12.2 源码。
+固定上游版本、依赖及构建说明见 [client/NATIVE.md](client/NATIVE.md) 和 [client/README.md](client/README.md)。Windows 需要 Rust 1.92.0、Qt 6.7.2 / MSVC；Android 使用原生 Java 与固定 Moonlight Android v12.2 源码。
 
 ```powershell
 .\tools\build-rust-windows.ps1
@@ -42,6 +44,6 @@ Windows 对已经显示过首帧的意外中断自动恢复，最多连续尝试
 
 ## 许可
 
-基于 Moonlight Qt、Moonlight Android 及其依赖，保留原有版权和 GPL v3 许可。服务端 Sunshine 单独安装和配置。许可文本见 [LICENSE](LICENSE)。本项目不代表 Moonlight 或 Sunshine 官方构建。
+基于 Moonlight Qt、Moonlight Android、Sunshine 及其依赖，保留原有版权、NOTICE 和各组件许可证。Sunshine 的官方基准记录在 `server/UPSTREAM.json`，原始许可和 NOTICE 留在 `server/sunshine/`。客户端许可见 [LICENSE](LICENSE)。本项目不代表 Moonlight 或 Sunshine 官方构建。
 
 设备卡片的 ↑ / ↓ 按钮调整显示顺序，立即保存，并随 WebDAV 配置同步到其他客户端。刷新和重启保持顺序；同时修改产生冲突时可选择保留哪一端。

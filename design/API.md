@@ -16,7 +16,7 @@ Android 应用运行时监听 `127.0.0.1:48752`，64 字符随机令牌保存在
 | GET | `/v1/actions` | action 目录及参数说明 |
 | POST | `/v1/action` | `{"id":"...","args":{...}}` |
 
-动作全集以 `crates/rhremote-core/src/actions.json` 为准。部分动作只适用于特定平台：Windows 提供窗口最小化、最大化、关闭和本应用预览；Android 提供触屏控制面板、键盘、平移和缩放。不适用的动作返回错误，不能作为成功验收。
+动作全集以 `client/crates/rhremote-core/src/actions.json` 为准。部分动作只适用于特定平台：Windows 提供窗口最小化、最大化、关闭和本应用预览；Android 提供触屏控制面板、键盘、平移和缩放。不适用的动作返回错误，不能作为成功验收。
 
 ```json
 {"id":"device.settings.open","args":{"uuid":"<Sunshine UUID>"}}

@@ -20,7 +20,7 @@ try{
  foreach($dll in @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll')){Copy-Item -LiteralPath (Join-Path $native $dll) -Destination $stage}
  $forbidden=@(Get-ChildItem -LiteralPath $stage -Recurse -File|Where-Object {$_.Extension -in @('.ini','.pem','.key','.log','.pfx','.p12') -or $_.Name -match 'token|credential|password|portable\.dat'})
  if($forbidden){throw 'Unexpected private or runtime configuration in package staging'}
- & $vpk pack --packId RHRemote --packVersion $Version --packDir $stage --mainExe RHRemote.exe --packAuthors RailgunHamster --packTitle RHRemote --icon (Join-Path $repo 'apps/shared/icons/rhremote.ico') --channel win --runtime win-x64 --outputDir $out
+ & $vpk pack --packId RHRemote --packVersion $Version --packDir $stage --mainExe RHRemote.exe --packAuthors RailgunHamster --packTitle RHRemote-Moonlight --icon (Join-Path $repo 'client/shared/icons/rhremote.ico') --channel win --runtime win-x64 --outputDir $out
  if($LASTEXITCODE -ne 0){throw 'Velopack packaging failed'}
  Get-ChildItem -LiteralPath $out -File|ForEach-Object {[pscustomobject]@{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}}
 }finally{Pop-Location}

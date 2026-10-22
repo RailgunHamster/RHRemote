@@ -16,6 +16,6 @@ exit /b %errorlevel%
 & cmd /d /c $batch
 if($LASTEXITCODE -ne 0){throw 'Icon renderer build failed'}
 $previousPath=$env:PATH
-try{$env:PATH="$qt\bin;$previousPath";& (Join-Path $helper 'render-icons.exe') (Join-Path $repo 'apps/shared/icons/rhremote.svg') (Join-Path $repo 'apps/shared/icons/rhremote.png');if($LASTEXITCODE -ne 0){throw 'SVG rendering failed'}}finally{$env:PATH=$previousPath}
+try{$env:PATH="$qt\bin;$previousPath";& (Join-Path $helper 'render-icons.exe') (Join-Path $repo 'client/shared/icons/rhremote.svg') (Join-Path $repo 'client/shared/icons/rhremote.png');if($LASTEXITCODE -ne 0){throw 'SVG rendering failed'}}finally{$env:PATH=$previousPath}
 & C:\tools\Miniconda3\python.exe (Join-Path $repo 'tools/derive-icons.py')
 if($LASTEXITCODE -ne 0){throw 'Icon derivation failed'}

@@ -10,7 +10,7 @@ import RhProfiles 1.0
 ApplicationWindow {
     id: window
     width: 1180;height: 780;minimumWidth: 720;minimumHeight: 560
-    title: "RHRemote"
+    title: "RHRemote-Moonlight"
     property bool dark: false
     property bool pollingActive: false
     property bool clearOnBack: false
@@ -45,7 +45,7 @@ ApplicationWindow {
         Rectangle{anchors.bottom: parent.bottom;width: parent.width;height: 1;color: window.lineColor}
         RowLayout {
             anchors.fill: parent;anchors.leftMargin: 22;anchors.rightMargin: 22;spacing: 12
-            Label{text:"RHRemote";font.weight:Font.Medium;color:window.inkColor}
+            Label{text:"RHRemote-Moonlight";font.weight:Font.Medium;color:window.inkColor}
             Label{text:"0.1 · v2";font.pixelSize:11;color:window.mutedColor}
             Item{Layout.fillWidth:true}
             RhButton{text:window.dark?"浅色":"深色";onClicked:window.dark=!window.dark}

@@ -1,4 +1,10 @@
-# RHRemote 客户端实验
+# RHRemote-Moonlight
+
+客户端使用 Windows Rust + Slint 和 Android 原生 View + Java。当前串流适配器参考 Moonlight Qt / Android，固定版本与集成流程见 [原生客户端构建说明](NATIVE.md)。客户端 Rust crate 位于 `crates/`，平台入口位于 `windows/`、`android/`，共用资源位于 `shared/`。
+
+应用显示名为 RHRemote-Moonlight；包名、应用身份、配对存储和更新身份保持兼容。Sunshine 上游合并由服务端独立维护，客户端不强制追随 Moonlight 官方界面。
+
+## 早期 Windows 显示节奏实验
 
 基于 Moonlight v6.1.0，提交 `f786e94c7b2f943e24e65d7d74deb539b827fc84`。
 完整本地源码在 `D:\RHRemoteTools\moonlight-qt-v6.1-source`，分支为 `codex/rhremote-lan-pacing`。

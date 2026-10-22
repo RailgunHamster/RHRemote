@@ -20,7 +20,7 @@ Edit-Source 'app/build.gradle' {
     $s=$s.Replace('applicationId "com.limelight"','applicationId "com.rhremote.client"').Replace('applicationId "com.limelight.root"','applicationId "com.rhremote.client.root"')
     $s=$s.Replace('applicationIdSuffix ".debug"','').Replace('applicationIdSuffix ".unofficial"','')
     $s=$s.Replace('versionName "12.2"','versionName "0.2.1"').Replace('versionCode = 315','versionCode = 201')
-    $s=$s.Replace('"Moonlight (Debug)"','"RHRemote"').Replace('"Moonlight (Root Debug)"','"RHRemote"').Replace('"Moonlight"','"RHRemote"').Replace('"Moonlight (Root)"','"RHRemote"')
+    $s=$s.Replace('"Moonlight (Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight (Root Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight"','"RHRemote-Moonlight"').Replace('"Moonlight (Root)"','"RHRemote-Moonlight"')
     # Build only the actual OPPO architecture; don't spend time building unused ABIs.
     $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters 'arm64-v8a' }")
     $s=$s.Replace('targetSdk 36',"targetSdk 36`n        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'")
@@ -184,11 +184,11 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/NvConnection.java' {param(
 '@
     return (Replace-Once $s "        // If there's a game running, resume it" "        if(rhDisplay!=null)rhDisplay.prepare();`n        // If there's a game running, resume it")
 }
-$overlay=Join-Path $repo 'apps/android/overlay'
+$overlay=Join-Path $repo 'client/android/overlay'
 New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/main/assets')|Out-Null
-Copy-Item -LiteralPath (Join-Path $repo 'crates/rhremote-core/src/actions.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-actions.json') -Force
-Copy-Item -LiteralPath (Join-Path $repo 'apps/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-shortcuts.json') -Force
-Copy-Item -LiteralPath (Join-Path $repo 'crates/rhremote-core/src/settings.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-settings.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'client/crates/rhremote-core/src/actions.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-actions.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'client/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-shortcuts.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'client/crates/rhremote-core/src/settings.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-settings.json') -Force
 Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
     $relative=$_.FullName.Substring($overlay.Length+1);$target=Join-Path $SourceDir $relative
     New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent)|Out-Null

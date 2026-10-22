@@ -108,7 +108,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .with_winit_window_attributes_hook(|attributes| {
-            if attributes.title == "RHRemote · 串流控制" {
+            if attributes.title == "RHRemote-Moonlight · 串流控制" {
                 attributes.with_active(false)
             } else {
                 attributes
@@ -391,13 +391,13 @@ mod tests {
             .collect();
         for source in [
             include_str!(
-                "../../../apps/android/overlay/app/src/main/java/com/limelight/rhremote/RhHome.java"
+                "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhHome.java"
             ),
             include_str!(
-                "../../../apps/android/overlay/app/src/main/java/com/limelight/rhremote/RhStreamControls.java"
+                "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhStreamControls.java"
             ),
             include_str!(
-                "../../../apps/android/overlay/app/src/main/java/com/limelight/rhremote/RhStreamPanel.java"
+                "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhStreamPanel.java"
             ),
         ] {
             for value in source.split('"').skip(1).step_by(2) {

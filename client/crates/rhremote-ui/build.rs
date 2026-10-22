@@ -1,8 +1,8 @@
 fn main() {
-    println!("cargo:rerun-if-changed=../../apps/shared/icons/rhremote.ico");
+    println!("cargo:rerun-if-changed=../../shared/icons/rhremote.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let icon = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
-            .join("../../apps/shared/icons/rhremote.ico")
+            .join("../../shared/icons/rhremote.ico")
             .canonicalize()
             .unwrap();
         let rc = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("rhremote.rc");

@@ -185,7 +185,7 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
     $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`r`n{","void Session::clConnectionTerminated(int errorCode)`r`n{`r`n    RhRuntime::terminated(errorCode);")
     $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`n{","void Session::clConnectionTerminated(int errorCode)`n{`n    RhRuntime::terminated(errorCode);")
     $s=$s.Replace('LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags)','(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT") ? 0 : LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags))')
-    $s=Replace-Once $s 'QString(m_Computer->name + " - Moonlight")' 'QString(m_Computer->name + " - RHRemote")'
+    $s=Replace-Once $s 'QString(m_Computer->name + " - Moonlight")' 'QString(m_Computer->name + " - RHRemote-Moonlight")'
     $s=Replace-Once $s 'bool Session::startConnectionAsync()' 'bool Session::startConnectionAsync()'
     $s=Replace-Once $s '    QString rtspSessionUrl;' @'
     const auto displayMode=qEnvironmentVariable("RHREMOTE_DISPLAY_MODE");
@@ -267,13 +267,13 @@ HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h
 win32 {
     TARGET = RHRemote
     QMAKE_TARGET_COMPANY = RHRemote
-    QMAKE_TARGET_DESCRIPTION = RHRemote Desktop Client
-    QMAKE_TARGET_PRODUCT = RHRemote
+    QMAKE_TARGET_DESCRIPTION = RHRemote-Moonlight Desktop Client
+    QMAKE_TARGET_PRODUCT = RHRemote-Moonlight
     RC_ICONS = $$PWD/res/rhremote.ico
 }
 '@}
-$overlay=Join-Path $repo 'apps/windows/overlay'
-Copy-Item -LiteralPath (Join-Path $repo 'apps/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/res/rhremote-shortcuts.json') -Force
+$overlay=Join-Path $repo 'client/windows/overlay'
+Copy-Item -LiteralPath (Join-Path $repo 'client/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/res/rhremote-shortcuts.json') -Force
 Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
     $relative=$_.FullName.Substring($overlay.Length+1);$target=Join-Path $SourceDir $relative
     if(Test-Path -LiteralPath $target){$original=Join-Path $backup $relative;if(-not(Test-Path -LiteralPath $original)){New-Item -ItemType Directory -Force -Path (Split-Path $original -Parent)|Out-Null;Copy-Item -LiteralPath $target -Destination $original}}
