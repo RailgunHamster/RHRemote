@@ -13,6 +13,11 @@ serde.workspace = true
 serde_json.workspace = true
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
+rhremote-transport = { path = "../../../transport/crates/rhremote-transport" }
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+anyhow = "1"
+ureq = { version = "2.12", default-features = false, features = ["json","tls"] }
+url = "2.5"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Devices_Display", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Gdi", "Win32_Foundation", "Win32_System_Threading", "Win32_System_Services", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_JobObjects", "Win32_System_Console", "Win32_Security"] }

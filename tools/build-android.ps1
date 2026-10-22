@@ -1,5 +1,16 @@
-param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[switch]$BuildTests)
+param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[switch]$BuildTests,[string]$NdkDir="$env:LOCALAPPDATA\Android\Sdk\ndk\29.0.14206865")
 $ErrorActionPreference='Stop'
+$repo=Split-Path $PSScriptRoot -Parent
+$toolchain=Join-Path $NdkDir 'toolchains/llvm/prebuilt/windows-x86_64/bin'
+$env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=Join-Path $toolchain 'aarch64-linux-android26-clang.cmd'
+$env:CC_aarch64_linux_android=$env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
+$env:AR_aarch64_linux_android=Join-Path $toolchain 'llvm-ar.exe'
+if(-not(Test-Path -LiteralPath $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER)){throw 'Android NDK compiler unavailable'}
+Push-Location $repo
+try{& cargo build --locked --release -p rhremote-transport --lib --target aarch64-linux-android -j4;if($LASTEXITCODE-ne0){throw 'Rust Android transport build failed'}}finally{Pop-Location}
+$jni=Join-Path $SourceDir 'app/src/main/jniLibs/arm64-v8a'
+New-Item -ItemType Directory -Force -Path $jni|Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'target/aarch64-linux-android/release/librhremote_transport.so') -Destination $jni -Force
 & (Join-Path $PSScriptRoot 'prepare-android.ps1') -SourceDir $SourceDir
 Push-Location $SourceDir
 try {

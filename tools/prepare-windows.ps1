@@ -183,7 +183,14 @@ Edit-Source 'app/cli/listapps.cpp' {param($s)
     $s="#include `"gui/rhhost.h`"`n#include <QFile>`n#include <QSaveFile>`n"+$s
     return (Replace-Once $s '                if (event.computer->pairState == NvComputer::PS_PAIRED) {' @'
                 if (event.computer->pairState == NvComputer::PS_PAIRED) {
-                    if(qEnvironmentVariableIsSet("RHREMOTE_PROBE_OPERATION")){QCoreApplication::exit(0);return;}
+                    if(qEnvironmentVariableIsSet("RHREMOTE_PROBE_OPERATION")){
+                        const auto metadata=qEnvironmentVariable("RHREMOTE_NETWORK_METADATA");
+                        if(!metadata.isEmpty()){
+                            const auto info=RhHost::request(event.computer->activeAddress.address(),event.computer->serverCert,"/v1/network");
+                            QSaveFile output(metadata);if(output.open(QIODevice::WriteOnly)){output.write(QJsonDocument(info).toJson(QJsonDocument::Compact));output.commit();}
+                        }
+                        QCoreApplication::exit(0);return;
+                    }
                     const auto requestPath=qEnvironmentVariable("RHREMOTE_HOST_REQUEST");
                     if(!requestPath.isEmpty()) {
                         QFile file(requestPath);QJsonObject result{{"ok",false},{"error","invalid host request"}};
@@ -453,4 +460,6 @@ Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
 }
 & python (Join-Path $PSScriptRoot 'patch-statistics.py') windows $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Windows statistics instrumentation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-tunnel.py') windows $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Windows tunnel adaptation failed.'}
 'Windows RHRemote source prepared; prior engine experiments and upstream UI originals retained.'

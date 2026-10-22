@@ -14,6 +14,10 @@ import org.json.*;
 public final class RhHost {
     public static JSONObject request(Context context,String host,byte[] pinnedDer,String path,JSONObject body)throws Exception {
         if(host==null||pinnedDer==null)throw new IOException("缺少主机配对信息");
+        if(!path.equals("/v1/transport/authorize")){
+            try{String endpoint=RhTunnel.identity(context);request(context,host,pinnedDer,"/v1/transport/authorize",RhActions.obj("endpointId",endpoint));}
+            catch(Exception|LinkageError e){if("127.77.0.2".equals(host))throw new IOException("独立连接授权失败",e);}
+        }
         X509Certificate pinned=(X509Certificate)CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(pinnedDer));
         LimelightCryptoProvider crypto=PlatformBinding.getCryptoProvider(context);
         X509KeyManager keys=new X509KeyManager(){
@@ -30,7 +34,7 @@ public final class RhHost {
             public void checkServerTrusted(X509Certificate[] chain,String type)throws CertificateException{if(chain.length!=1||!pinned.equals(chain[0]))throw new CertificateException("主机证书与配对记录不一致");}
         };
         SSLContext ssl=SSLContext.getInstance("TLS");ssl.init(new KeyManager[]{keys},new TrustManager[]{trust},null);
-        HttpsURLConnection connection=(HttpsURLConnection)new URI("https",null,host,47995,path,null,null).toURL().openConnection(Proxy.NO_PROXY);
+        HttpsURLConnection connection=(HttpsURLConnection)new URI("https",null,host,RhTunnel.port(host,47995),path,null,null).toURL().openConnection(Proxy.NO_PROXY);
         connection.setSSLSocketFactory(ssl.getSocketFactory());connection.setHostnameVerifier((name,session)->{try{return session.getPeerCertificates().length==1&&pinned.equals(session.getPeerCertificates()[0]);}catch(Exception e){return false;}});
         connection.setConnectTimeout(2500);connection.setReadTimeout(15000);connection.setInstanceFollowRedirects(false);
         try {

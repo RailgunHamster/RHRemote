@@ -261,6 +261,8 @@ impl NativePlatform {
     }
     fn command(&self) -> Command {
         let mut command = Command::new(&self.engine);
+        let (offset,endpoint_id)=self.network.native_environment();
+        command.env("RHREMOTE_TUNNEL_PORT_OFFSET",offset.to_string()).env("RHREMOTE_TUNNEL_CLIENT_ID",endpoint_id);
         command
             .env_remove("RHREMOTE_CONTROL_PORT")
             .env_remove("RHREMOTE_CONTROL_TOKEN")
@@ -299,14 +301,19 @@ impl NativePlatform {
             d.online = true;
             return d;
         }
+        let mut native_address=d.address.clone();
         if let Ok((address,_))=self.network.resolve(&d,&rhremote_core::Profile::default()) {
-            d.address=address;d.online=true;
+            native_address=address.clone();if address!="127.77.0.2"{d.address=address;}d.online=true;
             for a in self.network.discovered(&d) {if d.addresses.len()<7&&!d.addresses.contains(&a)&&a!=d.address{d.addresses.push(a);}}
         }
         if d.online {
+            let metadata=self.native_data.join(format!("network-{}.json",d.uuid.chars().filter(|c|c.is_ascii_alphanumeric()||*c=='-').collect::<String>()));
+            let _=fs::write(&metadata,b"{}");
             let child = self
                 .command()
-                .args(["list", &d.address])
+                .args(["list", &native_address])
+                .env("RHREMOTE_TARGET_UUID",&d.uuid).env("RHREMOTE_CONNECT_ADDRESS",&native_address)
+                .env("RHREMOTE_NETWORK_METADATA",&metadata)
                 .env("RHREMOTE_PROBE_OPERATION", "1")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -325,6 +332,7 @@ impl NativePlatform {
                                         // A successful authenticated app-list request establishes pairing.
                                         // App names and an initially empty list do not define trust.
                                         d.paired = output.status.success();
+                                        if let Ok(bytes)=fs::read(&metadata){if let Ok(info)=serde_json::from_slice::<Value>(&bytes){if info["ok"]==true{if let Some(address)=info["result"]["transport"]["address"].as_str().filter(|a|rhremote_core::network::transport_id(a).is_some()){if d.addresses.len()<7&&!d.addresses.iter().any(|a|a==address){d.addresses.push(address.into());}}}}}
                                     }
                                     Err(error) => {
                                         self.probe_diagnostic("read_output", &error.to_string())

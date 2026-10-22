@@ -1,0 +1,38 @@
+name: RHRemote standalone relay
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'transport/**'
+      - 'server/crates/rhremote-relay/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/relay-linux.yml'
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain
+        run: rustup toolchain install 1.92.0 --profile minimal
+      - name: Protocol and authorization tests
+        run: cargo +1.92.0 test --locked -p rhremote-transport -p rhremote-relay -j2
+      - name: Build relay
+        run: cargo +1.92.0 build --locked --release -p rhremote-relay -j2
+      - name: Package
+        run: |
+          mkdir relay-artifact
+          cp target/release/RHRemoteRelay relay-artifact/
+          cp tools/deploy-relay.sh relay-artifact/
+          cd relay-artifact
+          sha256sum RHRemoteRelay > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: RHRemoteRelay-linux-x64
+          path: relay-artifact/
+          retention-days: 7

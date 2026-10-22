@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod auth;
 mod network;
+mod transport;
 #[cfg(windows)]
 mod console;
 mod displays;
@@ -111,7 +112,17 @@ fn handle(
         return Err("Client is no longer an enabled Sunshine peer".into());
     }
     let result = match (parts[0], parts[1]) {
-        ("GET", "/v1/network") => Ok(network::information()),
+        ("GET", "/v1/network") => {let mut info=network::information();info["transport"]=transport::information();Ok(info)},
+        ("GET", "/v1/transport") => Ok(transport::information()),
+        ("POST", "/v1/transport/authorize") => {
+            let length=length.ok_or("Missing bounded body")?;
+            if length>512{return Err("Body too large".into());}
+            let mut body=vec![0;length];stream.read_exact(&mut body)?;
+            let body:Value=serde_json::from_slice(&body)?;
+            let id=body["endpointId"].as_str().ok_or("endpointId required")?;
+            let leaf=stream.conn.peer_certificates().and_then(|c|c.first()).ok_or("Paired certificate required")?;
+            transport::authorize(id,leaf.as_ref())
+        },
         ("GET", "/v1/network/probe") => network.ticket(peer),
         #[cfg(windows)]
         ("GET", "/v1/health") => Ok(
@@ -189,6 +200,7 @@ fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Err
     };
     let network=network::Probe::start(&options.listen);
     let listener = TcpListener::bind(options.listen)?;
+    transport::start(config.clone(),clients.clone());
     let gate = Arc::new(Mutex::new(()));
     let active = Arc::new(AtomicUsize::new(0));
     listener.set_nonblocking(true)?;

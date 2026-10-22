@@ -5,6 +5,7 @@ export struct DeviceRow { uuid:string, name:string, status:string, summary:strin
 export struct ProfileSource { client-id:string, label:string }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
 export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
+export struct RouteRow { key:string,label:string,enabled:bool }
 export global Palette {
     in property <bool> dark;
     out property <color> page: dark ? #151b29 : #f4f7fc;
@@ -149,6 +150,8 @@ export component MainWindow inherits Window {
     in property <string> network-address;
     in property <string> network-addresses;
     in property <string> network-report;
+    in property <[RouteRow]> network-routes;
+    in property <string> relay-url;
     in property <string> draft-display-name;
     in property <[ProfileSource]> profile-sources;
     in property <string> profile-tab:"video";
@@ -278,7 +281,18 @@ export component MainWindow inherits Window {
                                 ActionButton{text:"诊断连接";action-id:"device.network.diagnose";argument:root.selected-uuid;}
                                 Rectangle{horizontal-stretch:1;}
                             }
-                            Text{text:"直连优先；Tailscale 打洞失败时自动中继。请保持两端 Tailscale 已连接。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
+                            Text{text:"连接顺序";color:Palette.ink;}
+                            for route in root.network-routes: HorizontalLayout{spacing:6px;
+                                Text{text:route.label;color:route.enabled ? Palette.ink : Palette.muted;vertical-alignment:center;horizontal-stretch:1;}
+                                ActionButton{text:route.enabled ? "启用" : "停用";chosen:route.enabled;action-id:"settings.route.toggle";argument:route.key;}
+                                if route.enabled: ActionButton{text:"↑";action-id:"settings.route.move";argument:route.key+"|up";}
+                                if route.enabled: ActionButton{text:"↓";action-id:"settings.route.move";argument:route.key+"|down";}
+                            }
+                            ActionButton{text:"恢复默认顺序";action-id:"settings.set";argument:"routeOrder=default";}
+                            Text{text:"中继服务器";color:Palette.ink;}
+                            relay-edit:=LineEdit{text:root.relay-url;placeholder-text:"https://relay.example.com";}
+                            ActionButton{text:"应用服务器地址";action-id:"settings.set";argument:"relayUrl="+relay-edit.text;}
+                            Text{text:"按顺序尝试已启用的路径；同类路径按实测质量选择。更改随本设备连接配置同步。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             Text{text:root.network-report;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
                         if root.profile-tab=="video": HorizontalLayout{spacing:6px;

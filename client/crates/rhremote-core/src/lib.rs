@@ -61,6 +61,8 @@ pub struct Profile {
     pub packet_size_auto: bool,
     pub network_mode: String,
     pub remote_bitrate_mbps: u32,
+    pub route_order: Vec<String>,
+    pub relay_url: String,
     pub on_screen_controller: bool,
     pub gamepad_enabled: bool,
     pub full_range: bool,
@@ -94,6 +96,8 @@ impl Default for Profile {
             packet_size_auto: true,
             network_mode: "auto".into(),
             remote_bitrate_mbps: 0,
+            route_order: network::default_route_order(),
+            relay_url: network::DEFAULT_RELAY.into(),
             on_screen_controller: false,
             gamepad_enabled: false,
             full_range: false,
@@ -103,6 +107,7 @@ impl Default for Profile {
 }
 impl Profile {
     pub fn validate(&self) -> Result<(), String> {
+        network::validate_routes(&self.route_order, &self.relay_url)?;
         if !(320..=8192).contains(&self.width)
             || !(320..=8192).contains(&self.height)
             || self.width % 2 != 0
@@ -542,6 +547,18 @@ impl Controller {
                 s.selected = uuid;
                 s.page = "settings".into();
                 s.profile_sources_expanded = false;
+            }
+            "settings.route.move" | "settings.route.toggle" => {
+                let mut next=s.draft.clone().ok_or("open device settings first")?;
+                let route=args["route"].as_str().filter(|r|network::ROUTES.iter().any(|(id,_)|r==id)).ok_or("unknown route")?;
+                if id=="settings.route.toggle" {
+                    if next.route_order.iter().any(|r|r==route){next.route_order.retain(|r|r!=route);}else{next.route_order.push(route.into());}
+                }else{
+                    let index=next.route_order.iter().position(|r|r==route).ok_or("route is disabled")?;
+                    let target=match args["direction"].as_str(){Some("up")=>index.saturating_sub(1),Some("down")=>(index+1).min(next.route_order.len()-1),_=>return Err("direction must be up or down".into())};
+                    next.route_order.swap(index,target);
+                }
+                next.validate()?;s.draft=Some(next);
             }
             "settings.set" => {
                 let current = s.draft.as_ref().ok_or("open device settings first")?;

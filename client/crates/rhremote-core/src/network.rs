@@ -4,8 +4,19 @@ use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
 pub const MAX_ADDRESSES: usize = 8;
+pub const DEFAULT_RELAY: &str = "http://101.43.203.147:33447/";
+pub const ROUTES: &[(&str,&str)] = &[("lan","局域网"),("public_direct","公网直连"),("punch_direct","内置打洞直连"),("tailscale_direct","Tailscale 直连"),("relay","自建中继"),("tailscale_relay","Tailscale 中继 / 未确认路径")];
+pub fn default_route_order()->Vec<String>{ROUTES.iter().map(|(id,_)|(*id).into()).collect()}
+pub fn validate_routes(order:&[String], relay:&str)->Result<(),String>{
+    if order.is_empty()||order.len()>ROUTES.len()||order.iter().enumerate().any(|(i,s)|!ROUTES.iter().any(|(id,_)|s==id)||order[..i].contains(s)){return Err("连接路径至少启用一项，且不能重复或包含未知类型".into());}
+    let parsed=url::Url::parse(relay).map_err(|_|"中继服务器地址无效")?;
+    if !matches!(parsed.scheme(),"http"|"https")||parsed.host_str().is_none()||!parsed.username().is_empty()||parsed.password().is_some()||parsed.query().is_some()||parsed.fragment().is_some()||parsed.path()!="/"{return Err("中继地址须为 HTTP(S) 服务器根地址，不包含凭据、查询或路径".into());}
+    Ok(())
+}
+pub fn transport_id(address:&str)->Option<&str>{address.strip_prefix("rhr:").filter(|s|s.len()==64&&s.bytes().all(|b|b.is_ascii_hexdigit()))}
 
 pub fn validate_address(value: &str) -> Result<(), String> {
+    if transport_id(value).is_some(){return Ok(());}
     if value.is_empty()
         || value.len() > 253
         || value != value.trim()
@@ -70,6 +81,7 @@ pub fn merge_extra(primary: &str, saved: &[String], observed: &[String]) -> Vec<
 }
 
 pub fn kind(address: &str) -> &'static str {
+    if transport_id(address).is_some(){return "transport";}
     let bare = address.trim_matches(['[', ']']);
     match bare.parse::<IpAddr>() {
         Ok(IpAddr::V4(ip)) if ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]) => {
@@ -88,7 +100,16 @@ pub fn kind(address: &str) -> &'static str {
 }
 
 pub fn accepts(mode: &str, address: &str) -> bool {
-    mode == "auto" || kind(address) == "auto" || mode == kind(address)
+    mode == "auto" || kind(address) == "auto" || mode == kind(address) || mode=="internet"&&kind(address)=="transport"
+}
+pub fn route_rank(profile:&Profile, route:&str)->Option<usize>{profile.route_order.iter().position(|r|r==route)}
+pub fn address_route(address:&str)->&'static str{match kind(address){"lan"|"auto"=>"lan","tailscale"=>"tailscale_relay","transport"=>"punch_direct",_=>"public_direct"}}
+
+#[cfg(test)]mod route_tests{
+    use super::*;
+    #[test]fn order_is_explicit_unique_and_nonempty(){let mut p=Profile::default();assert!(p.validate().is_ok());p.route_order=vec!["relay".into(),"lan".into()];assert!(p.validate().is_ok());assert_eq!(route_rank(&p,"relay"),Some(0));assert_eq!(route_rank(&p,"public_direct"),None);p.route_order.push("relay".into());assert!(p.validate().is_err());p.route_order.clear();assert!(p.validate().is_err());}
+    #[test]fn relay_settings_reject_credentials_and_paths(){for url in ["http://127.0.0.1:33447/","https://relay.example.com"]{assert!(validate_routes(&default_route_order(),url).is_ok());}for url in ["file:///tmp/relay","https://user:secret@relay.example.com","http://relay.example.com/admin","https://relay.example.com/?token=secret"]{assert!(validate_routes(&default_route_order(),url).is_err());}}
+    #[test]fn transport_addresses_sync_without_private_material(){let id="a".repeat(64);let address=format!("rhr:{id}");assert!(validate_address(&address).is_ok());assert_eq!(transport_id(&address),Some(id.as_str()));assert_eq!(kind(&address),"transport");assert!(accepts("internet",&address));assert!(!accepts("lan",&address));assert!(validate_address("rhr:invalid").is_err());let p=Profile::default();let mut stored=serde_json::to_value(p).unwrap();stored["routeOrder"]=serde_json::json!(["relay","lan"]);let profile:Profile=serde_json::from_value(stored).unwrap();assert_eq!(profile.route_order,["relay","lan"]);assert!(profile.validate().is_ok());}
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -97,6 +118,8 @@ pub struct EffectivePolicy {
     pub network: String,
     pub packet_size: u32,
     pub bitrate_mbps: u32,
+    pub port_offset: u16,
+    pub client_endpoint_id: String,
 }
 pub fn policy(profile: &Profile, address: &str) -> EffectivePolicy {
     let network = if profile.network_mode == "auto" {
@@ -104,8 +127,10 @@ pub fn policy(profile: &Profile, address: &str) -> EffectivePolicy {
     } else {
         &profile.network_mode
     };
-    let remote = ["tailscale", "internet"].contains(&network);
+    let remote = ["tailscale", "internet", "transport"].contains(&network);
     EffectivePolicy {
+        port_offset: 0,
+        client_endpoint_id: String::new(),
         network: network.into(),
         // Zero delegates route/VPN detection to the native client. A tailnet
         // destination is conservative even if its underlay is the local LAN.

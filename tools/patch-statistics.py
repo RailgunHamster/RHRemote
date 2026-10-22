@@ -7,7 +7,8 @@ def edit(root, relative, changes):
     text = path.read_text(encoding="utf-8")
     backup=root/".rhremote-statistics-originals"/relative
     if "// RHREMOTE_STATISTICS_PATCH" in text:
-        if not backup.exists():return
+        if not backup.exists():
+            raise RuntimeError(f"statistics original missing: {relative}; restore the owned generated file from its pinned upstream before reapplying")
         text=backup.read_text(encoding="utf-8")
     else:
         backup.parent.mkdir(parents=True,exist_ok=True)

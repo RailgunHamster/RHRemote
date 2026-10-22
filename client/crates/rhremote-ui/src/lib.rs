@@ -44,9 +44,11 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "settings.save" => json!({"displayName":arg}),
         "device.connect" | "device.pair" | "device.settings.open" => json!({"uuid":arg}),
         "device.add.submit" => json!({"address":arg}),
+        "settings.route.move" => {let (route,direction)=arg.split_once('|').unwrap_or(("",""));json!({"route":route,"direction":direction})},
+        "settings.route.toggle" => json!({"route":arg}),
         "settings.set" => {
             let (key, value) = arg.split_once('=').unwrap_or(("", ""));
-            let parsed = if key == "resolution" {
+            let parsed = if key=="routeOrder" && value=="default" {json!(rhremote_core::network::default_route_order())} else if key == "resolution" {
                 Value::Array(
                     value
                         .split('x')
@@ -248,6 +250,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_network_report(if state["network"]["uuid"]==selected{network::report_text(&state["network"])}else{"尚未诊断".into()}.into());
             let client_id=state["saved"]["clientId"].as_str().unwrap_or("");
             ui.set_profile_tab(state["profileTab"].as_str().unwrap_or("video").into());
+            let order:Vec<&str>=state["draft"]["routeOrder"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            let mut route_rows=Vec::new();
+            for key in &order {if let Some((_,label))=rhremote_core::network::ROUTES.iter().find(|(id,_)|id==key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:true});}}
+            for (key,label) in rhremote_core::network::ROUTES {if !order.contains(key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:false});}}
+            ui.set_network_routes(ModelRc::new(VecModel::from(route_rows)));
+            ui.set_relay_url(state["draft"]["relayUrl"].as_str().unwrap_or(rhremote_core::network::DEFAULT_RELAY).into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);
             ui.set_audio_enabled(state["audioEnabled"]==true);ui.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
             let remote:Vec<RemoteDisplay>=state["statistics"]["displays"].as_array().into_iter().flatten().map(|d|RemoteDisplay{id:d["id"].as_str().unwrap_or("").into(),label:format!("{} · {}×{}",if d["virtual"]==true{"虚拟屏"}else{d["name"].as_str().filter(|v|!v.is_empty()).unwrap_or("屏幕")},d["width"],d["height"]).into(),chosen:d["id"]==state["statistics"]["selectedDisplay"]["id"],available:d["available"]==true}).collect();

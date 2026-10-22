@@ -9,6 +9,8 @@
  {"id":"device.add.cancel","label":"取消添加","args":{}},
  {"id":"device.settings.open","label":"连接设置","args":{"uuid":"string"}},
  {"id":"settings.set","label":"画质、编码、输入和统计选项","args":{"key":"string","value":"any"}},
+ {"id":"settings.route.move","label":"调整连接路径顺序","args":{"route":"route id","direction":"up / down"}},
+ {"id":"settings.route.toggle","label":"启用或停用连接路径","args":{"route":"route id"}},
  {"id":"settings.copy_from","label":"复制其他客户端的配置到当前草稿","args":{"clientId":"string"}},
  {"id":"settings.catalog","label":"可配置字段与平台支持范围","args":{}},
  {"id":"settings.tab","label":"设备设置分类","args":{"tab":"video / audio / input / advanced"}},

@@ -10,9 +10,15 @@
 namespace RhHost {
 inline QJsonObject request(const QString& host,const QSslCertificate& pinned,const QString& path,const QJsonObject& body=QJsonObject()) {
     if(host.isEmpty() || pinned.isNull()) return {{"ok",false},{"error","缺少主机配对信息"}};
+    const int offset=host=="127.77.0.2"?qEnvironmentVariableIntValue("RHREMOTE_TUNNEL_PORT_OFFSET"):0;
+    const auto endpointId=qEnvironmentVariable("RHREMOTE_TUNNEL_CLIENT_ID");
+    if(!endpointId.isEmpty()&&path!="/v1/transport/authorize"){
+        const auto grant=request(host,pinned,"/v1/transport/authorize",{{"endpointId",endpointId}});
+        if(offset>0&&!grant["ok"].toBool())return grant;
+    }
     QSslSocket socket;socket.setProxy(QNetworkProxy::NoProxy);socket.setSslConfiguration(IdentityManager::get()->getSslConfig());
     QObject::connect(&socket,&QSslSocket::sslErrors,&socket,[&](const QList<QSslError>& errors){if(socket.peerCertificate()==pinned)socket.ignoreSslErrors(errors);});
-    socket.connectToHostEncrypted(host,47995);
+    socket.connectToHostEncrypted(host,47995+offset);
     if(!socket.waitForEncrypted(2500))return {{"ok",false},{"error","主机辅助服务不可用，请安装或启动 RHRemoteHost"}};
     if(socket.peerCertificate()!=pinned){socket.abort();return {{"ok",false},{"error","主机证书与配对记录不一致"}};}
     const auto payload=body.isEmpty()?QByteArray():QJsonDocument(body).toJson(QJsonDocument::Compact);
@@ -34,7 +40,7 @@ inline QJsonObject diagnose(const QString& host,const QSslCertificate& pinned) {
         const auto payload=ticket["result"].toObject();
         const auto token=payload["token"].toString().toLatin1();
         if(payload["udpPort"].toInt()!=47995||token.size()!=40||!token.startsWith("RHRNET1:"))return {{"ok",false},{"error","诊断响应无效"}};
-        QUdpSocket udp;udp.setProxy(QNetworkProxy::NoProxy);udp.connectToHost(host,47995);
+        QUdpSocket udp;udp.setProxy(QNetworkProxy::NoProxy);udp.connectToHost(host,47995+(host=="127.77.0.2"?qEnvironmentVariableIntValue("RHREMOTE_TUNNEL_PORT_OFFSET"):0));
         if(udp.state()!=QAbstractSocket::ConnectedState&&!udp.waitForConnected(1200))result["mediaUdp"]="unreachable";
         else {
             udp.write(token);udp.waitForBytesWritten(200);
