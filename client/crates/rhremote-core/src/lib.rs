@@ -744,6 +744,8 @@ impl Controller {
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
                     if id == "device.connect" {
+                        // An ended stream's firstFrame must not describe this attempt.
+                        s.statistics = Value::Null;
                         s.connecting = true;
                         s.connect_in_flight = true;
                         s.stream_epoch += 1;
@@ -1251,12 +1253,15 @@ mod tests {
         let file=template.storage.with_extension("concurrent.json");
         let c=Controller::new("test",file,transport.clone()).unwrap();
         c.replace_devices(devices);
+        c.stream_state(false,json!({"phase":"transport_closed","firstFrame":true}));
+        assert_eq!(c.state()["statistics"]["firstFrame"],true);
         let old_epoch=c.stream_epoch();
         let worker=c.clone();
         let start=std::thread::spawn(move || worker.dispatch("device.connect",json!({"uuid":"a"})));
         started_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         assert_eq!(c.state()["connecting"],true);
         assert_eq!(c.state()["status"],"正在连接…");
+        assert!(c.state()["statistics"].is_null());
         c.stream_state_for(old_epoch,false,json!({"phase":"idle"}));
         let pending_epoch=c.stream_epoch();
         c.stream_state_for(pending_epoch,false,json!({"phase":"error","error":"stale failure"}));

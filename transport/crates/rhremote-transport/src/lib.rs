@@ -209,10 +209,6 @@ async fn forward_tcp(
     socket.set_nodelay(true)?;
     let (mut send, mut receive) = connection.open_bi().await?;
     send.write_all(&port.to_be_bytes()).await?;
-    ensure!(
-        receive.read_u8().await? == 0,
-        "Remote transport rejected TCP channel"
-    );
     let (mut reader, mut writer) = socket.split();
     tokio::try_join!(
         async {
@@ -221,6 +217,10 @@ async fn forward_tcp(
             Ok::<_, anyhow::Error>(())
         },
         async {
+            // Pipeline the native request with its port header. The host still
+            // authorizes before connecting to Sunshine; consume its status before
+            // exposing any response. Waiting here avoids an extra RTT per socket.
+            ensure!(receive.read_u8().await? == 0,"Remote transport rejected TCP channel");
             tokio::io::copy(&mut receive, &mut writer).await?;
             writer.shutdown().await?;
             Ok::<_, anyhow::Error>(())
@@ -488,6 +488,31 @@ async fn serve_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn tcp_request_does_not_wait_for_the_channel_acknowledgement(){
+        let build=||Endpoint::builder(presets::Minimal).alpns(vec![ALPN.to_vec()]).relay_mode(RelayMode::Disabled).bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST,0))).unwrap();
+        let server=build().bind().await.unwrap();let client=build().bind().await.unwrap();
+        let remote=EndpointAddr::new(server.id()).with_ip_addr(server.bound_sockets()[0]);
+        let receiver=tokio::spawn(async move{
+            let connection=server.accept().await.unwrap().await.unwrap();
+            let(mut send,mut receive)=connection.accept_bi().await.unwrap();
+            assert_eq!(receive.read_u16().await.unwrap(),47989);
+            // Deliberately require the request before returning the channel ACK.
+            // The old sequential handshake deadlocks on this condition.
+            let mut payload=[0;5];receive.read_exact(&mut payload).await.unwrap();assert_eq!(&payload,b"hello");
+            send.write_all(b"\0reply").await.unwrap();send.finish().unwrap();
+            send.stopped().await.unwrap();server.close().await;
+        });
+        let connection=client.connect(remote,ALPN).await.unwrap();
+        let listener=TcpListener::bind((Ipv4Addr::LOCALHOST,0)).await.unwrap();
+        let mut native=tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
+        let(socket,_)=listener.accept().await.unwrap();
+        let forward=tokio::spawn(forward_tcp(connection,socket,47989));
+        native.write_all(b"hello").await.unwrap();native.shutdown().await.unwrap();
+        let mut response=Vec::new();
+        tokio::time::timeout(Duration::from_secs(3),native.read_to_end(&mut response)).await.unwrap().unwrap();
+        assert_eq!(response,b"reply");forward.await.unwrap().unwrap();receiver.await.unwrap();client.close().await;
+    }
     #[tokio::test]
     async fn local_port_conflicts_select_another_complete_set(){
         let occupied=TcpListener::bind((Ipv4Addr::new(127,77,0,2),TCP_PORTS[0]+500)).await.unwrap();
