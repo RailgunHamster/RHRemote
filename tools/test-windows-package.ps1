@@ -7,12 +7,14 @@ $archive=[IO.Compression.ZipFile]::OpenRead($zip)
 try{foreach($entry in $archive.Entries){if($entry.FullName -match '(?i)\.(ini|pem|key|log|pfx|p12)$' -or $entry.FullName -match '(?i)token|credential|password'){throw 'Private configuration found in portable archive'}}}finally{$archive.Dispose()}
 $root=Join-Path 'D:\RHRemoteTools\package-smoke' ([guid]::NewGuid().ToString('N'));New-Item -ItemType Directory -Force -Path $root|Out-Null
 $unpack=Join-Path $root 'app';[IO.Compression.ZipFile]::ExtractToDirectory([IO.Path]::GetFullPath($zip),$unpack)
+$application=if(Test-Path -LiteralPath (Join-Path $unpack 'current\RHRemote.exe')){Join-Path $unpack 'current'}else{$unpack}
+if(-not(Test-Path -LiteralPath (Join-Path $application 'RHRemote.exe'))){throw 'Portable package is missing the application executable'}
 $values=@{RHREMOTE_CONTROL_PORT='48755';RHREMOTE_CONTROL_TOKEN=[IO.File]::ReadAllText('D:\RHRemoteTools\secrets\rhremote-control-token.txt').Trim();RHREMOTE_DATA_DIR=(Join-Path $root 'data');RHREMOTE_UI_POSITION='-3750,80';RHREMOTE_NATIVE_ENGINE=$null}
 $before=@{};$process=$null
 function State{(& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Port 48755 -Mode state).state}
 try{
  foreach($name in $values.Keys){$before[$name]=[Environment]::GetEnvironmentVariable($name,'Process');[Environment]::SetEnvironmentVariable($name,$values[$name],'Process')}
- $process=Start-Process -FilePath (Join-Path $unpack 'RHRemote.exe') -WorkingDirectory $unpack -PassThru -RedirectStandardError (Join-Path $root 'stderr.log') -RedirectStandardOutput (Join-Path $root 'stdout.log')
+ $process=Start-Process -FilePath (Join-Path $application 'RHRemote.exe') -WorkingDirectory $application -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $root 'stderr.log') -RedirectStandardOutput (Join-Path $root 'stdout.log')
  $deadline=(Get-Date).AddSeconds(20);do{Start-Sleep -Milliseconds 250;try{$state=State}catch{$state=$null}}while(-not $state -and (Get-Date)-lt $deadline)
  if(-not $state -or -not $state.updates.managed){throw 'Packaged app did not detect its Velopack manifest'}
  $null=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Port 48755 -Action 'device.add.submit' -Arguments @{address='192.168.0.104'}
