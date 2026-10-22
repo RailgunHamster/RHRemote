@@ -86,7 +86,9 @@ statistics.configure {enabled:true} 启用本机测试模式，每次连接自�
 
 `stream.displays.refresh` 刷新屏幕；`stream.display.select` 接受 `displayId: auto / virtual / 屏幕列表中的 id`。一次仅捕获一块屏幕，通过 Sunshine 的 Ctrl+Alt+Shift+F1…F12 切换。自动模式优先可用实体屏；没有可用实体屏时准备客户端尺寸的自有虚拟屏。`displayMode` 是客户端×设备配置，参与 WebDAV 同步。
 
-屏幕清单和虚拟屏尺寸准备需要被控端的 RHRemoteHost。Ctrl+Alt+Delete 通过辅助服务调用 Windows SendSAS，不用普通键盘注入代替。辅助服务只接受 Sunshine 已启用配对客户端的双向 TLS 认证；客户端固定校验配对时保存的主机证书。每次操作重新检查配对启用状态，配对密钥不参加同步。
+屏幕清单、虚拟屏尺寸准备及 Ctrl+Alt+Delete 由统一的 RHRemote-Sunshine 服务提供；旧版独立 RHRemoteHost 仍按同一协议兼容。Ctrl+Alt+Delete 由 Windows SendSAS 完成。接口只接受 Sunshine 已启用配对客户端的双向 TLS 认证；客户端固定校验配对时保存的主机证书。每次操作重新检查配对启用状态，配对密钥不参加同步。
+
+同样鉴权的 `GET https://<host>:47995/v1/health` 返回 `{ok:true,result:{product:"RHRemote-Sunshine",serviceMode:"unified",servicePid,sunshine:{pid,sessionId,starts}}}`。`servicePid` 是 SCM 的 `SunshineService` 进程，同时也是 47995 监听者；Sunshine 引擎是它管理的子进程。健康接口不返回配对材料或配置密码。
 
 Windows 在原有认证回环接口暴露这些操作；Android 工具栏和回环接口也使用同一动作分发器。Android 的网络操作异步返回接受状态，完成结果见 `stream.lastShortcut`、`stream.displayBusy`、`stream.displayError`。
 

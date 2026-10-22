@@ -2,6 +2,8 @@ param([string]$SourceDirectory=(Join-Path (Split-Path $PSScriptRoot -Parent) 'di
 $ErrorActionPreference='Stop'
 $admin=([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if(-not $admin){throw 'Run the RHRemoteHost installer in an administrator PowerShell.'}
+$unified=Get-CimInstance Win32_Service -Filter "Name='SunshineService'" -ErrorAction SilentlyContinue
+if($unified-and$unified.PathName-match'--sunshine-service'){throw 'RHRemote-Sunshine already owns the host API. Use install-server.ps1 instead of installing a second host service.'}
 foreach($name in @('RHRemoteHost.exe','scripts/display.ps1','scripts/displayconfig.ps1','scripts/amyuni-vdd.ps1','scripts/tablet-mode.ps1')){if(-not(Test-Path -LiteralPath (Join-Path $SourceDirectory $name))){throw ('Missing installer file: '+$name)}}
 if(-not(Test-Path -LiteralPath (Join-Path $SunshineConfig 'credentials/cacert.pem'))){throw 'Sunshine certificate not found.'}
 $install=Join-Path $env:ProgramFiles 'RHRemoteHost';$data=Join-Path $env:ProgramData 'RHRemoteHost'

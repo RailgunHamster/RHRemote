@@ -23,11 +23,11 @@ Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运�
 
 Windows 对已经显示过首帧的意外中断自动恢复，最多连续尝试 3 次、限时 60 秒；主动断开或关闭窗口不会重连。重试保留连接参数和实时声音设置，第一次重试复用选屏信息，后续失败再重新查询主机。受控客户端不会等待底层错误对话框确认。
 
-被控端保留 Sunshine，新增可选 Rust 辅助服务 RHRemoteHost，用于安全操作序列、屏幕清单和自有虚拟屏尺寸管理。构建运行 `tools/build-host.ps1`，在被控端管理员 PowerShell 运行 `dist/host/install-host.ps1 -SourceDirectory <组件目录> -EnableSecureAttention`。它使用已有 Sunshine 配对证书，不增加账号密码；安装目录和操作文件仅 SYSTEM / 管理员可写，47995 端口仅允许局域网。卸载使用同目录 `uninstall-host.ps1`，保留备份和数据。
+被控端使用统一的 RHRemote-Sunshine Windows 服务：Rust 服务按已有配对鉴权，提供屏幕管理和安全操作接口，并管理 Sunshine 串流进程。安装包中的 `install-server.ps1 -SourceDirectory <解压目录>` 在管理员 PowerShell 中替换原 `SunshineService`，保留原配置、证书、配对和应用列表，验证成功后移除旧 RHRemoteHost 独立服务。47995 接口复用已有 Sunshine 配对证书，局域网防火墙规则随包安装；Windows 的服务发送安全操作序列策略沿用原设置。安装失败会自动回滚，手工回滚和构建说明见 [服务端](server/README.md)。
 
 虚拟屏需要已安装的 Amyuni IDD 驱动；不会接管其他程序的虚拟屏。自动选择依赖 Windows 报告的屏幕可用状态：有些显示器关电源后仍被 Windows 视为连接，此时需要手动选择虚拟屏。实体屏的分辨率、位置和主屏状态不随客户端调整。
 
-只安装 Sunshine 可以连接其默认捕获画面，但枚举物理屏、自动选屏和虚拟屏管理需要上述 RHRemoteHost。Android 屏幕页显示服务端返回的物理屏与虚拟屏；组件缺失或连接失败时显示具体错误。旧版平板部署的虚拟屏归属记录会从系统盘或组件所在工具盘迁移，不假设工具都安装在 C 盘。
+统一包已包含枚举物理屏、自动选屏和虚拟屏管理。旧版官方 Sunshine 加独立主机组件的协议仍兼容。Android 屏幕页显示服务端返回的物理屏与虚拟屏；组件缺失或连接失败时显示具体错误。旧版平板部署的虚拟屏归属记录会从系统盘或组件所在工具盘迁移，不假设工具都安装在 C 盘。
 
 ## 构建与接口
 
@@ -42,7 +42,7 @@ Windows 对已经显示过首帧的意外中断自动恢复，最多连续尝试
 
 产品按钮与本地 HTTP API 使用同一个操作分发器，见 [API 与同步协议](design/API.md)。测试模式记录连接各阶段及逐帧元数据，见 [Statistics](design/STATISTICS.md)。诊断数据、真实设备快照、账号、配对证书、私钥与令牌不属于源码或发布包。
 
-Sunshine 官方更新使用 `tools/update-sunshine.ps1 -Ref <官方 tag 或 commit>`，随后审查冲突、同步依赖并构建验证。已有启动修复和品牌调整是官方基准之后的普通提交；脚本不覆盖本地改动。完整说明及本地构建命令见 [server/README.md](server/README.md)。源码整合不会自动替换已安装服务；当前 RHRemoteHost 的独立运行方式仍兼容。
+Sunshine 官方更新使用 `tools/update-sunshine.ps1 -Ref <官方 tag 或 commit>`，随后审查冲突、同步依赖并构建验证。已有启动修复和品牌调整是官方基准之后的普通提交；脚本不覆盖本地改动。Rust 服务管理逻辑保存在上游目录之外，统一安装包直接构建维护源码。完整说明及本地构建命令见 [server/README.md](server/README.md)。
 
 ## 许可
 
