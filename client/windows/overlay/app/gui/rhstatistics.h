@@ -50,4 +50,8 @@ public:
     public: Scope(QString n,qint64 f=-1):name(std::move(n)),start(active()?now():0),frame(f){}
         ~Scope(){if(start)event(name,frame,{},start,now()-start);}
     };
+    template<class Function>
+    static auto measure(const QString& name,Function&& operation)->decltype(operation()){
+        Scope trace(name);return operation();
+    }
 };

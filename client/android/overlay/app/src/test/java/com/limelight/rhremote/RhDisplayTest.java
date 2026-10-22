@@ -10,6 +10,13 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28)
 public class RhDisplayTest {
+    @Test public void windowsGamepadPreferenceSurvivesSyncWithoutChangingLegacyDefaults()throws Exception{
+        RhProfile p=profile();assertFalse(p.gamepadEnabled);
+        JSONObject value=p.json();value.put("gamepadEnabled",true);
+        RhProfile enabled=RhProfile.fromJson("host",value);assertTrue(enabled.gamepadEnabled);
+        assertTrue(enabled.clientJson().getBoolean("gamepadEnabled"));
+        value.remove("gamepadEnabled");assertFalse(RhProfile.fromJson("host",value).gamepadEnabled);
+    }
     private RhProfile profile()throws Exception{return RhProfile.fromJson("host",RhActions.obj("width",2520,"height",1680,"fps",30,"bitrateMbps",25,"codec","HEVC","swapButtons",false,"trackpad",false,"statistics",false));}
     @Test public void automaticAndExplicitPhysicalSelectionUseTheCompanionProtocol()throws Exception{
         RhDisplay display=new RhDisplay(profile(),(path,body)->{

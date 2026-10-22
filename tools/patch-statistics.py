@@ -20,7 +20,9 @@ def edit(root, relative, changes):
 
 def windows(root):
     include = '#include "gui/rhstatistics.h"\n#include "gui/rhcontrol.h"\n'
-    edit(root, "app/main.cpp", [("int main(int argc, char *argv[])", "int main(int argc, char *argv[])"), ("    QQuickStyle::setStyle(\"Material\");", '    RhStatistics::event("native_ui_ready");\n    QQuickStyle::setStyle("Material");'),
+    edit(root, "app/main.cpp", [("int main(int argc, char *argv[])\n{", 'int main(int argc, char *argv[])\n{\n    RhStatistics::event("native_process_entry");'),
+        ('    QGuiApplication app(argc, argv);','    const auto rhQtBegin=RhStatistics::now();\n    QGuiApplication app(argc, argv);\n    RhStatistics::event("client_qt_application_initialize",-1,{},rhQtBegin,RhStatistics::now()-rhQtBegin);'),
+        ("    QQuickStyle::setStyle(\"Material\");", '    RhStatistics::event("native_ui_ready");\n    QQuickStyle::setStyle("Material");'),
         ('        engine.load(QUrl(rhAdapter', '        RhStatistics::Scope traceQml("client_qml_load");\n        engine.load(QUrl(rhAdapter')])
     # Include before any function definitions (the main signature can vary by compiler).
     for relative in ["app/main.cpp", "app/streaming/session.cpp", "app/backend/nvhttp.cpp", "app/streaming/video/ffmpeg.cpp", "app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp"]:
@@ -31,7 +33,14 @@ def windows(root):
         ("    int riKeyId;", '    RhStatistics::Scope traceLaunch("host_launch_request");\n    int riKeyId;'),
         ("    QNetworkReply* reply = openConnection(baseUrl, command, arguments, timeoutMs, logLevel);", '    RhStatistics::Scope traceHttp("http_"+command);\n    QNetworkReply* reply = openConnection(baseUrl, command, arguments, timeoutMs, logLevel);')])
     edit(root, "app/streaming/session.cpp", [
+        ('    DECODER_PARAMETERS params;', '    RhStatistics::Scope traceDecoder(testOnly?"client_decoder_create_test":"client_decoder_create_stream");\n    DECODER_PARAMETERS params;'),
         ("bool Session::initialize()\n{", 'bool Session::initialize()\n{\n    RhStatistics::Scope traceInitialize("client_session_initialize");'),
+        ('    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {', '    if (RhStatistics::measure("client_sdl_video_initialize",[]{return SDL_InitSubSystem(SDL_INIT_VIDEO);}) != 0) {'),
+        ('    SDL_Window* testWindow = SDL_CreateWindow("", x, y, width, height,\n                                              SDL_WINDOW_HIDDEN | StreamUtils::getPlatformWindowFlags());', '    SDL_Window* testWindow = RhStatistics::measure("client_probe_window_create",[&]{return SDL_CreateWindow("", x, y, width, height,\n                                              SDL_WINDOW_HIDDEN | StreamUtils::getPlatformWindowFlags());});'),
+        ('    m_AudioCallbacks.capabilities = getAudioRendererCapabilities(m_StreamConfig.audioConfiguration);', '    m_AudioCallbacks.capabilities = RhStatistics::measure("client_audio_capability_probe",[&]{return getAudioRendererCapabilities(m_StreamConfig.audioConfiguration);});'),
+        ('void Session::getWindowDimensions(int& x, int& y,\n                                  int& width, int& height)\n{', 'void Session::getWindowDimensions(int& x, int& y,\n                                  int& width, int& height)\n{\n    RhStatistics::Scope traceDimensions("client_window_dimensions");'),
+        ('    m_Window = SDL_CreateWindow(windowName.c_str(),\n                                x,\n                                y,\n                                width,\n                                height,\n                                defaultWindowFlags | StreamUtils::getPlatformWindowFlags());', '    m_Window = RhStatistics::measure("client_stream_window_create",[&]{return SDL_CreateWindow(windowName.c_str(),\n                                x,\n                                y,\n                                width,\n                                height,\n                                defaultWindowFlags | StreamUtils::getPlatformWindowFlags());});'),
+        ('    bool audioTestPassed = testAudio(m_StreamConfig.audioConfiguration);', '    bool audioTestPassed = RhStatistics::measure("client_audio_launch_test",[&]{return testAudio(m_StreamConfig.audioConfiguration);});'),
         ("bool Session::validateLaunch(SDL_Window* testWindow)\n{",'bool Session::validateLaunch(SDL_Window* testWindow)\n{\n    RhStatistics::Scope traceValidate("client_validate_launch");'),
         ("void Session::emitLaunchWarning(QString text)\n{", 'void Session::emitLaunchWarning(QString text)\n{\n    RhStatistics::Scope traceWarning("client_warning_display_wait");'),
         ("bool Session::startConnectionAsync()\n{",'bool Session::startConnectionAsync()\n{\n    RhStatistics::event("host_launch_prepare");'),
@@ -46,6 +55,10 @@ def windows(root):
         ("    RhRuntime::stream(true);", '    RhStatistics::event("connection_ready");\n    RhRuntime::stream(true);'),
         ("        RhRuntime::stream(false);", '        RhStatistics::event("session_end");\n        RhRuntime::stream(false);')])
     edit(root, "app/streaming/video/ffmpeg.cpp", [
+        ('void FFmpegVideoDecoder::reset()\n{', 'void FFmpegVideoDecoder::reset()\n{\n    RhStatistics::Scope traceReset("client_ffmpeg_reset");'),
+        ('bool FFmpegVideoDecoder::initialize(PDECODER_PARAMETERS params)\n{', 'bool FFmpegVideoDecoder::initialize(PDECODER_PARAMETERS params)\n{\n    RhStatistics::Scope traceInitialize(m_TestOnly?"client_ffmpeg_test_initialize":"client_ffmpeg_stream_initialize");'),
+        ('    // In test-only mode, we should only see test frames', '    RhStatistics::Scope traceComplete(testFrame?"client_ffmpeg_trial_decode":"client_ffmpeg_live_setup");\n    // In test-only mode, we should only see test frames'),
+        ('    int err = avcodec_open2(m_VideoDecoderCtx, decoder, &options);', '    int err = RhStatistics::measure("client_avcodec_open",[&]{return avcodec_open2(m_VideoDecoderCtx, decoder, &options);});'),
         ("    PLENTRY entry = du->bufferList;", '''    if(RhStatistics::active()){
         const qint64 now=RhStatistics::now();const quint64 common=LiGetMillis();
         RhStatistics::event("packet_first",du->frameNumber,{},now-qint64(common-du->receiveTimeMs)*1000);
@@ -59,6 +72,15 @@ def windows(root):
                             frame->opaque=reinterpret_cast<void*>(quintptr(du.frameNumber));
                             RhStatistics::event("decode_output",du.frameNumber);
                         }''')])
+    edit(root, "app/streaming/video/ffmpeg-renderers/d3d11va.cpp", [
+        ('bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)\n{', 'bool D3D11VARenderer::initialize(PDECODER_PARAMETERS params)\n{\n    RhStatistics::Scope traceInitialize(params->testOnly?"client_d3d11_test_initialize":"client_d3d11_stream_initialize");'),
+        ('bool D3D11VARenderer::createDeviceByAdapterIndex(int adapterIndex, bool* adapterNotFound)\n{', 'bool D3D11VARenderer::createDeviceByAdapterIndex(int adapterIndex, bool* adapterNotFound)\n{\n    RhStatistics::Scope traceDevice("client_d3d11_device_select");'),
+        ('    if (!SDL_DXGIGetOutputInfo(SDL_GetWindowDisplayIndex(params->window),\n                               &adapterIndex, &outputIndex)) {', '    if (!RhStatistics::measure("client_d3d11_output_lookup",[&]{return SDL_DXGIGetOutputInfo(SDL_GetWindowDisplayIndex(params->window),\n                               &adapterIndex, &outputIndex);})) {'),
+        ('    hr = m_Factory->CreateSwapChainForHwnd(m_Device.Get(),', '    hr = RhStatistics::measure("client_d3d11_swapchain_create",[&]{return m_Factory->CreateSwapChainForHwnd(m_Device.Get(),'),
+        ('                                           &swapChain);', '                                           &swapChain);});'),
+        ('bool D3D11VARenderer::setupRenderingResources()\n{', 'bool D3D11VARenderer::setupRenderingResources()\n{\n    RhStatistics::Scope traceResources("client_d3d11_render_resources");'),
+        ('        int err = av_hwdevice_ctx_init(m_HwDeviceContext);', '        int err = RhStatistics::measure("client_d3d11_hwdevice_context",[&]{return av_hwdevice_ctx_init(m_HwDeviceContext);});'),
+        ('        int err = av_hwframe_ctx_init(m_HwFramesContext);', '        int err = RhStatistics::measure("client_d3d11_frame_pool",[&]{return av_hwframe_ctx_init(m_HwFramesContext);});')])
     edit(root, "app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp", [
         ("    m_VsyncRenderer->renderFrame(frame);", '''    const qint64 traceFrame=qint64(quintptr(frame->opaque));
     RhStatistics::event("render_submit",traceFrame);

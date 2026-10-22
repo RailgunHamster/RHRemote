@@ -17,6 +17,7 @@
  {"key":"reverseScroll","label":"反转滚轮方向","tab":"input","type":"bool","platforms":["windows"]},
  {"key":"captureSysKeys","label":"转发系统快捷键","tab":"input","type":"select","platforms":["windows"],"options":[["never","从不"],["fullscreen","仅全屏"],["always","始终"]]},
  {"key":"onScreenController","label":"显示屏幕手柄","tab":"input","type":"bool","platforms":["android"]},
+ {"key":"gamepadEnabled","label":"手柄输入","tab":"input","type":"bool","platforms":["windows"],"help":"下次连接生效。关闭后不探测手柄，键鼠和触控保持可用。"},
  {"key":"framePacing","label":"平滑帧节奏","tab":"advanced","type":"bool","help":"关闭时优先降低等待延迟。"},
  {"key":"vsync","label":"垂直同步","tab":"advanced","type":"bool","platforms":["windows"]},
  {"key":"decoder","label":"视频解码器","tab":"advanced","type":"select","platforms":["windows"],"options":[["auto","自动"],["hardware","硬件解码"],["software","软件解码"]]},

@@ -58,6 +58,7 @@ pub struct Profile {
     pub window_mode: String,
     pub packet_size: u32,
     pub on_screen_controller: bool,
+    pub gamepad_enabled: bool,
     pub full_range: bool,
     pub display_mode: String,
 }
@@ -87,6 +88,7 @@ impl Default for Profile {
             window_mode: "windowed".into(),
             packet_size: 1392,
             on_screen_controller: false,
+            gamepad_enabled: false,
             full_range: false,
             display_mode: "auto".into(),
         }
@@ -896,6 +898,16 @@ pub fn start_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gamepads_are_off_by_default_and_can_be_enabled_per_client() {
+        let mut value = serde_json::to_value(Profile::default()).unwrap();
+        value.as_object_mut().unwrap().remove("gamepadEnabled");
+        assert!(!serde_json::from_value::<Profile>(value.clone()).unwrap().gamepad_enabled);
+        value["gamepadEnabled"] = json!(true);
+        let profile = serde_json::from_value::<Profile>(value).unwrap();
+        assert!(profile.gamepad_enabled);
+        assert_eq!(serde_json::to_value(profile).unwrap()["gamepadEnabled"], true);
+    }
     struct Stub;
     impl Platform for Stub {
         fn execute(&self, _: &str, _: &Value) -> Result<Value, String> {

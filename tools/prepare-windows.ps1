@@ -14,7 +14,8 @@ Edit-Source 'app/main.cpp' {param($s)
     $s=$s.Replace('QCoreApplication::setOrganizationName("Moonlight Game Streaming Project");','QCoreApplication::setOrganizationName("RHRemote");')
     $s=$s.Replace('QCoreApplication::setOrganizationDomain("moonlight-stream.com");','QCoreApplication::setOrganizationDomain("rhremote.local");')
     $s=$s.Replace('QCoreApplication::setApplicationName("Moonlight");','QCoreApplication::setApplicationName("RHRemote");')
-    $s="#include `"gui/rhprofiles.h`"`n#include `"gui/rhcontrol.h`"`n#include <QIcon>`n"+$s
+    $s="#include `"gui/rhprofiles.h`"`n#include `"gui/rhcontrol.h`"`n#include `"gui/rhcapturetools.h`"`n#include <QIcon>`n"+$s
+    $s=[regex]::Replace($s,'int main\(int argc, char \*argv\[\]\)\r?\n\{',"int main(int argc, char *argv[])`n{`n    RhCaptureTools::isolate();")
     $s=Replace-Once $s '    QQuickStyle::setStyle("Material");' @'
     qmlRegisterSingletonType<RhProfiles>("RhProfiles", 1, 0, "RhProfiles",
         [](QQmlEngine*, QJSEngine*) -> QObject* { return new RhProfiles(); });
@@ -173,12 +174,47 @@ Edit-Source 'moonlight-common-c/moonlight-common-c/src/VideoStream.c' {param($s)
     return (Replace-Once $s '#define FIRST_FRAME_TIMEOUT_SEC 10' '#define FIRST_FRAME_TIMEOUT_SEC 30')
 }
 Edit-Source 'app/streaming/session.h' {param($s)
-    $s="#include <future>`n#include <QJsonObject>`n"+$s
-    return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    void execInternal();")
+    $s="#include <future>`n#include <tuple>`n#include <QJsonObject>`n#include `"gui/rhprobecache.h`"`n"+$s
+    $s=[regex]::Replace($s,'    static\r?\n    DecoderAvailability getDecoderAvailability','    DecoderAvailability getDecoderAvailability')
+    return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    using RhProbeKey=std::tuple<SDL_Window*,int,int,int,int,int>;`n    RhProbeCache<RhProbeKey,IVideoDecoder> m_RhProbeCache;`n    void execInternal();")
 }
 Edit-Source 'app/streaming/session.cpp' {param($s)
     $s="#include `"gui/rhcontrol.h`"`n#include `"gui/rhpreparation.h`"`n"+$s
     $s=[regex]::Replace($s,'bool Session::initialize\(\)\r?\n\{',"bool Session::initialize()`n{`n    m_RhDisplayPreparation=RhPreparation::start(m_Computer->activeAddress.address(),m_Computer->serverCert,m_Preferences->width,m_Preferences->height);")
+    $s=Replace-Once $s '    if (!chooseDecoder(vds, window, videoFormat, width, height, frameRate, false, false, true, decoder)) {' @'
+    RhStatistics::Scope traceProbe("client_decoder_probe");
+    const auto key=std::make_tuple(window,int(vds),videoFormat,width,height,frameRate);
+    if(auto cached=m_RhProbeCache.get(key))return cached->isHardwareAccelerated()?DecoderAvailability::Hardware:DecoderAvailability::Software;
+    m_RhProbeCache.clear();
+    if (!chooseDecoder(vds, window, videoFormat, width, height, frameRate, false, false, true, decoder)) {
+'@
+    $s=[regex]::Replace($s,'    bool hw = decoder->isHardwareAccelerated\(\);\r?\n\r?\n    delete decoder;',"    bool hw = decoder->isHardwareAccelerated();`n    m_RhProbeCache.put(key,std::unique_ptr<IVideoDecoder>(decoder));")
+    $s=[regex]::Replace($s,'bool Session::populateDecoderProperties\(SDL_Window\* window\)\r?\n\{\r?\n    IVideoDecoder\* decoder;',@'
+bool Session::populateDecoderProperties(SDL_Window* window)
+{
+    RhStatistics::Scope traceProperties("client_decoder_properties");
+    const auto key=std::make_tuple(window,int(m_Preferences->videoDecoderSelection),m_SupportedVideoFormats.first(),m_StreamConfig.width,m_StreamConfig.height,m_StreamConfig.fps);
+    IVideoDecoder* decoder=m_RhProbeCache.take(key).release();
+    m_RhProbeCache.clear();
+'@)
+    $s=[regex]::Replace($s,'(?m)^    if \(!chooseDecoder\(m_Preferences->videoDecoderSelection,','    if (!decoder && !chooseDecoder(m_Preferences->videoDecoderSelection,')
+    $s=Replace-Once $s '    SDL_DestroyWindow(testWindow);' "    m_RhProbeCache.clear();`n    SDL_DestroyWindow(testWindow);"
+    # Check controller mappings after the real input handler has initialized SDL,
+    # instead of opening and closing the same device subsystem twice.
+    $s=Replace-Once $s '    if (!SdlInputHandler::getUnmappedGamepads().isEmpty()) {' '    if (qEnvironmentVariableIsEmpty("RHREMOTE_CONTROL_PORT") && !SdlInputHandler::getUnmappedGamepads().isEmpty()) {'
+    $s=Replace-Once $s '    m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);' @'
+    m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);
+    if(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT") && qEnvironmentVariable("RHREMOTE_GAMEPAD_ENABLED")!="0" && !SdlInputHandler::getUnmappedGamepads().isEmpty())
+        emitLaunchWarning(tr("An attached gamepad has no mapping and won't be usable. Visit the Moonlight help to resolve this."));
+'@
+    $s=Replace-Once $s '    emit displayLaunchWarning(text);' @'
+    emit displayLaunchWarning(text);
+    if(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT")){
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,"Launch warning: %s",qPrintable(text));
+        RhStatistics::event("launch_warning",-1,{{"message",text}});
+        return;
+    }
+'@
     # Desktop absolute input is intentional. The upstream warning adds 3.5 s.
     $s=Replace-Once $s 'if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame)' 'if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame && m_App.name.compare("Desktop",Qt::CaseInsensitive)!=0)'
     # The RHRemote shell already owns progress/status; no fixed toast-reading delay.
@@ -246,6 +282,38 @@ Edit-Source 'app/streaming/video/ffmpeg.cpp' {param($s)
         // Accumulate these values into the global stats
 '@)
 }
+Edit-Source 'app/streaming/input/gamepad.cpp' {param($s)
+    $pattern='(?s)QString SdlInputHandler::getUnmappedGamepads\(\)\r?\n\{.*?\r?\n    return ret;\r?\n\}'
+    $match=[regex]::Match($s,$pattern);if(-not$match.Success){throw 'Unmapped controller probe anchor missing'}
+    $body=Replace-Once $match.Value '    if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {' "    const bool rhControllersInitialized=SDL_WasInit(SDL_INIT_GAMECONTROLLER)!=0;`n    if (!rhControllersInitialized && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) != 0) {"
+    $body=Replace-Once $body '    SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);' '    if (!rhControllersInitialized) SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);'
+    return $s.Substring(0,$match.Index)+$body+$s.Substring($match.Index+$match.Length)
+}
+Edit-Source 'app/streaming/input/input.cpp' {param($s)
+    $start=$s.IndexOf('    SDL_assert(!SDL_WasInit(SDL_INIT_JOYSTICK));')
+    $end=$s.IndexOf('    m_GamepadMask = getAttachedGamepadMask();',$start)
+    if($start-lt0-or$end-lt$start){throw 'Input controller initialization block missing'}
+    $end+='    m_GamepadMask = getAttachedGamepadMask();'.Length
+    return $s.Substring(0,$start)+"    if(qEnvironmentVariable(`"RHREMOTE_GAMEPAD_ENABLED`")!=`"0`"){`n"+$s.Substring($start,$end-$start)+"`n    }else{m_GamepadMask=0;}`n"+$s.Substring($end)
+}
+Edit-Source 'app/streaming/video/ffmpeg-renderers/d3d11va.h' {param($s)
+    return (Replace-Once $s '    int m_DecoderSelectionPass;' "    bool m_RhProbeCacheable=false;`n    int m_DecoderSelectionPass;")
+}
+Edit-Source 'app/streaming/video/ffmpeg-renderers/d3d11va.cpp' {param($s)
+    $s=Replace-Once $s '#include <initguid.h>' "#include <initguid.h>`n#include `"gui/rhd3d11probe.h`""
+    $s=Replace-Once $s '    m_DecoderParams = *params;' "    m_DecoderParams = *params;`n    m_RhProbeCacheable=params->testOnly;"
+    $s=[regex]::Replace($s,'(?m)^    m_Device\.Reset\(\);',"    if(m_RhProbeCacheable)RhD3D11Probe::put(m_Factory.Get(),m_Device.Get());`n    m_Device.Reset();")
+    $s=Replace-Once $s '    hr = CreateDXGIFactory(__uuidof(IDXGIFactory5), (void**)&m_Factory);' @'
+    m_Factory=RhD3D11Probe::factory();
+    hr=m_Factory?S_OK:CreateDXGIFactory(__uuidof(IDXGIFactory5), (void**)&m_Factory);
+'@
+    $s=Replace-Once $s '    hr = D3D11CreateDevice(adapter.Get(),' @'
+    m_Device=RhD3D11Probe::take(adapterDesc.AdapterLuid,m_Factory.Get());
+    if(m_Device){featureLevel=m_Device->GetFeatureLevel();m_Device->GetImmediateContext(&m_DeviceContext);hr=S_OK;}
+    else hr = D3D11CreateDevice(adapter.Get(),
+'@
+    return $s
+}
 Edit-Source 'app/streaming/audio/audio.cpp' {param($s)
     $s="#include `"gui/rhcontrol.h`"`n"+$s
     $s=Replace-Once $s '    s_ActiveSession->m_AudioSampleCount++;' @'
@@ -266,7 +334,7 @@ Edit-Source 'app/streaming/audio/audio.cpp' {param($s)
 Edit-Source 'app/app.pro' {param($s)return $s+@'
 
 # RHRemote native shell; the existing streaming implementation remains intact.
-HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h
+HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h gui/rhprobecache.h gui/rhd3d11probe.h gui/rhcapturetools.h
 win32 {
     TARGET = RHRemote
     QMAKE_TARGET_COMPANY = RHRemote
