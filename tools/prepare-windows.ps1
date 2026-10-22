@@ -172,8 +172,13 @@ Edit-Source 'app/gui/StreamSegue.qml' {param($s)
 Edit-Source 'moonlight-common-c/moonlight-common-c/src/VideoStream.c' {param($s)
     return (Replace-Once $s '#define FIRST_FRAME_TIMEOUT_SEC 10' '#define FIRST_FRAME_TIMEOUT_SEC 30')
 }
+Edit-Source 'app/streaming/session.h' {param($s)
+    $s="#include <future>`n#include <QJsonObject>`n"+$s
+    return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    void execInternal();")
+}
 Edit-Source 'app/streaming/session.cpp' {param($s)
-    $s="#include `"gui/rhcontrol.h`"`n"+$s
+    $s="#include `"gui/rhcontrol.h`"`n#include `"gui/rhpreparation.h`"`n"+$s
+    $s=[regex]::Replace($s,'bool Session::initialize\(\)\r?\n\{',"bool Session::initialize()`n{`n    m_RhDisplayPreparation=RhPreparation::start(m_Computer->activeAddress.address(),m_Computer->serverCert,m_Preferences->width,m_Preferences->height);")
     # Desktop absolute input is intentional. The upstream warning adds 3.5 s.
     $s=Replace-Once $s 'if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame)' 'if (m_Preferences->absoluteMouseMode && !m_App.isAppCollectorGame && m_App.name.compare("Desktop",Qt::CaseInsensitive)!=0)'
     # The RHRemote shell already owns progress/status; no fixed toast-reading delay.
@@ -190,11 +195,9 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
     $s=Replace-Once $s '    QString rtspSessionUrl;' @'
     const auto displayMode=qEnvironmentVariable("RHREMOTE_DISPLAY_MODE");
     if(!displayMode.isEmpty()){
-        const auto cached=QJsonDocument::fromJson(qgetenv("RHREMOTE_RESUME_SELECTION")).object();
-        const int cachedIndex=cached["selected"].toObject()["captureIndex"].toInt();
-        auto reply=cachedIndex>=1&&cachedIndex<=12&&cached["displays"].isArray()
-            ? QJsonObject{{"ok",true},{"result",cached}}
-            : RhHost::request(m_Computer->activeAddress.address(),m_Computer->serverCert,"/v1/display/prepare",{{"mode",displayMode},{"width",m_Preferences->width},{"height",m_Preferences->height}});
+        auto reply=m_RhDisplayPreparation.valid()
+            ? m_RhDisplayPreparation.get()
+            : QJsonObject{{"ok",false},{"error","Display preparation did not start"}};
         {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.firstFrame=false;r.localDisconnect=false;r.retryEligible=false;
             if(reply["ok"].toBool()){auto data=reply["result"].toObject();r.displays=data["displays"].toArray();r.selectedDisplay=data["selected"].toObject();int index=r.selectedDisplay["captureIndex"].toInt();r.initialDisplay=index==data["initialCaptureIndex"].toInt()?0:index;r.displayError.clear();}
             else{r.displayError=reply["error"].toString();}
@@ -263,7 +266,7 @@ Edit-Source 'app/streaming/audio/audio.cpp' {param($s)
 Edit-Source 'app/app.pro' {param($s)return $s+@'
 
 # RHRemote native shell; the existing streaming implementation remains intact.
-HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h
+HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h
 win32 {
     TARGET = RHRemote
     QMAKE_TARGET_COMPANY = RHRemote

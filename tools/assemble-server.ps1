@@ -9,9 +9,9 @@ foreach($file in @('sunshine.exe','assets/web/index.html')){if(-not(Test-Path -L
 foreach($file in @('RHRemoteHost.exe','scripts/display.ps1','scripts/RhDisplayConfig.dll')){if(-not(Test-Path -LiteralPath (Join-Path $HostDirectory $file))){throw ('Incomplete Rust service build: '+$file)}}
 New-Item -ItemType Directory -Path $out|Out-Null
 Get-ChildItem -LiteralPath $SunshineDirectory -Force|ForEach-Object {Copy-Item -LiteralPath $_.FullName -Destination $out -Recurse -Force}
-$hostOut=Join-Path $out 'host';New-Item -ItemType Directory -Path $hostOut|Out-Null
-Copy-Item -LiteralPath (Join-Path $HostDirectory 'RHRemoteHost.exe') -Destination $hostOut
-Copy-Item -LiteralPath (Join-Path $HostDirectory 'scripts') -Destination $hostOut -Recurse
+$hostOut=Join-Path $out 'host';New-Item -ItemType Directory -Path $hostOut -Force|Out-Null
+Copy-Item -LiteralPath (Join-Path $HostDirectory 'RHRemoteHost.exe') -Destination $hostOut -Force
+Copy-Item -LiteralPath (Join-Path $HostDirectory 'scripts') -Destination $hostOut -Recurse -Force
 foreach($name in @('install-server.ps1','server-package.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $out}
 # Existing Sunshine setup UI and service scripts must use the unified installer.
 $shim="@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0..\install-server.ps1`" -SourceDirectory `"%~dp0..`"`r`nexit /b %ERRORLEVEL%`r`n"

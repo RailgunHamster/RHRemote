@@ -9,6 +9,14 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def test_overlapped_display_preparation_is_metadata_not_an_extra_video_frame(self):
+        rows=[e("connect_action",0),e("connection_begin",1_000_000),e("render_return",2_000_000,1),e("trace_end",2_100_000)]
+        rows.append(dict(event="host_display_prepared",ts_us=900_000,frame=-1,fields={"path":"native","hostRequestMs":800,"workerMs":790,"captureMs":770}))
+        summary,frames=a.analyze(rows,{"platform":"windows"})
+        self.assertEqual(summary["frame_count"],1)
+        self.assertEqual(summary["display_preparation"]["hostRequestMs"],800)
+        self.assertEqual(summary["connection_measurement"]["total_ms"],2000)
+        self.assertEqual(sum(p["duration_ms"] for p in summary["connection_phases"]),2000)
     def test_ui_queue_time_is_part_of_connection_total(self):
         rows=[e("connect_action",0),e("connect_request_received",620_000),e("native_spawn_begin",625_000),e("connection_begin",1_000_000),e("render_return",2_000_000,1)]
         measurement,phases=a.connection_measurement(rows,"windows")

@@ -88,6 +88,8 @@ def analyze(events,manifest):
     if by_name["connection_stage_failed"]:errors.append("Connection failed; partial trace retained.")
     summary={"schema":"rhremote.statistics.analysis/v1","platform":manifest.get("platform"),"profile":manifest.get("profile"),"event_count":len(events),"frame_count":len(frames),"recorder_lost_events":lost,"warnings":errors,"startup":startup,"startup_spans":sorted(spans,key=lambda s:s["start_us"]),"frame_metrics":distributions,"cadence":frame_gaps,"missing_frame_numbers":missing,"frame_drops":sum("frame_drop" in f["events"] for f in frames.values()),"interpretation":{"Windows":"render_return measures CPU render/present submission return, not physical screen scanout.","Android":"surface_render_callback is callback arrival. surface_rendered is the framework-reported timestamp and can precede submission (e.g. a requested Choreographer timestamp). Neither measures physical scanout.","host":"host_processing_ms is a protocol aggregate. Capture/encode sub-stages require host instrumentation.","network":"packet_first is available for assembled frames; missing frame IDs do not identify the loss location."}}
     summary["connection_measurement"],summary["connection_phases"]=connection_measurement(events,manifest.get("platform"))
+    preparation=by_name["host_display_prepared"]
+    if preparation:summary["display_preparation"]=preparation[-1].get("fields",{})
     return summary,list(frames.values())
 
 def import_host(path,lo,hi):

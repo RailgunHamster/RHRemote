@@ -36,6 +36,7 @@ def windows(root):
         ("void Session::emitLaunchWarning(QString text)\n{", 'void Session::emitLaunchWarning(QString text)\n{\n    RhStatistics::Scope traceWarning("client_warning_display_wait");'),
         ("bool Session::startConnectionAsync()\n{",'bool Session::startConnectionAsync()\n{\n    RhStatistics::event("host_launch_prepare");'),
         ('    if(!displayMode.isEmpty()){', '    if(!displayMode.isEmpty()){\n        RhStatistics::Scope traceDisplayPrepare("host_display_prepare");'),
+        ('        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;', '        RhStatistics::event("host_display_prepared",-1,reply["result"].toObject()["timings"].toObject());\n        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;'),
         ('    m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);', '    {RhStatistics::Scope traceInput("client_input_initialize");\n    m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height); }'),
         ('void Session::clConnectionTerminated(int errorCode)\n{', 'void Session::clConnectionTerminated(int errorCode)\n{\n    RhStatistics::event("connection_terminated",-1,{{"code",errorCode}});'),
         ("    Session::clStageStarting,\n    nullptr,", '    Session::clStageStarting,\n    [](int stage){RhStatistics::event("connection_stage_end",-1,{{"stage",stage},{"name",QString::fromLocal8Bit(LiGetStageName(stage))}});},'),
