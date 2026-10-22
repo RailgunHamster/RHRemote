@@ -3,6 +3,8 @@ mod auth;
 #[cfg(windows)]
 mod console;
 mod displays;
+#[cfg(windows)]
+mod native_displays;
 mod runtime;
 #[cfg(windows)]
 mod service;

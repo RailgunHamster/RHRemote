@@ -19,6 +19,35 @@ fn wide(value: &std::ffi::OsStr) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
     value.encode_wide().chain(Some(0)).collect()
 }
+pub fn sync_input_desktop() -> Result<String, String> {
+    use windows::Win32::System::StationsAndDesktops::*;
+    unsafe {
+        let desktop = OpenInputDesktop(
+            DF_ALLOWOTHERACCOUNTHOOK,
+            false,
+            DESKTOP_ACCESS_FLAGS(0x10000000),
+        )
+        .map_err(|e| e.to_string())?;
+        let mut name = [0u16; 128];
+        let mut needed = 0;
+        let result = GetUserObjectInformationW(
+            HANDLE(desktop.0),
+            UOI_NAME,
+            Some(name.as_mut_ptr().cast()),
+            256,
+            Some(&mut needed),
+        )
+        .and_then(|_| SetThreadDesktop(desktop));
+        let _ = CloseDesktop(desktop);
+        result.map_err(|e| e.to_string())?;
+        Ok(String::from_utf16_lossy(
+            &name[..name
+                .iter()
+                .position(|n| *n == 0)
+                .ok_or("Invalid desktop name")?],
+        ))
+    }
+}
 pub fn helper(script: &Path, input: &Path, output: &Path) -> Result<(), String> {
     use windows::Win32::System::StationsAndDesktops::*;
     unsafe {

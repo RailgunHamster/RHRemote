@@ -37,6 +37,7 @@ pub fn install_helpers() -> Result<PathBuf, Box<dyn std::error::Error>> {
         .join("scripts/display.ps1"))
 }
 pub fn run(helper: &Path, request: Value) -> Result<Value, String> {
+    let started = std::time::Instant::now();
     if !helper.exists() {
         return Err("主机显示组件未安装".into());
     }
@@ -69,13 +70,14 @@ pub fn run(helper: &Path, request: Value) -> Result<Value, String> {
         if bytes.len() > 131072 {
             return Err("Display response too large".into());
         }
-        let value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let mut value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
         if value["ok"] == false {
             Err(value["error"]
                 .as_str()
                 .unwrap_or("Display action failed")
                 .into())
         } else {
+            value["timings"]["hostRequestMs"] = json!(started.elapsed().as_secs_f64() * 1000.0);
             Ok(value)
         }
     });
@@ -85,11 +87,45 @@ pub fn run(helper: &Path, request: Value) -> Result<Value, String> {
 }
 #[cfg(windows)]
 pub fn worker(input: &Path, output: &Path) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    let root = PathBuf::from(std::env::var_os("ProgramData").ok_or("ProgramData unavailable")?)
+        .join("RHRemoteHost");
+    if input.parent() != Some(root.as_path())
+        || output.parent() != Some(root.as_path())
+        || input == output
+    {
+        return Err("Display worker paths must remain in its protected data directory".into());
+    }
+    if fs::metadata(input).map_err(|e| e.to_string())?.len() > 4096 {
+        return Err("Display request too large".into());
+    }
+    let request: Value = serde_json::from_slice(&fs::read(input).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let fallback = match crate::native_displays::prepare(&request, &root) {
+        Ok(Some(mut result)) => {
+            result["timings"]["workerMs"] = json!(started.elapsed().as_secs_f64() * 1000.0);
+            return fs::write(
+                output,
+                serde_json::to_vec(&result).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string());
+        }
+        Ok(None) => "virtual_monitor_change_required".to_string(),
+        Err(error) => error,
+    };
     crate::console::helper(
         &install_helpers().map_err(|e| e.to_string())?,
         input,
         output,
+    )?;
+    let mut result: Value = serde_json::from_slice(&fs::read(output).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    result["timings"] = json!({"workerMs":started.elapsed().as_secs_f64()*1000.0,"path":"powershell","fallback":fallback});
+    fs::write(
+        output,
+        serde_json::to_vec(&result).map_err(|e| e.to_string())?,
     )
+    .map_err(|e| e.to_string())
 }
 #[cfg(windows)]
 pub fn capture_order() -> Result<Value, String> {
