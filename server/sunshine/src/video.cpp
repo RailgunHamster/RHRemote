@@ -1,3 +1,4 @@
+#include "rhremote_trace.h"
 /**
  * @file src/video.cpp
  * @brief Definitions for video.
@@ -1455,6 +1456,7 @@ namespace video {
    * @param config Configuration values to apply.
    */
   void reset_display(std::shared_ptr<platf::display_t> &disp, const platf::mem_type_e &type, const std::string &display_name, const config_t &config) {
+    rhremote::scope rh_scope("display_reset");
     // We try this twice, in case we still get an error on reinitialization
     for (int x = 0; x < 2; ++x) {
       disp.reset();
@@ -1911,6 +1913,7 @@ namespace video {
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
   int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    rhremote::scope rh_first_encode("first_encode", frame_nr == 1);
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
       return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
@@ -2346,6 +2349,7 @@ namespace video {
    * @return Constructed encode session object.
    */
   std::unique_ptr<encode_session_t> make_encode_session(platf::display_t *disp, const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::encode_device_t> encode_device) {
+    rhremote::scope rh_scope("encoder_create");
     if (dynamic_cast<platf::avcodec_encode_device_t *>(encode_device.get())) {
       auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
       return make_avcodec_encode_session(disp, encoder, config, width, height, std::move(avcodec_encode_device));
@@ -3037,6 +3041,7 @@ namespace video {
    * @brief Validate encoder before it is used.
    */
   bool validate_encoder(encoder_t &encoder, bool expect_failure) {
+    rhremote::scope rh_scope("encoder_validate");
     const auto output_name {display_device::map_output_name(config::video.output_name)};
     std::shared_ptr<platf::display_t> disp;
 
@@ -3150,13 +3155,9 @@ namespace video {
       auto test_yuv444 = [&](auto &flag_map, auto video_format) {
         const config_t config = {1920, 1080, 60, 6000, 1000, 1, 0, 1, video_format, 0, 1};
 
+        if (!flag_map[encoder_t::PASSED]) { return; }
         reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
-        if (!disp) {
-          return;
-        }
-        if (!flag_map[encoder_t::PASSED]) {
-          return;
-        }
+        if (!disp) { return; }
 
         auto encoder_codec_name = encoder.codec_from_config(config).name;
 
@@ -3170,13 +3171,9 @@ namespace video {
       auto test_yuv420_hdr = [&](auto &flag_map, auto video_format) {
         const config_t config = {1920, 1080, 60, 6000, 1000, 1, 0, 3, video_format, 1, 0};
 
+        if (!flag_map[encoder_t::PASSED]) { return; }
         reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
-        if (!disp) {
-          return;
-        }
-        if (!flag_map[encoder_t::PASSED]) {
-          return;
-        }
+        if (!disp) { return; }
 
         auto encoder_codec_name = encoder.codec_from_config(config).name;
 
@@ -3190,13 +3187,9 @@ namespace video {
       auto test_yuv444_hdr = [&](auto &flag_map, auto video_format) {
         const config_t config = {1920, 1080, 60, 6000, 1000, 1, 0, 3, video_format, 1, 1};
 
+        if (!flag_map[encoder_t::PASSED]) { return; }
         reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
-        if (!disp) {
-          return;
-        }
-        if (!flag_map[encoder_t::PASSED]) {
-          return;
-        }
+        if (!disp) { return; }
 
         auto encoder_codec_name = encoder.codec_from_config(config).name;
 
@@ -3235,6 +3228,7 @@ namespace video {
   }
 
   int probe_encoders() {
+    rhremote::scope rh_scope("encoder_probe");
     if (!allow_encoder_probing()) {
       // Error already logged
       return -1;
@@ -3243,7 +3237,9 @@ namespace video {
     auto encoder_list = encoders;
 
     // If we already have a good encoder, check to see if another probe is required
-    if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) && !platf::needs_encoder_reenumeration()) {
+    const bool topology_changed = platf::needs_encoder_reenumeration();
+    const bool explicit_software = chosen_encoder && chosen_encoder->name == "software" && config::video.encoder == "software";
+    if (chosen_encoder && (!(chosen_encoder->flags & ALWAYS_REPROBE) || explicit_software) && !topology_changed) {
       return 0;
     }
 

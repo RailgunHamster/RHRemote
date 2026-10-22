@@ -1,3 +1,4 @@
+#include "src/rhremote_trace.h"
 /**
  * @file src/platform/windows/display_base.cpp
  * @brief Definitions for the Windows display base code.
@@ -56,6 +57,7 @@ namespace platf::dxgi {
    * DDAPI-specific initialization goes here.
    */
   int duplication_t::init(display_base_t *display, const ::video::config_t &config) {
+    rhremote::scope rh_scope("dda_duplicate_output");
     HRESULT status;
 
     // Capture format will be determined from the first call to AcquireNextFrame()
@@ -448,7 +450,8 @@ namespace platf::dxgi {
   }
 
   int display_base_t::init(const ::video::config_t &config, const std::string &display_name) {
-    std::once_flag windows_cpp_once_flag;
+    rhremote::scope rh_scope("dda_device_init");
+    static std::once_flag windows_cpp_once_flag;
 
     std::call_once(windows_cpp_once_flag, []() {
       DECLARE_HANDLE(DPI_AWARENESS_CONTEXT);
