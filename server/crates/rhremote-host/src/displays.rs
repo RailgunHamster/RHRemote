@@ -147,9 +147,17 @@ pub fn capture_order() -> Result<Value, String> {
         let sync = SetThreadDesktop(desktop);
         let _ = CloseDesktop(desktop);
         sync.map_err(|e| e.to_string())?;
+        let capture_started = std::time::Instant::now();
         let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| e.to_string())?;
+        let factory_create_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
         let mut names = Vec::new();
         let mut diagnostics = Vec::new();
+        let (
+            mut device_create_ms,
+            mut device_release_ms,
+            mut output_probe_ms,
+            mut output_release_ms,
+        ) = (0.0, 0.0, 0.0, 0.0);
         let mut a = 0;
         while let Ok(adapter) = factory.EnumAdapters1(a) {
             a += 1;
@@ -188,19 +196,25 @@ pub fn capture_order() -> Result<Value, String> {
                 None,
                 None,
             );
+            let create_ms = started.elapsed().as_secs_f64() * 1000.0;
+            device_create_ms += create_ms;
             if let Err(error) = creation {
                 diagnostics
                     .push(json!({"adapter":a-1,"createDevice":format!("{:08x}",error.code().0),"createDeviceMs":started.elapsed().as_millis() as u64}));
                 continue;
             }
-            diagnostics.push(json!({"adapter":a-1,"attachedOutputs":outputs.len(),"createDeviceMs":started.elapsed().as_millis() as u64}));
+            let record = diagnostics.len();
+            diagnostics.push(json!({"adapter":a-1,"attachedOutputs":outputs.len(),"createDeviceMs":create_ms,"outputs":[]}));
             let Some(device) = device else { continue };
             for output in outputs {
                 let desc = output.GetDesc().map_err(|e| e.to_string())?;
                 let Ok(output1) = output.cast::<IDXGIOutput1>() else {
                     continue;
                 };
+                let probe_started = std::time::Instant::now();
                 let duplicate = output1.DuplicateOutput(&device);
+                let probe_ms = probe_started.elapsed().as_secs_f64() * 1000.0;
+                output_probe_ms += probe_ms;
                 if duplicate.is_ok() {
                     let count = desc
                         .DeviceName
@@ -208,12 +222,31 @@ pub fn capture_order() -> Result<Value, String> {
                         .position(|x| *x == 0)
                         .unwrap_or(desc.DeviceName.len());
                     names.push(String::from_utf16_lossy(&desc.DeviceName[..count]));
-                } else if let Err(error) = duplicate {
+                } else if let Err(error) = &duplicate {
                     diagnostics.push(json!({"adapter":a-1,"output":String::from_utf16_lossy(&desc.DeviceName).trim_end_matches('\0'),"duplicateOutput":format!("{:08x}",error.code().0)}));
                 }
+                let release_started = std::time::Instant::now();
+                drop(duplicate);
+                let release_ms = release_started.elapsed().as_secs_f64() * 1000.0;
+                output_release_ms += release_ms;
+                diagnostics[record]["outputs"].as_array_mut().unwrap().push(json!({"name":String::from_utf16_lossy(&desc.DeviceName).trim_end_matches('\0'),"probeMs":probe_ms,"releaseMs":release_ms}));
             }
+            let release_started = std::time::Instant::now();
+            drop(device);
+            let release_ms = release_started.elapsed().as_secs_f64() * 1000.0;
+            device_release_ms += release_ms;
+            diagnostics[record]["releaseDeviceMs"] = json!(release_ms);
         }
-        Ok(json!({"names":names,"diagnostics":diagnostics}))
+        let release_started = std::time::Instant::now();
+        drop(factory);
+        let factory_release_ms = release_started.elapsed().as_secs_f64() * 1000.0;
+        let total_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
+        Ok(json!({"names":names,"diagnostics":diagnostics,"timings":{
+            "factoryCreateMs":factory_create_ms,"factoryReleaseMs":factory_release_ms,
+            "deviceCreateMs":device_create_ms,"deviceReleaseMs":device_release_ms,
+            "outputProbeMs":output_probe_ms,"outputReleaseMs":output_release_ms,
+            "otherMs":(total_ms-factory_create_ms-factory_release_ms-device_create_ms-device_release_ms-output_probe_ms-output_release_ms).max(0.0),
+            "totalMs":total_ms}}))
     }
 }
 #[cfg(test)]

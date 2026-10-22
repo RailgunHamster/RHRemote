@@ -286,7 +286,7 @@ pub fn prepare(request: &Value, root: &Path) -> Result<Option<Value>, String> {
         .last()
         .unwrap_or("");
     Ok(Some(
-        json!({"ok":true,"schema":"rhremote.displays/v1","displays":displays,"selected":selected,"created":false,"captureDiagnostics":capture["diagnostics"],"inputDesktop":desktop,"initialCaptureIndex":if output.is_empty(){1}else{0},"timings":{"path":"native","queryMs":query_ms,"captureMs":capture_ms,"nativeMs":started.elapsed().as_secs_f64()*1000.0}}),
+        json!({"ok":true,"schema":"rhremote.displays/v1","displays":displays,"selected":selected,"created":false,"captureDiagnostics":capture["diagnostics"],"inputDesktop":desktop,"initialCaptureIndex":if output.is_empty(){1}else{0},"timings":{"path":"native","queryMs":query_ms,"captureMs":capture_ms,"captureBreakdown":capture["timings"],"nativeMs":started.elapsed().as_secs_f64()*1000.0}}),
     ))
 }
 
