@@ -5,8 +5,15 @@ on:
     paths:
       - 'server/sunshine/**'
       - 'server/UPSTREAM.json'
+      - 'server/crates/**'
+      - 'server/host/**'
       - '.gitmodules'
       - 'tools/build-server.ps1'
+      - 'tools/build-host.ps1'
+      - 'tools/assemble-server.ps1'
+      - 'tools/server-package.ps1'
+      - 'tools/install-server.ps1'
+      - 'tools/test-server-package.ps1'
       - '.github/workflows/server-windows.yml'
 permissions:
   contents: read
@@ -22,6 +29,15 @@ jobs:
       - name: Verify upstream pins
         shell: pwsh
         run: python tools/sync-sunshine-dependencies.py --check
+      - name: Build and test the unified Rust service
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.92.0 --profile minimal
+          if($LASTEXITCODE-ne0){throw 'Rust toolchain setup failed'}
+          cargo +1.92.0 test -p rhremote-host --locked -j4
+          if($LASTEXITCODE-ne0){throw 'Host service regressions failed'}
+          ./tools/test-server-package.ps1
+          ./tools/build-host.ps1 -Release
       - name: Fetch Windows source dependencies
         shell: bash
         run: |
@@ -56,12 +72,15 @@ jobs:
         run: |
           cmake -S server/sunshine -B .deps/server-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=OFF -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
           cmake --build .deps/server-build --target sunshine sunshinesvc dxgi-info audio-info web-ui --parallel 3
-          cmake --install .deps/server-build --prefix "$PWD/artifacts/server"
-          cp server/UPSTREAM.json server/sunshine/LICENSE artifacts/server/
+          cmake --install .deps/server-build --prefix "$PWD/.deps/server-stage"
+          cp server/UPSTREAM.json server/sunshine/LICENSE .deps/server-stage/
+      - name: Assemble one-service server package
+        shell: pwsh
+        run: ./tools/assemble-server.ps1 -SunshineDirectory .deps/server-stage -OutputDirectory artifacts/server -EngineCommit $env:GITHUB_SHA
       - name: Verify output and record provenance
         shell: pwsh
         run: |
-          foreach($file in @('sunshine.exe','tools/sunshinesvc.exe','assets/web/index.html')){
+          foreach($file in @('sunshine.exe','host/RHRemoteHost.exe','assets/web/index.html','server-package.json')){
             if(-not(Test-Path -LiteralPath (Join-Path artifacts/server $file))){throw "Incomplete output: $file"}
           }
           $product=(Get-Item artifacts/server/sunshine.exe).VersionInfo.ProductName

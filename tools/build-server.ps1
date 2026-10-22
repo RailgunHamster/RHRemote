@@ -9,7 +9,8 @@ param(
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 if(-not $BuildDirectory){$BuildDirectory=Join-Path $repo '.deps/server-build'}
-if(-not $OutputDirectory){$OutputDirectory=Join-Path $repo 'dist/server'}
+if(-not $OutputDirectory){$OutputDirectory=Join-Path $repo ('dist/server-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))}
+$stage=Join-Path $BuildDirectory ('stage-'+[guid]::NewGuid().ToString('N'))
 $cmake=Join-Path $MsysRoot 'ucrt64/bin/cmake.exe'
 if(-not(Test-Path -LiteralPath $cmake)){throw 'MSYS2 UCRT64 CMake is required; see server/README.md for dependencies.'}
 if($Version -notmatch '^\d+\.\d+\.\d+$' -or $Jobs-lt1){throw 'Expected a numeric version and a positive job count'}
@@ -43,12 +44,15 @@ try {
     if($LASTEXITCODE-ne0){throw 'RHRemote-Sunshine configuration failed'}
     & $cmake --build $BuildDirectory --target sunshine sunshinesvc dxgi-info audio-info web-ui --parallel $Jobs
     if($LASTEXITCODE-ne0){throw 'RHRemote-Sunshine build failed'}
-    & $cmake --install $BuildDirectory --prefix $OutputDirectory
+    & $cmake --install $BuildDirectory --prefix $stage
     if($LASTEXITCODE-ne0){throw 'RHRemote-Sunshine staging failed'}
     foreach($file in @('sunshine.exe','tools/sunshinesvc.exe','assets/web/index.html')){
-        if(-not(Test-Path -LiteralPath (Join-Path $OutputDirectory $file))){throw "Server output is incomplete: $file"}
+        if(-not(Test-Path -LiteralPath (Join-Path $stage $file))){throw "Server output is incomplete: $file"}
     }
-    Copy-Item -LiteralPath server/UPSTREAM.json,server/sunshine/LICENSE -Destination $OutputDirectory -Force
+    Copy-Item -LiteralPath server/UPSTREAM.json,server/sunshine/LICENSE -Destination $stage -Force
+    & (Join-Path $PSScriptRoot 'build-host.ps1') -Release
+    if($LASTEXITCODE-ne0){throw 'Unified Rust service build failed'}
+    & (Join-Path $PSScriptRoot 'assemble-server.ps1') -SunshineDirectory $stage -OutputDirectory $OutputDirectory -EngineCommit $env:COMMIT
     Get-FileHash -LiteralPath (Join-Path $OutputDirectory 'sunshine.exe') -Algorithm SHA256 | Select-Object Path,Hash
 } finally {
     foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}

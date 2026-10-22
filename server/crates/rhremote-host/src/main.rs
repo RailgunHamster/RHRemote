@@ -3,8 +3,11 @@ mod auth;
 #[cfg(windows)]
 mod console;
 mod displays;
+mod runtime;
 #[cfg(windows)]
 mod service;
+#[cfg(windows)]
+mod supervisor;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde_json::{Value, json};
 use std::{
@@ -103,6 +106,10 @@ fn handle(
         return Err("Client is no longer an enabled Sunshine peer".into());
     }
     let result = match (parts[0], parts[1]) {
+        #[cfg(windows)]
+        ("GET", "/v1/health") => Ok(
+            json!({"product":"RHRemote-Sunshine","serviceMode":if service::unified(){"unified"}else{"legacy"},"servicePid":std::process::id(),"sunshine":supervisor::health()}),
+        ),
         ("GET", "/v1/displays") => {
             let _guard = gate.lock().unwrap();
             displays::run(&helper, json!({"mode":"list"}))
@@ -150,29 +157,34 @@ fn handle(
     Ok(())
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = PathBuf::from(r"C:\Program Files\Sunshine\config");
-    let mut listen = "0.0.0.0:47995".to_owned();
-    let args: Vec<_> = std::env::args().skip(1).collect();
-    let args: Vec<_> = args.into_iter().filter(|v| v != "--service").collect();
-    for pair in args.chunks(2) {
-        if pair.len() != 2 {
-            return Err("Expected option value".into());
-        }
-        match pair[0].as_str() {
-            "--sunshine-config" => config = PathBuf::from(&pair[1]),
-            "--listen" => listen = pair[1].clone(),
-            _ => return Err("Unknown option".into()),
-        }
-    }
+    run_with_ready(|| {})
+}
+fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Error>> {
+    let options = runtime::parse(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    let config = options.config;
     let helper = displays::install_helpers()?;
     let clients = Arc::new(auth::SunshineClients::new(
         config.join("sunshine_state.json"),
     ));
-    let tls = Arc::new(tls(&config, clients.clone())?);
-    let listener = TcpListener::bind(listen)?;
+    let started = std::time::Instant::now();
+    let tls = loop {
+        match tls(&config, clients.clone()) {
+            Ok(tls) => break Arc::new(tls),
+            Err(_) if options.unified && started.elapsed() < Duration::from_secs(20) => {
+                #[cfg(windows)]
+                if service::STOP.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    let listener = TcpListener::bind(options.listen)?;
     let gate = Arc::new(Mutex::new(()));
     let active = Arc::new(AtomicUsize::new(0));
     listener.set_nonblocking(true)?;
+    on_ready();
     loop {
         #[cfg(windows)]
         if service::STOP.load(Ordering::SeqCst) {
@@ -231,6 +243,18 @@ fn main() {
     #[cfg(windows)]
     {
         let args: Vec<_> = std::env::args_os().collect();
+        if args.get(1).is_some_and(|v| v == "--terminate-sunshine") && args.len() == 3 {
+            let result = args[2]
+                .to_str()
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|pid| *pid > 0)
+                .ok_or("Invalid PID".to_string())
+                .and_then(supervisor::terminate_console);
+            if result.is_err() {
+                std::process::exit(1);
+            }
+            return;
+        }
         if args.get(1).is_some_and(|v| v == "--display-worker") && args.len() == 4 {
             if displays::worker(Path::new(&args[2]), Path::new(&args[3])).is_err() {
                 std::process::exit(1)
@@ -248,8 +272,8 @@ fn main() {
         }
     }
     #[cfg(windows)]
-    if std::env::args().any(|v| v == "--service") {
-        if service::dispatch().is_err() {
+    if std::env::args().any(|v| v == "--service" || v == "--sunshine-service") {
+        if service::dispatch(std::env::args().any(|v| v == "--sunshine-service")).is_err() {
             std::process::exit(1)
         }
         return;
