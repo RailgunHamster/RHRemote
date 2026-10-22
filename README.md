@@ -17,7 +17,7 @@ RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 *
 
 Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运行。Android 使用 arm64-v8a APK，包名为 `com.rhremote.client`，可与原版 Moonlight 并存。升级保留同一应用身份和签名，不要先卸载。
 
-当前开发版本 v0.2.2 是开发预览版。Android 暂用开发签名；Windows 尚无代码签名证书。连接成功不代表稳定 30 / 60 FPS 验收，首次连接的主机编码检测耗时仍在排查。
+当前开发版本 v0.2.3 是开发预览版。Android 暂用开发签名；Windows 尚无代码签名证书。连接成功不代表稳定 30 / 60 FPS 验收，首次连接的主机编码检测耗时仍在排查。
 
 开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制栏悬浮在串流窗口顶部，可收起为小开关；Android 顶部固定开关展开“操作 / 屏幕 / 声音”分类面板，按钮按宽度排列为两列或三列，长内容纵向滚动。每个操作都有对应动作接口。
 

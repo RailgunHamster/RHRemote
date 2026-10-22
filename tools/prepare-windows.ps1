@@ -50,6 +50,13 @@ Edit-Source 'app/gui/computermodel.h' {param($s)
 Edit-Source 'app/backend/nvcomputer.h' {param($s)
     return (Replace-Once $s '    // Ephemeral traits' "    // RHRemote: authenticated app list fetched during this engine process.`n    bool rhAppListFresh = false;`n    // Ephemeral traits")
 }
+Edit-Source 'app/cli/commandlineparser.cpp' {param($s)
+    $s="#include `"gui/rhcontrol.h`"`n"+$s
+    return (Replace-Once $s '        showMessage(message + "\n\n" + helpText(), Error);' @'
+        if(qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")){RhRuntime::status("error",message);exit(1);}
+        showMessage(message + "\n\n" + helpText(), Error);
+'@)
+}
 Edit-Source 'app/backend/computermanager.cpp' {param($s)
     $s=$s.Replace("`r`n","`n")
     $s=Replace-Once $s '                for (auto& address : m_Computer->uniqueAddresses()) {' @'
@@ -232,7 +239,7 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
             m_StreamConfig.streamingRemotely=(mode=="tailscale"||mode=="internet")?STREAM_CFG_REMOTE:mode=="lan"?STREAM_CFG_LOCAL:STREAM_CFG_AUTO;
         }
 '@
-    $s=[regex]::Replace($s,'bool Session::initialize\(\)\r?\n\{',"bool Session::initialize()`n{`n    m_RhDisplayPreparation=RhPreparation::start(m_Computer->activeAddress.address(),m_Computer->serverCert,m_Preferences->width,m_Preferences->height);")
+    $s=[regex]::Replace($s,'bool Session::initialize\(\)\r?\n\{',"bool Session::initialize()`n{`n    if(qEnvironmentVariable(`"RHREMOTE_PACKET_AUTO`")==`"1`")m_Preferences->packetSize=0;`n    m_RhDisplayPreparation=RhPreparation::start(m_Computer->activeAddress.address(),m_Computer->serverCert,m_Preferences->width,m_Preferences->height);")
     $s=Replace-Once $s '    if (!chooseDecoder(vds, window, videoFormat, width, height, frameRate, false, false, true, decoder)) {' @'
     RhStatistics::Scope traceProbe("client_decoder_probe");
     const auto key=std::make_tuple(window,int(vds),videoFormat,width,height,frameRate);

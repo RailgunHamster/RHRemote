@@ -76,7 +76,7 @@ try{
  if($SourceOnly){Write-Output "$Provider audited source mirror updated: $Commit";return}
  $notes=[IO.File]::ReadAllText((Join-Path $candidate 'RELEASE-NOTES.md'))
  $release=Api GET ('/releases/tags/'+$tag) $null -Allow404
- if(-not $release){$body=@{tag_name=$tag;target_commitish=$Commit;name=$releaseTitle;body=$notes;prerelease=$false};if($Provider -eq 'github'){$body.draft=$true;$body.target_commitish='main'};$release=Api POST '/releases' $body}
+ if(-not $release.id){$body=@{tag_name=$tag;target_commitish=$Commit;name=$releaseTitle;body=$notes;prerelease=$true};if($Provider -eq 'github'){$body.draft=$true;$body.target_commitish='main'};$release=Api POST '/releases' $body}
  if(-not $release.id){throw 'Release API did not return a release ID'}
  Add-Type -AssemblyName System.Net.Http
  $client=New-Object Net.Http.HttpClient;$client.Timeout=[TimeSpan]::FromMinutes(10)

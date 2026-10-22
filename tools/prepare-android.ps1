@@ -19,7 +19,7 @@ Edit-Source 'app/build.gradle' {
     param($s)
     $s=$s.Replace('applicationId "com.limelight"','applicationId "com.rhremote.client"').Replace('applicationId "com.limelight.root"','applicationId "com.rhremote.client.root"')
     $s=$s.Replace('applicationIdSuffix ".debug"','').Replace('applicationIdSuffix ".unofficial"','')
-    $s=$s.Replace('versionName "12.2"','versionName "0.2.2"').Replace('versionCode = 315','versionCode = 202')
+    $s=$s.Replace('versionName "12.2"','versionName "0.2.3"').Replace('versionCode = 315','versionCode = 203')
     $s=$s.Replace('"Moonlight (Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight (Root Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight"','"RHRemote-Moonlight"').Replace('"Moonlight (Root)"','"RHRemote-Moonlight"')
     # Build only the actual OPPO architecture; don't spend time building unused ABIs.
     $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters 'arm64-v8a' }")

@@ -1,4 +1,4 @@
-param([string]$Version='0.2.2',[switch]$ReleaseBuild,[string]$OutputDirectory='')
+param([string]$Version='0.2.3',[switch]$ReleaseBuild,[string]$OutputDirectory='')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $stage=Join-Path $repo ('dist/velopack-stage-'+[guid]::NewGuid().ToString('N'))

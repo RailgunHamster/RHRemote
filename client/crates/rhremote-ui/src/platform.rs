@@ -16,6 +16,18 @@ struct Recovery {
     policy: crate::recovery::Policy,
 }
 
+// The CLI rejects zero; it is an internal preference value for auto detection.
+fn packet_arguments(size:u32)->Vec<String>{
+    if size==0{Vec::new()}else{vec!["--packet-size".into(),size.to_string()]}
+}
+#[cfg(test)] mod packet_argument_tests {
+    #[test] fn automatic_packets_never_reach_the_cli_as_zero(){
+        assert!(super::packet_arguments(0).is_empty());
+        assert_eq!(super::packet_arguments(1024),vec!["--packet-size","1024"]);
+        assert_eq!(super::packet_arguments(1200),vec!["--packet-size","1200"]);
+    }
+}
+
 #[cfg(all(test, windows))]
 mod recovery_transport_tests {
     use super::*;
@@ -452,8 +464,6 @@ impl NativePlatform {
                 p["audioConfig"].as_str().unwrap_or("stereo"),
                 "--capture-system-keys",
                 p["captureSysKeys"].as_str().unwrap_or("fullscreen"),
-                "--packet-size",
-                &policy.packet_size.to_string(),
                 if p["reverseScroll"] == true {
                     "--reverse-scroll-direction"
                 } else {
@@ -486,6 +496,8 @@ impl NativePlatform {
                     "--no-touchscreen-trackpad"
                 },
             ])
+            .args(packet_arguments(policy.packet_size))
+            .env("RHREMOTE_PACKET_AUTO", if policy.packet_size==0{"1"}else{"0"})
             .env("RHREMOTE_NETWORK_MODE", &policy.network)
             .env("RHREMOTE_CONNECT_ADDRESS", address)
             .env("RHREMOTE_CONTROL_PORT", self.port.to_string())

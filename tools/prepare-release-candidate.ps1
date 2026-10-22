@@ -1,7 +1,7 @@
-param([Parameter(Mandatory)][string]$WindowsDirectory,[string]$Version='0.2.2')
+param([Parameter(Mandatory)][string]$WindowsDirectory,[string]$Version='0.2.3')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
-if($Version -ne '0.2.2'){throw 'Update application version metadata before preparing a different release'}
+if($Version -ne '0.2.3'){throw 'Update application version metadata before preparing a different release'}
 $out=Join-Path $repo ('dist/release-candidates/'+$Version+'-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $out|Out-Null
 $feed=Get-Content -LiteralPath (Join-Path $WindowsDirectory 'releases.win.json') -Raw|ConvertFrom-Json
@@ -12,10 +12,10 @@ if($package.Length -ne $feed.Assets[0].Size -or (Get-FileHash -LiteralPath $pack
 $apk=Get-Item -LiteralPath (Join-Path $repo "dist/android/RHRemote-v$Version.apk")
 $aapt='C:\Users\40608\AppData\Local\Android\Sdk\build-tools\37.0.0\aapt.exe'
 $badging=(& $aapt dump badging $apk.FullName)|Select-Object -First 1
-if($badging -notmatch "name='com.rhremote.client'.*versionCode='202'.*versionName='0.2.2'"){throw 'APK package/version metadata differs from candidate'}
+if($badging -notmatch "name='com.rhremote.client'.*versionCode='203'.*versionName='0.2.3'"){throw 'APK package/version metadata differs from candidate'}
 $apkName="RHRemote-Android-$Version-arm64-v8a.apk"
 Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $out $apkName)
-$android=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionCode=202;packageName='com.rhremote.client';tag="v$Version";fileName=$apkName;size=$apk.Length;sha256=(Get-FileHash -LiteralPath $apk.FullName -Algorithm SHA256).Hash.ToLowerInvariant();notes='Automatic LAN / Tailscale address selection, VPN packet sizing and paired network diagnostics.'}}
+$android=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionCode=203;packageName='com.rhremote.client';tag="v$Version";fileName=$apkName;size=$apk.Length;sha256=(Get-FileHash -LiteralPath $apk.FullName -Algorithm SHA256).Hash.ToLowerInvariant();notes='Automatic LAN / Tailscale address selection, VPN packet sizing and paired network diagnostics.'}}
 [IO.File]::WriteAllText((Join-Path $out 'releases.android.json'),($android|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
 
 # Archive the exact committed monorepo, including the maintained Sunshine tree.
