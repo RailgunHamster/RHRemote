@@ -159,6 +159,10 @@ pub struct State {
     pub status: String,
     pub streaming: bool,
     pub connecting: bool,
+    #[serde(skip)]
+    connect_in_flight: bool,
+    #[serde(skip)]
+    stream_epoch: u64,
     pub audio_enabled: bool,
     pub volume: u32,
     pub statistics: Value,
@@ -184,8 +188,14 @@ pub struct State {
     #[serde(skip)]
     installing_update: bool,
 }
+#[derive(Clone, Copy, Debug)]
+pub struct ActionTiming {
+    pub requested_at_us: u128,
+    pub queue_wait_us: u128,
+}
 pub trait Platform: Send + Sync {
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String>;
+    fn connection_requested(&self, _timing: Option<ActionTiming>) {}
 }
 pub struct Controller {
     state: Mutex<State>,
@@ -236,6 +246,8 @@ impl Controller {
                 status: String::new(),
                 streaming: false,
                 connecting: false,
+                connect_in_flight: false,
+                stream_epoch: 0,
                 audio_enabled: false,
                 volume: 100,
                 statistics: Value::Null,
@@ -298,7 +310,17 @@ impl Controller {
         s.revision += 1;
     }
     pub fn stream_state(&self, streaming: bool, statistics: Value) {
+        self.stream_state_for(self.stream_epoch(), streaming, statistics);
+    }
+    pub fn stream_epoch(&self) -> u64 {
+        self.state.lock().unwrap().stream_epoch
+    }
+    pub fn stream_state_for(&self, epoch: u64, streaming: bool, statistics: Value) {
         let mut s = self.state.lock().unwrap();
+        // A poll started before a new connection cannot erase its pending state.
+        if epoch != s.stream_epoch || s.connect_in_flight {
+            return;
+        }
         let was_connecting = s.connecting;
         if streaming && !s.streaming {
             s.status = String::new();
@@ -371,6 +393,9 @@ impl Controller {
         fs::rename(&temp, &self.storage).map_err(|e| e.to_string())
     }
     pub fn dispatch(&self, id: &str, args: Value) -> Value {
+        self.dispatch_timed(id, args, None)
+    }
+    pub fn dispatch_timed(&self, id: &str, args: Value, timing: Option<ActionTiming>) -> Value {
         if !catalog().as_array().unwrap().iter().any(|a| a["id"] == id) {
             return json!({"ok":false,"error":"unknown action","action":id});
         }
@@ -379,7 +404,7 @@ impl Controller {
         } else if id.starts_with("sync.") || id.starts_with("app.settings.") {
             self.dispatch_global(id, args)
         } else {
-            self.dispatch_inner(id, args)
+            self.dispatch_inner(id, args, timing)
         };
         let response = match result {
             Ok(value) => json!({"ok":true,"action":id,"result":value}),
@@ -390,7 +415,7 @@ impl Controller {
         s.revision += 1;
         response
     }
-    fn dispatch_inner(&self, id: &str, mut args: Value) -> Result<Value, String> {
+    fn dispatch_inner(&self, id: &str, mut args: Value, timing: Option<ActionTiming>) -> Result<Value, String> {
         let mut s = self.state.lock().unwrap();
         if s.sync_busy
             && matches!(
@@ -654,6 +679,13 @@ impl Controller {
                     args["device"] = serde_json::to_value(&d).unwrap();
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
+                    if id == "device.connect" {
+                        s.connecting = true;
+                        s.connect_in_flight = true;
+                        s.stream_epoch += 1;
+                        s.status = "正在连接…".into();
+                        s.revision += 1;
+                    }
                     if id == "device.pair" {
                         s.pair_attempt += 1;
                         args["attemptId"] = json!(s.pair_attempt);
@@ -680,9 +712,19 @@ impl Controller {
                     }
                 }
                 drop(s);
+                if id == "device.connect" {
+                    self.platform.connection_requested(timing);
+                }
                 let result = match self.platform.execute(id, &args) {
                     Ok(value) => value,
                     Err(error) => {
+                        if id == "device.connect" {
+                            let mut state = self.state.lock().unwrap();
+                            state.connect_in_flight = false;
+                            state.connecting = false;
+                            state.stream_epoch += 1;
+                            state.status = error.clone();
+                        }
                         if id == "device.pair" {
                             let mut state = self.state.lock().unwrap();
                             if args["attemptId"].as_u64() == Some(state.pair_attempt) {
@@ -726,6 +768,8 @@ impl Controller {
                         }
                     }
                     "device.connect" => {
+                        s.connect_in_flight = false;
+                        s.stream_epoch += 1;
                         s.status = "正在连接…".into();
                         s.show_stats = args["profile"]["statistics"].as_bool().unwrap_or(false);
                     }
@@ -1105,6 +1149,62 @@ mod tests {
         c.stream_state(false, Value::Null);
         assert_eq!(c.state()["status"], "No video traffic (-100)");
         let _ = fs::remove_file(&c.storage);
+    }
+    #[test]
+    fn connect_is_visible_during_start_and_stale_polls_cannot_enable_duplicate_requests() {
+        use std::sync::{atomic::{AtomicUsize, Ordering}, mpsc};
+        struct SlowConnect {
+            started: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+            calls: AtomicUsize,
+        }
+        impl Platform for SlowConnect {
+            fn execute(&self, action: &str, _: &Value) -> Result<Value, String> {
+                if action != "device.connect" {return Err("unused test action".into());}
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.started.send(()).unwrap();
+                self.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                Ok(json!({"accepted":true}))
+            }
+        }
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let transport = Arc::new(SlowConnect {started:started_tx,release:Mutex::new(release_rx),calls:AtomicUsize::new(0)});
+        let template = controller();
+        let devices:Vec<Device> = serde_json::from_value(template.state()["devices"].clone()).unwrap();
+        let file=template.storage.with_extension("concurrent.json");
+        let c=Controller::new("test",file,transport.clone()).unwrap();
+        c.replace_devices(devices);
+        let old_epoch=c.stream_epoch();
+        let worker=c.clone();
+        let start=std::thread::spawn(move || worker.dispatch("device.connect",json!({"uuid":"a"})));
+        started_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(c.state()["connecting"],true);
+        assert_eq!(c.state()["status"],"正在连接…");
+        c.stream_state_for(old_epoch,false,json!({"phase":"idle"}));
+        let pending_epoch=c.stream_epoch();
+        c.stream_state_for(pending_epoch,false,json!({"phase":"error","error":"stale failure"}));
+        assert_eq!(c.state()["connecting"],true);
+        assert_eq!(c.dispatch("device.connect",json!({"uuid":"a"}))["ok"],false);
+        assert_eq!(transport.calls.load(Ordering::SeqCst),1);
+        release_tx.send(()).unwrap();
+        assert_eq!(start.join().unwrap()["ok"],true);
+        // A poll captured during spawn may arrive after spawn returns.
+        c.stream_state_for(pending_epoch,false,json!({"phase":"idle"}));
+        assert_eq!(c.state()["connecting"],true);
+        c.stream_state(true,json!({"phase":"connected","firstFrame":true}));
+        assert_eq!(c.state()["connecting"],false);
+        let _=fs::remove_file(&c.storage);
+        let _=fs::remove_file(&template.storage);
+    }
+    #[test]
+    fn rejected_native_start_clears_pending_connection_and_displays_error() {
+        let c=controller();
+        let result=c.dispatch("device.connect",json!({"uuid":"a"}));
+        assert_eq!(result["ok"],false);
+        assert_eq!(c.state()["connecting"],false);
+        assert_eq!(c.state()["status"],"no transport in unit tests");
+        let _=fs::remove_file(&c.storage);
     }
     #[test]
     fn self_device_is_kept_editable_but_cannot_connect() {

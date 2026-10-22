@@ -695,6 +695,9 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    fn connection_requested(&self, timing: Option<rhremote_core::ActionTiming>) {
+        self.statistics.lock().unwrap().connection_requested(timing);
+    }
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String> {
         let _device_guard = if action.starts_with("devices.") || action == "device.add.submit" {
             Some(self.device_operation.lock().unwrap())

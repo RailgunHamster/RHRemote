@@ -14,12 +14,14 @@ Windows 的 render_return 只表示 CPU 渲染/Present 提交返回，不代表�
 
 时间轴和默认视区以当前 connect_action 为 0，明确标记首帧终点。分段表显示累计起止时间及本段耗时，合计与首帧指标一致；程序启动与连接前空闲不计入本次连接。原始 HTTP/初始化调用可能并行或嵌套，置于可展开明细，不能直接相加。已分析的报告可用 `analyze-statistics.py <目录> --refresh-report` 从报告内的事件刷新展示，不重新采集或恢复已删除的原始记录。
 
+Windows 的连接起点现在取按钮回调入队时间；直接 API 调用取分发器接收时间。新增 `connect_request_received`（来源及 UI 队列等待）和 `native_spawn_begin`，报告将操作排队和请求处理单列，避免把按钮等待排除在首帧耗时之外。请求立即进入 connecting 状态，启动中的旧轮询结果不能清除它或放行重复连接。
+
 2026-10-21 实测：Windows 1920×1080/30/HEVC，去掉桌面鼠标模式的 3.5 秒提示等待和 RHRemote 连接前 1.5 秒等待后，连接至首帧渲染提交返回从 16.397 秒降到 9.817 秒；这是后续连接对照，不是冷启动或稳定帧率验收。之后仍有约 6.4 秒等待主机首包。Sunshine 重启后首连曾用 36.949 秒重测编码能力，需继续定位主机初始化；不能把该耗时归咎于 UI。
 
 OPPO 实测记录 206 帧、零统计丢记录，连接至系统呈现回调到达 6.552 秒。独立的 winserver 控制台 FFmpeg 合成视频测试中，H.264 / HEVC 均成功编码 60 帧，但开始出帧前等待约 7.2 / 8.2 秒；该路径不使用 RHRemote、Moonlight 或桌面捕获，支持将剩余启动等待继续定位到主机 QSV 初始化。另两次设备/帧上下文实验失败，不把它们的时间当作有效编码性能结论。
 # Sunshine 服务端诊断构建
 
-`tools/prepare-sunshine.py` 固定 Sunshine `cb72dffa3233c5815cd5ba88f09f049dd679ba75`，默认生成带计时的行为对照版，`--optimized` 生成优化版。诊断版在 Sunshine 日志输出 `RHREMOTE_PHASE`，使用服务端单调时钟测量编码器探测、格式验证、采集重建、DDA 设备与 duplication 创建、编码器创建和首帧编码；不记录像素或声音。
+服务端源码现维护于 `server/sunshine`，官方基准记录在 `server/UPSTREAM.json`。此前验证的优化和 `RHREMOTE_PHASE` 计时已经作为独立提交保留；正式构建直接编译维护源码。`tools/prepare-sunshine.py` 仅保留作固定官方基准的历史 A/B 对照，不用于覆盖维护源码。服务端单调时钟测量编码器探测、格式验证、采集重建、DDA 设备与 duplication 创建、编码器创建和首帧编码；不记录像素或声音。
 
 `collect-statistics.ps1 -Platform windows -RunId <已结束的统计编号>` 可分析自动恢复之前的特定会话。服务端原生计时进入同一 timeline，服务端阶段耗时由单调时钟直接取得，跨机器对齐仍附带 SSH 估计误差。模拟中断结果和实际 Windows 解锁验收分别记录。
 

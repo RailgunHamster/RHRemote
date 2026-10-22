@@ -25,9 +25,9 @@ def connection_measurement(events,platform):
     endpoint="render_return" if platform=="windows" else "surface_render_callback"
     end=first(endpoint)
     measurement={"origin_event":"connect_action","origin_us":start,"endpoint_event":endpoint,"endpoint_us":end["ts_us"] if end else None,"endpoint_frame":end.get("frame") if end else None,"total_ms":round((end["ts_us"]-start)/1000,3) if end else None,"session_kind":"resume" if first("http_resume") else "launch" if first("http_launch") else "unknown","physical_scanout_measured":False}
-    labels={"connection_begin":"客户端连接准备","connection_ready":"串流协议握手","packet_first":"等待视频首包","decode_output":"首帧组帧及解码",endpoint:"首帧排队及渲染提交" if platform=="windows" else "首帧排队及系统回调"}
+    labels={"connect_request_received":"客户端操作排队","native_spawn_begin":"连接请求处理","connection_begin":"客户端连接准备","connection_ready":"串流协议握手","packet_first":"等待视频首包","decode_output":"首帧组帧及解码",endpoint:"首帧排队及渲染提交" if platform=="windows" else "首帧排队及系统回调"}
     phases=[];previous=origin
-    for name in ["connection_begin","connection_ready","packet_first","decode_output",endpoint]:
+    for name in ["connect_request_received","native_spawn_begin","connection_begin","connection_ready","packet_first","decode_output",endpoint]:
         point=first(name)
         if point is None or point["ts_us"]<previous["ts_us"]:continue
         phases.append({"name":("连接准备及协议握手" if name=="connection_ready" and previous is origin else labels[name]),"from":previous["event"],"to":name,"start_us":previous["ts_us"],"end_us":point["ts_us"],"start_ms":round((previous["ts_us"]-start)/1000,3),"end_ms":round((point["ts_us"]-start)/1000,3),"duration_ms":round((point["ts_us"]-previous["ts_us"])/1000,3)})
@@ -69,7 +69,7 @@ def analyze(events,manifest):
     app=[e for e in events if e["event"] in ["application_start","preferences_loaded","devices_restored","ui_created","ui_shown"]]
     if app and app[-1]["event"]=="ui_shown":startup["application_to_window_ms"]=round((app[-1]["ts_us"]-app[0]["ts_us"])/1000,3)
     if connect is not None:
-        for name in ["native_start","native_ui_ready","connection_begin","connection_ready","packet_first","decode_output","render_submit","render_return","surface_rendered","surface_render_callback"]:
+        for name in ["connect_request_received","native_spawn_begin","native_start","native_ui_ready","connection_begin","connection_ready","packet_first","decode_output","render_submit","render_return","surface_rendered","surface_render_callback"]:
             ts=[e["ts_us"] for e in by_name[name] if e["ts_us"]>=connect]
             if ts:startup[name+"_ms"] =round((min(ts)-connect)/1000,3)
     spans=[{"name":e["event"],"ms":round(e["dur_us"]/1000,3),"start_us":e["ts_us"]} for e in events if e.get("dur_us") and e.get("frame",-1)<0]

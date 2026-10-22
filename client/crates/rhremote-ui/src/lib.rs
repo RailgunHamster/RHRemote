@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
+mod devices;
 mod overlay;
 mod platform;
 mod recovery;
@@ -139,11 +140,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     toolbar.set_shortcut_ids(ui.get_shortcut_ids());
     native.statistics.lock().unwrap().mark("ui_created");
     let actions = controller.clone();
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, String)>(64);
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, String, u128, std::time::Instant)>(64);
     std::thread::spawn(move || {
-        for (id, arg) in receiver {
+        for (id, arg, requested_at_us, queued) in receiver {
             let args = args_for(&id, &arg, &actions.state());
-            let response = actions.dispatch(&id, args);
+            let response = actions.dispatch_timed(&id, args, Some(rhremote_core::ActionTiming{requested_at_us,queue_wait_us:queued.elapsed().as_micros()}));
             if response["ok"] != true {
                 actions.message(response["error"].as_str().unwrap_or("操作失败").into());
             }
@@ -151,9 +152,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let toolbar_sender = sender.clone();
     let toolbar_queue = controller.clone();
+    let toolbar_timing = native.clone();
     toolbar.global::<Commands>().on_trigger(move |id, arg| {
         if toolbar_sender
-            .try_send((id.to_string(), arg.to_string()))
+            .try_send((id.to_string(), arg.to_string(), toolbar_timing.statistics.lock().unwrap().now(), std::time::Instant::now()))
             .is_err()
         {
             toolbar_queue.message("操作队列已满".into());
@@ -167,9 +169,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
     let picker_sender = sender.clone();
     let picker_actions = controller.clone();
+    let picker_timing = native.clone();
     picker.global::<Commands>().on_trigger(move |id, arg| {
         if picker_sender
-            .try_send((id.to_string(), arg.to_string()))
+            .try_send((id.to_string(), arg.to_string(), picker_timing.statistics.lock().unwrap().now(), std::time::Instant::now()))
             .is_err()
         {
             picker_actions.message("操作队列已满".into());
@@ -195,8 +198,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     let queue = controller.clone();
+    let ui_timing = native.clone();
     ui.global::<Commands>().on_trigger(move |id, arg| {
-        if sender.try_send((id.to_string(), arg.to_string())).is_err() {
+        if sender.try_send((id.to_string(), arg.to_string(), ui_timing.statistics.lock().unwrap().now(), std::time::Instant::now())).is_err() {
             queue.message("操作队列已满，请稍后重试".into());
         }
     });
@@ -228,7 +232,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_settings_tab(state["settingsTab"].as_str().unwrap_or("updates").into());ui.set_sync_url(state["sync"]["url"].as_str().unwrap_or("").into());ui.set_sync_username(state["sync"]["username"].as_str().unwrap_or("").into());ui.set_sync_automatic(state["sync"]["automatic"]==true);ui.set_sync_interval_index(match state["sync"]["intervalMinutes"].as_u64().unwrap_or(5){15=>1,30=>2,60=>3,_=>0});ui.set_sync_has_password(state["sync"]["hasPassword"]==true);ui.set_sync_busy(state["syncBusy"]==true);ui.set_sync_conflicts(state["sync"]["conflicts"].as_array().map(|a|a.iter().filter_map(|v|v.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default().into());ui.set_sync_last(if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)>0{"已同步"}else{"尚未同步"}.into());
             ui.set_updates_managed(state["updates"]["managed"]==true);ui.set_updates_busy(state["updatesBusy"]==true);ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());ui.set_updates_pending(state["updates"]["pendingRestart"]==true);ui.set_update_version(state["updates"]["availableVersion"].as_str().unwrap_or("").into());ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
             let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|{let p:Profile=serde_json::from_value(state["saved"]["profiles"][d["uuid"].as_str().unwrap_or("")].clone()).unwrap_or_default();DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"● 已配对"}else{"待配对"}.into(),summary:format!("{} × {}  ·  {} 帧  ·  {} Mbps",p.width,p.height,p.fps,p.bitrate_mbps).into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}}).collect();
-            ui.set_selected_name(devices.iter().find(|d|d["uuid"]==selected).and_then(|d|d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str())).unwrap_or("").into());ui.set_draft_display_name(state["draftDisplayName"].as_str().unwrap_or("").into());ui.set_devices(ModelRc::new(VecModel::from(rows)));
+            ui.set_selected_name(devices.iter().find(|d|d["uuid"]==selected).and_then(|d|d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str())).unwrap_or("").into());ui.set_draft_display_name(state["draftDisplayName"].as_str().unwrap_or("").into());devices::update_devices(&ui,rows);
             let client_id=state["saved"]["clientId"].as_str().unwrap_or("");
             ui.set_profile_tab(state["profileTab"].as_str().unwrap_or("video").into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);
@@ -296,10 +300,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some((attempt, device, error)) = transport.pairing_result() {
                 poll.pairing_complete(attempt, device, error);
             }
+            let epoch = poll.stream_epoch();
             if let Ok(value) = transport.state() {
-                poll.stream_state(value["streaming"] == true, value);
+                poll.stream_state_for(epoch, value["streaming"] == true, value);
             } else {
-                poll.stream_state(false, Value::Null);
+                poll.stream_state_for(epoch, false, Value::Null);
             }
             std::thread::sleep(Duration::from_millis(250));
         }

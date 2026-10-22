@@ -9,6 +9,13 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def test_ui_queue_time_is_part_of_connection_total(self):
+        rows=[e("connect_action",0),e("connect_request_received",620_000),e("native_spawn_begin",625_000),e("connection_begin",1_000_000),e("render_return",2_000_000,1)]
+        measurement,phases=a.connection_measurement(rows,"windows")
+        self.assertEqual(measurement["total_ms"],2000)
+        self.assertEqual(phases[0]["duration_ms"],620)
+        self.assertEqual(phases[0]["name"],"客户端操作排队")
+        self.assertEqual(sum(phase["duration_ms"] for phase in phases),2000)
     def test_refresh_reimports_host_evidence_after_raw_traces_were_deleted(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);stamp=1_792_627_200_000_000

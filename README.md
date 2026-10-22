@@ -42,6 +42,8 @@ Windows 对已经显示过首帧的意外中断自动恢复，最多连续尝试
 
 产品按钮与本地 HTTP API 使用同一个操作分发器，见 [API 与同步协议](design/API.md)。测试模式记录连接各阶段及逐帧元数据，见 [Statistics](design/STATISTICS.md)。诊断数据、真实设备快照、账号、配对证书、私钥与令牌不属于源码或发布包。
 
+Sunshine 官方更新使用 `tools/update-sunshine.ps1 -Ref <官方 tag 或 commit>`，随后审查冲突、同步依赖并构建验证。已有启动修复和品牌调整是官方基准之后的普通提交；脚本不覆盖本地改动。完整说明及本地构建命令见 [server/README.md](server/README.md)。源码整合不会自动替换已安装服务；当前 RHRemoteHost 的独立运行方式仍兼容。
+
 ## 许可
 
 基于 Moonlight Qt、Moonlight Android、Sunshine 及其依赖，保留原有版权、NOTICE 和各组件许可证。Sunshine 的官方基准记录在 `server/UPSTREAM.json`，原始许可和 NOTICE 留在 `server/sunshine/`。客户端许可见 [LICENSE](LICENSE)。本项目不代表 Moonlight 或 Sunshine 官方构建。

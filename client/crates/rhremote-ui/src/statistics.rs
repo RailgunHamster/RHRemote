@@ -13,10 +13,29 @@ pub struct Statistics {
     app: Vec<Value>,
     clock: Instant,
     origin: u128,
+    pending_connect: Option<u128>,
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn connection_origin_includes_ui_queue_time() {
+        let data=std::env::temp_dir().join(format!("rhremote-origin-{}",rhremote_core::random_token().unwrap()));
+        let mut s=Statistics::new(&data);
+        s.enabled=true;
+        let requested=s.now()-10_000;
+        s.connection_requested(Some(rhremote_core::ActionTiming{requested_at_us:requested,queue_wait_us:9_000}));
+        let trace=s.session(&json!({})).unwrap().unwrap();
+        let rows:Vec<Value>=fs::read_to_string(trace.parent().unwrap().join("ui.jsonl")).unwrap().lines().map(|line|serde_json::from_str(line).unwrap()).collect();
+        let origin=rows.iter().find(|row|row["event"]=="connect_action").unwrap();
+        assert_eq!(origin["ts_us"].as_u64().unwrap() as u128,requested);
+        let accepted=rows.iter().find(|row|row["event"]=="connect_request_received").unwrap();
+        assert_eq!(accepted["fields"]["source"],"ui");
+        assert_eq!(accepted["fields"]["queue_wait_us"],9_000);
+        assert!(rows.iter().any(|row|row["event"]=="native_spawn_begin"));
+        assert_eq!(data.parent(),Some(std::env::temp_dir().as_path()));
+        fs::remove_dir_all(data).unwrap();
+    }
     #[test]
     fn cleanup_keeps_active_and_explicitly_retained_runs() {
         let data = std::env::temp_dir().join(format!(
@@ -54,12 +73,21 @@ impl Statistics {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_micros(),
+            pending_connect: None,
         };
         s.mark("application_start");
         s
     }
-    fn now(&self) -> u128 {
+    pub fn now(&self) -> u128 {
         self.origin + self.clock.elapsed().as_micros()
+    }
+    pub fn connection_requested(&mut self, timing: Option<rhremote_core::ActionTiming>) {
+        let now = self.now();
+        let origin = timing.map(|t| t.requested_at_us).filter(|t| *t<=now).unwrap_or(now);
+        self.pending_connect = Some(origin);
+        // Only startup and connection admission metadata are stored here; never action arguments.
+        self.app.retain(|row| !matches!(row["event"].as_str(),Some("connect_request_received")));
+        self.app.push(json!({"event":"connect_request_received","ts_us":now,"frame":-1,"thread":"rust-ui","fields":{"source":if timing.is_some(){"ui"}else{"api"},"queue_wait_us":timing.map(|t|t.queue_wait_us).unwrap_or(0)}}));
     }
     pub fn mark(&mut self, event: &str) {
         self.app.push(
@@ -92,7 +120,9 @@ impl Statistics {
         let dir = self.root.join(id);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let mut rows = self.app.clone();
-        rows.push(json!({"event":"connect_action","ts_us":self.now(),"frame":-1,"thread":"rust-ui","fields":{}}));
+        let requested = self.pending_connect.take().unwrap_or_else(||self.now());
+        rows.push(json!({"event":"connect_action","ts_us":requested,"frame":-1,"thread":"rust-ui","fields":{}}));
+        rows.push(json!({"event":"native_spawn_begin","ts_us":self.now(),"frame":-1,"thread":"rust-ui","fields":{}}));
         let mut text = rows
             .into_iter()
             .map(|v| v.to_string())

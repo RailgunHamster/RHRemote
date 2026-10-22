@@ -33,7 +33,7 @@ def configuration(root):
         dependencies.append(dict(path=relative, repository=url, revision=links[path]))
     result = io.StringIO()
     existing.write(result, space_around_delimiters=True)
-    return result.getvalue(), dependencies
+    return result.getvalue().rstrip()+"\n", dependencies
 
 def main():
     parser = argparse.ArgumentParser()

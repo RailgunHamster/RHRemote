@@ -1,4 +1,4 @@
-param([int]$Port=48751,[string]$DataDir='D:\RHRemoteTools\rust-client-state',[switch]$ApiOnlyInputTest,[switch]$TestMode)
+param([int]$Port=48751,[string]$DataDir='D:\RHRemoteTools\rust-client-state',[switch]$ApiOnlyInputTest,[switch]$TestMode,[string]$DisplayOrigin='0,0',[string]$UiPosition='80,80')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $exe=Join-Path $repo 'dist/windows-rust/RHRemote.exe'
@@ -6,7 +6,8 @@ if(Get-Process RHRemote -ErrorAction SilentlyContinue|Where-Object {$_.Path -eq 
 $secret='D:\RHRemoteTools\secrets\rhremote-control-token.txt'
 New-Item -ItemType Directory -Force -Path (Split-Path $secret -Parent)|Out-Null
 if(-not(Test-Path -LiteralPath $secret)){$bytes=New-Object byte[] 32;[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes);[IO.File]::WriteAllText($secret,([BitConverter]::ToString($bytes).Replace('-','').ToLowerInvariant()))}
-$values=@{RHREMOTE_CONTROL_PORT="$Port";RHREMOTE_CONTROL_TOKEN=[IO.File]::ReadAllText($secret).Trim();RHREMOTE_DATA_DIR=$DataDir;RHREMOTE_NATIVE_ENGINE=(Join-Path $repo 'dist/windows/RHRemote.exe');RHREMOTE_UI_SCREEN='secondary';RHREMOTE_UI_POSITION='-3750,80';RHREMOTE_CLIENT_DISPLAY_ORIGIN='-3840,0'}
+if($DisplayOrigin-notmatch'^-?\d+,-?\d+$' -or $UiPosition-notmatch'^-?\d+,-?\d+$'){throw 'Expected x,y display/window coordinates'}
+$values=@{RHREMOTE_CONTROL_PORT="$Port";RHREMOTE_CONTROL_TOKEN=[IO.File]::ReadAllText($secret).Trim();RHREMOTE_DATA_DIR=$DataDir;RHREMOTE_NATIVE_ENGINE=(Join-Path $repo 'dist/windows/RHRemote.exe');RHREMOTE_UI_SCREEN='primary';RHREMOTE_UI_POSITION=$UiPosition;RHREMOTE_CLIENT_DISPLAY_ORIGIN=$DisplayOrigin}
 if($ApiOnlyInputTest){$values.RHREMOTE_BENCHMARK_NO_INPUT='1';$values.RHREMOTE_DECODED_SNAPSHOT=(Join-Path $DataDir 'decoded-test.png')}
 if($ApiOnlyInputTest -or $TestMode){$values.RHREMOTE_TEST_MODE='1'}
 $previous=@{}

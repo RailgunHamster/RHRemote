@@ -21,5 +21,7 @@ fn main() {
             .manifest_optional()
             .expect("embed RHRemote icon");
     }
-    slint_build::compile("ui/app.slint").expect("compile RHRemote UI");
+    let config = slint_build::CompilerConfiguration::new()
+        .with_debug_info(std::env::var("PROFILE").as_deref() != Ok("release"));
+    slint_build::compile_with_config("ui/app.slint", config).expect("compile RHRemote UI");
 }
