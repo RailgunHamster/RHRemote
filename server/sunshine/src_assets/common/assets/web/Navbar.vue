@@ -2,8 +2,9 @@
   <div>
     <nav class="navbar navbar-expand-lg navbar-sunshine">
       <div class="container-fluid">
-        <a class="navbar-brand" href="./" title="Sunshine">
+        <a class="navbar-brand d-flex align-items-center gap-2" href="./" title="RHRemote-Sunshine · Based on LizardByte/Sunshine">
           <img src="/images/logo-sunshine-45.png" height="45" alt="Sunshine">
+          <span class="fs-6">RHRemote-Sunshine</span>
         </a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
                 aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">

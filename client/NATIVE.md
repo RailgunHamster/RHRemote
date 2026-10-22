@@ -1,6 +1,6 @@
 # RHRemote 原生客户端
 
-界面按用户确认的 v2（RHVideo 配色、专注连接布局）实现。服务端使用现有 Sunshine。
+客户端显示名称为 RHRemote-Moonlight，界面按用户确认的 v2（RHVideo 配色、专注连接布局）实现。服务端 RHRemote-Sunshine 的源码及构建见 `server/`。
 
 | 平台 | 原生界面 / 串流 | 固定上游 |
 | --- | --- | --- |
@@ -18,9 +18,9 @@
 
 Windows 使用已安装的 Qt 6.7.2 / MSVC 与已有客户端依赖，源码位置默认 `D:\RHRemoteTools\moonlight-qt-v6.1-source`。现有串流实验改动保留，实验开关继续默认关闭。Android 使用 Gradle 9.7.1 / Android SDK 37 / NDK 29，源码默认 `D:\RHRemoteTools\moonlight-android-v12.2-source`。Gradle 使用用户已经配置的 Windows HTTPS 代理下载公开依赖，不改变系统代理设置。
 
-Windows 需要 Rust 1.92.0。首次准备原生源码时，按 `client/README.md` 应用基础引擎补丁，再运行准备与构建脚本；上游子模块、Qt 和媒体库沿用固定版本。`client/crates/rhremote-ui` 是当前界面，旧 Qt 页面只是原生适配器中的遗留入口。
+Windows 需要 Rust 1.92.0。首次准备原生源码时，按本目录的 `README.md` 应用基础引擎补丁，再运行准备与构建脚本；上游子模块、Qt 和媒体库沿用固定版本。`client/crates/rhremote-ui` 是当前界面，旧 Qt 页面只是原生适配器中的遗留入口。
 
-输出为 `dist/windows-rust/RHRemote.exe`、原生适配器 `dist/windows/RHRemote.exe` 与 `dist/android/RHRemote-v0.2.0.apk`。Windows 候选包由 `tools/package-windows-velopack.ps1` 生成，只收集显式运行库，排除配对配置、缓存、令牌和日志。原生适配器状态保存在用户数据目录，更新不会覆盖它。
+输出为 `dist/windows-rust/RHRemote.exe`、原生适配器 `dist/windows/RHRemote.exe` 与 `dist/android/RHRemote-v0.2.1.apk`。Windows 候选包由 `tools/package-windows-velopack.ps1` 生成，只收集显式运行库，排除配对配置、缓存、令牌和日志。原生适配器状态保存在用户数据目录，更新不会覆盖它。
 
 Android 构建 arm64-v8a，应用标识 `com.rhremote.client`，与原版 Moonlight 并存。当前使用本机调试签名的开发版本；尚未作为正式生产签名分发。后续设备更新应保留同一签名，不卸载应用以免丢失其配对。
 

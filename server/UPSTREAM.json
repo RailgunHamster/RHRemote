@@ -1,0 +1,94 @@
+{
+  "product": "RHRemote-Sunshine",
+  "repository": "https://github.com/LizardByte/Sunshine.git",
+  "revision": "cb72dffa3233c5815cd5ba88f09f049dd679ba75",
+  "license": "GPL-3.0-only",
+  "source": "sunshine",
+  "dependencies": [
+    {
+      "path": "packaging/linux/flatpak/deps/flatpak-builder-tools",
+      "repository": "https://github.com/flatpak/flatpak-builder-tools.git",
+      "revision": "1fc32195e3e60fe5c97f0af646dec7a99df5962b"
+    },
+    {
+      "path": "third-party/build-deps",
+      "repository": "https://github.com/LizardByte/build-deps.git",
+      "revision": "a9a9277cdafe8a0ff9f197915fe43b383ed4f36b"
+    },
+    {
+      "path": "third-party/doxyconfig",
+      "repository": "https://github.com/LizardByte/doxyconfig.git",
+      "revision": "b87f7e4e1dcd8a31c9a550cd7702b7420d89efac"
+    },
+    {
+      "path": "third-party/glad",
+      "repository": "https://github.com/Dav1dde/glad.git",
+      "revision": "73db193f853e2ee079bf3ca8a64aa2eaf6459043"
+    },
+    {
+      "path": "third-party/libdisplaydevice",
+      "repository": "https://github.com/LizardByte/libdisplaydevice.git",
+      "revision": "6e9722f89103320c948dc1199066c9e17a69e88a"
+    },
+    {
+      "path": "third-party/libvirtualhid",
+      "repository": "https://github.com/LizardByte/libvirtualhid.git",
+      "revision": "6fdb8bd4de3b68d96c30e5303ac2ebb333c09746"
+    },
+    {
+      "path": "third-party/lizardbyte-common",
+      "repository": "https://github.com/LizardByte/lizardbyte-common.git",
+      "revision": "f9d91e1d29b7473f58e43acde4579da4e56c4abe"
+    },
+    {
+      "path": "third-party/moonlight-common-c",
+      "repository": "https://github.com/moonlight-stream/moonlight-common-c.git",
+      "revision": "874ac9548f1bd6f095ef2b435c42cdde460e7821"
+    },
+    {
+      "path": "third-party/nvapi",
+      "repository": "https://github.com/NVIDIA/nvapi.git",
+      "revision": "cd6918f60b3c9a0476fdfe7e89bb32330602049d"
+    },
+    {
+      "path": "third-party/plasma-wayland-protocols",
+      "repository": "https://github.com/KDE/plasma-wayland-protocols.git",
+      "revision": "4c015e90ae6c88f2ffa766e899387ef431eade49"
+    },
+    {
+      "path": "third-party/Simple-Web-Server",
+      "repository": "https://github.com/LizardByte-infrastructure/Simple-Web-Server.git",
+      "revision": "546895a93a29062bb178367b46c7afb72da9881e"
+    },
+    {
+      "path": "third-party/TPCircularBuffer",
+      "repository": "https://github.com/michaeltyson/TPCircularBuffer.git",
+      "revision": "cc520397504bb72bc6df79ff03eb72988a6dc50d"
+    },
+    {
+      "path": "third-party/tray",
+      "repository": "https://github.com/LizardByte/tray.git",
+      "revision": "c329d9fd0d39dfb47f0f2fb5467e1db2e8a1d623"
+    },
+    {
+      "path": "third-party/ViGEmClient",
+      "repository": "https://github.com/LizardByte/Virtual-Gamepad-Emulation-Client.git",
+      "revision": "8d71f6740ffff4671cdadbca255ce528e3cd3fef"
+    },
+    {
+      "path": "third-party/wayland-protocols",
+      "repository": "https://github.com/LizardByte-infrastructure/wayland-protocols.git",
+      "revision": "ee78491a237eaff9389a0ccf8680521d074407d3"
+    },
+    {
+      "path": "third-party/wlr-protocols",
+      "repository": "https://github.com/LizardByte-infrastructure/wlr-protocols.git",
+      "revision": "bf4fc79abc359eea5a0edec0ac6d4a2b2955f82a"
+    }
+  ],
+  "integration": {
+    "method": "git-subtree",
+    "prefix": "server/sunshine",
+    "history": "squash"
+  }
+}

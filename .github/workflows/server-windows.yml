@@ -1,0 +1,75 @@
+name: RHRemote-Sunshine Windows
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'server/sunshine/**'
+      - 'server/UPSTREAM.json'
+      - '.gitmodules'
+      - 'tools/build-server.ps1'
+      - '.github/workflows/server-windows.yml'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Verify upstream pins
+        shell: pwsh
+        run: python tools/sync-sunshine-dependencies.py --check
+      - name: Fetch Windows source dependencies
+        shell: bash
+        run: |
+          git submodule update --init --depth 1 -- server/sunshine/third-party/build-deps server/sunshine/third-party/libdisplaydevice server/sunshine/third-party/libvirtualhid server/sunshine/third-party/lizardbyte-common server/sunshine/third-party/moonlight-common-c server/sunshine/third-party/nvapi server/sunshine/third-party/Simple-Web-Server server/sunshine/third-party/ViGEmClient
+          git -C server/sunshine/third-party/moonlight-common-c submodule update --init --recursive --depth 1
+          git -C server/sunshine/third-party/libvirtualhid submodule update --init --recursive --depth 1
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+        with:
+          msystem: ucrt64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-MinHook
+      - name: Build maintained server, service and web UI
+        shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
+          BRANCH: main
+          BUILD_VERSION: 0.2.1
+          COMMIT: ${{ github.sha }}
+        run: |
+          cmake -S server/sunshine -B .deps/server-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=OFF -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
+          cmake --build .deps/server-build --target sunshine sunshinesvc dxgi-info audio-info web-ui --parallel 3
+          cmake --install .deps/server-build --prefix "$PWD/artifacts/server"
+          cp server/UPSTREAM.json server/sunshine/LICENSE artifacts/server/
+      - name: Verify output and record provenance
+        shell: pwsh
+        run: |
+          foreach($file in @('sunshine.exe','tools/sunshinesvc.exe','assets/web/index.html')){
+            if(-not(Test-Path -LiteralPath (Join-Path artifacts/server $file))){throw "Incomplete output: $file"}
+          }
+          $product=(Get-Item artifacts/server/sunshine.exe).VersionInfo.ProductName
+          if($product-ne'RHRemote-Sunshine'){throw "Unexpected server branding: $product"}
+          @{commit=$env:GITHUB_SHA;upstream=(Get-Content server/UPSTREAM.json -Raw|ConvertFrom-Json).revision;product=$product} | ConvertTo-Json | Set-Content artifacts/provenance.json
+          Get-ChildItem artifacts/server -Recurse -Filter *.exe | Get-FileHash -Algorithm SHA256 | Select-Object Path,Hash | ConvertTo-Json | Set-Content artifacts/hashes.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: RHRemote-Sunshine-windows-x64
+          path: artifacts/
+          retention-days: 7

@@ -1,0 +1,64 @@
+[submodule "sunshine/packaging/linux/flatpak/deps/flatpak-builder-tools"]
+path = server/sunshine/packaging/linux/flatpak/deps/flatpak-builder-tools
+url = https://github.com/flatpak/flatpak-builder-tools.git
+
+[submodule "sunshine/third-party/build-deps"]
+path = server/sunshine/third-party/build-deps
+url = https://github.com/LizardByte/build-deps.git
+
+[submodule "sunshine/third-party/doxyconfig"]
+path = server/sunshine/third-party/doxyconfig
+url = https://github.com/LizardByte/doxyconfig.git
+
+[submodule "sunshine/third-party/glad"]
+path = server/sunshine/third-party/glad
+url = https://github.com/Dav1dde/glad.git
+
+[submodule "sunshine/third-party/libdisplaydevice"]
+path = server/sunshine/third-party/libdisplaydevice
+url = https://github.com/LizardByte/libdisplaydevice.git
+
+[submodule "sunshine/third-party/libvirtualhid"]
+path = server/sunshine/third-party/libvirtualhid
+url = https://github.com/LizardByte/libvirtualhid.git
+
+[submodule "sunshine/third-party/lizardbyte-common"]
+path = server/sunshine/third-party/lizardbyte-common
+url = https://github.com/LizardByte/lizardbyte-common.git
+
+[submodule "sunshine/third-party/moonlight-common-c"]
+path = server/sunshine/third-party/moonlight-common-c
+url = https://github.com/moonlight-stream/moonlight-common-c.git
+
+[submodule "sunshine/third-party/nvapi"]
+path = server/sunshine/third-party/nvapi
+url = https://github.com/NVIDIA/nvapi.git
+
+[submodule "sunshine/third-party/plasma-wayland-protocols"]
+path = server/sunshine/third-party/plasma-wayland-protocols
+url = https://github.com/KDE/plasma-wayland-protocols.git
+
+[submodule "sunshine/third-party/Simple-Web-Server"]
+path = server/sunshine/third-party/Simple-Web-Server
+url = https://github.com/LizardByte-infrastructure/Simple-Web-Server.git
+
+[submodule "sunshine/third-party/TPCircularBuffer"]
+path = server/sunshine/third-party/TPCircularBuffer
+url = https://github.com/michaeltyson/TPCircularBuffer.git
+
+[submodule "sunshine/third-party/tray"]
+path = server/sunshine/third-party/tray
+url = https://github.com/LizardByte/tray.git
+
+[submodule "sunshine/third-party/ViGEmClient"]
+path = server/sunshine/third-party/ViGEmClient
+url = https://github.com/LizardByte/Virtual-Gamepad-Emulation-Client.git
+
+[submodule "sunshine/third-party/wayland-protocols"]
+path = server/sunshine/third-party/wayland-protocols
+url = https://github.com/LizardByte-infrastructure/wayland-protocols.git
+
+[submodule "sunshine/third-party/wlr-protocols"]
+path = server/sunshine/third-party/wlr-protocols
+url = https://github.com/LizardByte-infrastructure/wlr-protocols.git
+

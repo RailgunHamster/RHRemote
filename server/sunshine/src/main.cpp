@@ -26,6 +26,7 @@
 #include "main.h"
 #include "nvhttp.h"
 #include "process.h"
+#include "rhremote_brand.h"
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
@@ -215,7 +216,8 @@ int main(int argc, char *argv[]) {
   // logging can begin at this point
   // if anything is logged prior to this point, it will appear in stdout, but not in the log viewer in the UI
   // the version should be printed to the log before anything else
-  BOOST_LOG(info) << PROJECT_NAME << " version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
+  BOOST_LOG(info) << rhremote::product_name << " version: " << PROJECT_VERSION << " commit: " << PROJECT_VERSION_COMMIT;
+  BOOST_LOG(info) << "Based on LizardByte/Sunshine; upstream revision is recorded in server/UPSTREAM.json";
 
   // Log publisher metadata
   log_publisher_data();
