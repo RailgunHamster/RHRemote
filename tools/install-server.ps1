@@ -77,12 +77,18 @@ $conf=Join-Path $SunshineConfig 'sunshine.conf'
 if(Test-Path -LiteralPath $conf){foreach($line in [IO.File]::ReadAllLines($conf)){if($line-match'^\s*port\s*=\s*(\d+)\s*$'){$basePort=[int]$matches[1]}}}
 if($basePort-lt1024-or$basePort-gt65514){throw 'Unsupported Sunshine port range'}
 $serverInfo='http://127.0.0.1:'+$basePort+'/serverinfo?uniqueid=0123456789ABCDEF'
+function Read-Identity {
+    $response=Invoke-WebRequest -UseBasicParsing -Uri $serverInfo -TimeoutSec 2
+    $text=if($response.Content-is[byte[]]){[Text.Encoding]::UTF8.GetString($response.Content)}else{[string]$response.Content}
+    $document=[xml]$text
+    [string]$document.root.uniqueid
+}
 $psi=New-Object Diagnostics.ProcessStartInfo (Join-Path $source 'sunshine.exe');$psi.Arguments='--version';$psi.WorkingDirectory=$source;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
 $preflight=[Diagnostics.Process]::Start($psi);$stdout=$preflight.StandardOutput.ReadToEndAsync();$stderr=$preflight.StandardError.ReadToEndAsync()
 if(-not$preflight.WaitForExit(15000)){$preflight.Kill();throw 'Sunshine preflight timed out'}
 if($preflight.ExitCode-ne0){throw 'The packaged Sunshine binary could not load'}
 $beforeUuid=$null
-try{$xml=[xml](Invoke-WebRequest -UseBasicParsing -Uri $serverInfo -TimeoutSec 3).Content;$beforeUuid=[string]$xml.root.uniqueid}catch{}
+try{$beforeUuid=Read-Identity}catch{}
 Protect-Directory $backupRoot
 $backup=Join-Path $backupRoot ((Get-Date -Format yyyyMMdd-HHmmss)+'-'+[guid]::NewGuid().ToString('N').Substring(0,8))
 Protect-Directory $backup
@@ -133,14 +139,15 @@ try{
         $service=Get-CimInstance Win32_Service -Filter "Name='SunshineService'"
         $listener=Get-NetTCPConnection -LocalPort 47995 -State Listen -ErrorAction SilentlyContinue|Where-Object OwningProcess -eq $service.ProcessId
         try{
-            $xml=[xml](Invoke-WebRequest -UseBasicParsing -Uri $serverInfo -TimeoutSec 2).Content
-            $uuid=[string]$xml.root.uniqueid
+            $uuid=Read-Identity
             $engine=Get-CimInstance Win32_Process -Filter ("Name='sunshine.exe' AND ParentProcessId="+$service.ProcessId)
+            $readiness=@{state=$service.State;servicePid=$service.ProcessId;listenerPid=@($listener.OwningProcess);enginePid=@($engine.ProcessId);hasUuid=[bool]$uuid;elapsedMs=$clock.ElapsedMilliseconds}
             if($service.State-eq'Running'-and$listener-and$engine-and$uuid){$ready=$true;break}
-        }catch{}
+        }catch{$readiness=@{state=$service.State;servicePid=$service.ProcessId;listenerPid=@($listener.OwningProcess);error=$_.Exception.Message;elapsedMs=$clock.ElapsedMilliseconds}}
+        [IO.File]::WriteAllText((Join-Path $backup 'readiness-last.json'),($readiness|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
         Start-Sleep -Milliseconds 250
     }while((Get-Date)-lt$deadline)
-    if(-not$ready){throw 'The unified service did not become ready'}
+    if(-not$ready){throw ('The unified service did not become ready: '+($readiness|ConvertTo-Json -Compress))}
     if($beforeUuid-and$uuid-ne$beforeUuid){throw 'Sunshine pairing identity changed'}
     if($oldHost){& sc.exe delete RHRemoteHost|Out-Null;if($LASTEXITCODE-ne0){throw 'Unable to remove the legacy host service'}}
     [pscustomobject]@{ok=$true;service='SunshineService';displayName='RHRemote-Sunshine';servicePid=$service.ProcessId;sunshinePid=$engine.ProcessId;hostEndpointOwner=$listener.OwningProcess;legacyHostRemoved=($null-eq(Get-Service RHRemoteHost -ErrorAction SilentlyContinue));uuidPreserved=($beforeUuid-eq$uuid);readyMs=$clock.ElapsedMilliseconds;backup=$backup;commit=$package.commit}|ConvertTo-Json -Depth 4
