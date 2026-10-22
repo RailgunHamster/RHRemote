@@ -5,7 +5,7 @@
 - Windows 经 winserver 的 Tailscale IPv4 地址收到串流首帧，实际配置为 H.264 / 1080p30 / 25 Mbps / 静音，VPN 分包 1024 字节。首帧 CPU 提交约 2398 ms；不将它解释为物理呈现时间或稳定帧率验收。
 - 一次性诊断使用不可达的局域网首选地址与有效 Tailscale 备用地址：首选返回不可达，备用约 5 ms 匹配主机 UUID；未修改原保存地址。
 - winserver 的配对鉴权接口与 UDP 单次票据探测通过；TCP 四个必要端口可达。主机端匿名连接不能获得网络接口权限。
-- winserver / claw 的统一服务升级成功，安装器确认 UUID 保留，新增规则限制 Tailscale 网卡和地址范围。本机服务更新已准备 UAC 方案，尚待确认。
+- 本机 / winserver / claw 的统一服务升级成功，安装器确认 UUID 保留，新增规则限制 Tailscale 网卡和地址范围。
 - Android APK 和 JVM 测试通过；没有操作 OPPO。Windows / Android 的地址和网络参数参与已有 WebDAV 配置模型。
 
 ## 公网 DERP
@@ -27,10 +27,17 @@
 
 - OPPO 蜂窝网络和 Wi-Fi / 蜂窝切换，按用户要求等待恢复实机测试。
 - Sunshine 媒体真正经 DERP 的持续串流与帧率：当前独立 DERP 转发测试和 Tailscale 串流测试分别完成，不混为同一项。
-- 本机新版主机接口与规则的管理员安装。
 - 25 Mbps 中继稳定性、4K60 以及免安装 Tailscale 的组网方案。
 
 启动耗时优化保持为下一优先级，详见根目录 TODO。
+
+## 本机管理员安装验证
+
+用户确认 UAC 后，安装器于 2026-10-22 21:46（北京时间）返回成功。`SunshineService` 显示为 `RHRemote-Sunshine`，处于运行状态，TCP / UDP 47995 均由该服务持有，旧的独立 `RHRemoteHost` 服务已移除。公开服务器信息返回原 UUID `AEB4CA42-2046-A809-7F90-634CC7645127`，与安装器的 `uuidPreserved: true` 一致。
+
+五条网络规则已核对程序、协议、端口和范围：诊断 UDP 限局域网，其余四条限 Tailscale 网卡及 tailnet 地址段，不包含管理网页端口 47990。未携带配对客户端证书访问网络接口时连接被拒绝，没有获得接口数据。
+
+结果文件：`D:\RHRemoteTools\install-local-network-20261022-result.json`。自动备份：`C:\ProgramData\RHRemote-Sunshine\backups\20261022-214541-0b68e98e`。安装器报告的 `readyMs: 12604` 是安装期间等待服务就绪的时间，不是远程连接首帧时间。此项验证不包含 OPPO 或蜂窝网络实测。
 
 ## 0.2.3 发布前回归
 
