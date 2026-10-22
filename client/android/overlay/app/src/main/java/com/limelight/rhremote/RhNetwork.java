@@ -56,6 +56,7 @@ public final class RhNetwork {
         return resolve(c,source,profile,null);
     }
     public static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile profile,JSONObject options)throws Exception {
+        RhStatistics.event("network_resolve_begin",-1,RhActions.obj("routeOrder",new JSONArray(profile.routeOrder)));
         long began=System.nanoTime();JSONObject metadata=metadata(c,source);
         if(options!=null){metadata=new JSONObject(metadata.toString());if(options.has("address"))metadata.put("address",options.getString("address"));if(options.has("addresses"))metadata.put("addresses",options.getJSONArray("addresses"));}
         List<String> candidates=addresses(metadata);candidates.removeIf(a->!profile.networkMode.equals("auto")&&!kind(a).equals("auto")&&!kind(a).equals(profile.networkMode)&&!(profile.networkMode.equals("internet")&&kind(a).equals("transport")));
@@ -85,6 +86,7 @@ public final class RhNetwork {
             if(selected!=null){chosenRoute=route;chosenPath=route.equals("tailscale_relay")?"unknown":"direct";offset=0;break;}
         }
         last=RhActions.obj("uuid",source.uuid,"selectedAddress",selected==null?JSONObject.NULL:selected,"attempts",attempts,"route",chosenRoute,"routeOrder",new JSONArray(profile.routeOrder),"path",chosenPath,"portOffset",offset,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began),"mediaUdp","not_tested");
+        RhStatistics.event(selected==null?"network_resolve_failed":"network_resolve_end",-1,last);
         if(selected==null)throw new IOException("已启用的连接路径均不可达或 UUID 不符；请运行网络诊断");
         ComputerDetails resolved=new ComputerDetails(source);resolved.activeAddress=new ComputerDetails.AddressTuple(selected.replace("[","").replace("]",""),47989+offset);resolved.manualAddress=resolved.activeAddress;resolved.state=ComputerDetails.State.ONLINE;
         if(options==null&&!selected.equals("127.77.0.2")&&source.serverCert!=null)learn(c.getApplicationContext(),source,selected);

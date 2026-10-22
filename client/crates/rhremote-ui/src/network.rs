@@ -109,9 +109,13 @@ pub fn report_text(value: &Value) -> String {
         return "尚未诊断".into();
     }
     let address = value["selectedAddress"].as_str().unwrap_or("无可用地址");
-    let path = match value["path"].as_str() {
-        Some("direct") => "Tailscale 直连",
-        Some("relay") => "Tailscale 中继",
+    let path = match (value["route"].as_str(),value["path"].as_str()) {
+        (Some("tailscale_direct"),Some("direct")) => "Tailscale 直连",
+        (Some("tailscale_relay"),Some("relay")) => "Tailscale 中继",
+        (Some("punch_direct"),Some("direct")) => "内置打洞直连",
+        (Some("relay"),Some("relay")) => "RHRemote 中继",
+        (Some("lan"),_) => "局域网",
+        (Some("public_direct"),_) => "公网直连",
         _ => "路径未确认",
     };
     let udp = match value["host"]["mediaUdp"].as_str() {
@@ -149,6 +153,9 @@ pub fn report_text(value: &Value) -> String {
     lines.join("\n")
 }
 impl Network {
+    pub fn release_transport(&self){
+        if let Some(client)=self.tunnel.lock().unwrap().as_mut(){client.stop();}
+    }
     pub fn native_environment(&self)->(u16,String){
         let last=self.last.lock().unwrap();let offset=last["policy"]["portOffset"].as_u64().unwrap_or(0)as u16;
         let id=last["policy"]["clientEndpointId"].as_str().filter(|s|!s.is_empty()).map(str::to_owned);drop(last);
@@ -252,9 +259,10 @@ impl Network {
         let mut result = self.last.lock().unwrap().clone();
         if let Some(address) = result["selectedAddress"].as_str().map(str::to_owned) {
             let mut ports = Vec::new();
-            for port in [47984, 47989, 47995, 48010] {
+            for port in [47984u16, 47989, 47995, 48010] {
                 let start = Instant::now();
-                let ok = (address.trim_matches(['[', ']']), port)
+                let offset=result["policy"]["portOffset"].as_u64().unwrap_or(0)as u16;
+                let ok = (address.trim_matches(['[', ']']), port+offset)
                     .to_socket_addrs()
                     .ok()
                     .into_iter()

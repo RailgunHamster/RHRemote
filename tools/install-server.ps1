@@ -156,6 +156,7 @@ try{
     [pscustomobject]@{ok=$true;service='SunshineService';displayName='RHRemote-Sunshine';servicePid=$service.ProcessId;sunshinePid=$engine.ProcessId;hostEndpointOwner=$listener.OwningProcess;legacyHostRemoved=($null-eq(Get-Service RHRemoteHost -ErrorAction SilentlyContinue));uuidPreserved=($beforeUuid-eq$uuid);readyMs=$clock.ElapsedMilliseconds;backup=$backup;commit=$package.commit}|ConvertTo-Json -Depth 4
 }catch{
     $failure=$_.Exception.Message
-    try{Restore-Deployment $backup}catch{throw ('Deployment failed; automatic rollback also failed. Backup: '+$backup+'; rollback: '+$_.Exception.Message)}
+    [IO.File]::WriteAllText((Join-Path $backup 'deployment-error.json'),(@{error=$failure;location=$_.InvocationInfo.PositionMessage}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+    try{Restore-Deployment $backup}catch{throw ('Deployment failed: '+$failure+'; automatic rollback also failed. Backup: '+$backup+'; rollback: '+$_.Exception.Message)}
     throw ('Deployment rolled back: '+$failure+'; backup: '+$backup)
 }

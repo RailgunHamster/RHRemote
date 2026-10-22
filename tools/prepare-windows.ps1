@@ -243,7 +243,7 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
         m_StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;
         if(qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")) {
             const auto mode=qEnvironmentVariable("RHREMOTE_NETWORK_MODE");
-            m_StreamConfig.streamingRemotely=(mode=="tailscale"||mode=="internet")?STREAM_CFG_REMOTE:mode=="lan"?STREAM_CFG_LOCAL:STREAM_CFG_AUTO;
+            m_StreamConfig.streamingRemotely=(mode=="tailscale"||mode=="internet"||mode=="transport")?STREAM_CFG_REMOTE:mode=="lan"?STREAM_CFG_LOCAL:STREAM_CFG_AUTO;
         }
 '@
     $s=[regex]::Replace($s,'bool Session::initialize\(\)\r?\n\{',"bool Session::initialize()`n{`n    if(qEnvironmentVariable(`"RHREMOTE_PACKET_AUTO`")==`"1`")m_Preferences->packetSize=0;`n    m_RhDisplayPreparation=RhPreparation::start(m_Computer->activeAddress.address(),m_Computer->serverCert,m_Preferences->width,m_Preferences->height);")

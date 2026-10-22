@@ -27,7 +27,7 @@ pub const ALPN: &[u8] = b"rhremote/tunnel/1";
 pub const DEFAULT_RELAY: &str = "http://101.43.203.147:33447/";
 pub const TCP_PORTS: &[u16] = &[47984, 47989, 47995, 48010];
 pub const UDP_PORTS: &[u16] = &[47995, 47998, 47999, 48000, 48002, 48010];
-pub const DEFAULT_OFFSET: u16 = 10000;
+pub const DEFAULT_OFFSET: u16 = 1000;
 const MAX_FLOWS: usize = 32;
 const MAX_PACKET: usize = 1150;
 
@@ -343,21 +343,9 @@ impl Drop for Proxy {
 }
 impl Proxy {
     pub async fn start(endpoint: &Endpoint, remote: &Address, offset: u16) -> Result<Self> {
-        ensure!(offset <= u16::MAX - 48010, "Invalid port offset");
+        let (offset,tcp,udp)=bind_proxy_ports(offset).await?;
         let connection = connect(endpoint, remote).await?;
         let local = Ipv4Addr::new(127, 77, 0, 2);
-        // Bind every required socket before reporting readiness. No partial setup.
-        let mut tcp = Vec::new();
-        for &port in TCP_PORTS {
-            tcp.push((port, TcpListener::bind((local, port + offset)).await?));
-        }
-        let mut udp = HashMap::new();
-        for &port in UDP_PORTS {
-            udp.insert(
-                port,
-                Arc::new(UdpSocket::bind((local, port + offset)).await?),
-            );
-        }
         let mut jobs = JoinSet::new();
         for (port, listener) in tcp {
             let connection = connection.clone();
@@ -399,6 +387,26 @@ impl Proxy {
             jobs,
         })
     }
+}
+type BoundPorts=(u16,Vec<(u16,TcpListener)>,HashMap<u16,Arc<UdpSocket>>);
+async fn bind_proxy_ports(preferred:u16)->Result<BoundPorts>{
+    ensure!(preferred>0 && preferred<=u16::MAX-48010,"Invalid port offset");
+    // Hyper-V may reserve an entire TCP range, even on loopback. Try complete
+    // application-local port sets; never change the system's reserved ranges.
+    let mut offsets=vec![preferred];
+    offsets.extend((1000..=15000).step_by(1000).filter(|o|*o!=preferred));
+    let mut last=None;
+    for offset in offsets {
+        let bound:Result<BoundPorts>=async {
+            let local=Ipv4Addr::new(127,77,0,2);
+            let mut tcp=Vec::new();let mut udp=HashMap::new();
+            for &port in TCP_PORTS{tcp.push((port,TcpListener::bind((local,port+offset)).await?));}
+            for &port in UDP_PORTS{udp.insert(port,Arc::new(UdpSocket::bind((local,port+offset)).await?));}
+            Ok((offset,tcp,udp))
+        }.await;
+        match bound{Ok(ports)=>return Ok(ports),Err(error)=>last=Some(error)}
+    }
+    Err(last.unwrap()).context("No complete local transport port set is available")
 }
 /// Serve only local Sunshine ports. The peer cannot choose an arbitrary host.
 pub async fn serve(endpoint: Endpoint, grants: Arc<Grants>) -> Result<()> {
@@ -457,7 +465,9 @@ async fn serve_connection(
                 let Ok((port,client,data))=parse_frame(&packet)else{continue};
                 if !sockets.contains_key(&client){
                     if sockets.len()>=MAX_FLOWS{continue;}
-                    let Ok(socket)=UdpSocket::bind((local,client)).await else{continue};let socket=Arc::new(socket);
+                    // Sunshine learns the source port from its authenticated PING.
+                    // The native client's local port may already be in use here.
+                    let Ok(socket)=UdpSocket::bind((local,0)).await else{continue};let socket=Arc::new(socket);
                     sockets.insert(client,socket.clone());let connection=connection.clone();
                     jobs.spawn(async move{let mut buffer=[0;65536];while let Ok((len,source))=socket.recv_from(&mut buffer).await{if source.ip()!=IpAddr::V4(Ipv4Addr::LOCALHOST)||!UDP_PORTS.contains(&source.port())||len>MAX_PACKET{continue;}let _=connection.send_datagram(frame(source.port(),client,&buffer[..len]));}});
                 }
@@ -478,6 +488,17 @@ async fn serve_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn local_port_conflicts_select_another_complete_set(){
+        let occupied=TcpListener::bind((Ipv4Addr::new(127,77,0,2),TCP_PORTS[0]+500)).await.unwrap();
+        let (offset,tcp,udp)=bind_proxy_ports(500).await.unwrap();
+        assert_ne!(offset,500);
+        assert_eq!(tcp.len(),TCP_PORTS.len());
+        assert_eq!(udp.len(),UDP_PORTS.len());
+        for (port,listener)in tcp{assert_eq!(listener.local_addr().unwrap().port(),port+offset);}
+        drop(occupied);
+        assert!(TcpListener::bind((Ipv4Addr::new(127,77,0,2),TCP_PORTS[0]+500)).await.is_ok());
+    }
     #[test]
     fn management_and_unpaired_media_are_denied() {
         assert!(!tcp_allowed(47990, true));

@@ -32,7 +32,7 @@ mod tests {
         let accepted=rows.iter().find(|row|row["event"]=="connect_request_received").unwrap();
         assert_eq!(accepted["fields"]["source"],"ui");
         assert_eq!(accepted["fields"]["queue_wait_us"],9_000);
-        assert!(rows.iter().any(|row|row["event"]=="native_spawn_begin"));
+        assert!(!rows.iter().any(|row|row["event"]=="native_spawn_begin"));
         assert_eq!(data.parent(),Some(std::env::temp_dir().as_path()));
         fs::remove_dir_all(data).unwrap();
     }
@@ -94,6 +94,15 @@ impl Statistics {
             json!({"event":event,"ts_us":self.now(),"frame":-1,"thread":"rust-ui","fields":{}}),
         );
     }
+    pub fn event(&self, event: &str, fields: Value) -> Result<(), String> {
+        if !self.enabled { return Ok(()); }
+        if let Some(dir) = &self.latest {
+            use std::io::Write;
+            let mut file=fs::OpenOptions::new().append(true).open(dir.join("ui.jsonl")).map_err(|e|e.to_string())?;
+            writeln!(file,"{}",json!({"event":event,"ts_us":self.now(),"frame":-1,"thread":"rust-ui","fields":fields})).map_err(|e|e.to_string())?;
+        }
+        Ok(())
+    }
     pub fn state(&self) -> Value {
         json!({"enabled":self.enabled,"directory":self.root,"latest":self.latest,"format":"rhremote.statistics/v1","frameData":"metadata_only","presentSemantics":"Windows render_return is CPU submission completion, not physical scanout"})
     }
@@ -122,7 +131,6 @@ impl Statistics {
         let mut rows = self.app.clone();
         let requested = self.pending_connect.take().unwrap_or_else(||self.now());
         rows.push(json!({"event":"connect_action","ts_us":requested,"frame":-1,"thread":"rust-ui","fields":{}}));
-        rows.push(json!({"event":"native_spawn_begin","ts_us":self.now(),"frame":-1,"thread":"rust-ui","fields":{}}));
         let mut text = rows
             .into_iter()
             .map(|v| v.to_string())

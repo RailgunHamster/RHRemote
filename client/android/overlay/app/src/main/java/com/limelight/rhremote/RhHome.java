@@ -172,10 +172,10 @@ public final class RhHome implements RhActions.Target {
                 if(networkBusy)throw new IllegalStateException("正在检查连接地址");ComputerDetails target=computers.get(args.getString("uuid"));if(target==null)throw new IllegalArgumentException("unknown device");
                 boolean connect=id.equals("device.connect");String pin=args.optString("pin",String.format(Locale.ROOT,"%04d",new java.security.SecureRandom().nextInt(10000)));if(!pin.matches("[0-9]{4}"))throw new IllegalArgumentException("PIN must contain four digits");
                 networkBusy=true;message("正在检查连接地址…");NETWORK.execute(()->{try{
-                    ComputerDetails resolved=RhNetwork.resolve(activity,target,RhProfile.load(activity,target.uuid));
                     if(connect)RhStatistics.begin(RhProfile.load(activity,target.uuid));
+                    ComputerDetails resolved=RhNetwork.resolve(activity,target,RhProfile.load(activity,target.uuid));
                     activity.runOnUiThread(()->{networkBusy=false;if(connect){actions.connect(resolved);}else{pairPin=pin;pairing=true;showPair();actions.pair(resolved,pairPin);}});
-                }catch(Exception e){activity.runOnUiThread(()->{networkBusy=false;message("连接失败："+e.getMessage());});}});break;
+                }catch(Exception e){if(connect)RhStatistics.finish();activity.runOnUiThread(()->{networkBusy=false;message("连接失败："+e.getMessage());});}});break;
             }
             case "pair.cancel":if(!pairing)throw new IllegalStateException("no active pairing");actions.cancelPair();message("正在取消配对…");break;
             case "appearance.toggle":RhShared.theme(activity,!RhShared.dark(activity));activity.recreate();break;

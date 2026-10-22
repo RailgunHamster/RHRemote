@@ -1,7 +1,8 @@
 param([string]$Serial='192.168.0.103:5555',[int]$Port=48754,[switch]$RestartAfterInstrumentation)
 $ErrorActionPreference='Stop'
-if($Serial -ne '192.168.0.103:5555'){throw 'This test helper is scoped to the authorized OPPO'}
 $adb='C:\Users\40608\AppData\Local\Android\Sdk\platform-tools\adb.exe'
+$model=(& $adb -s $Serial shell getprop ro.product.model) -join ''
+if($LASTEXITCODE -ne 0 -or $model.Trim() -ne 'OPD2515'){throw 'This test helper is scoped to the authorized OPPO Pad Mini'}
 if($RestartAfterInstrumentation){& $adb -s $Serial shell am force-stop com.rhremote.client}
 & $adb -s $Serial shell am start -n com.rhremote.client/com.limelight.PcView | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Could not start RHRemote on OPPO'}

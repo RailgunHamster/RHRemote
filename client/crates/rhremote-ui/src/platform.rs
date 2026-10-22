@@ -277,6 +277,10 @@ impl NativePlatform {
         command
     }
     fn probe(&self, device: &Device) -> Device {
+        // Probing another host must not replace a live stream's tunnel or ports.
+        if self.child.lock().unwrap().as_mut().is_some_and(|c|c.try_wait().ok().flatten().is_none()){
+            return device.clone();
+        }
         let mut d = device.clone();
         d.online = false;
         d.paired = false;
@@ -412,11 +416,17 @@ impl NativePlatform {
         Some((attempt, device, error))
     }
     fn spawn_stream(&self, args: &Value) -> Result<Child, String> {
+        // A native engine has fresh UDP ports and ENet state. A previous engine's
+        // port map must not be reused as a new Sunshine media session.
+        self.network.release_transport();
         let p = &args["profile"];
         let device:Device=serde_json::from_value(args["device"].clone()).map_err(|e|e.to_string())?;
         let profile:rhremote_core::Profile=serde_json::from_value(p.clone()).map_err(|e|e.to_string())?;
-        let (resolved,policy)=self.network.resolve(&device,&profile)?;
         let trace = self.statistics.lock().unwrap().session(p)?;
+        self.statistics.lock().unwrap().event("network_resolve_begin",json!({"routeOrder":profile.route_order}))?;
+        let selected=self.network.resolve(&device,&profile);
+        self.statistics.lock().unwrap().event(if selected.is_ok(){"network_resolve_end"}else{"network_resolve_failed"},self.network.last.lock().unwrap().clone())?;
+        let (resolved,policy)=selected?;
         fs::write(
             &self.session_status,
             b"{\"streaming\":false,\"phase\":\"connecting\",\"error\":\"\"}",
@@ -427,6 +437,9 @@ impl NativePlatform {
         let fps = p["fps"].to_string();
         let rate = (policy.bitrate_mbps * 1000).to_string();
         let mut command = self.command();
+        command.env("RHREMOTE_TUNNEL_PORT_OFFSET",policy.port_offset.to_string());
+        if !policy.client_endpoint_id.is_empty(){command.env("RHREMOTE_TUNNEL_CLIENT_ID",&policy.client_endpoint_id);}
+        self.statistics.lock().unwrap().event("native_spawn_begin",json!({"route":self.network.last.lock().unwrap()["route"]}))?;
         command.env_remove("RHREMOTE_STATISTICS_FILE");
         if let Some(path) = trace {
             command.env("RHREMOTE_STATISTICS_FILE", path);
@@ -703,6 +716,7 @@ impl NativePlatform {
             let _ = child.kill();
             let _ = child.wait();
         }
+        self.network.release_transport();
         fs::write(
             &self.session_status,
             b"{\"streaming\":false,\"phase\":\"disconnected\",\"error\":\"\"}",

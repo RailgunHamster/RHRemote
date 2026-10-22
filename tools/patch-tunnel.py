@@ -50,6 +50,7 @@ static inline unsigned short rhTunnelPort(const void* raw, unsigned short port) 
 
 def windows(root):
     edit(root, 'moonlight-common-c/moonlight-common-c/src/PlatformSockets.h', sockets)
+    enet(root, 'moonlight-common-c/moonlight-common-c/src/')
     def http(text):
         text = replace(text, 'void NvHTTP::setAddress(NvAddress address)\n{', 'void NvHTTP::setAddress(NvAddress address)\n{\n    if(address.address()=="127.77.0.2"&&address.port()==47989)address.setPort(47989+qEnvironmentVariableIntValue("RHREMOTE_TUNNEL_PORT_OFFSET"));')
         text = replace(text, 'void NvHTTP::setHttpsPort(uint16_t port)\n{', 'void NvHTTP::setHttpsPort(uint16_t port)\n{\n    if(m_BaseUrlHttp.host()=="127.77.0.2"&&port==47984)port+=qEnvironmentVariableIntValue("RHREMOTE_TUNNEL_PORT_OFFSET");')
@@ -58,10 +59,27 @@ def windows(root):
 
 def android(root):
     edit(root, 'app/src/main/jni/moonlight-core/moonlight-common-c/src/PlatformSockets.h', sockets)
+    enet(root, 'app/src/main/jni/moonlight-core/moonlight-common-c/src/')
     def http(text):
         text = replace(text, '.port(httpsPort).build()', '.port(com.limelight.rhremote.RhTunnel.port(baseUrlHttp.host(),httpsPort)).build()')
         return text
     edit(root, 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java', http)
+
+def enet(root, prefix):
+    # ENet sets ports without SET_PORT. Keep control packets on the proxy too.
+    for relative in ('ControlStream.c', 'RtspConnection.c'):
+        def change(text):
+            import re
+            updated,count=re.subn(r'enet_address_set_port\(([^,]+), (ControlPortNumber|RtspPortNumber)\)',r'enet_address_set_port(\1, rhTunnelPort(&RemoteAddr, \2))',text)
+            if not count:
+                raise RuntimeError(f'ENet tunnel port anchor missing: {relative}')
+            # ENet negotiates the packet MTU during connect. Its default can
+            # exceed the QUIC datagram payload, including server-to-client input.
+            before = 'peer = enet_host_connect(client, '
+            updated = replace(updated, before,
+                'if (rhTunnelPort(&RemoteAddr, 47995) != 47995) client->mtu = 1024;\n        ' + before)
+            return updated
+        edit(root, prefix+relative, change)
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser();parser.add_argument('platform',choices=['windows','android']);parser.add_argument('root',type=Path)
