@@ -35,9 +35,11 @@ function Test-RHRPackage([string]$Root,[switch]$AllowRuntimeFiles){
     }
     foreach($required in @('sunshine.exe','host/RHRemoteHost.exe','host/scripts/display.ps1','host/scripts/RhDisplayConfig.dll','assets/web/index.html')){if(-not$seen.ContainsKey($required)){throw ('Incomplete package: '+$required)}}
     $base=[IO.Path]::GetFullPath($Root).TrimEnd('\','/')
-    foreach($file in @($(if(-not$AllowRuntimeFiles){Get-ChildItem -LiteralPath $base -Recurse -File|Where-Object Name -ne 'server-package.json'}))){
-        $relative=$file.FullName.Substring($base.Length+1).Replace('\','/')
-        if(-not$seen.ContainsKey($relative)){throw ('Unlisted package file: '+$relative)}
+    if(-not$AllowRuntimeFiles){
+        foreach($file in (Get-ChildItem -LiteralPath $base -Recurse -File|Where-Object Name -ne 'server-package.json')){
+            $relative=$file.FullName.Substring($base.Length+1).Replace('\','/')
+            if(-not$seen.ContainsKey($relative)){throw ('Unlisted package file: '+$relative)}
+        }
     }
     $metadata
 }

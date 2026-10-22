@@ -7,6 +7,10 @@ try{
     foreach($relative in $paths){$file=Join-Path $root $relative;New-Item -ItemType Directory -Path (Split-Path $file -Parent) -Force|Out-Null;[IO.File]::WriteAllText($file,'package regression')}
     $null=New-RHRPackageManifest $root ('a'*40) ('b'*40)
     $null=Test-RHRPackage $root
+    [IO.File]::WriteAllText((Join-Path $root 'runtime-state.txt'),'existing installation state')
+    Expect-Rejection {Test-RHRPackage $root}
+    $null=Test-RHRPackage $root -AllowRuntimeFiles
+    Remove-Item -LiteralPath (Join-Path $root 'runtime-state.txt')
     foreach($path in @('../escape.exe','/absolute.exe','host/../../escape.exe')){Expect-Rejection {Get-RHRChildPath $root $path}}
     [IO.File]::WriteAllText((Join-Path $root 'sunshine.exe'),'changed bytes')
     Expect-Rejection {Test-RHRPackage $root}
