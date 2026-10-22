@@ -77,7 +77,7 @@ public final class RhShared {
             if(old.length()>1000)throw new IOException("configuration too large");
             for(Iterator<String> it=old.keys();it.hasNext();) { String id=it.next();only(old.getJSONObject(id),RhProfile.KEYS);group.put(id,RhProfile.fromJson(id,old.getJSONObject(id)).clientJson()); }
             JSONArray devices=next.getJSONArray("devices");
-            for(int i=0;i<devices.length();i++) { JSONObject d=devices.getJSONObject(i);only(d,"uuid","name","address","swapButtons","displayName");JSONObject p=old.optJSONObject(d.getString("uuid"));d.put("swapButtons",p!=null?p.getBoolean("swapButtons"):d.optBoolean("swapButtons")); }
+            for(int i=0;i<devices.length();i++) { JSONObject d=devices.getJSONObject(i);only(d,"uuid","name","address","swapButtons","displayName","addresses");JSONObject p=old.optJSONObject(d.getString("uuid"));d.put("swapButtons",p!=null?p.getBoolean("swapButtons"):d.optBoolean("swapButtons")); }
             next.put("schemaVersion",2);next.put("clients",RhActions.obj("legacy-v1",RhActions.obj("name","旧版配置","platform","legacy")));next.put("profiles",RhActions.obj("legacy-v1",group));
         }
         JSONArray hosts=next.getJSONArray("devices");
@@ -91,8 +91,8 @@ public final class RhShared {
         JSONArray devices=value.getJSONArray("devices");JSONObject clients=value.getJSONObject("clients"),profiles=value.getJSONObject("profiles");
         if(devices.length()>1000||clients.length()>100||profiles.length()>100)throw new IOException("configuration too large");Set<String> ids=new HashSet<>();
         for(int i=0;i<devices.length();i++) {
-            JSONObject d=devices.getJSONObject(i);only(d,"uuid","name","address","swapButtons","displayName");String id=d.getString("uuid"),address=d.getString("address");
-            validateDisplayName(d.optString("displayName"));
+            JSONObject d=devices.getJSONObject(i);only(d,"uuid","name","address","swapButtons","displayName","addresses");String id=d.getString("uuid"),address=d.getString("address");
+            validateDisplayName(d.optString("displayName"));RhNetwork.addresses(d);
             if(!validId(id)||!ids.add(id.toLowerCase(Locale.ROOT))||d.getString("name").getBytes(StandardCharsets.UTF_8).length>256||address.isEmpty()||address.length()>253||address.matches(".*[/\\\\@\\r\\n?#].*"))throw new IOException("invalid device metadata");
             if(d.has("swapButtons"))d.getBoolean("swapButtons");
         }
@@ -123,11 +123,17 @@ public final class RhShared {
     public static synchronized JSONObject capture(Context c,Collection<ComputerDetails> computers)throws Exception {
         JSONObject shared=read(c);LinkedHashMap<String,JSONObject> devices=new LinkedHashMap<>();JSONArray old=shared.getJSONArray("devices");
         for(int i=0;i<old.length();i++){JSONObject d=old.getJSONObject(i);devices.put(d.getString("uuid"),d);}
-        for(ComputerDetails d:computers){JSONObject previous=devices.get(d.uuid);JSONObject item=metadata(d,swap(shared,d.uuid),previous==null?"":previous.optString("displayName"));if(item!=null)devices.put(d.uuid,item);}
+        for(ComputerDetails d:computers){JSONObject previous=devices.get(d.uuid);JSONObject item=metadata(d,swap(shared,d.uuid),previous==null?"":previous.optString("displayName"));if(item!=null){if(previous!=null){item.put("address",previous.getString("address"));if(previous.has("addresses"))item.put("addresses",previous.getJSONArray("addresses"));}devices.put(d.uuid,item);}}
         JSONArray list=new JSONArray();JSONObject group=new JSONObject();
         JSONObject existing=shared.getJSONObject("profiles").optJSONObject(clientId(c));if(existing!=null)group=new JSONObject(existing.toString());
         for(Map.Entry<String,JSONObject> d:devices.entrySet()){list.put(d.getValue());group.put(d.getKey(),RhProfile.load(c,d.getKey()).clientJson());}
         shared.put("devices",list);shared.getJSONObject("clients").put(clientId(c),clientInfo());shared.getJSONObject("profiles").put(clientId(c),group);shared.put("dark",dark(c));validate(shared);write(file(c),shared);return shared;
+    }
+    public static synchronized void saveAddresses(Context c,String uuid,String primary,JSONArray extra)throws Exception {
+        JSONObject shared=read(c);JSONArray devices=shared.getJSONArray("devices");boolean found=false;
+        JSONObject metadata=RhActions.obj("address",primary,"addresses",extra);List<String> all=RhNetwork.addresses(metadata);JSONArray normalized=new JSONArray();for(String address:all)if(!address.equalsIgnoreCase(primary))normalized.put(address);
+        for(int i=0;i<devices.length();i++)if(uuid.equals(devices.getJSONObject(i).getString("uuid"))){devices.getJSONObject(i).put("address",primary).put("addresses",normalized);found=true;}
+        if(!found)throw new IOException("未找到设备");validate(shared);write(file(c),shared);
     }
     public static synchronized void saveProfile(Context c,ComputerDetails d,RhProfile p,String displayName)throws Exception {
         displayName=validateDisplayName(displayName);

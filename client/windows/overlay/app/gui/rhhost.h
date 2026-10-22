@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QElapsedTimer>
+#include <QUdpSocket>
 
 namespace RhHost {
 inline QJsonObject request(const QString& host,const QSslCertificate& pinned,const QString& path,const QJsonObject& body=QJsonObject()) {
@@ -22,5 +23,27 @@ inline QJsonObject request(const QString& host,const QSslCertificate& pinned,con
     QJsonParseError error;const auto reply=QJsonDocument::fromJson(data.mid(split+4),&error);
     if(error.error!=QJsonParseError::NoError||!reply.isObject())return {{"ok",false},{"error","主机响应格式错误"}};
     return reply.object();
+}
+inline QJsonObject diagnose(const QString& host,const QSslCertificate& pinned) {
+    auto info=request(host,pinned,"/v1/network");
+    if(!info["ok"].toBool())return info;
+    auto result=info["result"].toObject();
+    const auto ticket=request(host,pinned,"/v1/network/probe");
+    if(!ticket["ok"].toBool()){result["mediaUdp"]="unavailable";result["probeError"]=ticket["error"];}
+    else {
+        const auto payload=ticket["result"].toObject();
+        const auto token=payload["token"].toString().toLatin1();
+        if(payload["udpPort"].toInt()!=47995||token.size()!=40||!token.startsWith("RHRNET1:"))return {{"ok",false},{"error","诊断响应无效"}};
+        QUdpSocket udp;udp.setProxy(QNetworkProxy::NoProxy);udp.connectToHost(host,47995);
+        if(udp.state()!=QAbstractSocket::ConnectedState&&!udp.waitForConnected(1200))result["mediaUdp"]="unreachable";
+        else {
+            udp.write(token);udp.waitForBytesWritten(200);
+            if(udp.hasPendingDatagrams()||udp.waitForReadyRead(1200)){
+                QByteArray reply;reply.resize(int(udp.pendingDatagramSize()));udp.readDatagram(reply.data(),reply.size());
+                result["mediaUdp"]=reply==token?"reachable":"invalid_reply";
+            }else result["mediaUdp"]="timeout";
+        }
+    }
+    return {{"ok",true},{"result",result}};
 }
 }

@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod auth;
+mod network;
 #[cfg(windows)]
 mod console;
 mod displays;
@@ -65,7 +66,9 @@ fn handle(
     gate: Arc<Mutex<()>>,
     helper: PathBuf,
     clients: Arc<auth::SunshineClients>,
+    network: Arc<network::Probe>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let peer=socket.peer_addr()?.ip();
     socket.set_nonblocking(false)?;
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     socket.set_write_timeout(Some(Duration::from_secs(5)))?;
@@ -108,6 +111,8 @@ fn handle(
         return Err("Client is no longer an enabled Sunshine peer".into());
     }
     let result = match (parts[0], parts[1]) {
+        ("GET", "/v1/network") => Ok(network::information()),
+        ("GET", "/v1/network/probe") => network.ticket(peer),
         #[cfg(windows)]
         ("GET", "/v1/health") => Ok(
             json!({"product":"RHRemote-Sunshine","serviceMode":if service::unified(){"unified"}else{"legacy"},"servicePid":std::process::id(),"sunshine":supervisor::health()}),
@@ -182,6 +187,7 @@ fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Err
             Err(error) => return Err(error),
         }
     };
+    let network=network::Probe::start(&options.listen);
     let listener = TcpListener::bind(options.listen)?;
     let gate = Arc::new(Mutex::new(()));
     let active = Arc::new(AtomicUsize::new(0));
@@ -210,8 +216,9 @@ fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Err
         let helper = helper.clone();
         let active = active.clone();
         let clients = clients.clone();
+        let network = network.clone();
         std::thread::spawn(move || {
-            if let Err(error) = handle(socket, tls, gate, helper, clients) {
+            if let Err(error) = handle(socket, tls, gate, helper, clients, network) {
                 use std::io::Write;
                 let root = PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
                     .join("RHRemoteHost");

@@ -25,12 +25,29 @@ def windows(root):
         ("    QQuickStyle::setStyle(\"Material\");", '    RhStatistics::event("native_ui_ready");\n    QQuickStyle::setStyle("Material");'),
         ('        engine.load(QUrl(rhAdapter', '        RhStatistics::Scope traceQml("client_qml_load");\n        engine.load(QUrl(rhAdapter')])
     # Include before any function definitions (the main signature can vary by compiler).
-    for relative in ["app/main.cpp", "app/streaming/session.cpp", "app/backend/nvhttp.cpp", "app/streaming/video/ffmpeg.cpp", "app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp"]:
+    for relative in ["app/main.cpp", "app/streaming/session.cpp", "app/backend/nvhttp.cpp", "app/streaming/audio/audio.cpp", "app/streaming/video/ffmpeg.cpp", "app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp"]:
         p=root/relative
         s=p.read_text(encoding="utf-8")
         if include not in s:p.write_text(include+s,encoding="utf-8",newline="\n")
     edit(root, "app/backend/nvhttp.cpp", [
         ("    int riKeyId;", '    RhStatistics::Scope traceLaunch("host_launch_request");\n    int riKeyId;'),
+        ('    QNetworkReply* reply = m_Nam.get(request);', '''    QNetworkReply* reply = m_Nam.get(request);
+    if(RhStatistics::active()){
+        const auto id=QString::number(RhStatistics::now());
+        const bool secure=baseUrl.scheme()=="https";
+        const auto trace=[command,id,secure](const char* phase){
+            RhStatistics::event("http_transport",-1,{{"command",command},{"request",id},{"secure",secure},{"phase",phase}});
+        };
+        trace("queued");
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+        QObject::connect(reply,&QNetworkReply::socketStartedConnecting,reply,[trace]{trace("socket_connect");});
+        QObject::connect(reply,&QNetworkReply::requestSent,reply,[trace]{trace("request_sent");});
+#endif
+        QObject::connect(reply,&QNetworkReply::encrypted,reply,[trace]{trace("encrypted");});
+        QObject::connect(reply,&QNetworkReply::metaDataChanged,reply,[trace]{trace("headers_received");});
+        QObject::connect(reply,&QNetworkReply::readyRead,reply,[trace]{trace("data_available");});
+        QObject::connect(reply,&QNetworkReply::finished,reply,[trace]{trace("finished");});
+    }'''),
         ("    QNetworkReply* reply = openConnection(baseUrl, command, arguments, timeoutMs, logLevel);", '    RhStatistics::Scope traceHttp("http_"+command);\n    QNetworkReply* reply = openConnection(baseUrl, command, arguments, timeoutMs, logLevel);')])
     edit(root, "app/streaming/session.cpp", [
         ('    DECODER_PARAMETERS params;', '    RhStatistics::Scope traceDecoder(testOnly?"client_decoder_create_test":"client_decoder_create_stream");\n    DECODER_PARAMETERS params;'),
@@ -44,6 +61,13 @@ def windows(root):
         ("bool Session::validateLaunch(SDL_Window* testWindow)\n{",'bool Session::validateLaunch(SDL_Window* testWindow)\n{\n    RhStatistics::Scope traceValidate("client_validate_launch");'),
         ("void Session::emitLaunchWarning(QString text)\n{", 'void Session::emitLaunchWarning(QString text)\n{\n    RhStatistics::Scope traceWarning("client_warning_display_wait");'),
         ("bool Session::startConnectionAsync()\n{",'bool Session::startConnectionAsync()\n{\n    RhStatistics::event("host_launch_prepare");'),
+        ('    va_start(ap, format);', '''    va_start(ap, format);
+    if(RhStatistics::active()&&strcmp(format,"RHREMOTE_RTSP %s %llu\\n")==0){
+        va_list copy;va_copy(copy,ap);
+        const char* command=va_arg(copy,const char*);const auto duration=va_arg(copy,unsigned long long);va_end(copy);
+        const auto end=RhStatistics::now();
+        RhStatistics::event("rtsp_request",-1,{{"command",QString::fromLatin1(command)}},end-qint64(duration),qint64(duration));
+    }'''),
         ('    if(!displayMode.isEmpty()){', '    if(!displayMode.isEmpty()){\n        RhStatistics::Scope traceDisplayPrepare("host_display_prepare");'),
         ('        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;', '        RhStatistics::event("host_display_prepared",-1,reply["result"].toObject()["timings"].toObject());\n        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;'),
         ('    m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height);', '    {RhStatistics::Scope traceInput("client_input_initialize");\n    m_InputHandler = new SdlInputHandler(*m_Preferences, m_StreamConfig.width, m_StreamConfig.height); }'),
@@ -81,6 +105,8 @@ def windows(root):
         ('bool D3D11VARenderer::setupRenderingResources()\n{', 'bool D3D11VARenderer::setupRenderingResources()\n{\n    RhStatistics::Scope traceResources("client_d3d11_render_resources");'),
         ('        int err = av_hwdevice_ctx_init(m_HwDeviceContext);', '        int err = RhStatistics::measure("client_d3d11_hwdevice_context",[&]{return av_hwdevice_ctx_init(m_HwDeviceContext);});'),
         ('        int err = av_hwframe_ctx_init(m_HwFramesContext);', '        int err = RhStatistics::measure("client_d3d11_frame_pool",[&]{return av_hwframe_ctx_init(m_HwFramesContext);});')])
+    edit(root, "app/streaming/audio/audio.cpp", [
+        ('bool Session::initializeAudioRenderer()\n{', 'bool Session::initializeAudioRenderer()\n{\n    RhStatistics::Scope traceAudio("client_audio_renderer_initialize");')])
     edit(root, "app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp", [
         ("    m_VsyncRenderer->renderFrame(frame);", '''    const qint64 traceFrame=qint64(quintptr(frame->opaque));
     RhStatistics::event("render_submit",traceFrame);

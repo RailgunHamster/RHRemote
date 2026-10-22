@@ -94,7 +94,9 @@ $backup=Join-Path $backupRoot ((Get-Date -Format yyyyMMdd-HHmmss)+'-'+[guid]::Ne
 Protect-Directory $backup
 $firewallProgram=@(Get-NetFirewallRule -Name 'RHRemoteHost-LAN' -ErrorAction SilentlyContinue|Get-NetFirewallApplicationFilter|Select-Object -ExpandProperty Program)|Select-Object -First 1
 $newRules=@('RHRemote-Sunshine-TCP','RHRemote-Sunshine-UDP'|Where-Object {-not(Get-NetFirewallRule -Name $_ -ErrorAction SilentlyContinue)})
-$before=@{schema='rhremote.server-backup/v1';install=$install;config=$SunshineConfig;sunshine=$oldSunshine;host=$oldHost;firewallProgram=$firewallProgram;firewallCreated=$newRules;uuid=$beforeUuid;commit=$package.commit}
+$networkPlan=& (Join-Path $PSScriptRoot 'configure-network.ps1') -InstallDirectory $install -BasePort $basePort
+$networkNew=@($networkPlan.rules|Where-Object {-not(Get-NetFirewallRule -Name $_.name -ErrorAction SilentlyContinue)}|ForEach-Object {$_.name})
+$before=@{schema='rhremote.server-backup/v1';install=$install;config=$SunshineConfig;sunshine=$oldSunshine;host=$oldHost;firewallProgram=$firewallProgram;firewallCreated=@($newRules)+@($networkNew);uuid=$beforeUuid;commit=$package.commit}
 [IO.File]::WriteAllText((Join-Path $backup 'deployment-before.json'),($before|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $clock=[Diagnostics.Stopwatch]::StartNew()
 try{
@@ -133,6 +135,7 @@ try{
         $ports=if($tcp){@(($basePort-5),$basePort,($basePort+21))}else{@(($basePort+9),($basePort+10),($basePort+11),($basePort+13),($basePort+21))}
         New-NetFirewallRule -Name $name -DisplayName ('RHRemote-Sunshine '+$(if($tcp){'TCP'}else{'UDP'})+' (LAN)') -Direction Inbound -Action Allow -Protocol $(if($tcp){'TCP'}else{'UDP'}) -LocalPort $ports -RemoteAddress LocalSubnet -Program (Join-Path $install 'sunshine.exe') -Profile Any|Out-Null
     }
+    $null=& (Join-Path $PSScriptRoot 'configure-network.ps1') -InstallDirectory $install -BasePort $basePort -Apply
     Start-Service -Name SunshineService
     $deadline=(Get-Date).AddSeconds($VerifyTimeoutSec);$ready=$false
     do{

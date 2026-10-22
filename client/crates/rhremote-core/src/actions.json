@@ -12,7 +12,7 @@
  {"id":"settings.copy_from","label":"复制其他客户端的配置到当前草稿","args":{"clientId":"string"}},
  {"id":"settings.catalog","label":"可配置字段与平台支持范围","args":{}},
  {"id":"settings.tab","label":"设备设置分类","args":{"tab":"video / audio / input / advanced"}},
- {"id":"settings.sources.toggle","label":"展开其他客户端的配置","args":{}},
+ {"id":"settings.sources.toggle","label":"展开其他客户端的配置","args":{"tab":"video / audio / input / network / advanced"}},
  {"id":"settings.save","label":"保存","args":{"displayName":"string, optional; empty clears alias"}},
  {"id":"settings.cancel","label":"取消设置 / 返回","args":{}},
  {"id":"device.connect","label":"连接","args":{"uuid":"string"}},
@@ -56,5 +56,8 @@
  {"id":"window.close","label":"关闭","args":{}},
  {"id":"view.snapshot","label":"导出本应用界面预览","args":{}},
  {"id":"view.toolbar.snapshot","label":"导出串流悬浮控制栏预览","args":{}},
- {"id":"view.picker.snapshot","label":"导出悬浮选择列表预览","args":{}}
+ {"id":"view.picker.snapshot","label":"导出悬浮选择列表预览","args":{}},
+ {"id":"device.network.configure","label":"保存设备连接地址","args":{"uuid":"string","address":"primary hostname or IP; optional","addresses":"array of extra hostnames/IPs; maximum total 8"}},
+ {"id":"device.network.diagnose","label":"诊断连接网络","args":{"uuid":"string","address":"optional one-time primary address","addresses":"optional one-time extra address array"}},
+ {"id":"network.state","label":"当前路径与诊断结果","args":{}}
 ]

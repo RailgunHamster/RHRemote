@@ -5,12 +5,13 @@ $params=@{Mode='action';Action='statistics.state'}
 if($Platform -eq 'android'){$params.Port=48754;$params.TokenFile='D:\RHRemoteTools\secrets\rhremote-android-control-token.txt'}
 $s=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') @params
 if(-not $s.ok){throw 'Statistics state unavailable'}
-$path=[string]$s.result.latest;if(-not $path){throw 'No statistics run available'}
+$path=[string]$s.result.latest
 if($RunId){
  if($Platform-ne'windows'-or$RunId-notmatch'^\d+-[a-f0-9-]+$'){throw 'Explicit run selection requires a valid Windows run ID'}
- $path=Join-Path (Split-Path -Parent $path) $RunId
+ $directory=[string]$s.result.directory;if(-not $directory){throw 'Statistics directory unavailable'}
+ $path=Join-Path $directory $RunId
  if(-not(Test-Path -LiteralPath (Join-Path $path 'manifest.json'))){throw 'Selected Windows trace does not exist'}
-}
+}elseif(-not $path){throw 'No statistics run available'}
 if($Platform -eq 'android'){
  $prefix='/data/user/0/com.rhremote.client/files/statistics/'
  if(-not $path.StartsWith($prefix)){throw 'Unexpected app statistics path'}

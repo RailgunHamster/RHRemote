@@ -145,6 +145,10 @@ export component MainWindow inherits Window {
     in property <string> page:"devices";
     in property <string> selected-name;
     in property <string> client-name;
+    in property <string> selected-uuid;
+    in property <string> network-address;
+    in property <string> network-addresses;
+    in property <string> network-report;
     in property <string> draft-display-name;
     in property <[ProfileSource]> profile-sources;
     in property <string> profile-tab:"video";
@@ -206,7 +210,7 @@ export component MainWindow inherits Window {
             Rectangle {height:60px;background:Palette.surface;
                 HorizontalLayout {padding-left:24px;padding-right:24px;spacing:14px;
                     Text{text:"RHRemote-Moonlight";font-weight:600;color:Palette.ink;vertical-alignment:center;}
-                    Text{text:"v0.2.1";font-size:11px;color:Palette.muted;vertical-alignment:center;}
+                    Text{text:"v0.2.2";font-size:11px;color:Palette.muted;vertical-alignment:center;}
                     Rectangle {horizontal-stretch:1;}
                     ActionButton{text:root.dark ? "浅色" : "深色";action-id:"appearance.toggle";}
                     ActionButton{text:"设置";action-id:"app.settings.open";}
@@ -235,9 +239,9 @@ export component MainWindow inherits Window {
                                     if !root.compact: ActionButton{text:"设置";action-id:"device.settings.open";argument:device.uuid;}
                                     if !root.compact: ActionButton{text:"↑";action-id:"device.move";argument:device.uuid+"|up";disabled:index==0;}
                                     if !root.compact: ActionButton{text:"↓";action-id:"device.move";argument:device.uuid+"|down";disabled:index==root.devices.length - 1;}
-                                    if !root.compact: ActionButton{text:device.is-self ? "本机" : device.paired ? "连接" : "配对";action-id:device.paired ? "device.connect" : "device.pair";argument:device.uuid;primary:device.name=="winserver";disabled:!device.online || device.is-self;}
+                                    if !root.compact: ActionButton{text:device.is-self ? "本机" : device.paired ? "连接" : "配对";action-id:device.paired ? "device.connect" : "device.pair";argument:device.uuid;primary:device.name=="winserver";disabled:device.is-self;}
                                 }
-                                if root.compact: HorizontalLayout {ActionButton{text:"↑";action-id:"device.move";argument:device.uuid+"|up";disabled:index==0;}ActionButton{text:"↓";action-id:"device.move";argument:device.uuid+"|down";disabled:index==root.devices.length - 1;}Rectangle{horizontal-stretch:1;}ActionButton{text:"连接设置";action-id:"device.settings.open";argument:device.uuid;}ActionButton{text:device.is-self ? "本机" : device.paired ? "连接" : "配对";action-id:device.paired ? "device.connect" : "device.pair";argument:device.uuid;primary:true;disabled:!device.online || device.is-self;}}
+                                if root.compact: HorizontalLayout {ActionButton{text:"↑";action-id:"device.move";argument:device.uuid+"|up";disabled:index==0;}ActionButton{text:"↓";action-id:"device.move";argument:device.uuid+"|down";disabled:index==root.devices.length - 1;}Rectangle{horizontal-stretch:1;}ActionButton{text:"连接设置";action-id:"device.settings.open";argument:device.uuid;}ActionButton{text:device.is-self ? "本机" : device.paired ? "连接" : "配对";action-id:device.paired ? "device.connect" : "device.pair";argument:device.uuid;primary:true;disabled:device.is-self;}}
                             }
                         }
                     }
@@ -261,8 +265,21 @@ export component MainWindow inherits Window {
                             ActionButton{text:"画面";action-id:"settings.tab";argument:"video";chosen:root.profile-tab=="video";}
                             ActionButton{text:"音频";action-id:"settings.tab";argument:"audio";chosen:root.profile-tab=="audio";}
                             ActionButton{text:"输入";action-id:"settings.tab";argument:"input";chosen:root.profile-tab=="input";}
+                            ActionButton{text:"网络";action-id:"settings.tab";argument:"network";chosen:root.profile-tab=="network";}
                             ActionButton{text:"高级";action-id:"settings.tab";argument:"advanced";chosen:root.profile-tab=="advanced";}
                             Rectangle{horizontal-stretch:1;}
+                        }
+                        if root.profile-tab=="network": VerticalLayout{spacing:10px;
+                            Text{text:"设备连接地址（随 WebDAV 同步）";color:Palette.ink;}
+                            network-primary:=LineEdit{text:root.network-address;placeholder-text:"首选 IP 或主机名";}
+                            network-extra:=LineEdit{text:root.network-addresses;placeholder-text:"备用地址，以逗号分隔，例如 100.x.x.x";}
+                            HorizontalLayout{
+                                ActionButton{text:"保存地址";action-id:"device.network.configure";argument:root.selected-uuid+"|"+network-primary.text+"|"+network-extra.text;}
+                                ActionButton{text:"诊断连接";action-id:"device.network.diagnose";argument:root.selected-uuid;}
+                                Rectangle{horizontal-stretch:1;}
+                            }
+                            Text{text:"直连优先；Tailscale 打洞失败时自动中继。请保持两端 Tailscale 已连接。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
+                            Text{text:root.network-report;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
                         if root.profile-tab=="video": HorizontalLayout{spacing:6px;
                             ActionButton{text:"720P";action-id:"settings.set";argument:"resolution=1280x720";}
@@ -327,7 +344,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-tab=="updates": VerticalLayout{spacing:14px;
-                            Text{text:"RHRemote-Moonlight 0.2.1";color:Palette.ink;font-size:18px;}
+                            Text{text:"RHRemote-Moonlight 0.2.2";color:Palette.ink;font-size:18px;}
                             Text{text:root.updates-managed ? "自动检查更新 · GitHub / Gitee" : "开发预览版。安装 Velopack 版本后启用自动更新。";color:Palette.muted;wrap:word-wrap;}
                             Text{text:root.updates-available ? "可用版本："+root.update-version : "";color:Palette.ink;}
                             HorizontalLayout{spacing:10px;

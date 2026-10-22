@@ -12,7 +12,7 @@ Get-ChildItem -LiteralPath $SunshineDirectory -Force|ForEach-Object {Copy-Item -
 $hostOut=Join-Path $out 'host';New-Item -ItemType Directory -Path $hostOut -Force|Out-Null
 Copy-Item -LiteralPath (Join-Path $HostDirectory 'RHRemoteHost.exe') -Destination $hostOut -Force
 Copy-Item -LiteralPath (Join-Path $HostDirectory 'scripts') -Destination $hostOut -Recurse -Force
-foreach($name in @('install-server.ps1','server-package.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $out}
+foreach($name in @('install-server.ps1','server-package.ps1','configure-network.ps1')){Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $out}
 # Existing Sunshine setup UI and service scripts must use the unified installer.
 $shim="@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0..\install-server.ps1`" -SourceDirectory `"%~dp0..`"`r`nexit /b %ERRORLEVEL%`r`n"
 [IO.File]::WriteAllText((Join-Path $out 'scripts/install-service.bat'),$shim,[Text.Encoding]::ASCII)

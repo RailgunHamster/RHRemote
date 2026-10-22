@@ -4,6 +4,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
 mod devices;
+mod network;
 mod overlay;
 mod platform;
 mod recovery;
@@ -17,6 +18,12 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
             let (uuid, direction) = arg.split_once('|').unwrap_or(("", ""));
             json!({"uuid":uuid,"direction":direction})
         }
+        "device.network.configure" => {
+            let mut fields=arg.splitn(3,'|');
+            let uuid=fields.next().unwrap_or("");let primary=fields.next().unwrap_or("");let extra=fields.next().unwrap_or("");
+            json!({"uuid":uuid,"address":primary.trim(),"addresses":extra.split([',',';','\n']).map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})
+        }
+        "device.network.diagnose" => json!({"uuid":arg}),
         "statistics.configure" => json!({"enabled":arg=="true"}),
         "app.settings.tab" | "settings.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
@@ -56,6 +63,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
                 "bitrateMbps",
                 "volume",
                 "packetSize",
+                "remoteBitrateMbps",
             ]
             .contains(&key)
             {
@@ -97,7 +105,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .unwrap_or_default();
     if !saved.is_empty() {
-        let rows:Vec<_>=saved.iter().map(|d|json!({"uuid":d["uuid"],"name":d["name"],"address":d["address"],"online":false,"paired":false,"isSelf":false})).collect();
+        let rows:Vec<_>=saved.iter().map(|d|json!({"uuid":d["uuid"],"name":d["name"],"address":d["address"],"addresses":d["addresses"].as_array().cloned().unwrap_or_default(),"online":false,"paired":false,"isSelf":false})).collect();
         use rhremote_core::Platform;
         native.execute("devices.restore", &json!({"devices":rows}))?;
     }
@@ -233,6 +241,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_updates_managed(state["updates"]["managed"]==true);ui.set_updates_busy(state["updatesBusy"]==true);ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());ui.set_updates_pending(state["updates"]["pendingRestart"]==true);ui.set_update_version(state["updates"]["availableVersion"].as_str().unwrap_or("").into());ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
             let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|{let p:Profile=serde_json::from_value(state["saved"]["profiles"][d["uuid"].as_str().unwrap_or("")].clone()).unwrap_or_default();DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"● 已配对"}else{"待配对"}.into(),summary:format!("{} × {}  ·  {} 帧  ·  {} Mbps",p.width,p.height,p.fps,p.bitrate_mbps).into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}}).collect();
             ui.set_selected_name(devices.iter().find(|d|d["uuid"]==selected).and_then(|d|d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str())).unwrap_or("").into());ui.set_draft_display_name(state["draftDisplayName"].as_str().unwrap_or("").into());devices::update_devices(&ui,rows);
+            let host=state["saved"]["devices"].as_array().into_iter().flatten().find(|d|d["uuid"]==selected).or_else(||devices.iter().find(|d|d["uuid"]==selected));
+            ui.set_selected_uuid(selected.into());
+            ui.set_network_address(host.and_then(|d|d["address"].as_str()).unwrap_or("").into());
+            ui.set_network_addresses(host.and_then(|d|d["addresses"].as_array()).map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default().into());
+            ui.set_network_report(if state["network"]["uuid"]==selected{network::report_text(&state["network"])}else{"尚未诊断".into()}.into());
             let client_id=state["saved"]["clientId"].as_str().unwrap_or("");
             ui.set_profile_tab(state["profileTab"].as_str().unwrap_or("video").into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);

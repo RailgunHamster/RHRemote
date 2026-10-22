@@ -174,6 +174,8 @@ pub struct SharedDevice {
     pub uuid: String,
     pub name: String,
     pub address: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
     #[serde(default)]
     pub display_name: String,
     #[serde(default)]
@@ -347,6 +349,7 @@ impl SharedConfig {
         let mut ids = BTreeSet::new();
         for d in &self.devices {
             display_name(&d.display_name)?;
+            crate::network::addresses(&d.address,&d.addresses)?;
             if !valid_id(&d.uuid) || !ids.insert(d.uuid.to_ascii_lowercase()) {
                 return Err("empty or duplicate device UUID".into());
             }
@@ -476,7 +479,13 @@ pub(crate) fn from_state(s: &State) -> SharedConfig {
             SharedDevice {
                 uuid: d.uuid.clone(),
                 name: d.name.clone(),
-                address: d.address.clone(),
+                address: devices.get(&d.uuid).map(|h| h.address.clone()).unwrap_or_else(||d.address.clone()),
+                addresses: {
+                    let primary=devices.get(&d.uuid).map(|h|h.address.as_str()).unwrap_or(&d.address);
+                    let saved=devices.get(&d.uuid).map(|h|h.addresses.as_slice()).unwrap_or(&[]);
+                    let mut observed=d.addresses.clone();observed.push(d.address.clone());
+                    crate::network::merge_extra(primary,saved,&observed)
+                },
                 display_name: devices
                     .get(&d.uuid)
                     .map(|h| h.display_name.clone())
@@ -540,6 +549,7 @@ mod tests {
                 uuid: "self".into(),
                 name: "PC".into(),
                 address: "local".into(),
+                addresses: Vec::new(),
                 display_name: String::new(),
                 swap_buttons: true,
             }],
@@ -655,6 +665,7 @@ mod tests {
                 uuid: (*id).into(),
                 name: (*id).into(),
                 address: "local".into(),
+                addresses: Vec::new(),
                 display_name: String::new(),
                 online: *id != "offline",
                 paired: false,
@@ -744,6 +755,7 @@ mod tests {
             uuid: "self".into(),
             name: "PC".into(),
             address: "local".into(),
+            addresses: Vec::new(),
             display_name: String::new(),
             online: true,
             paired: true,

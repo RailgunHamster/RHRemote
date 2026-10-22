@@ -19,7 +19,7 @@ Edit-Source 'app/build.gradle' {
     param($s)
     $s=$s.Replace('applicationId "com.limelight"','applicationId "com.rhremote.client"').Replace('applicationId "com.limelight.root"','applicationId "com.rhremote.client.root"')
     $s=$s.Replace('applicationIdSuffix ".debug"','').Replace('applicationIdSuffix ".unofficial"','')
-    $s=$s.Replace('versionName "12.2"','versionName "0.2.1"').Replace('versionCode = 315','versionCode = 201')
+    $s=$s.Replace('versionName "12.2"','versionName "0.2.2"').Replace('versionCode = 315','versionCode = 202')
     $s=$s.Replace('"Moonlight (Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight (Root Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight"','"RHRemote-Moonlight"').Replace('"Moonlight (Root)"','"RHRemote-Moonlight"')
     # Build only the actual OPPO architecture; don't spend time building unused ABIs.
     $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters 'arm64-v8a' }")
@@ -167,7 +167,9 @@ Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
 '@
     $s=Replace-Once $s '    private void stopConnection() {' "    private void stopConnection() {`n        if(rhControls != null) rhControls.dispose();`n        if(rhTouch != null) rhTouch.cancel();"
     $s=Replace-Once $s '                connected = true;' "                connected = true;`n                if(rhControls != null) rhControls.markConnected();"
-    $s=Replace-Once $s '.setMaxPacketSize(1392)' '.setMaxPacketSize(rhProfile.packetSize)'
+    $s=Replace-Once $s '.setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO)' '.setRemoteConfiguration(rhProfile.remoteConfiguration(host))'
+    $s=Replace-Once $s 'rhProfile.apply(prefConfig);' 'rhProfile.applyNetwork(getIntent().getStringExtra(EXTRA_HOST),prefConfig);'
+    $s=Replace-Once $s '.setMaxPacketSize(1392)'  '.setMaxPacketSize(rhProfile.effectivePacketSize(host))'
     $s=Replace-Once $s '        controllerHandler = new ControllerHandler(this, conn, this, prefConfig);' @'
         conn.setRhDisplay(new com.limelight.rhremote.RhDisplay(this,host,getIntent().getByteArrayExtra(EXTRA_SERVER_CERT),rhProfile));
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);

@@ -14,6 +14,6 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Android build failed.'}
     $repo=Split-Path $PSScriptRoot -Parent;$out=Join-Path $repo 'dist/android'
     New-Item -ItemType Directory -Force -Path $out|Out-Null
-    Copy-Item -LiteralPath 'app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk' -Destination (Join-Path $out 'RHRemote-v0.2.1.apk') -Force
-    Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out 'RHRemote-v0.2.1.apk')|Select-Object Hash,Path
+    Copy-Item -LiteralPath 'app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk' -Destination (Join-Path $out 'RHRemote-v0.2.2.apk') -Force
+    Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out 'RHRemote-v0.2.2.apk')|Select-Object Hash,Path
 }finally{Pop-Location}

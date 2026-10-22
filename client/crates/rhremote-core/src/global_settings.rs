@@ -119,6 +119,7 @@ impl Controller {
                             name: d.name,
                             display_name: d.display_name,
                             address: d.address,
+                            addresses: Vec::new(),
                             online: false,
                             paired: false,
                             is_self: false,

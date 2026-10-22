@@ -9,7 +9,7 @@ function Edit-Source([string]$Relative,[scriptblock]$Edit){
     $updated=& $Edit (Get-Content -LiteralPath $original -Raw)
     [IO.File]::WriteAllText($target,$updated,(New-Object Text.UTF8Encoding $false))
 }
-function Replace-Once([string]$Text,[string]$Before,[string]$After){if(-not $Text.Contains($Before)){throw ('Upstream patch anchor missing: '+$Before.Substring(0,[Math]::Min(70,$Before.Length)))};return $Text.Replace($Before,$After)}
+function Replace-Once([string]$Text,[string]$Before,[string]$After){if(-not $Text.Contains($Before)){$Text=$Text.Replace("`r`n","`n");$Before=$Before.Replace("`r`n","`n");$After=$After.Replace("`r`n","`n")};if(-not $Text.Contains($Before)){throw ('Upstream patch anchor missing: '+$Before.Substring(0,[Math]::Min(70,$Before.Length)))};return $Text.Replace($Before,$After)}
 Edit-Source 'app/main.cpp' {param($s)
     $s=$s.Replace('QCoreApplication::setOrganizationName("Moonlight Game Streaming Project");','QCoreApplication::setOrganizationName("RHRemote");')
     $s=$s.Replace('QCoreApplication::setOrganizationDomain("moonlight-stream.com");','QCoreApplication::setOrganizationDomain("rhremote.local");')
@@ -52,6 +52,12 @@ Edit-Source 'app/backend/nvcomputer.h' {param($s)
 }
 Edit-Source 'app/backend/computermanager.cpp' {param($s)
     $s=$s.Replace("`r`n","`n")
+    $s=Replace-Once $s '                for (auto& address : m_Computer->uniqueAddresses()) {' @'
+                auto rhAddresses=m_Computer->uniqueAddresses();
+                const auto rhSelected=qEnvironmentVariable("RHREMOTE_CONNECT_ADDRESS");
+                if(!rhSelected.isEmpty()&&m_Computer->uuid.compare(qEnvironmentVariable("RHREMOTE_TARGET_UUID"),Qt::CaseInsensitive)==0)rhAddresses={NvAddress(rhSelected,47989)};
+                for (auto& address : rhAddresses) {
+'@
     $s=Replace-Once $s '        changed = m_Computer->updateAppList(appList);' @'
         changed = m_Computer->updateAppList(appList);
         if(qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")){
@@ -67,7 +73,27 @@ void ComputerManager::startPollingComputer(NvComputer* computer)
 {
     const auto target=qEnvironmentVariable("RHREMOTE_TARGET_UUID");
     if(!target.isEmpty() && computer->uuid.compare(target,Qt::CaseInsensitive)!=0)return;
+    const auto address=qEnvironmentVariable("RHREMOTE_CONNECT_ADDRESS");
+    if(!target.isEmpty()&&!address.isEmpty()) {computer->manualAddress=NvAddress(address,47989);computer->activeAddress=computer->manualAddress;}
 '@)
+}
+Edit-Source 'app/backend/computerseeker.cpp' {param($s)
+    $s=Replace-Once $s '    m_ComputerManager->addNewHostManually(m_ComputerName);' @'
+    // The shell passes a known UUID and address. Its normal monitor performs
+    // fresh certificate/UUID checks and fetches the app list. Avoid a parallel
+    // add-host task doing the same HTTP and HTTPS probes again.
+    bool knownTarget=false;
+    const auto target=qEnvironmentVariable("RHREMOTE_TARGET_UUID");
+    if(!target.isEmpty()){
+        for(auto computer:m_ComputerManager->getComputers()){
+            if(computer->uuid.compare(target,Qt::CaseInsensitive)==0&&matchComputer(computer)){
+                knownTarget=true;break;
+            }
+        }
+    }
+    if(!knownTarget)m_ComputerManager->addNewHostManually(m_ComputerName);
+'@
+    return $s
 }
 Edit-Source 'app/cli/startstream.cpp' {param($s)
     $s=$s.Replace("`r`n","`n")
@@ -154,7 +180,7 @@ Edit-Source 'app/cli/listapps.cpp' {param($s)
                     const auto requestPath=qEnvironmentVariable("RHREMOTE_HOST_REQUEST");
                     if(!requestPath.isEmpty()) {
                         QFile file(requestPath);QJsonObject result{{"ok",false},{"error","invalid host request"}};
-                        if(file.open(QIODevice::ReadOnly)&&file.size()<=4096){const auto request=QJsonDocument::fromJson(file.readAll()).object();const auto path=request["path"].toString();if(path=="/v1/displays"||path=="/v1/display/prepare")result=RhHost::request(event.computer->activeAddress.address(),event.computer->serverCert,path,request["body"].toObject());}
+                        if(file.open(QIODevice::ReadOnly)&&file.size()<=4096){const auto request=QJsonDocument::fromJson(file.readAll()).object();const auto path=request["path"].toString();if(path=="/v1/network/diagnose")result=RhHost::diagnose(event.computer->activeAddress.address(),event.computer->serverCert);else if(path=="/v1/displays"||path=="/v1/display/prepare"||path=="/v1/network")result=RhHost::request(event.computer->activeAddress.address(),event.computer->serverCert,path,request["body"].toObject());}
                         QSaveFile output(qEnvironmentVariable("RHREMOTE_HOST_RESPONSE"));if(output.open(QIODevice::WriteOnly)){output.write(QJsonDocument(result).toJson(QJsonDocument::Compact));output.commit();}
                         QCoreApplication::exit(result["ok"].toBool()?0:1);return;
                     }
@@ -173,13 +199,39 @@ Edit-Source 'app/gui/StreamSegue.qml' {param($s)
 Edit-Source 'moonlight-common-c/moonlight-common-c/src/VideoStream.c' {param($s)
     return (Replace-Once $s '#define FIRST_FRAME_TIMEOUT_SEC 10' '#define FIRST_FRAME_TIMEOUT_SEC 30')
 }
+Edit-Source 'moonlight-common-c/moonlight-common-c/src/RtspConnection.c' {param($s)
+    $s=$s.Replace("`r`n","`n")
+    return (Replace-Once $s @'
+    if (useEnet) {
+        return transactRtspMessageEnet(request, response, expectingPayload, error);
+    }
+    else {
+        return transactRtspMessageTcp(request, response, error);
+    }
+'@ @'
+    LARGE_INTEGER rhStarted,rhEnded,rhFrequency;
+    QueryPerformanceFrequency(&rhFrequency);QueryPerformanceCounter(&rhStarted);
+    const bool rhResult=useEnet ? transactRtspMessageEnet(request,response,expectingPayload,error) : transactRtspMessageTcp(request,response,error);
+    // Timing metadata only: never log targets, headers, keys or payloads here.
+    QueryPerformanceCounter(&rhEnded);
+    Limelog("RHREMOTE_RTSP %s %llu\n",request->message.request.command,(unsigned long long)((rhEnded.QuadPart-rhStarted.QuadPart)*1000000/rhFrequency.QuadPart));
+    return rhResult;
+'@)
+}
 Edit-Source 'app/streaming/session.h' {param($s)
-    $s="#include <future>`n#include <tuple>`n#include <QJsonObject>`n#include `"gui/rhprobecache.h`"`n"+$s
+    $s="#include <future>`n#include <tuple>`n#include <QJsonObject>`n#include `"gui/rhprobecache.h`"`n#include `"gui/rhwindowbridge.h`"`n"+$s
     $s=[regex]::Replace($s,'    static\r?\n    DecoderAvailability getDecoderAvailability','    DecoderAvailability getDecoderAvailability')
-    return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    using RhProbeKey=std::tuple<SDL_Window*,int,int,int,int,int>;`n    RhProbeCache<RhProbeKey,IVideoDecoder> m_RhProbeCache;`n    void execInternal();")
+    return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    using RhProbeKey=std::tuple<SDL_Window*,int,int,int,int,int>;`n    RhProbeCache<RhProbeKey,IVideoDecoder> m_RhProbeCache;`n    RhWindowBridge m_RhWindowBridge;`n    int m_RhAudioProbeConfig=-1;`n    bool m_RhAudioProbeOk=false;`n    void execInternal();")
 }
 Edit-Source 'app/streaming/session.cpp' {param($s)
     $s="#include `"gui/rhcontrol.h`"`n#include `"gui/rhpreparation.h`"`n"+$s
+    $s=Replace-Once $s '        m_StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;' @'
+        m_StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;
+        if(qEnvironmentVariableIsSet("RHREMOTE_TARGET_UUID")) {
+            const auto mode=qEnvironmentVariable("RHREMOTE_NETWORK_MODE");
+            m_StreamConfig.streamingRemotely=(mode=="tailscale"||mode=="internet")?STREAM_CFG_REMOTE:mode=="lan"?STREAM_CFG_LOCAL:STREAM_CFG_AUTO;
+        }
+'@
     $s=[regex]::Replace($s,'bool Session::initialize\(\)\r?\n\{',"bool Session::initialize()`n{`n    m_RhDisplayPreparation=RhPreparation::start(m_Computer->activeAddress.address(),m_Computer->serverCert,m_Preferences->width,m_Preferences->height);")
     $s=Replace-Once $s '    if (!chooseDecoder(vds, window, videoFormat, width, height, frameRate, false, false, true, decoder)) {' @'
     RhStatistics::Scope traceProbe("client_decoder_probe");
@@ -198,7 +250,11 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     m_RhProbeCache.clear();
 '@)
     $s=[regex]::Replace($s,'(?m)^    if \(!chooseDecoder\(m_Preferences->videoDecoderSelection,','    if (!decoder && !chooseDecoder(m_Preferences->videoDecoderSelection,')
-    $s=Replace-Once $s '    SDL_DestroyWindow(testWindow);' "    m_RhProbeCache.clear();`n    SDL_DestroyWindow(testWindow);"
+    $s=Replace-Once $s '    SDL_DestroyWindow(testWindow);' "    m_RhProbeCache.clear();`n    if(ret)m_RhWindowBridge.retain(testWindow);`n    SDL_DestroyWindow(testWindow);"
+    # A real window now owns its own loader reference. Release before every
+    # video shutdown as well, including connection and window creation failures.
+    $s=Replace-Once $s '    m_InputHandler->setWindow(m_Window);' "    m_RhWindowBridge.release();`n    m_InputHandler->setWindow(m_Window);"
+    $s=Replace-Once $s 'SDL_QuitSubSystem(SDL_INIT_VIDEO);' "m_RhWindowBridge.release();`n        SDL_QuitSubSystem(SDL_INIT_VIDEO);"
     # Check controller mappings after the real input handler has initialized SDL,
     # instead of opening and closing the same device subsystem twice.
     $s=Replace-Once $s '    if (!SdlInputHandler::getUnmappedGamepads().isEmpty()) {' '    if (qEnvironmentVariableIsEmpty("RHREMOTE_CONTROL_PORT") && !SdlInputHandler::getUnmappedGamepads().isEmpty()) {'
@@ -274,12 +330,27 @@ bool Session::populateDecoderProperties(SDL_Window* window)
 }
 Edit-Source 'app/streaming/video/ffmpeg.cpp' {param($s)
     $s="#include `"gui/rhcontrol.h`"`n"+$s
+    $s=Replace-Once $s '                // The test worked, so now let''s initialize it for real' @'
+                // The backend may retain an empty device only after its trial
+                // decode succeeded. Live codec, textures and swapchain are rebuilt.
+                m_BackendRenderer->finishTrialDecode();
+                // The test worked, so now let's initialize it for real
+'@
     return (Replace-Once $s '        // Accumulate these values into the global stats' @'
         if(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT")) {
             VIDEO_STATS apiStats={};addVideoStats(m_LastWndVideoStats,apiStats);addVideoStats(m_ActiveWndVideoStats,apiStats);
             char text[2048]={};stringifyVideoStats(apiStats,text,sizeof(text));RhRuntime::performance(QString::fromUtf8(text));
         }
         // Accumulate these values into the global stats
+'@)
+}
+Edit-Source 'app/streaming/video/ffmpeg-renderers/renderer.h' {param($s)
+    return (Replace-Once $s '    // NOTE: This can be called BEFORE initialize()!' @'
+    // Called only after a successful trial decode, immediately before reset.
+    // Backends may hand off reusable device state after releasing trial resources.
+    virtual void finishTrialDecode() {}
+
+    // NOTE: This can be called BEFORE initialize()!
 '@)
 }
 Edit-Source 'app/streaming/input/gamepad.cpp' {param($s)
@@ -297,6 +368,8 @@ Edit-Source 'app/streaming/input/input.cpp' {param($s)
     return $s.Substring(0,$start)+"    if(qEnvironmentVariable(`"RHREMOTE_GAMEPAD_ENABLED`")!=`"0`"){`n"+$s.Substring($start,$end-$start)+"`n    }else{m_GamepadMask=0;}`n"+$s.Substring($end)
 }
 Edit-Source 'app/streaming/video/ffmpeg-renderers/d3d11va.h' {param($s)
+    $s=Replace-Once $s '    virtual bool needsTestFrame() override;' '    virtual void finishTrialDecode() override { m_RhProbeCacheable=true; }
+    virtual bool needsTestFrame() override;'
     return (Replace-Once $s '    int m_DecoderSelectionPass;' "    bool m_RhProbeCacheable=false;`n    int m_DecoderSelectionPass;")
 }
 Edit-Source 'app/streaming/video/ffmpeg-renderers/d3d11va.cpp' {param($s)
@@ -316,6 +389,27 @@ Edit-Source 'app/streaming/video/ffmpeg-renderers/d3d11va.cpp' {param($s)
 }
 Edit-Source 'app/streaming/audio/audio.cpp' {param($s)
     $s="#include `"gui/rhcontrol.h`"`n"+$s
+    $s=[regex]::Replace($s,'int Session::getAudioRendererCapabilities\(int audioConfiguration\)\r?\n\{',@'
+int Session::getAudioRendererCapabilities(int audioConfiguration)
+{
+    // A muted RHRemote connection can negotiate the conservative capability
+    // set without opening a playback endpoint for this disposable probe.
+    if(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT")&&!RhRuntime::get().audioEnabled.load())return 0;
+'@)
+    $s=[regex]::Replace($s,'bool Session::testAudio\(int audioConfiguration\)\r?\n\{',@'
+bool Session::testAudio(int audioConfiguration)
+{
+    if(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT")){
+        if(!RhRuntime::get().audioEnabled.load())return true;
+        if(m_RhAudioProbeConfig==audioConfiguration)return m_RhAudioProbeOk;
+    }
+'@)
+    $s=Replace-Once $s '    int caps = audioRenderer->getCapabilities();' @'
+    if(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT")){
+        m_RhAudioProbeConfig=audioConfiguration;m_RhAudioProbeOk=true;
+    }
+    int caps = audioRenderer->getCapabilities();
+'@
     $s=Replace-Once $s '    s_ActiveSession->m_AudioSampleCount++;' @'
     s_ActiveSession->m_AudioSampleCount++;
     RhRuntime::get().audioPackets++;
@@ -334,7 +428,7 @@ Edit-Source 'app/streaming/audio/audio.cpp' {param($s)
 Edit-Source 'app/app.pro' {param($s)return $s+@'
 
 # RHRemote native shell; the existing streaming implementation remains intact.
-HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h gui/rhprobecache.h gui/rhd3d11probe.h gui/rhcapturetools.h
+HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h gui/rhprobecache.h gui/rhd3d11probe.h gui/rhcapturetools.h gui/rhwindowbridge.h
 win32 {
     TARGET = RHRemote
     QMAKE_TARGET_COMPANY = RHRemote

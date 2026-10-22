@@ -97,3 +97,5 @@ Windows 的 `stream.controls.toggle` 展开／收起位于串流窗口顶部的�
 Android 的 `stream.controls.toggle` 控制顶部分类面板，开关坐标保持不变。`stream.controls.tab {tab: input / displays / audio}` 选择操作、屏幕、声音页；`stream.displays.open` 直接打开屏幕页。`state.stream.controlsTab` 与 `controlsLayout` 返回当前页、列数、开关/面板位置尺寸及可滚动状态。按钮和音量滑条继续使用既有 action；屏幕刷新在后台进行，保留仍可用显示器的选择，并使用本次清单里的最新 captureIndex。屏幕组件未安装时不生成虚假的显示器条目。
 
 Windows 意外中断后，`statistics.phase=reconnecting`、`connecting=true`，恢复首帧后回到 `connected`。`statistics.reconnectAttempts` 是当前连续恢复次数；主动 `stream.disconnect` 会取消待执行的恢复。仅有已渲染会话能够自动恢复，首次连接失败不会无限重试。`stream.test.interrupt` 仅在已启用逐帧统计的活动 Windows 会话中可用，注入一次明确标记的模拟中断，走完整的底层终止及恢复路径。
+
+设备网络接口及参数见 [NETWORK.md](NETWORK.md)：`device.network.configure`、`device.network.diagnose`、`network.state`。设置分类新增 `network`；设备的多地址参与同步，诊断和当前路径保留在本机。

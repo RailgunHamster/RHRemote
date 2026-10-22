@@ -9,6 +9,7 @@ use std::{
 };
 mod global_settings;
 pub mod sync_model;
+pub mod network;
 
 pub const ACTIONS: &str = include_str!("actions.json");
 pub fn settings_catalog() -> Value {
@@ -57,6 +58,9 @@ pub struct Profile {
     pub decoder: String,
     pub window_mode: String,
     pub packet_size: u32,
+    pub packet_size_auto: bool,
+    pub network_mode: String,
+    pub remote_bitrate_mbps: u32,
     pub on_screen_controller: bool,
     pub gamepad_enabled: bool,
     pub full_range: bool,
@@ -87,6 +91,9 @@ impl Default for Profile {
             decoder: "hardware".into(),
             window_mode: "windowed".into(),
             packet_size: 1392,
+            packet_size_auto: true,
+            network_mode: "auto".into(),
+            remote_bitrate_mbps: 0,
             on_screen_controller: false,
             gamepad_enabled: false,
             full_range: false,
@@ -107,6 +114,8 @@ impl Profile {
         if !(10..=240).contains(&self.fps)
             || !(1..=300).contains(&self.bitrate_mbps)
             || !["auto", "HEVC", "H.264", "AV1"].contains(&self.codec.as_str())
+            || !["auto", "lan", "tailscale", "internet"].contains(&self.network_mode.as_str())
+            || self.remote_bitrate_mbps > 300
             || self.volume > 100
             || !(1024..=1472).contains(&self.packet_size)
             || !["stereo", "5.1-surround", "7.1-surround"].contains(&self.audio_config.as_str())
@@ -128,6 +137,8 @@ pub struct Device {
     #[serde(default)]
     pub display_name: String,
     pub address: String,
+    #[serde(default)]
+    pub addresses: Vec<String>,
     pub online: bool,
     pub paired: bool,
     #[serde(default)]
@@ -168,6 +179,7 @@ pub struct State {
     pub audio_enabled: bool,
     pub volume: u32,
     pub statistics: Value,
+    pub network: Value,
     pub controls: bool,
     pub stream_menu: String,
     pub trackpad: bool,
@@ -253,6 +265,7 @@ impl Controller {
                 audio_enabled: false,
                 volume: 100,
                 statistics: Value::Null,
+                network: Value::Null,
                 controls: false,
                 stream_menu: String::new(),
                 trackpad: false,
@@ -358,6 +371,7 @@ impl Controller {
         } else if was_connecting && streaming {
             s.status = String::new();
         }
+        if let Some(network)=statistics.get("network"){s.network=network.clone();}
         s.statistics = statistics;
         s.revision += 1;
     }
@@ -470,6 +484,36 @@ impl Controller {
                 s.devices.swap(index, target);
                 s.status = "设备顺序已保存".into();
             }
+            "device.network.configure" => {
+                let uuid = args["uuid"].as_str().ok_or("uuid required")?;
+                let device=s.devices.iter().find(|d|d.uuid==uuid).ok_or("unknown device")?.clone();
+                let primary=args["address"].as_str().unwrap_or(&device.address).to_owned();
+                let extra:Vec<String>=serde_json::from_value(args["addresses"].clone()).map_err(|_|"addresses requires an array of hostnames or IPs")?;
+                let all=network::addresses(&primary,&extra)?;
+                let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;
+                let host=next.devices.iter_mut().find(|d|d.uuid==uuid).ok_or("unknown device")?;
+                host.address=primary.clone();host.addresses=all.into_iter().filter(|a|!a.eq_ignore_ascii_case(&primary)).collect();
+                let extras=host.addresses.clone();
+                self.persist(&next)?;
+                s.saved=next;
+                let host=s.devices.iter_mut().find(|d|d.uuid==uuid).unwrap();host.address=primary;host.addresses=extras;
+                s.status="连接地址已保存".into();
+                let rows=s.devices.clone();drop(s);
+                self.platform.execute("devices.restore", &json!({"devices":rows}))?;
+                return Ok(json!({"saved":true}));
+            }
+            "device.network.diagnose" => {
+                let uuid=args["uuid"].as_str().ok_or("uuid required")?;
+                let mut device=s.devices.iter().find(|d|d.uuid==uuid).ok_or("unknown device")?.clone();
+                if let Some(saved)=s.saved.devices.iter().find(|d|d.uuid==uuid){device.addresses=saved.addresses.clone();}
+                if let Some(primary)=args.get("address").and_then(Value::as_str){device.address=primary.into();}
+                if let Some(extra)=args.get("addresses"){device.addresses=serde_json::from_value(extra.clone()).map_err(|_|"addresses requires an array")?;}
+                network::addresses(&device.address,&device.addresses)?;
+                let profile=if s.selected==uuid{s.draft.clone().unwrap_or_else(||s.saved.effective_profile(uuid))}else{s.saved.effective_profile(uuid)};
+                args["device"]=json!(device);args["profile"]=json!(profile);
+                drop(s);let result=self.platform.execute(id,&args)?;
+                let mut s=self.state.lock().unwrap();s.network=result.clone();s.revision+=1;return Ok(result);
+            }
             "devices.open" | "device.add.cancel" | "settings.cancel" => {
                 s.page = "devices".into();
                 s.draft = None;
@@ -540,7 +584,7 @@ impl Controller {
                     return Err("open device settings first".into());
                 }
                 let tab = args["tab"].as_str().ok_or("tab required")?;
-                if !["video", "audio", "input", "advanced"].contains(&tab) {
+                if !["video", "audio", "input", "network", "advanced"].contains(&tab) {
                     return Err("unknown device settings tab".into());
                 }
                 s.profile_tab = tab.into();
@@ -671,14 +715,15 @@ impl Controller {
                     if d.is_self {
                         return Err("this is the local device; its configuration remains available for editing and sync".into());
                     }
-                    if !d.online {
-                        return Err("device is offline".into());
-                    }
+
                     if id == "device.connect" && !d.paired {
                         return Err("device must be paired first".into());
                     }
                     s.selected = uuid.clone();
                     args["device"] = serde_json::to_value(&d).unwrap();
+                    if let Some(saved) = s.saved.devices.iter().find(|h| h.uuid == uuid) {
+                        args["device"]["addresses"] = json!(saved.addresses);
+                    }
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
                     if id == "device.connect" {
@@ -927,6 +972,7 @@ mod tests {
                 name: "A".into(),
                 display_name: String::new(),
                 address: "localhost".into(),
+                addresses: Vec::new(),
                 online: true,
                 paired: true,
                 is_self: false,
@@ -936,6 +982,7 @@ mod tests {
                 name: "B".into(),
                 display_name: String::new(),
                 address: "localhost".into(),
+                addresses: Vec::new(),
                 online: true,
                 paired: true,
                 is_self: false,
@@ -1226,6 +1273,7 @@ mod tests {
             name: "Self".into(),
             display_name: String::new(),
             address: "localhost".into(),
+            addresses: Vec::new(),
             online: true,
             paired: true,
             is_self: true,

@@ -13,6 +13,7 @@ on:
       - 'tools/assemble-server.ps1'
       - 'tools/server-package.ps1'
       - 'tools/install-server.ps1'
+      - 'tools/configure-network.ps1'
       - 'tools/test-server-package.ps1'
       - '.github/workflows/server-windows.yml'
 permissions:

@@ -24,5 +24,8 @@
  {"key":"windowMode","label":"窗口模式","tab":"advanced","type":"select","platforms":["windows"],"options":[["windowed","窗口"],["borderless","无边框全屏"],["fullscreen","独占全屏"]]},
  {"key":"packetSize","label":"视频分包大小（字节）","tab":"advanced","type":"number","min":1024,"max":1472,"step":1},
  {"key":"fullRange","label":"完整色彩范围","tab":"advanced","type":"bool","platforms":["android"]},
- {"key":"statistics","label":"显示性能统计","tab":"advanced","type":"bool"}
+ {"key":"statistics","label":"显示性能统计","tab":"advanced","type":"bool"},
+ {"key":"networkMode","label":"连接网络","tab":"network","type":"select","options":[["auto","自动选择"],["lan","局域网"],["tailscale","Tailscale"],["internet","外网地址"]]},
+ {"key":"packetSizeAuto","label":"自动分包（兼容 VPN / 流量）","tab":"network","type":"bool","help":"开启时按连接路径决定分包，Tailscale 使用 1024 字节；关闭后使用高级页的手动值。"},
+ {"key":"remoteBitrateMbps","label":"外网码率上限（Mbps，0 沿用画面设置）","tab":"network","type":"number","min":0,"max":300,"step":1}
 ]

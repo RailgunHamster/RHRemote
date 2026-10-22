@@ -276,6 +276,7 @@ mod tests {
                 uuid: "self".into(),
                 name: "PC".into(),
                 address: "127.0.0.1".into(),
+                addresses: Vec::new(),
                 display_name: String::new(),
                 swap_buttons: true,
             }],

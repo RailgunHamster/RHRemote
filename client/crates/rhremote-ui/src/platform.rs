@@ -158,6 +158,7 @@ pub struct NativePlatform {
     port: u16,
     pub sync: Mutex<crate::config_sync::ConfigSync>,
     device_operation: Mutex<()>,
+    network: crate::network::Network,
     updates: Mutex<crate::updates::Updates>,
     pub statistics: Mutex<crate::statistics::Statistics>,
 }
@@ -202,6 +203,7 @@ impl NativePlatform {
             .into_values()
             .filter_map(|m| {
                 Some(Device {
+                    addresses: Vec::new(),
                     uuid: m.get("uuid")?.clone(),
                     name: m.get("hostname")?.clone(),
                     display_name: String::new(),
@@ -240,6 +242,7 @@ impl NativePlatform {
                 .port(),
             sync: Mutex::new(crate::config_sync::ConfigSync::new(data)?),
             device_operation: Mutex::new(()),
+            network: crate::network::Network::default(),
             updates: Mutex::new(crate::updates::Updates::new()),
             statistics: Mutex::new(statistics),
         })
@@ -284,24 +287,9 @@ impl NativePlatform {
             d.online = true;
             return d;
         }
-        let url = format!(
-            "http://{}:47989/serverinfo?uniqueid=0123456789ABCDEF",
-            d.address
-        );
-        if let Ok(response) = ureq::get(&url).timeout(Duration::from_secs(2)).call() {
-            if let Ok(text) = response.into_string() {
-                if let Ok(doc) = roxmltree::Document::parse(&text) {
-                    if let Some(uuid) = doc
-                        .descendants()
-                        .find(|n| n.has_tag_name("uniqueid"))
-                        .and_then(|n| n.text())
-                    {
-                        if uuid.eq_ignore_ascii_case(&d.uuid) {
-                            d.online = true;
-                        }
-                    }
-                }
-            }
+        if let Ok((address,_))=self.network.resolve(&d,&rhremote_core::Profile::default()) {
+            d.address=address;d.online=true;
+            for a in self.network.discovered(&d) {if d.addresses.len()<7&&!d.addresses.contains(&a)&&a!=d.address{d.addresses.push(a);}}
         }
         if d.online {
             let child = self
@@ -405,18 +393,19 @@ impl NativePlatform {
     }
     fn spawn_stream(&self, args: &Value) -> Result<Child, String> {
         let p = &args["profile"];
+        let device:Device=serde_json::from_value(args["device"].clone()).map_err(|e|e.to_string())?;
+        let profile:rhremote_core::Profile=serde_json::from_value(p.clone()).map_err(|e|e.to_string())?;
+        let (resolved,policy)=self.network.resolve(&device,&profile)?;
         let trace = self.statistics.lock().unwrap().session(p)?;
         fs::write(
             &self.session_status,
             b"{\"streaming\":false,\"phase\":\"connecting\",\"error\":\"\"}",
         )
         .map_err(|e| e.to_string())?;
-        let address = args["device"]["address"]
-            .as_str()
-            .ok_or("address required")?;
+        let address = resolved.as_str();
         let resolution = format!("{}x{}", p["width"], p["height"]);
         let fps = p["fps"].to_string();
-        let rate = (p["bitrateMbps"].as_u64().unwrap_or(25) * 1000).to_string();
+        let rate = (policy.bitrate_mbps * 1000).to_string();
         let mut command = self.command();
         command.env_remove("RHREMOTE_STATISTICS_FILE");
         if let Some(path) = trace {
@@ -464,7 +453,7 @@ impl NativePlatform {
                 "--capture-system-keys",
                 p["captureSysKeys"].as_str().unwrap_or("fullscreen"),
                 "--packet-size",
-                &p["packetSize"].as_u64().unwrap_or(1392).to_string(),
+                &policy.packet_size.to_string(),
                 if p["reverseScroll"] == true {
                     "--reverse-scroll-direction"
                 } else {
@@ -497,6 +486,8 @@ impl NativePlatform {
                     "--no-touchscreen-trackpad"
                 },
             ])
+            .env("RHREMOTE_NETWORK_MODE", &policy.network)
+            .env("RHREMOTE_CONNECT_ADDRESS", address)
             .env("RHREMOTE_CONTROL_PORT", self.port.to_string())
             .env(
                 "RHREMOTE_TARGET_UUID",
@@ -536,6 +527,26 @@ impl NativePlatform {
             )
             .spawn()
             .map_err(|e| e.to_string())
+    }
+    fn network_host_diagnostic(&self,address:&str,uuid:&str)->Result<Value,String> {
+        if self.child.lock().unwrap().as_mut().is_some_and(|c|c.try_wait().ok().flatten().is_none()) {
+            return Err("请先断开串流再运行主机网络诊断".into());
+        }
+        let request=self.native_data.join("network-request.json");
+        let response=self.native_data.join("network-response.json");
+        fs::write(&request,br#"{"path":"/v1/network/diagnose"}"#).map_err(|e|e.to_string())?;
+        fs::write(&response,b"{}").map_err(|e|e.to_string())?;
+        let mut child=self.command().args(["list",address])
+            .env("RHREMOTE_TARGET_UUID",uuid).env("RHREMOTE_CONNECT_ADDRESS",address)
+            .env("RHREMOTE_HOST_REQUEST",request).env("RHREMOTE_HOST_RESPONSE",&response).spawn().map_err(|e|e.to_string())?;
+        let deadline=Instant::now()+Duration::from_secs(12);
+        loop {
+            if child.try_wait().map_err(|e|e.to_string())?.is_some(){break;}
+            if Instant::now()>=deadline{let _=child.kill();let _=child.wait();return Err("主机网络诊断超时；检查配对、47995 与主机服务版本".into());}
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let reply:Value=serde_json::from_slice(&fs::read(response).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+        if reply["ok"]==true{Ok(reply["result"].clone())}else{Err(reply["error"].as_str().unwrap_or("主机网络诊断不可用；检查服务版本与配对证书").into())}
     }
     pub fn state(&self) -> Result<Value, String> {
         let http_state: Option<Value> = self
@@ -659,6 +670,7 @@ impl NativePlatform {
         drop(slot);
         drop(recovery);
         value["tracing"] = self.statistics.lock().unwrap().state();
+        value["network"] = self.network.last.lock().unwrap().clone();
         Ok(value)
     }
     fn stop_owned(&self) -> Result<Value, String> {
@@ -707,13 +719,24 @@ impl Platform for NativePlatform {
         self.statistics.lock().unwrap().connection_requested(timing);
     }
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String> {
-        let _device_guard = if action.starts_with("devices.") || action == "device.add.submit" {
+        let _device_guard = if action.starts_with("devices.") || action == "device.add.submit" || action == "device.network.diagnose" {
             Some(self.device_operation.lock().unwrap())
         } else {
             None
         };
         match action {
             "engine.close" => self.stop_owned(),
+            "network.state" => Ok(self.network.last.lock().unwrap().clone()),
+            "device.network.diagnose" => {
+                let d:Device=serde_json::from_value(args["device"].clone()).map_err(|e|e.to_string())?;
+                let p:rhremote_core::Profile=serde_json::from_value(args["profile"].clone()).map_err(|e|e.to_string())?;
+                let mut result=self.network.diagnose(&d,&p);
+                if let Some(address)=result["selectedAddress"].as_str().map(str::to_owned){
+                    match self.network_host_diagnostic(&address,&d.uuid){Ok(host)=>result["host"]=host,Err(error)=>result["hostError"]=json!(error)}
+                }
+                *self.network.last.lock().unwrap()=result.clone();
+                Ok(result)
+            }
             "statistics.state" => Ok(self.statistics.lock().unwrap().state()),
             "statistics.configure" => {
                 let mut child = self.child.lock().unwrap();
@@ -787,6 +810,7 @@ impl Platform for NativePlatform {
                     name: field("hostname").unwrap_or(address.into()),
                     display_name: String::new(),
                     address: address.into(),
+                    addresses: Vec::new(),
                     online: true,
                     paired: false,
                     is_self: false,
@@ -821,6 +845,8 @@ impl Platform for NativePlatform {
                 let attempt = args["attemptId"].as_u64().ok_or("attempt ID required")?;
                 let device: Device =
                     serde_json::from_value(args["device"].clone()).map_err(|e| e.to_string())?;
+                let profile:rhremote_core::Profile=serde_json::from_value(args["profile"].clone()).map_err(|e|e.to_string())?;
+                let (pair_address,_)=self.network.resolve(&device,&profile)?;
                 fs::write(
                     &self.session_status,
                     b"{\"streaming\":false,\"phase\":\"pairing\",\"error\":\"\"}",
@@ -832,9 +858,7 @@ impl Platform for NativePlatform {
                         .env("RHREMOTE_SESSION_STATUS", &self.session_status)
                         .args([
                             "pair",
-                            args["device"]["address"]
-                                .as_str()
-                                .ok_or("address required")?,
+                            &pair_address,
                             "--pin",
                             args["pin"].as_str().ok_or("PIN required")?,
                         ])
