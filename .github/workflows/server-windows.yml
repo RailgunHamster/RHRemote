@@ -70,6 +70,8 @@ jobs:
           BUILD_VERSION: 0.2.1
           COMMIT: ${{ github.sha }}
         run: |
+          g++ -std=c++23 -DRHREMOTE_DEVICE_PROBE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_device_probe.cpp -o test-rhremote-device-probe.exe
+          ./test-rhremote-device-probe.exe
           cmake -S server/sunshine -B .deps/server-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=OFF -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
           cmake --build .deps/server-build --target sunshine sunshinesvc dxgi-info audio-info web-ui --parallel 3
           cmake --install .deps/server-build --prefix "$PWD/.deps/server-stage"

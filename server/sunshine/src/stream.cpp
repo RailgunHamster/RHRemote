@@ -2,6 +2,7 @@
  * @file src/stream.cpp
  * @brief Definitions for the streaming protocols.
  */
+#include "rhremote_trace.h"
 
 // standard includes
 #include <cstring>
@@ -2137,14 +2138,21 @@ namespace stream {
     while_starting_do_nothing(session->state);
 
     auto ref = broadcast.ref();
-    auto error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
+    int error;
+    {
+      rhremote::scope ping_scope("video_initial_ping");
+      error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
+    }
     if (error < 0) {
       return;
     }
 
     // Enable local prioritization and QoS tagging on video traffic if requested by the client
     auto address = session->video.peer.address();
-    session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
+    {
+      rhremote::scope qos_scope("video_socket_qos");
+      session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
+    }
 
     BOOST_LOG(debug) << "Start capturing Video"sv;
     video::capture(session->mail, session->config.monitor, session);

@@ -1478,6 +1478,7 @@ namespace video {
    * @param current_display_index The current display index or -1 if not yet known.
    */
   void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+    rhremote::scope refresh_scope("capture_refresh_displays");
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
     const auto output_name {display_device::map_output_name(config::video.output_name)};
     std::string current_display_name;

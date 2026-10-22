@@ -1,4 +1,5 @@
 #include "src/rhremote_trace.h"
+#include "src/rhremote_device_probe.h"
 /**
  * @file src/platform/windows/display_base.cpp
  * @brief Definitions for the Windows display base code.
@@ -361,73 +362,79 @@ namespace platf::dxgi {
    * @details When testing for enumeration only, we avoid resyncing the thread desktop.
    * @param adapter The DXGI adapter to use for capture.
    * @param output The DXGI output to capture.
+   * @param device Device shared only by outputs belonging to this adapter enumeration.
    * @param enumeration_only Specifies whether this test is occurring for display enumeration.
    *
    * @return True when Desktop Duplication can capture the requested output.
    */
-  bool test_dxgi_duplication(adapter_t &adapter, output_t &output, bool enumeration_only) {
-    D3D_FEATURE_LEVEL featureLevels[] {
-      D3D_FEATURE_LEVEL_11_1,
-      D3D_FEATURE_LEVEL_11_0,
-      D3D_FEATURE_LEVEL_10_1,
-      D3D_FEATURE_LEVEL_10_0,
-      D3D_FEATURE_LEVEL_9_3,
-      D3D_FEATURE_LEVEL_9_2,
-      D3D_FEATURE_LEVEL_9_1
-    };
+  bool test_dxgi_duplication(adapter_t &adapter, output_t &output, device_t &device, bool enumeration_only) {
+    rhremote::scope probe_scope("dda_output_probe");
+    return rhremote::probe_with_device(device, [&](device_t &device) {
+      rhremote::scope create_scope("dda_probe_device_create");
+      D3D_FEATURE_LEVEL featureLevels[] {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+        D3D_FEATURE_LEVEL_9_3,
+        D3D_FEATURE_LEVEL_9_2,
+        D3D_FEATURE_LEVEL_9_1
+      };
 
-    device_t device;
-    auto status = D3D11CreateDevice(
-      adapter.get(),
-      D3D_DRIVER_TYPE_UNKNOWN,
-      nullptr,
-      D3D11_CREATE_DEVICE_FLAGS,
-      featureLevels,
-      sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-      D3D11_SDK_VERSION,
-      &device,
-      nullptr,
-      nullptr
-    );
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to create D3D11 device for DD test [0x"sv << util::hex(status).to_string_view() << ']';
-      return false;
-    }
-
-    output1_t output1;
-    status = output->QueryInterface(IID_IDXGIOutput1, (void **) &output1);
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to query IDXGIOutput1 from the output"sv;
-      return false;
-    }
-
-    // Check if we can use the Desktop Duplication API on this output
-    for (int x = 0; x < 2; ++x) {
-      dup_t dup;
-
-      // Only resynchronize the thread desktop when not enumerating displays.
-      // During enumeration, the caller will do this only once to ensure
-      // a consistent view of available outputs.
-      if (!enumeration_only) {
-        syncThreadDesktop();
+      auto status = D3D11CreateDevice(
+        adapter.get(),
+        D3D_DRIVER_TYPE_UNKNOWN,
+        nullptr,
+        D3D11_CREATE_DEVICE_FLAGS,
+        featureLevels,
+        sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
+        D3D11_SDK_VERSION,
+        &device,
+        nullptr,
+        nullptr
+      );
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "Failed to create D3D11 device for DD test [0x"sv << util::hex(status).to_string_view() << ']';
+        return false;
       }
+      return true;
+    },
+                                       [&](device_t &device) {
+                                         output1_t output1;
+                                         auto status = output->QueryInterface(IID_IDXGIOutput1, (void **) &output1);
+                                         if (FAILED(status)) {
+                                           BOOST_LOG(error) << "Failed to query IDXGIOutput1 from the output"sv;
+                                           return false;
+                                         }
 
-      status = output1->DuplicateOutput((IUnknown *) device.get(), &dup);
-      if (SUCCEEDED(status)) {
-        return true;
-      }
+                                         // Check if we can use the Desktop Duplication API on this output
+                                         for (int x = 0; x < 2; ++x) {
+                                           dup_t dup;
 
-      // If we're not resyncing the thread desktop and we don't have permission to
-      // capture the current desktop, just bail immediately. Retrying won't help.
-      if (enumeration_only && status == E_ACCESSDENIED) {
-        break;
-      } else {
-        std::this_thread::sleep_for(200ms);
-      }
-    }
+                                           // Only resynchronize the thread desktop when not enumerating displays.
+                                           // During enumeration, the caller will do this only once to ensure
+                                           // a consistent view of available outputs.
+                                           if (!enumeration_only) {
+                                             syncThreadDesktop();
+                                           }
 
-    BOOST_LOG(error) << "DuplicateOutput() test failed [0x"sv << util::hex(status).to_string_view() << ']';
-    return false;
+                                           status = output1->DuplicateOutput((IUnknown *) device.get(), &dup);
+                                           if (SUCCEEDED(status)) {
+                                             return true;
+                                           }
+
+                                           // If we're not resyncing the thread desktop and we don't have permission to
+                                           // capture the current desktop, just bail immediately. Retrying won't help.
+                                           if (enumeration_only && status == E_ACCESSDENIED) {
+                                             break;
+                                           } else {
+                                             std::this_thread::sleep_for(200ms);
+                                           }
+                                         }
+
+                                         BOOST_LOG(error) << "DuplicateOutput() test failed [0x"sv << util::hex(status).to_string_view() << ']';
+                                         return false;
+                                       });
   }
 
   /**
@@ -482,7 +489,10 @@ namespace platf::dxgi {
 
     HRESULT status;
 
-    status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+    {
+      rhremote::scope factory_scope("dda_factory_create");
+      status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+    }
     if (FAILED(status)) {
       BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
       return -1;
@@ -495,6 +505,7 @@ namespace platf::dxgi {
     for (int tries = 0; tries < 2; ++tries) {
       for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
         dxgi::adapter_t adapter_tmp {adapter_p};
+        device_t candidate_device;
 
         DXGI_ADAPTER_DESC1 adapter_desc;
         adapter_tmp->GetDesc1(&adapter_desc);
@@ -514,8 +525,9 @@ namespace platf::dxgi {
             continue;
           }
 
-          if (desc.AttachedToDesktop && test_dxgi_duplication(adapter_tmp, output_tmp, false)) {
+          if (desc.AttachedToDesktop && test_dxgi_duplication(adapter_tmp, output_tmp, candidate_device, false)) {
             output = std::move(output_tmp);
+            device = std::move(candidate_device);
 
             offset_x = desc.DesktopCoordinates.left;
             offset_y = desc.DesktopCoordinates.top;
@@ -562,42 +574,10 @@ namespace platf::dxgi {
       return -1;
     }
 
-    D3D_FEATURE_LEVEL featureLevels[] {
-      D3D_FEATURE_LEVEL_11_1,
-      D3D_FEATURE_LEVEL_11_0,
-      D3D_FEATURE_LEVEL_10_1,
-      D3D_FEATURE_LEVEL_10_0,
-      D3D_FEATURE_LEVEL_9_3,
-      D3D_FEATURE_LEVEL_9_2,
-      D3D_FEATURE_LEVEL_9_1
-    };
-
-    status = adapter->QueryInterface(IID_IDXGIAdapter, (void **) &adapter_p);
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to query IDXGIAdapter interface"sv;
-      return -1;
-    }
-
-    status = D3D11CreateDevice(
-      adapter_p,
-      D3D_DRIVER_TYPE_UNKNOWN,
-      nullptr,
-      D3D11_CREATE_DEVICE_FLAGS,
-      featureLevels,
-      sizeof(featureLevels) / sizeof(D3D_FEATURE_LEVEL),
-      D3D11_SDK_VERSION,
-      &device,
-      &feature_level,
-      &device_ctx
-    );
-
-    adapter_p->Release();
-
-    if (FAILED(status)) {
-      BOOST_LOG(error) << "Failed to create D3D11 device [0x"sv << util::hex(status).to_string_view() << ']';
-
-      return -1;
-    }
+    // The successful probe already created this exact adapter's device with the
+    // same flags and feature levels. Keep it instead of paying for a second one.
+    feature_level = device->GetFeatureLevel();
+    device->GetImmediateContext(&device_ctx);
 
     DXGI_ADAPTER_DESC adapter_desc;
     adapter->GetDesc(&adapter_desc);
@@ -1054,6 +1034,7 @@ namespace platf {
   }
 
   std::vector<std::string> display_names(mem_type_e) {
+    rhremote::scope names_scope("dda_enumerate_outputs");
     std::vector<std::string> display_names;
 
     HRESULT status;
@@ -1077,6 +1058,7 @@ namespace platf {
     dxgi::adapter_t::pointer adapter_p;
     for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
       dxgi::adapter_t adapter {adapter_p};
+      dxgi::device_t probe_device;
       DXGI_ADAPTER_DESC1 adapter_desc;
       adapter->GetDesc1(&adapter_desc);
 
@@ -1111,7 +1093,7 @@ namespace platf {
           << std::endl;
 
         // Don't include the display in the list if we can't actually capture it
-        if (desc.AttachedToDesktop && dxgi::test_dxgi_duplication(adapter, output, true)) {
+        if (desc.AttachedToDesktop && dxgi::test_dxgi_duplication(adapter, output, probe_device, true)) {
           display_names.emplace_back(std::move(device_name));
         }
       }
