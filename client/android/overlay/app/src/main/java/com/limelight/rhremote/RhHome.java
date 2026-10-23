@@ -15,7 +15,9 @@ import java.util.*;
 
 /** Native RHRemote v2 shell. Only actual ComputerManager discoveries become device cards. */
 public final class RhHome implements RhActions.Target {
-    public interface Actions { void connect(ComputerDetails d); void add(String address); void advanced(); void pair(ComputerDetails d,String pin);void cancelPair();void refresh(); }
+    public interface Actions { void connect(ComputerDetails d); void add(String address); void advanced(); void pair(ComputerDetails d,String pin);void cancelPair();void refresh();
+        default Runnable prepareConnect(ComputerDetails d,RhAdmission operation)throws Exception{return ()->connect(d);}
+    }
     private long lastSyncAttempt=0;private final Activity activity;private final Actions actions;
     private final LinearLayout root,content,bar;private final TextView status;
     private final RelativeLayout empty;
@@ -28,12 +30,14 @@ public final class RhHome implements RhActions.Target {
     private RhProfile draft;private ComputerDetails selected;private AlertDialog adding;
     private String draftDisplayName="";private EditText displayNameEditor;
     private boolean networkBusy=false;
+    private RhAdmission admission;
     private String profileTab="video";private final Map<String,EditText> numberEditors=new HashMap<>();
     private boolean profileSourcesExpanded;
     private final RhSync sync;private boolean syncBusy;
     private final RhUpdates updates;private boolean updatesBusy;
     private boolean pairing;private String pairPin="";
     private static final java.util.concurrent.ExecutorService NETWORK=java.util.concurrent.Executors.newFixedThreadPool(2);
+    private static final java.util.concurrent.ExecutorService CONNECT=java.util.concurrent.Executors.newSingleThreadExecutor(task->new Thread(task,"RHRemote admission"));
     public RhHome(Activity a,Actions callbacks) {
         activity=a;actions=callbacks;sync=new RhSync(a);updates=new RhUpdates(a);
         boolean dark=RhShared.dark(a);
@@ -66,8 +70,30 @@ public final class RhHome implements RhActions.Target {
     private void heading(String title,String sub){TextView h=text(title,26,ink,true);h.setPadding(0,0,0,dp(7));content.addView(h);TextView s=text(sub,13,muted,false);s.setPadding(0,0,0,dp(26));content.addView(s);}
     public void update(ComputerDetails d){String signature=d.name+"|"+d.state+"|"+d.pairState+"|"+RhProfile.load(activity,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&!signature.equals(old))renderDevices(false);}
     public void message(String value){status.setText(value==null?"":value);}
-    public boolean goBack(){if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(profileVisible){invoke("devices.open",RhActions.obj());return true;}return false;}
-    public void showDevices(){pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);}
+    public boolean goBack(){if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(profileVisible){invoke("devices.open",RhActions.obj());return true;}return false;}
+    public void dispose(){if(admission!=null)admission.cancel();}
+    public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);}
+    private void showAdmission(RhAdmission operation){
+        pageId="connecting";profileVisible=true;content.removeAllViews();heading("连接","");
+        org.json.JSONObject state=operation.state();String phase=state.optString("phase");
+        label(phase.equals("cancelling")?"正在取消并清理连接…":phase.equals("cleaning")?"正在清理连接…":phase.equals("starting")?"正在启动串流…":phase.equals("apps")?"正在读取应用列表…":phase.equals("identity")?"正在确认配对状态…":phase.equals("error")?state.optString("error"):"正在检查连接地址…");
+        Button cancel=button("取消连接",false,()->invoke("stream.disconnect",RhActions.obj()));cancel.setEnabled(!state.optBoolean("cancelled"));content.addView(cancel);
+    }
+    private void beginAdmission(ComputerDetails target,boolean connect,String pin){
+        RhProfile profile=RhProfile.load(activity,target.uuid);networkBusy=true;
+        admission=new RhAdmission(activity,target.uuid,CONNECT,new RhAdmission.Listener(){
+            public void changed(RhAdmission operation){if(activity.isDestroyed())return;if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
+            public void finished(RhAdmission operation,boolean handedOff,String result){if(admission!=operation)return;admission=null;networkBusy=false;pairing=false;pairPin="";if(!activity.isDestroyed()){showDevices();if(!result.isEmpty())message(result);}}
+        });
+        admission.start(operation->{
+            if(connect)RhStatistics.begin(profile);
+            operation.progress("resolving");ComputerDetails routed=RhNetwork.resolve(activity,new ComputerDetails(target),profile,null,operation);
+            operation.progress("identity");ComputerDetails resolved=RhNetwork.refreshConnectionDetails(activity,routed,operation);
+            if(!connect||resolved.pairState!=PairingManager.PairState.PAIRED||resolved.serverCert==null)return ()->{update(resolved);pairPin=pin;pairing=true;showPair();try{operation.pair(()->actions.pair(resolved,pin),actions::cancelPair);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
+            Runnable launch=actions.prepareConnect(resolved,operation);operation.checkpoint();
+            return ()->{update(resolved);try{operation.handoff(launch);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
+        });
+    }
     private void renderDevices(boolean resetScroll){
         profileVisible=false;content.removeAllViews();heading("远程设备","");
         List<ComputerDetails> list=RhShared.ordered(activity,computers.values());
@@ -133,11 +159,12 @@ public final class RhHome implements RhActions.Target {
     public org.json.JSONObject state()throws Exception{
         org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(activity,computers.values())){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
         org.json.JSONObject shared=RhShared.read(activity);
-        return RhActions.obj("network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?"":selected.uuid,"draftDisplayName",draftDisplayName,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
+        return RhActions.obj("admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?"":selected.uuid,"draftDisplayName",draftDisplayName,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
         if(syncBusy&&(id.startsWith("sync.")||id.equals("device.move")||id.equals("device.settings.open")||id.startsWith("settings.")||id.equals("appearance.toggle")||id.equals("device.add.submit")))throw new IllegalStateException("同步进行中，请稍后保存");
         if(pairing&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("appearance.toggle")))throw new IllegalStateException("请先取消当前配对");
+        if(admission!=null&&id.equals("appearance.toggle"))throw new IllegalStateException("请先取消当前连接");
         if(draft!=null&&displayNameEditor!=null&&id.startsWith("settings."))draftDisplayName=displayNameEditor.getText().toString();
         if(draft!=null&&id.startsWith("settings.")&&!id.equals("settings.cancel")){org.json.JSONObject pending=draft.json();for(Map.Entry<String,EditText> entry:numberEditors.entrySet()){try{pending.put(entry.getKey(),Integer.parseInt(entry.getValue().getText().toString()));}catch(NumberFormatException e){throw new IllegalArgumentException("请输入有效的数字");}}draft=RhProfile.fromJson(selected.uuid,pending);}
         switch(id){
@@ -171,13 +198,9 @@ public final class RhHome implements RhActions.Target {
             case "device.connect":case "device.pair":{
                 if(networkBusy)throw new IllegalStateException("正在检查连接地址");ComputerDetails target=computers.get(args.getString("uuid"));if(target==null)throw new IllegalArgumentException("unknown device");
                 boolean connect=id.equals("device.connect");String pin=args.optString("pin",String.format(Locale.ROOT,"%04d",new java.security.SecureRandom().nextInt(10000)));if(!pin.matches("[0-9]{4}"))throw new IllegalArgumentException("PIN must contain four digits");
-                networkBusy=true;message("正在检查连接地址…");NETWORK.execute(()->{try{
-                    if(connect)RhStatistics.begin(RhProfile.load(activity,target.uuid));
-                    ComputerDetails resolved=RhNetwork.refreshConnectionDetails(activity,RhNetwork.resolve(activity,new ComputerDetails(target),RhProfile.load(activity,target.uuid)));
-                    activity.runOnUiThread(()->{networkBusy=false;update(resolved);if(connect){actions.connect(resolved);}else{pairPin=pin;pairing=true;showPair();actions.pair(resolved,pairPin);}});
-                }catch(Exception e){if(connect)RhStatistics.finish();activity.runOnUiThread(()->{networkBusy=false;message("连接失败："+e.getMessage());});}});break;
+                beginAdmission(target,connect,pin);break;
             }
-            case "pair.cancel":if(!pairing)throw new IllegalStateException("no active pairing");actions.cancelPair();message("正在取消配对…");break;
+            case "pair.cancel":if(admission!=null){admission.cancel();break;}if(!pairing)throw new IllegalStateException("no active pairing");actions.cancelPair();message("正在取消配对…");break;
             case "appearance.toggle":RhShared.theme(activity,!RhShared.dark(activity));activity.recreate();break;
             case "app.settings.open":pageId="global-settings";showGlobal();break;
             case "app.settings.tab":String tab=args.getString("tab");if(!Arrays.asList("appearance","sync","updates","about").contains(tab))throw new IllegalArgumentException("unknown tab");settingsTab=tab;pageId="global-settings";showGlobal();break;
@@ -200,5 +223,5 @@ public final class RhHome implements RhActions.Target {
     private void startSync(String resolution)throws Exception{org.json.JSONObject captured=RhShared.capture(activity,new ArrayList<>(computers.values()));syncBusy=true;message("同步中…");NETWORK.execute(()->{try{org.json.JSONObject result=sync.run(captured,resolution);activity.runOnUiThread(()->{syncBusy=false;try{if(result.has("shared")){boolean before=RhShared.dark(activity);RhShared.apply(activity,result.getJSONObject("shared"));restoreSharedDevices();message("同步完成");if(before!=RhShared.dark(activity)){activity.recreate();return;}}else message("配置冲突，请选择保留哪一端的冲突项");if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("devices"))renderDevices(false);}catch(Exception e){message("应用同步配置失败");}});}catch(Exception e){activity.runOnUiThread(()->{syncBusy=false;message(e instanceof java.io.IOException?e.getMessage():"同步失败，请检查 WebDAV 设置");if(pageId.equals("global-settings"))showGlobal();});}});}
     private void restoreSharedDevices(){try{org.json.JSONArray list=RhShared.read(activity).getJSONArray("devices");for(int i=0;i<list.length();i++){org.json.JSONObject d=list.getJSONObject(i);String uuid=d.getString("uuid");if(!computers.containsKey(uuid)){ComputerDetails added=new ComputerDetails();added.uuid=uuid;added.name=d.getString("name");added.manualAddress=new ComputerDetails.AddressTuple(d.getString("address"),47989);computers.put(uuid,added);}}}catch(Exception e){message("已同步的设备列表读取失败");}}
     private void showPair(){pageId="pair";profileVisible=true;content.removeAllViews();heading("配对","");label("在 Sunshine 输入配对码");TextView pin=text(pairPin,40,blue,true);content.addView(pin);content.addView(button("取消配对",false,()->invoke("pair.cancel",RhActions.obj())));}
-    public void pairFinished(boolean success,String result){pairing=false;pairPin="";showDevices();message(result);}
+    public void pairFinished(boolean success,String result){if(admission!=null){admission.pairFinished(result);return;}pairing=false;pairPin="";showDevices();message(result);}
 }

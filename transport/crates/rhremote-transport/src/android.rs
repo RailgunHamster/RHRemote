@@ -7,6 +7,7 @@ use jni::{
 };
 use std::sync::{Mutex, OnceLock};
 static CLIENT: OnceLock<Mutex<Option<Client>>> = OnceLock::new();
+static ATTEMPTS: OnceLock<crate::cancellation::Attempts> = OnceLock::new();
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_identityNative(
@@ -37,11 +38,13 @@ pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_startNative(
     peer: JString,
     relay: JString,
     relay_only: jni::sys::jboolean,
+    attempt_id: jni::sys::jlong,
 ) -> jstring {
     let result = (|| -> anyhow::Result<serde_json::Value> {
         let key: String = env.get_string(&key)?.into();
         let peer: String = env.get_string(&peer)?.into();
         let relay: String = env.get_string(&relay)?.into();
+        let attempt = ATTEMPTS.get_or_init(Default::default).begin(attempt_id as u64)?;
         let mut slot = CLIENT
             .get_or_init(|| Mutex::new(None))
             .lock()
@@ -49,13 +52,14 @@ pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_startNative(
         if slot.is_none() {
             *slot = Some(Client::new()?);
         }
-        let info = slot.as_mut().unwrap().start(
+        let info = slot.as_mut().unwrap().start_cancelable(
             std::path::Path::new(&key),
             Address {
                 endpoint_id: peer,
                 relay_url: relay,
             },
             relay_only != 0,
+            attempt.token(),
         )?;
         Ok(serde_json::json!({"ok":true,"result":info}))
     })();
@@ -64,6 +68,14 @@ pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_startNative(
     env.new_string(reply.to_string())
         .map(JString::into_raw)
         .unwrap_or(std::ptr::null_mut())
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_cancelStartNative(
+    _env: JNIEnv,
+    _class: JClass,
+    attempt_id: jni::sys::jlong,
+) {
+    ATTEMPTS.get_or_init(Default::default).cancel(attempt_id as u64);
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_stopNative(

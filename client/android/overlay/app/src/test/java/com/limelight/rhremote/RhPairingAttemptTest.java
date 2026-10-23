@@ -53,6 +53,20 @@ public class RhPairingAttemptTest {
         a.cancel(()->fail("Completed pairing should remain authorized"),(id,salt,signature)->{sent.incrementAndGet();return true;});
         assertEquals(0,sent.get());
     }
+    @Test public void cleanupWaitsForTheQueuedSignedCancellation()throws Exception {
+        ArrayList<Runnable> queued=new ArrayList<>();RhPairingAttempt a=new RhPairingAttempt("aabb",queued::add);
+        a.capability("1");a.prepare(SALT,PROOF);a.cancel(()->{},(id,salt,signature)->true);
+        java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try{java.util.concurrent.Future<?> done=worker.submit(()->{try{a.awaitCleanup();}catch(InterruptedException e){throw new RuntimeException(e);}});
+            try{done.get(100,java.util.concurrent.TimeUnit.MILLISECONDS);fail("Cleanup was reported complete before the signed request ran");}catch(java.util.concurrent.TimeoutException expected){}
+            queued.get(0).run();done.get(1,java.util.concurrent.TimeUnit.SECONDS);
+        }finally{worker.shutdownNow();assertTrue(worker.awaitTermination(1,java.util.concurrent.TimeUnit.SECONDS));}
+    }
+    @Test public void rejectedCleanupExecutorDoesNotLeaveAnUnfinishableWait()throws Exception {
+        RhPairingAttempt a=new RhPairingAttempt("aabb",task->{throw new java.util.concurrent.RejectedExecutionException();});a.capability("1");a.prepare(SALT,PROOF);
+        try{a.cancel(()->{},(id,salt,signature)->true);fail();}catch(java.util.concurrent.RejectedExecutionException expected){}
+        a.awaitCleanup();
+    }
     @Test public void transcriptUsesExactUtf8WithoutTrailingNewlineAndBindsSalt()throws Exception {
         RhPairingAttempt a=new RhPairingAttempt("aabb",Runnable::run);
         byte[] message=a.message(SALT);

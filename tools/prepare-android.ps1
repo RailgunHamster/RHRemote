@@ -1,6 +1,6 @@
 param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',
- [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.4',
- [ValidateRange(1,2100000000)][int]$VersionCode=206)
+ [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.5',
+ [ValidateRange(1,2100000000)][int]$VersionCode=207)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $expected='b48494cb96bff23d8886c4775cc4f39a1075495d'
@@ -189,10 +189,13 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
             public void connect(ComputerDetails d) {
                 if (d.pairState != PairState.PAIRED) doPair(d); else launchRhDesktop(d);
             }
+            public Runnable prepareConnect(ComputerDetails d,com.limelight.rhremote.RhAdmission operation) throws Exception {
+                return prepareRhDesktop(d,operation);
+            }
             public void add(String address) { addRhComputer(address); }
             public void advanced() { startActivity(new Intent(PcView.this, StreamSettings.class)); }
             public void pair(ComputerDetails d,String pin) { startRhPair(d,pin); }
-            public void cancelPair() { RhPairOperation operation=rhPairOperation;if(operation!=null){operation.cancelled=true;NvHTTP current=operation.http;if(current!=null)current.cancelRhPairing();} }
+            public void cancelPair() { RhPairOperation operation=rhPairOperation;if(operation!=null)synchronized(operation){operation.cancelled=true;NvHTTP current=operation.http;if(current!=null)current.cancelRhPairing();} }
             public void refresh() { if(managerBinder!=null) for(int i=0;i<pcGridAdapter.getCount();i++)managerBinder.invalidateStateForComputer(((ComputerObject)pcGridAdapter.getItem(i)).details.uuid);startComputerUpdates(); }
         });
         noPcFoundLayout = rhHome.emptyView();
@@ -205,6 +208,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
     private void doAppList(ComputerDetails computer, boolean newlyPaired, boolean showHiddenGames) {
         if(!showHiddenGames) { launchRhDesktop(computer); return; }
 '@
+    $s=Replace-Once $s '        super.onDestroy();' "        super.onDestroy();`n        if(rhHome!=null)rhHome.dispose();"
     $s=Replace-Once $s '    public static class ComputerObject {' @'
     @Override public void onBackPressed() {
         if(rhHome != null && rhHome.goBack()) return;
@@ -242,10 +246,29 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
                 if(state==PairState.PAIRED && !operation.cancelled){savedPair=managerBinder.saveRhPairing(computer,pairing.getPairedCert());paired=true;result="配对完成";}
                 else if(state==PairState.ALREADY_IN_PROGRESS)result="主机已有配对请求，请稍后重试";
                 else if(state==PairState.PIN_WRONG)result="配对码不正确";
-            }catch(Exception e){if(e.getMessage()!=null)result="配对失败："+e.getMessage();}finally{operation.http=null;}
+            }catch(Exception e){if(e.getMessage()!=null)result="配对失败："+e.getMessage();}finally{
+                NvHTTP completedHttp;synchronized(operation){completedHttp=operation.http;operation.http=null;}
+                if(completedHttp!=null){boolean interrupted=false;for(;;)try{completedHttp.awaitRhPairingCleanup();break;}catch(InterruptedException e){interrupted=true;}if(interrupted)Thread.currentThread().interrupt();}
+            }
             final boolean success=paired;final String message=operation.cancelled?"已取消配对":result;final ComputerDetails stored=savedPair;
             runOnUiThread(()->{if(rhPairOperation!=operation)return;rhPairOperation=null;if(rhHome!=null){if(success)rhHome.update(stored);rhHome.pairFinished(success,message);}startComputerUpdates();});
         },"RHRemote Pair").start();
+    }
+    private Runnable prepareRhDesktop(ComputerDetails computer,com.limelight.rhremote.RhAdmission operation) throws Exception {
+        final ComputerManagerService.ComputerManagerBinder binder=managerBinder;
+        if(binder==null)throw new IOException("连接管理器尚未准备好");
+        operation.checkpoint();
+        operation.progress("apps");
+        NvHTTP http=new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),computer.httpsPort,binder.getUniqueId(),computer.serverCert,PlatformBinding.getCryptoProvider(this),true);
+        try(com.limelight.rhremote.RhAdmission.Watch request=operation.watch(http::cancelRhRequests)) {
+            java.util.List<NvApp> apps=http.getAppList();operation.checkpoint();
+            NvApp desktop=null;
+            for(NvApp app:apps)if("Desktop".equalsIgnoreCase(app.getAppName())){desktop=app;break;}
+            if(desktop==null)throw new IOException("Sunshine 没有 Desktop 入口，请在主机确认应用列表。");
+            if(computer.runningGameId!=0&&computer.runningGameId!=desktop.getAppId())throw new IOException("主机正在运行其他串流应用，请先结束该会话。");
+            final NvApp selected=desktop;
+            return ()->{if(managerBinder!=binder)throw new IllegalStateException("连接管理器已关闭");ServerHelper.doStart(this,selected,computer,binder);};
+        }
     }
     private void launchRhDesktop(ComputerDetails computer) {
         if(managerBinder==null) return;
@@ -268,7 +291,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($s)
-    $s=Replace-Once $s '    private X509Certificate serverCert;' "    private X509Certificate serverCert;`n    private final boolean rhStrictPin;"
+    $s=Replace-Once $s '    private X509Certificate serverCert;' "    private X509Certificate serverCert;`n    private final boolean rhStrictPin;`n    private final com.limelight.rhremote.RhHttpRequests rhRequests=new com.limelight.rhremote.RhHttpRequests();"
     $s=Replace-Once $s '    public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {' @'
     public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
         this(address, httpsPort, uniqueId, serverCert, cryptoProvider, false);
@@ -300,17 +323,52 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($
 '@
     $s=Replace-Once $s '    public void unpair() throws IOException {' @'
     public void cancelRhRequests() {
+        rhRequests.cancel();
         httpClientLongConnectTimeout.dispatcher().cancelAll();
         httpClientLongConnectNoReadTimeout.dispatcher().cancelAll();
         httpClientShortConnectTimeout.dispatcher().cancelAll();
     }
     public void unpair() throws IOException {
 '@
+    $s=Replace-Once $s '        Response response = performAndroidTlsHack(client).newCall(request).execute();' @'
+        okhttp3.Call rhOwnedCall=performAndroidTlsHack(client).newCall(request);
+        com.limelight.rhremote.RhHttpRequests.Request rhRequest=rhRequests.track(rhOwnedCall::cancel);
+        Response response;
+        try { response=executeRhCall(rhOwnedCall,path); }
+        catch(IOException|RuntimeException|Error failed) {rhRequest.close();throw failed;}
+'@
+    $s=Replace-Once $s '        ResponseBody body = response.body();' @'
+        ResponseBody originalBody=response.body();
+        if(originalBody==null)rhRequest.close();
+        ResponseBody body=originalBody==null?null:new ResponseBody(){
+            private final okio.BufferedSource tracked=okio.Okio.buffer(new okio.ForwardingSource(originalBody.source()){
+                @Override public void close()throws IOException{try{super.close();}finally{rhRequest.close();}}
+            });
+            @Override public okhttp3.MediaType contentType(){return originalBody.contentType();}
+            @Override public long contentLength(){return originalBody.contentLength();}
+            @Override public okio.BufferedSource source(){return tracked;}
+        };
+'@
+    $s=Replace-Once $s '    private ResponseBody openHttpConnection(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {' @'
+    private Response executeRhCall(okhttp3.Call rhCall,String path)throws IOException {
+        return rhCall.execute();
+    }
+    private ResponseBody openHttpConnection(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {
+'@
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/nvstream/http/PairingManager.java' {param($s)return $s}
 Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
-    $s=Replace-Once $s '    private final TouchContext[] touchContextMap' '    private com.limelight.rhremote.RhTouchController rhTouch;
+    $s=Replace-Once $s '        super.onCreate(savedInstanceState);' @'
+        super.onCreate(savedInstanceState);
+        if(!com.limelight.rhremote.RhAdmission.allowGame(getIntent())) { rhAdmissionRejected=true; finish(); return; }
+'@
+    $s=Replace-Once $s '        super.onDestroy();' "        super.onDestroy();`n        if(rhAdmissionRejected)return;"
+    $s=Replace-Once $s '        super.onStop();' "        super.onStop();`n        if(rhAdmissionRejected)return;"
+    $s=Replace-Once $s '        super.onWindowFocusChanged(hasFocus);' "        super.onWindowFocusChanged(hasFocus);`n        if(rhAdmissionRejected)return;"
+    $s=Replace-Once $s '    protected void onPause() {' "    protected void onPause() {`n        if(rhAdmissionRejected){super.onPause();return;}"
+    $s=Replace-Once $s '    private final TouchContext[] touchContextMap' '    private boolean rhAdmissionRejected;
+    private com.limelight.rhremote.RhTouchController rhTouch;
     private com.limelight.rhremote.RhStreamControls rhControls;
     public com.limelight.rhremote.RhAudioRenderer rhAudioRenderer;
     private com.limelight.rhremote.RhProfile rhProfile;
@@ -339,6 +397,10 @@ Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
 '@
     $s=Replace-Once $s 'new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx)' '(rhAudioRenderer = new com.limelight.rhremote.RhAudioRenderer(Game.this,prefConfig.enableAudioFx,rhProfile))'
+    return $s
+}
+Edit-Source 'app/src/main/java/com/limelight/utils/ServerHelper.java' {param($s)
+    $s=Replace-Once $s '        return intent;' "        com.limelight.rhremote.RhAdmission.stamp(intent);`n        return intent;"
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/nvstream/NvConnection.java' {param($s)

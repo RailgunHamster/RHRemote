@@ -53,6 +53,7 @@ def android(root):
     public byte[] rhPairingMessage(String salt)throws IOException{return rhPairing.message(salt);}
     public void prepareRhPairing(String salt,String signature)throws IOException{rhPairing.prepare(salt,signature);}
     public void completeRhPairing(){rhPairing.complete();}
+    public void awaitRhPairingCleanup()throws InterruptedException{rhPairing.awaitCleanup();}
     public void cancelRhPairing(){
         rhPairing.cancel(this::cancelRhRequests,(id,salt,signature)->{
             java.net.URL url=baseUrlHttp.newBuilder().addPathSegment("pair")
@@ -71,9 +72,8 @@ def android(root):
         });
     }''')
     text = replace(text, '.addQueryParameter("uniqueid", uniqueId)', '.addQueryParameter("uniqueid", path.equals("pair")?rhPairing.id():uniqueId)')
-    text = replace(text, '        Response response = performAndroidTlsHack(client).newCall(request).execute();', '''        okhttp3.Call rhCall=performAndroidTlsHack(client).newCall(request);
-        if(path.equals("pair"))rhPairing.track(rhCall::cancel);
-        Response response = rhCall.execute();''')
+    text = replace(text, '        return rhCall.execute();', '''        if(path.equals("pair"))rhPairing.track(rhCall::cancel);
+        return rhCall.execute();''')
     path.write_text(text, encoding='utf-8', newline='\n')
     path = root / 'app/src/main/java/com/limelight/nvstream/http/PairingManager.java'
     text = path.read_text(encoding='utf-8')

@@ -43,6 +43,7 @@ public class RhPairingPersistenceTest {
         @RealObject NvHTTP real;
         @Implementation protected void __constructor__(ComputerDetails.AddressTuple address,int httpsPort,String id,X509Certificate cert,LimelightCryptoProvider crypto){}
         @Implementation protected PairingManager getPairingManager(){return new PairingManager(real,null);}
+        @Implementation protected void awaitRhPairingCleanup(){}
         @Implementation protected String getServerInfo(boolean online){return "<root status_code=\"200\"/>";}
         @Implementation protected ComputerDetails getComputerDetails(boolean online){
             ComputerDetails d=new ComputerDetails();d.uuid="synced-host";d.name="PC";d.httpsPort=47984;

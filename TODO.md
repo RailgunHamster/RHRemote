@@ -1,6 +1,6 @@
 # RHRemote TODO
 
-更新时间：2026-10-23。按用户最新要求：**外网功能优先，完成后继续启动耗时优化，全部待办以实际验收为准**。
+更新时间：2026-10-24。按用户最新要求：**外网功能优先，完成后继续启动耗时优化，全部待办以实际验收为准**。
 
 ## P0 外网连接（进行中）
 
@@ -16,7 +16,8 @@
 - [ ] OPPO 外网全离线回归：用户确认 Tailscale 下 SMB、其他服务和 Sunshine serverinfo XML 均可用，实际客户端为 0.2.3，未安装预览修复。Android 列表备用地址、主机 Tailscale 地址学习、冷启动配对、VPN 发现竞争和配对持久化已修复，更新页 null 显示已修正。64 项 JVM / 9 项发布前置测试通过；0.2.4 正式更新已在 GitHub / Gitee 发布，两站各十项匿名下载及 latest feed 校验通过。仍待用户升级后实际外网验收。详见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
 - [x] Android VPN 发现竞争修复：移除 STUN 期间整个应用的临时底层网络绑定；VPN 下跳过客户端公网地址推断，保留主机上报地址并检查查询期间的网络切换。新增四项旧代码失败/修复后通过的回归，完整 49 项 JVM 测试和双 APK 编译通过；不当作 OPPO 现场根因的实机证明。
 - [x] Android 同步设备首次配对持久化：成功前立即写入 SQLite；保存失败保留旧证书，轮询及迟到发现不能恢复旧证书，代理地址不持久化。11 项实际 PcView / SQLite 回归通过，完整 60 项 JVM 测试零失败；未当作 OPPO 实机验收。见 design/ANDROID-PAIRING-PERSISTENCE-20261023.md。
-- [ ] Android 连接入口取消：当前选路 / JNI 隧道启动期间仅有 networkBusy，尚无完整的取消及清理占用语义；补同一按钮/API 的可取消状态，旧任务清理完成前禁止后续任务抢占隧道，验证迟到结果不会启动串流。
+- [x] Android 初次连接入口取消：从选路、配对状态、应用列表到 Game 接管或真实清理完成保持占用；按钮 / stream.disconnect / pair.cancel 共用分派，Rust JNI 按次取消，HTTP 跟踪至正文关闭，配对等待签名取消任务结束。连接使用独立线程，旧结果不能启动新窗口。86 项 JVM / 11 项 Rust 测试及 ARM64 双 APK 构建通过；0.2.5 开发包未发布，OPPO 实机待验收。见 design/ANDROID-CONNECTION-ADMISSION-20261024.md。
+- [ ] Android 回退与恢复的通道归属：媒体恢复仍在启动新 Game 前释放占用，需保持到新控制器接管，并接入按次 JNI / HTTP 取消；检查打洞形成了本路径不接受的中继连接后，转向其他路径之前是否清理临时通道。补迟到窗口、取消、路径失败及下一连接不能抢占的回归。
 - [x] 用户提供 SSH 别名 tc，已确认并复用其现有 DERP；独立临时测试端经公网完成双向实际转发，未改动现有 Tailscale / DERP 服务。
 - [ ] tc 中继能力：独立 TCP 下载约 5.965 Mbps，DERP 25 Mbps 缺失 4103 包与 queue_head 增量相等。后续固定 1024 分包的同一 1080p30 影片各约 151 秒，LAN / 内置直连 / HTTPS 中继在请求 5 Mbps 时分别有 0 / 2 / 53 次 >50 ms 渲染间隔；中继 4 Mbps 降到 1 次，再回 5 Mbps 升至 278 次。优先定位容量/排队，并补主机分段、更长时间及跨运营商验收，不认定某个队列为唯一根因或宣称支持 25 Mbps/4K。用户码率已恢复。见 design/NATURAL-VIDEO-20261023.md、RELAY-THROUGHPUT-20261023.md。
 - [x] 本机 / winserver / claw 的网络服务已部署；本机 UAC 安装成功，设备 UUID 保持不变，TCP / UDP 47995 同属统一服务，Tailscale 规则已核对。

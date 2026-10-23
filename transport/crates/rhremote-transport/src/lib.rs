@@ -2,6 +2,8 @@
 //! The native Sunshine pairing remains authoritative for media authorization.
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(any(target_os = "android", test))]
+mod cancellation;
 pub mod grant;
 use anyhow::{Context, Result, bail, ensure};
 use iroh::{
@@ -300,25 +302,37 @@ impl Client {
             self.stop();
             let secret = key(key_file)?;
             let (endpoint, proxy) = self.runtime.block_on(async {
-                let endpoint = endpoint(secret, &remote.relay_url, relay_only).await?;
-                let proxy = tokio::select!{
-                    proxy=Proxy::start(&endpoint,&remote,DEFAULT_OFFSET)=>proxy?,
-                    _=async{while !cancel.load(std::sync::atomic::Ordering::SeqCst){tokio::time::sleep(Duration::from_millis(20)).await;}}=>{endpoint.close().await;bail!("Connection cancelled");}
-                };
-                if !relay_only {
-                    let until = Instant::now() + Duration::from_millis(1200);
-                    while !proxy
-                        .connection
-                        .paths()
-                        .iter()
-                        .any(|p| p.is_selected() && p.is_ip())
-                        && Instant::now() < until
-                    {
-                        ensure!(!cancel.load(std::sync::atomic::Ordering::SeqCst),"Connection cancelled");
-                        tokio::time::sleep(Duration::from_millis(30)).await;
+                let cancelled = async {
+                    while !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
                     }
+                };
+                tokio::pin!(cancelled);
+                let endpoint = tokio::select! {
+                    result=endpoint(secret, &remote.relay_url, relay_only)=>result?,
+                    _=&mut cancelled=>bail!("Connection cancelled"),
+                };
+                let result = async {
+                    let proxy = tokio::select! {
+                        proxy=Proxy::start(&endpoint,&remote,DEFAULT_OFFSET)=>proxy?,
+                        _=&mut cancelled=>bail!("Connection cancelled"),
+                    };
+                    if !relay_only {
+                        let until = Instant::now() + Duration::from_millis(1200);
+                        while !proxy.connection.paths().iter().any(|p| p.is_selected() && p.is_ip())
+                            && Instant::now() < until
+                        {
+                            ensure!(!cancel.load(std::sync::atomic::Ordering::SeqCst), "Connection cancelled");
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                        }
+                    }
+                    ensure!(!cancel.load(std::sync::atomic::Ordering::SeqCst), "Connection cancelled");
+                    Ok::<_, anyhow::Error>(proxy)
+                }.await;
+                match result {
+                    Ok(proxy)=>Ok((endpoint, proxy)),
+                    Err(error)=>{endpoint.close().await;Err(error)},
                 }
-                Ok::<_, anyhow::Error>((endpoint, proxy))
             })?;
             self.current = Some((endpoint, proxy, remote, relay_only));
         }
@@ -528,6 +542,24 @@ async fn serve_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancelled_transport_connect_reaps_the_endpoint_before_returning() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let cancel=Arc::new(AtomicBool::new(false));let signal=cancel.clone();
+        let path=std::env::temp_dir().join(format!("rhremote-cancel-{}.key",SecretKey::generate().public()));
+        let worker_path=path.clone();let began=Instant::now();
+        let worker=std::thread::spawn(move || {
+            let mut client=Client::new().unwrap();
+            let result=client.start_cancelable(&worker_path,Address {
+                endpoint_id:SecretKey::generate().public().to_string(),relay_url:"http://127.0.0.1:9/".into(),
+            },true,&signal);
+            assert!(result.unwrap_err().to_string().contains("cancelled"));
+            assert!(client.current.is_none());
+        });
+        std::thread::sleep(Duration::from_millis(150));cancel.store(true,Ordering::SeqCst);
+        worker.join().unwrap();let _=std::fs::remove_file(path);
+        assert!(began.elapsed()<Duration::from_secs(4));
+    }
     #[tokio::test]
     async fn tcp_request_does_not_wait_for_the_channel_acknowledgement() {
         let build = || {

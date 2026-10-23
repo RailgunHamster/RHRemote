@@ -66,31 +66,52 @@ public final class RhNetwork {
     /** Refresh transient details lost on process restart only at connection admission.
      * A stored certificate must be verified over HTTPS, without HTTP downgrade. */
     static ComputerDetails refreshConnectionDetails(Context context,ComputerDetails source)throws Exception {
+        return refreshConnectionDetails(context,source,null);
+    }
+    static ComputerDetails refreshConnectionDetails(Context context,ComputerDetails source,RhAdmission operation)throws Exception {
+        checkpoint(operation);
         if(source.pairState!=null&&source.httpsPort!=0)return source;
         ComputerDetails.AddressTuple address=source.activeAddress;
         if(address==null)throw new IOException("未选择连接地址");
         NvHTTP http=new NvHTTP(address,source.httpsPort,"0123456789ABCDEF",source.serverCert,PlatformBinding.getCryptoProvider(context),true);
+        try(RhAdmission.Watch request=operation==null?null:operation.watch(http::cancelRhRequests)){
+        checkpoint(operation);
         ComputerDetails fresh=http.getRhConnectionDetails();
+        checkpoint(operation);
         if(fresh.uuid==null||!source.uuid.equalsIgnoreCase(fresh.uuid))throw new IOException("uuid_mismatch");
         ComputerDetails result=new ComputerDetails(source);result.update(fresh);
         result.activeAddress=address;result.manualAddress=address;
         return result;
+        }
     }
     private static String check(String address,String uuid)throws Exception {return check(address,uuid,47989);}
     private static String check(String address,String uuid,int port)throws Exception {
+        return check(address,uuid,port,null);
+    }
+    private static void checkpoint(RhAdmission operation)throws IOException {if(operation!=null)operation.checkpoint();}
+    private static String check(String address,String uuid,int port,RhAdmission operation)throws Exception {
+        checkpoint(operation);
         String host=address.replace("[","").replace("]","");HttpURLConnection connection=(HttpURLConnection)new URI("http",null,host,port,"/serverinfo","uniqueid=0123456789ABCDEF",null).toURL().openConnection(Proxy.NO_PROXY);
         connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(1000);connection.setReadTimeout(1000);
-        try(InputStream in=connection.getInputStream()){
+        try(RhAdmission.Watch request=operation==null?null:operation.watch(connection::disconnect)){
+            checkpoint(operation);
+            try(InputStream in=connection.getInputStream()){
+            checkpoint(operation);
             ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[2048];int n;while((n=in.read(b))!=-1){if(out.size()+n>65536)throw new IOException("响应过大");out.write(b,0,n);}
             org.xmlpull.v1.XmlPullParser xml=android.util.Xml.newPullParser();xml.setFeature(org.xmlpull.v1.XmlPullParser.FEATURE_PROCESS_NAMESPACES,false);xml.setInput(new StringReader(out.toString("UTF-8")));
             while(xml.next()!=org.xmlpull.v1.XmlPullParser.END_DOCUMENT)if(xml.getEventType()==org.xmlpull.v1.XmlPullParser.START_TAG&&xml.getName().equals("uniqueid")){if(!uuid.equalsIgnoreCase(xml.nextText()))throw new IOException("uuid_mismatch");return address;}
             throw new IOException("uuid_missing");
+            }
         }finally{connection.disconnect();}
     }
     public static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile profile)throws Exception {
         return resolve(c,source,profile,null);
     }
     public static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile profile,JSONObject options)throws Exception {
+        return resolve(c,source,profile,options,null);
+    }
+    public static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile profile,JSONObject options,RhAdmission operation)throws Exception {
+        checkpoint(operation);
         RhStatistics.event("network_resolve_begin",-1,RhActions.obj("routeOrder",new JSONArray(profile.routeOrder)));
         long began=System.nanoTime();JSONObject metadata=metadata(c,source);
         if(options!=null){metadata=new JSONObject(metadata.toString());if(options.has("address"))metadata.put("address",options.getString("address"));if(options.has("addresses"))metadata.put("addresses",options.getJSONArray("addresses"));}
@@ -98,16 +119,17 @@ public final class RhNetwork {
         JSONArray failed=options==null?null:options.optJSONArray("failedRoutes");
         JSONArray attempts=new JSONArray();String selected=null,selectedRemote="",chosenRoute="",chosenPath="unknown";int offset=0;
         for(String route:profile.routeOrder) {
+            checkpoint(operation);
             if(route.equals("punch_direct")||route.equals("relay")) {
                 for(String address:candidates)if(kind(address).equals("transport")) {
                     if(RhRecoveryPolicy.excluded(failed,route,address))continue;
                     long at=System.nanoTime();try {
-                        JSONObject tunnel=RhTunnel.start(c,address.substring(4),profile.relayUrl,route.equals("relay"));
+                        JSONObject tunnel=RhTunnel.start(c,address.substring(4),profile.relayUrl,route.equals("relay"),operation);
                         if(route.equals("punch_direct")&&!tunnel.optString("path").equals("direct"))throw new IOException("打洞未形成直连，继续尝试后续路径");
-                        offset=tunnel.getInt("portOffset");check(tunnel.getString("address"),source.uuid,47989+offset);
+                        offset=tunnel.getInt("portOffset");check(tunnel.getString("address"),source.uuid,47989+offset,operation);
                         selected=tunnel.getString("address");selectedRemote=address;chosenPath=tunnel.optString("path","unknown");chosenRoute=route;
                         attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));break;
-                    }catch(Exception|LinkageError e){attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
+                    }catch(Exception|LinkageError e){checkpoint(operation);attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
                 }
                 if(selected!=null)break;continue;
             }
@@ -117,12 +139,12 @@ public final class RhNetwork {
             if(group.isEmpty())continue;
             CompletionService<JSONObject> queue=new ExecutorCompletionService<>(PROBES);List<Future<JSONObject>> tasks=new ArrayList<>();long end=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(2200),grace=end;long best=Long.MAX_VALUE;
             try {
-                for(String address:group)tasks.add(queue.submit(()->{long at=System.nanoTime();try{check(address,source.uuid);return RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}catch(Exception e){return RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}}));
-                for(int remaining=tasks.size();remaining>0;remaining--){long wait=Math.min(end,grace)-System.nanoTime();if(wait<=0)break;Future<JSONObject> future=queue.poll(wait,TimeUnit.NANOSECONDS);if(future==null)break;JSONObject result=future.get();attempts.put(result);if(result.optBoolean("ok")&&result.getLong("elapsedMs")<best){best=result.getLong("elapsedMs");selected=result.getString("address");grace=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(50);}}
+                for(String address:group)tasks.add(queue.submit(()->{long at=System.nanoTime();try{check(address,source.uuid,47989,operation);return RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}catch(Exception e){return RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}}));
+                for(int remaining=tasks.size();remaining>0;){checkpoint(operation);long wait=Math.min(end,grace)-System.nanoTime();if(wait<=0)break;Future<JSONObject> future=queue.poll(Math.min(wait,TimeUnit.MILLISECONDS.toNanos(50)),TimeUnit.NANOSECONDS);if(future==null)continue;remaining--;JSONObject result=future.get();attempts.put(result);if(result.optBoolean("ok")&&result.getLong("elapsedMs")<best){best=result.getLong("elapsedMs");selected=result.getString("address");grace=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(50);}}
             }finally{for(Future<?> future:tasks)future.cancel(true);}
             if(selected!=null){selectedRemote=selected;chosenRoute=route;chosenPath=route.equals("tailscale_relay")?"unknown":"direct";offset=0;break;}
         }
-        last=RhActions.obj("uuid",source.uuid,"selectedAddress",selected==null?JSONObject.NULL:selected,"remoteAddress",selectedRemote,"attempts",attempts,"route",chosenRoute,"routeOrder",new JSONArray(profile.routeOrder),"path",chosenPath,"portOffset",offset,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began),"mediaUdp","not_tested");
+        checkpoint(operation);last=RhActions.obj("uuid",source.uuid,"selectedAddress",selected==null?JSONObject.NULL:selected,"remoteAddress",selectedRemote,"attempts",attempts,"route",chosenRoute,"routeOrder",new JSONArray(profile.routeOrder),"path",chosenPath,"portOffset",offset,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began),"mediaUdp","not_tested");
         RhStatistics.event(selected==null?"network_resolve_failed":"network_resolve_end",-1,last);
         if(selected==null)throw new IOException("已启用的连接路径均不可达或 UUID 不符；请运行网络诊断");
         ComputerDetails resolved=new ComputerDetails(source);resolved.activeAddress=new ComputerDetails.AddressTuple(selected.replace("[","").replace("]",""),47989+offset);resolved.manualAddress=resolved.activeAddress;resolved.state=ComputerDetails.State.ONLINE;
