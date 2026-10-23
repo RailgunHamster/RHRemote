@@ -34,6 +34,12 @@ jobs:
           ./test-rhremote-frame-trace
       - name: Analyze incomplete, reordered and closed host traces
         run: python -m unittest discover -s tools -p test_host_frame_analysis.py -v
+      - name: Check recorder publication and close under ThreadSanitizer
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          g++ -std=c++23 -g -O1 -fsanitize=thread -fno-omit-frame-pointer -no-pie -pthread -DRHREMOTE_FRAME_TRACE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_frame_trace.cpp -o test-rhremote-frame-trace-tsan
+          ./test-rhremote-frame-trace-tsan
   windows:
     runs-on: windows-2022
     timeout-minutes: 60

@@ -134,6 +134,14 @@ namespace rhremote {
 
   /** @brief Metadata recorder whose background writer outlives queued packet references. */
   class frame_trace {
+    static_assert(std::atomic<std::uint64_t>::is_always_lock_free && std::atomic<std::uint32_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free, "Frame producers require lock-free atomics");
+
+    /** @brief One producer-reserved slot, released only after the consumer copies its metadata. */
+    struct alignas(64) slot {
+      frame_event row;  ///< POD data published before ready becomes true.
+      std::atomic<bool> ready {};  ///< Release/acquire publication, independent of the sleeping writer.
+    };
+
     /** @brief Shared writer state; the detached worker owns this state, not the public wrapper. */
     struct state {
       std::unique_ptr<std::ostream> output;  ///< Stream written only by the writer thread.
@@ -141,13 +149,13 @@ namespace rhremote {
       const std::int64_t steady_origin {frame_tick_us()};  ///< Steady epoch sampled before producers can emit.
       const std::int64_t unix_origin {std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count()};  ///< Approximate wall-clock correspondence, not synchronization.
       frame_trace_options options;  ///< Resource limits fixed at construction.
-      std::vector<frame_event> ring;  ///< Fixed-capacity producer buffer.
-      std::size_t head {}, count {};  ///< Ring read index and queued event count.
-      std::mutex mutex;  ///< Protects ring indices, never held during disk I/O.
+      std::vector<slot> ring;  ///< Fixed-capacity multi-producer, single-consumer buffer.
+      std::atomic<std::uint64_t> claimed {}, consumed {};  ///< Reserved and copied positions; depth never exceeds capacity.
+      std::atomic<std::uint32_t> emitters {};  ///< In-flight producers that must publish before close can finish.
+      std::mutex mutex;  ///< Only writer sleep and exporter completion; producers never acquire it.
       std::condition_variable wake, closed;  ///< Writer work and completion signals.
       std::atomic<std::uint64_t> lost {}, packet_serial {};  ///< Lost-event and packet identity counters.
-      std::atomic<bool> failed {}, capped {}, done {};  ///< Public writer health and completion.
-      bool stopping {};  ///< Close was requested; queued records still drain.
+      std::atomic<bool> failed {}, capped {}, done {}, stopping {};  ///< Writer health and nonblocking close request.
       std::function<void(std::string_view)> diagnostic;  ///< Optional writer-thread failure notification.
 
       /** @brief Initialize preallocated writer state. @param sink Owned stream. @param trace_id Generated ID. @param tag Validated client label. @param limits Bounds. @param notify Failure notification. */
@@ -189,21 +197,32 @@ namespace rhremote {
         *shared->output << first;
         bytes += first.size();
         std::array<frame_event, 256> batch;
+        const auto ready = [&] {
+          const auto position = shared->consumed.load(std::memory_order_relaxed);
+          return shared->ring[position % shared->ring.size()].ready.load(std::memory_order_acquire);
+        };
         while (true) {
           std::size_t size = 0;
-          {
+          while (size < batch.size() && ready()) {
+            const auto position = shared->consumed.load(std::memory_order_relaxed);
+            auto &item = shared->ring[position % shared->ring.size()];
+            batch[size++] = item.row;
+            item.ready.store(false, std::memory_order_relaxed);
+            shared->consumed.store(position + 1, std::memory_order_release);
+          }
+          if (!size) {
             std::unique_lock lock(shared->mutex);
-            shared->wake.wait(lock, [&] {
-              return shared->stopping || shared->count != 0;
+            // Producers never acquire this mutex. A bounded wait also covers a
+            // notification between the predicate check and entering the wait.
+            shared->wake.wait_for(lock, std::chrono::milliseconds(10), [&] {
+              return ready() || (shared->stopping && shared->emitters == 0);
             });
-            if (!shared->count && shared->stopping) {
+            // Check publication only after the SC emitter count: close cannot
+            // skip the last producer's event by observing ready too early.
+            if (shared->stopping && shared->emitters == 0 && !ready()) {
               break;
             }
-            while (size < batch.size() && shared->count) {
-              batch[size++] = shared->ring[shared->head];
-              shared->head = (shared->head + 1) % shared->ring.size();
-              --shared->count;
-            }
+            continue;
           }
           for (std::size_t index = 0; index < size; ++index) {
             const auto line = serialize(batch[index], *shared);
@@ -295,40 +314,46 @@ namespace rhremote {
       return {};
     }
 
-    /** @brief Copy metadata without waiting for a busy writer. @param event Fixed-size event. @return Whether this record was accepted. */
+    /** @brief Publish metadata without a mutex, allocation or unbounded retry. @param event Fixed-size event. @return Whether this record was accepted. */
     bool emit(frame_event event) noexcept {
       auto &shared = *state_;
-      if (shared.failed || shared.done) {
-        return false;
+      ++shared.emitters;
+      bool accepted = false;
+      if (!shared.stopping && !shared.failed && !shared.done) {
+        if (!event.at_us) {
+          event.at_us = frame_tick_us();
+        }
+        auto position = shared.claimed.load(std::memory_order_relaxed);
+        for (unsigned attempt = 0; attempt < 256; ++attempt) {
+          const auto consumed = shared.consumed.load(std::memory_order_acquire);
+          if (position - consumed >= shared.ring.size()) {
+            const auto current = shared.claimed.load(std::memory_order_relaxed);
+            if (current != position) {
+              position = current;
+              continue;
+            }
+            break;
+          }
+          if (shared.claimed.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
+            auto &item = shared.ring[position % shared.ring.size()];
+            item.row = event;
+            item.ready.store(true, std::memory_order_release);
+            accepted = true;
+            break;
+          }
+        }
+        if (!accepted) {
+          ++shared.lost;
+        }
       }
-      std::unique_lock lock(shared.mutex, std::try_to_lock);
-      if (!lock) {
-        ++shared.lost;
-        return false;
-      }
-      if (shared.stopping) {
-        return false;
-      }
-      if (shared.count == shared.ring.size()) {
-        ++shared.lost;
-        return false;
-      }
-      if (!event.at_us) {
-        event.at_us = frame_tick_us();
-      }
-      shared.ring[(shared.head + shared.count) % shared.ring.size()] = event;
-      ++shared.count;
-      lock.unlock();
+      --shared.emitters;
       shared.wake.notify_one();
-      return true;
+      return accepted;
     }
 
     /** @brief End recording without blocking capture, encoder or sender teardown. */
     void close() noexcept {
-      {
-        std::lock_guard lock(state_->mutex);
-        state_->stopping = true;
-      }
+      state_->stopping = true;
       state_->wake.notify_one();
     }
 

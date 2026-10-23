@@ -158,6 +158,117 @@ namespace {
     require(!trace->emit({}));
   }
 
+  /** @brief Concurrent encoder/capture/sender producers must not lose records merely because a writer is copying a batch. */
+  void concurrent_producers() {
+    std::stringbuf buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "concurrent", "client", rhremote::frame_trace_options {8192, 16 * 1024 * 1024});
+    std::atomic<bool> start {};
+    std::atomic<unsigned> waiting {}, accepted {};
+    std::vector<std::thread> producers;
+    constexpr unsigned count = 4, each = 1000;
+    for (unsigned producer = 0; producer < count; ++producer) {
+      producers.emplace_back([&, producer] {
+        ++waiting;
+        while (!start) {
+          std::this_thread::yield();
+        }
+        for (unsigned index = 0; index < each; ++index) {
+          rhremote::frame_event row;
+          row.frame = producer * each + index + 1;
+          accepted += trace->emit(row);
+        }
+      });
+    }
+    while (waiting != count) {
+      std::this_thread::yield();
+    }
+    start = true;
+    for (auto &producer : producers) {
+      producer.join();
+    }
+    trace->close();
+    require(trace->wait_closed(5s));
+    require(accepted == count * each && trace->lost_events() == 0);
+    std::vector<bool> seen(count * each);
+    unsigned rows = 0;
+    std::istringstream input(buffer.str());
+    for (std::string line; std::getline(input, line);) {
+      const auto marker = line.find("\"frame\":");
+      if (marker != std::string::npos) {
+        const auto id = std::stoul(line.substr(marker + 8));
+        require(id >= 1 && id <= seen.size() && !seen[id - 1]);
+        seen[id - 1] = true;
+        ++rows;
+      }
+    }
+    require(rows == accepted);
+  }
+
+  /** @brief Close racing producers drains every accepted record before writing the footer. */
+  void concurrent_close() {
+    std::stringbuf buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "closing", "client", rhremote::frame_trace_options {8192, 16 * 1024 * 1024});
+    std::atomic<unsigned> accepted {};
+    std::vector<std::thread> producers;
+    for (unsigned producer = 0; producer < 4; ++producer) {
+      producers.emplace_back([&, producer] {
+        for (unsigned index = 0; index < 1000; ++index) {
+          rhremote::frame_event row;
+          row.frame = producer * 1000 + index + 1;
+          if (!trace->emit(row)) {
+            break;
+          }
+          ++accepted;
+        }
+      });
+    }
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (accepted < 4) {
+      require(std::chrono::steady_clock::now() < deadline);
+      std::this_thread::yield();
+    }
+    trace->close();
+    for (auto &producer : producers) {
+      producer.join();
+    }
+    require(trace->wait_closed(5s));
+    unsigned rows = 0;
+    std::istringstream input(buffer.str());
+    for (std::string line; std::getline(input, line);) {
+      rows += line.find("\"frame\":") != std::string::npos;
+    }
+    require(rows == accepted && trace->lost_events() == 0);
+    require(buffer.str().ends_with("\"write_failed\":false}\n"));
+  }
+
+  /** @brief Capacity one remains a real one-slot queue across many consumer wraps. */
+  void single_slot_wrap() {
+    std::stringbuf buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "one-slot", "client", rhremote::frame_trace_options {1, 1024 * 1024});
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    for (unsigned id = 1; id <= 200;) {
+      rhremote::frame_event row;
+      row.frame = id;
+      if (trace->emit(row)) {
+        ++id;
+      } else {
+        require(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::yield();
+      }
+    }
+    trace->close();
+    require(trace->wait_closed(5s));
+    unsigned rows = 0;
+    std::istringstream input(buffer.str());
+    for (std::string line; std::getline(input, line);) {
+      const auto marker = line.find("\"frame\":");
+      if (marker != std::string::npos) {
+        require(std::stoul(line.substr(marker + 8)) == ++rows);
+      }
+    }
+    require(rows == 200);
+  }
+
   /** @brief A capped file still fits the whole-file bound and contains an explicit footer. */
   void file_cap() {
     gated_buffer buffer;
@@ -331,6 +442,9 @@ int main() {
   request_validation();
   source_timestamps();
   queue_overflow();
+  concurrent_producers();
+  concurrent_close();
+  single_slot_wrap();
   file_cap();
   write_failures();
   session_identity();
@@ -352,6 +466,18 @@ TEST(RhRemoteFrameTrace, SourceTimestamps) {
 
 TEST(RhRemoteFrameTrace, QueueOverflow) {
   queue_overflow();
+}
+
+TEST(RhRemoteFrameTrace, ConcurrentProducers) {
+  concurrent_producers();
+}
+
+TEST(RhRemoteFrameTrace, ConcurrentClose) {
+  concurrent_close();
+}
+
+TEST(RhRemoteFrameTrace, SingleSlotWrap) {
+  single_slot_wrap();
 }
 
 TEST(RhRemoteFrameTrace, FileCap) {
