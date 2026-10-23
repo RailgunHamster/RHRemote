@@ -12,17 +12,21 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Local test telemetry only: timestamps/IDs/lengths, never pixels, sound or input contents. */
 public final class RhStatistics {
     private static volatile Session current;private static Context context;private static String latest="";
+    private static volatile long requestedUs;
+    public static long originUs(){return requestedUs;}
     public static void initialize(Context c){context=c.getApplicationContext();}
     public static boolean enabled(){return context!=null&&context.getSharedPreferences("rhremote.statistics",0).getBoolean("enabled",false);}
     public static JSONObject state(){Session s=current;return RhActions.obj("enabled",enabled(),"latest",latest,"recording",s!=null,"lostEvents",s==null?0:s.lost.get(),"format","rhremote.statistics/v1");}
     public static JSONObject configure(boolean enabled){if(current!=null)throw new IllegalStateException("disconnect before changing test mode");context.getSharedPreferences("rhremote.statistics",0).edit().putBoolean("enabled",enabled).apply();return state();}
-    public static synchronized void begin(RhProfile profile)throws IOException{
+    public static synchronized void begin(RhProfile profile)throws IOException{beginAt(profile,System.currentTimeMillis()*1000);}
+    public static synchronized void beginAt(RhProfile profile,long originUs)throws IOException{
+        long now=System.currentTimeMillis()*1000;requestedUs=originUs>0&&originUs<=now?originUs:now;
         if(!enabled())return;if(current!=null)throw new IOException("statistics session already active");
         File root=new File(context.getFilesDir(),"statistics");root.mkdirs();
         File[] old=root.listFiles();if(old!=null)for(File f:old)if(new File(f,"analysis-complete.json").isFile()&&!new File(f,"keep").exists())removeOwned(root,f);
         File dir=new File(root,System.currentTimeMillis()+"-"+UUID.randomUUID().toString().substring(0,12));if(!dir.mkdirs())throw new IOException("statistics directory unavailable");
         write(new File(dir,"manifest.json"),RhActions.obj("schema","rhremote.statistics/v1","platform","android","profile",profile.json(),"clock","monotonic_anchored_utc_us","files",new org.json.JSONArray().put("native.jsonl"),"containsPixels",false,"containsAudio",false,"networkTimestampsPrecisionUs",1).toString());
-        Session s=new Session(new File(dir,"native.jsonl"));latest=dir.getAbsolutePath();current=s;event("connect_action");
+        Session s=new Session(new File(dir,"native.jsonl"));latest=dir.getAbsolutePath();current=s;event("connect_action",-1,new JSONObject(),requestedUs,0);
     }
     private static void removeOwned(File root,File f)throws IOException{
         String base=root.getCanonicalPath()+File.separator;if(!f.getCanonicalPath().startsWith(base))throw new IOException("statistics cleanup escaped root");

@@ -202,5 +202,6 @@ $sdk='C:/Users/40608/AppData/Local/Android/Sdk'
 if($LASTEXITCODE -ne 0){throw 'Android statistics instrumentation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-tunnel.py') android $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android tunnel adaptation failed.'}
-if($LASTEXITCODE -ne 0){throw 'Android statistics instrumentation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-android-recovery.py') $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Android recovery adaptation failed.'}
 Write-Output 'Android RHRemote source prepared. Upstream originals retained locally; no host or device settings changed.'

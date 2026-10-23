@@ -60,15 +60,17 @@ public final class RhNetwork {
         long began=System.nanoTime();JSONObject metadata=metadata(c,source);
         if(options!=null){metadata=new JSONObject(metadata.toString());if(options.has("address"))metadata.put("address",options.getString("address"));if(options.has("addresses"))metadata.put("addresses",options.getJSONArray("addresses"));}
         List<String> candidates=addresses(metadata);candidates.removeIf(a->!profile.networkMode.equals("auto")&&!kind(a).equals("auto")&&!kind(a).equals(profile.networkMode)&&!(profile.networkMode.equals("internet")&&kind(a).equals("transport")));
-        JSONArray attempts=new JSONArray();String selected=null,chosenRoute="",chosenPath="unknown";int offset=0;
+        JSONArray failed=options==null?null:options.optJSONArray("failedRoutes");
+        JSONArray attempts=new JSONArray();String selected=null,selectedRemote="",chosenRoute="",chosenPath="unknown";int offset=0;
         for(String route:profile.routeOrder) {
             if(route.equals("punch_direct")||route.equals("relay")) {
                 for(String address:candidates)if(kind(address).equals("transport")) {
+                    if(RhRecoveryPolicy.excluded(failed,route,address))continue;
                     long at=System.nanoTime();try {
                         JSONObject tunnel=RhTunnel.start(c,address.substring(4),profile.relayUrl,route.equals("relay"));
                         if(route.equals("punch_direct")&&!tunnel.optString("path").equals("direct"))throw new IOException("打洞未形成直连，继续尝试后续路径");
                         offset=tunnel.getInt("portOffset");check(tunnel.getString("address"),source.uuid,47989+offset);
-                        selected=tunnel.getString("address");chosenPath=tunnel.optString("path","unknown");chosenRoute=route;
+                        selected=tunnel.getString("address");selectedRemote=address;chosenPath=tunnel.optString("path","unknown");chosenRoute=route;
                         attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));break;
                     }catch(Exception|LinkageError e){attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
                 }
@@ -76,16 +78,16 @@ public final class RhNetwork {
             }
             // Another Android app's VPN path cannot be inferred from its IP.
             // Tailscale candidates therefore belong to the explicit unknown bucket.
-            List<String> group=new ArrayList<>();for(String address:candidates){String kind=kind(address);if(route.equals("lan")&&(kind.equals("lan")||kind.equals("auto"))||route.equals("public_direct")&&kind.equals("internet")||route.equals("tailscale_relay")&&kind.equals("tailscale"))group.add(address);}
+            List<String> group=new ArrayList<>();for(String address:candidates){if(RhRecoveryPolicy.excluded(failed,route,address))continue;String kind=kind(address);if(route.equals("lan")&&(kind.equals("lan")||kind.equals("auto"))||route.equals("public_direct")&&kind.equals("internet")||route.equals("tailscale_relay")&&kind.equals("tailscale"))group.add(address);}
             if(group.isEmpty())continue;
             CompletionService<JSONObject> queue=new ExecutorCompletionService<>(PROBES);List<Future<JSONObject>> tasks=new ArrayList<>();long end=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(2200),grace=end;long best=Long.MAX_VALUE;
             try {
                 for(String address:group)tasks.add(queue.submit(()->{long at=System.nanoTime();try{check(address,source.uuid);return RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}catch(Exception e){return RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}}));
                 for(int remaining=tasks.size();remaining>0;remaining--){long wait=Math.min(end,grace)-System.nanoTime();if(wait<=0)break;Future<JSONObject> future=queue.poll(wait,TimeUnit.NANOSECONDS);if(future==null)break;JSONObject result=future.get();attempts.put(result);if(result.optBoolean("ok")&&result.getLong("elapsedMs")<best){best=result.getLong("elapsedMs");selected=result.getString("address");grace=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(50);}}
             }finally{for(Future<?> future:tasks)future.cancel(true);}
-            if(selected!=null){chosenRoute=route;chosenPath=route.equals("tailscale_relay")?"unknown":"direct";offset=0;break;}
+            if(selected!=null){selectedRemote=selected;chosenRoute=route;chosenPath=route.equals("tailscale_relay")?"unknown":"direct";offset=0;break;}
         }
-        last=RhActions.obj("uuid",source.uuid,"selectedAddress",selected==null?JSONObject.NULL:selected,"attempts",attempts,"route",chosenRoute,"routeOrder",new JSONArray(profile.routeOrder),"path",chosenPath,"portOffset",offset,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began),"mediaUdp","not_tested");
+        last=RhActions.obj("uuid",source.uuid,"selectedAddress",selected==null?JSONObject.NULL:selected,"remoteAddress",selectedRemote,"attempts",attempts,"route",chosenRoute,"routeOrder",new JSONArray(profile.routeOrder),"path",chosenPath,"portOffset",offset,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began),"mediaUdp","not_tested");
         RhStatistics.event(selected==null?"network_resolve_failed":"network_resolve_end",-1,last);
         if(selected==null)throw new IOException("已启用的连接路径均不可达或 UUID 不符；请运行网络诊断");
         ComputerDetails resolved=new ComputerDetails(source);resolved.activeAddress=new ComputerDetails.AddressTuple(selected.replace("[","").replace("]",""),47989+offset);resolved.manualAddress=resolved.activeAddress;resolved.state=ComputerDetails.State.ONLINE;

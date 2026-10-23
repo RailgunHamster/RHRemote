@@ -49,7 +49,7 @@ public final class RhStreamControls implements RhActions.Target {
             case "stream.stats.toggle":preferences.enablePerfOverlay=!preferences.enablePerfOverlay;game.findViewById(R.id.performanceOverlay).setVisibility(preferences.enablePerfOverlay?View.VISIBLE:View.GONE);break;
             case "stream.audio.toggle":profile.audioEnabled=!profile.audioEnabled;applyAudio();break;
             case "stream.audio.volume":int volume=args.getInt("volume");if(volume<0||volume>100)throw new IllegalArgumentException("volume must be 0..100");profile.volume=volume;applyAudio();break;
-            case "stream.disconnect":dispose();game.finish();break;
+            case "stream.disconnect":game.rhCancelConnection();dispose();game.finish();break;
             case "input.gesture":touch.inject(args);break;
             default:throw new IllegalArgumentException("unsupported stream action");
         }updatePanel();return RhActions.obj("accepted",true);

@@ -17,6 +17,7 @@ public final class RhActions {
     public interface Target { JSONObject perform(String id,JSONObject args) throws Exception; JSONObject state() throws Exception; }
     private static final Handler MAIN=new Handler(Looper.getMainLooper());
     private static WeakReference<Target> home=new WeakReference<>(null),stream=new WeakReference<>(null);
+    private static volatile Target recovering;
     private static JSONArray catalog;private static String token;private static boolean started;
     private static Context appContext;
     public static JSONObject obj(Object... pairs){JSONObject value=new JSONObject();try{for(int i=0;i<pairs.length;i+=2)value.put((String)pairs[i],pairs[i+1]);}catch(JSONException e){throw new IllegalArgumentException(e);}return value;}
@@ -35,7 +36,10 @@ public final class RhActions {
     }
     public static void attachStream(Target target){stream=new WeakReference<>(target);}
     public static void detachStream(Target target){if(stream.get()==target)stream.clear();}
-    public static boolean hasStream(){return stream.get()!=null;}
+    static void beginRecovery(Target target){recovering=target;}
+    static void endRecovery(Target target){if(recovering==target)recovering=null;}
+    static boolean ownsRecovery(Target target){return recovering==target;}
+    public static boolean hasStream(){return stream.get()!=null||recovering!=null;}
     public static JSONObject dispatch(String id,JSONObject args){
         if(Looper.myLooper()==Looper.getMainLooper())return execute(id,args);
         CountDownLatch done=new CountDownLatch(1);JSONObject[] response=new JSONObject[1];MAIN.post(()->{response[0]=execute(id,args);done.countDown();});
@@ -45,14 +49,14 @@ public final class RhActions {
     private static JSONObject execute(String id,JSONObject args){
         if(id.equals("stream.shortcuts.list")){try{return obj("ok",true,"action",id,"result",RhShortcuts.catalog(appContext));}catch(Exception e){return obj("ok",false,"error","shortcut catalog unavailable");}}
         try{boolean known=false;for(int i=0;i<catalog.length();i++)if(id.equals(catalog.getJSONObject(i).getString("id"))){known=true;break;}if(!known)throw new IllegalArgumentException("unknown action");
-            if(stream.get()!=null&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("updates.install")))throw new IllegalStateException("请先断开当前连接");
-            Target target=(id.startsWith("stream.")||id.equals("input.gesture"))?stream.get():home.get();if(target==null)throw new IllegalStateException("action target unavailable");
+            if(hasStream()&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("updates.install")||id.equals("device.network.diagnose")))throw new IllegalStateException("请先断开当前连接");
+            Target target=(id.startsWith("stream.")||id.equals("input.gesture"))?(recovering!=null?recovering:stream.get()):home.get();if(target==null)throw new IllegalStateException("action target unavailable");
             return obj("ok",true,"action",id,"result",target.perform(id,args));
         }catch(Exception e){return obj("ok",false,"action",id,"error",e.getMessage()==null?"operation failed":e.getMessage());}
     }
     public static void click(String id,JSONObject args){JSONObject response=dispatch(id,args);if(!response.optBoolean("ok")){Target target=home.get();if(target instanceof RhHome)((RhHome)target).message(response.optString("error"));}}
     private static JSONObject snapshot(){
-        if(Looper.myLooper()==Looper.getMainLooper()){try{JSONObject state=home.get()==null?new JSONObject():home.get().state();Target target=stream.get();JSONObject active=target==null?new JSONObject():target.state();state.put("streaming",active.optBoolean("connected"));state.put("connecting",target!=null&&!active.optBoolean("connected"));if(target!=null)state.put("stream",active);return obj("ok",true,"state",state);}catch(Exception e){return obj("ok",false,"error","state unavailable");}}
+        if(Looper.myLooper()==Looper.getMainLooper()){try{JSONObject state=home.get()==null?new JSONObject():home.get().state();Target target=recovering!=null?recovering:stream.get();JSONObject active=target==null?new JSONObject():target.state();state.put("streaming",active.optBoolean("connected"));state.put("connecting",target!=null&&!active.optBoolean("connected"));if(target!=null)state.put("stream",active);return obj("ok",true,"state",state);}catch(Exception e){return obj("ok",false,"error","state unavailable");}}
         JSONObject[] result=new JSONObject[1];CountDownLatch latch=new CountDownLatch(1);MAIN.post(()->{result[0]=snapshot();latch.countDown();});try{if(latch.await(5,TimeUnit.SECONDS))return result[0];}catch(InterruptedException e){Thread.currentThread().interrupt();}return obj("ok",false,"error","state timeout");
     }
     private static byte[] read(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1){if(out.size()+n>limit)throw new IOException("request too large");out.write(b,0,n);}return out.toByteArray();}
