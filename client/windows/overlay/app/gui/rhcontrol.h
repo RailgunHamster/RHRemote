@@ -22,6 +22,8 @@
 #include "rhhost.h"
 #include "rhkeys.h"
 #include "rhstatistics.h"
+#include "rhparentlifetime.h"
+#include <memory>
 
 // Shared with the decoder; never reads live renderer buffers from the HTTP thread.
 struct RhRuntime {
@@ -34,6 +36,7 @@ struct RhRuntime {
     QString hostAddress;QSslCertificate hostCert;
     QJsonArray displays;QJsonObject selectedDisplay;QString displayError;int initialDisplay=0;
     std::atomic<bool> firstFrame{false};
+    std::atomic<bool> ownerExited{false},ownerMonitorEnabled{false},sessionActive{false};
     std::atomic<quintptr> streamWindow{0};
     std::atomic<bool> localDisconnect{false},retryEligible{false},routeRetryEligible{false},routeFatal{false},transportReleased{false};
     std::atomic<int> terminationCode{0};
@@ -56,6 +59,18 @@ struct RhRuntime {
 
 class RhControl : public QObject {
     Q_OBJECT
+#ifdef Q_OS_WIN32
+    std::unique_ptr<RhParentLifetime> parentLifetime;
+    static void ownerLost(){
+        auto& runtime=RhRuntime::get();runtime.ownerExited=true;runtime.localDisconnect=true;runtime.retryEligible=false;runtime.routeRetryEligible=false;
+        RhStatistics::event("owner_process_exited");
+        LiInterruptConnection();
+        SDL_Event event{};event.type=SDL_QUIT;SDL_PushEvent(&event);
+        QMetaObject::invokeMethod(QCoreApplication::instance(),[]{
+            if(!RhRuntime::get().sessionActive.load())QCoreApplication::quit();
+        },Qt::QueuedConnection);
+    }
+#endif
     class Server final : public QThread {
     public:
         RhControl* owner;quint16 port;QByteArray token;
@@ -103,6 +118,7 @@ class RhControl : public QObject {
         auto& r=RhRuntime::get();
         if(method=="GET"&&(path=="/v1/state"||path=="/v1/stats")){
             QMutexLocker lock(&r.mutex);auto result=path=="/v1/state"?r.home:QJsonObject();
+            result["ownerMonitorEnabled"]=r.ownerMonitorEnabled.load();result["ownerExited"]=r.ownerExited.load();
             result["ok"]=true;result["streaming"]=r.streaming;result["activeProfile"]=r.profile;
             result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["routeRetryEligible"]=r.routeRetryEligible.load();result["routeFatal"]=r.routeFatal.load();result["terminationCode"]=r.terminationCode.load();result["transportReleased"]=r.transportReleased.load();return result;
         }
@@ -183,6 +199,14 @@ class RhControl : public QObject {
     }
 public:
     explicit RhControl(QObject* parent=nullptr):QObject(parent){
+#ifdef Q_OS_WIN32
+        const auto owner=qEnvironmentVariable("RHREMOTE_OWNER_PID");
+        if(!owner.isEmpty()){
+            bool valid=false;const auto pid=owner.toUInt(&valid);
+            try{if(!valid)throw std::invalid_argument("Invalid owner PID");parentLifetime=std::make_unique<RhParentLifetime>(pid,[]{ownerLost();});RhRuntime::get().ownerMonitorEnabled=true;}
+            catch(const std::exception&){ownerLost();}
+        }
+#endif
         bool ok=false;int port=qEnvironmentVariableIntValue("RHREMOTE_CONTROL_PORT",&ok);auto token=qgetenv("RHREMOTE_CONTROL_TOKEN");
         if(ok&&port>1024&&port<65536&&token.size()>=32){server=new Server(this,quint16(port),token);server->start();}
         QObject::connect(QCoreApplication::instance(),&QCoreApplication::aboutToQuit,this,[this]{
@@ -191,7 +215,12 @@ public:
         });
     }
     void stopServer(){if(server){server->requestInterruption();server->wait();delete server;server=nullptr;}}
-    ~RhControl(){stopServer();}
+    ~RhControl(){
+#ifdef Q_OS_WIN32
+        parentLifetime.reset();
+#endif
+        stopServer();
+    }
     Q_INVOKABLE void publish(const QVariantMap& value){auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.home=QJsonObject::fromVariantMap(value);}
     Q_INVOKABLE void complete(const QString& id,const QVariantMap& result){auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.lastCommand={{"id",id},{"result",QJsonObject::fromVariantMap(result)}};}
 signals:

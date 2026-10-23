@@ -1372,6 +1372,7 @@ impl LaunchContext {
         command
             .env("RHREMOTE_TUNNEL_PORT_OFFSET", offset.to_string())
             .env("RHREMOTE_TUNNEL_CLIENT_ID", endpoint_id);
+        command.env("RHREMOTE_OWNER_PID", std::process::id().to_string());
         command
             .env_remove("RHREMOTE_CONTROL_PORT")
             .env_remove("RHREMOTE_CONTROL_TOKEN")

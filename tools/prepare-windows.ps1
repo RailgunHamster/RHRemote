@@ -483,4 +483,6 @@ if($LASTEXITCODE -ne 0){throw 'Windows pairing adaptation failed.'}
 if($LASTEXITCODE -ne 0){throw 'Windows initial display adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-frame-trace.py') windows $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Windows host frame trace adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-parent-lifetime.py') $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Windows parent lifetime adaptation failed.'}
 'Windows RHRemote source prepared; prior engine experiments and upstream UI originals retained.'
