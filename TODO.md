@@ -18,7 +18,8 @@
 - [x] Android 同步设备首次配对持久化：成功前立即写入 SQLite；保存失败保留旧证书，轮询及迟到发现不能恢复旧证书，代理地址不持久化。11 项实际 PcView / SQLite 回归通过，完整 60 项 JVM 测试零失败；未当作 OPPO 实机验收。见 design/ANDROID-PAIRING-PERSISTENCE-20261023.md。
 - [x] Android 初次连接入口取消：从选路、配对状态、应用列表到 Game 接管或真实清理完成保持占用；按钮 / stream.disconnect / pair.cancel 共用分派，Rust JNI 按次取消，HTTP 跟踪至正文关闭，配对等待签名取消任务结束。连接使用独立线程，旧结果不能启动新窗口。86 项 JVM / 11 项 Rust 测试及 ARM64 双 APK 构建通过；已随 0.2.5 正式发布，OPPO 实机待验收。见 design/ANDROID-CONNECTION-ADMISSION-20261024.md。
 - [x] Android 更新安装流程：用户确认尚未下载时点击安装，旧按钮只在页底报错。改为下载并安装、进度和页内失败提示，已下载记录持久化，安装权限返回后继续；旋转复用 Home 状态，后台下载不打开系统安装器。完整 102 项 JVM（新增 16 项安装回归）及双 APK 构建、9 项发布前置测试通过。0.2.5 / code207 已在 GitHub 和 Gitee 正式发布，两站各八资产及两个 latest feed 匿名校验通过；OPPO 安装及外网媒体仍待实机确认。见 design/ANDROID-UPDATE-INSTALL-20261024.md。
-- [x] Android 回退与恢复的通道归属：恢复占用保持到新控制器接管；初次 Game 已获准启动后的取消也等待其真实清理。统一按次 JNI / HTTP 取消，失败路径先关闭临时代理再回退，清理失败保留占用。新增 26 项交接、真实 HTTP、取消、UUID 与清理顺序回归，完整 128 项 JVM、ARM64 双 APK 及 9 项发布前置测试通过；0.2.6 / code208 准备发布。该项仅为代码及自动化验证，OPPO 外网、网络切换和长时间实际媒体验收仍保留未完成。见 design/ANDROID-RECOVERY-OWNERSHIP-20261024.md。
+- [x] Android 回退与恢复的通道归属：恢复占用保持到新控制器接管；初次 Game 已获准启动后的取消也等待其真实清理。统一按次 JNI / HTTP 取消，失败路径先关闭临时代理再回退，清理失败保留占用。新增 26 项交接、真实 HTTP、取消、UUID 与清理顺序回归，完整 128 项 JVM、ARM64 双 APK 及 9 项发布前置测试通过；0.2.6 / code208 已在 GitHub 发布并通过十项匿名下载校验。该项仅为代码及自动化验证，OPPO 外网、网络切换和长时间实际媒体验收仍保留未完成。见 design/ANDROID-RECOVERY-OWNERSHIP-20261024.md。
+- [ ] 补齐 0.2.6 的 Gitee 源码与正式更新发布：安装包、精确提交和不可变候选已准备。发布时 winserver SSH 在认证阶段被重置，Tailscale、局域网和经 claw 转接均未成功；远程暂存／发布器未执行。Sunshine HTTP 仍返回 200 和正确 UUID，未重启服务或改变 SSH 主机信任。Gitee 保持 0.2.5，GitHub 已为 0.2.6，不能声称双站已同步。候选及日志见 design/ANDROID-RECOVERY-OWNERSHIP-20261024.md。
 - [x] 用户提供 SSH 别名 tc，已确认并复用其现有 DERP；独立临时测试端经公网完成双向实际转发，未改动现有 Tailscale / DERP 服务。
 - [ ] tc 中继能力：独立 TCP 下载约 5.965 Mbps，DERP 25 Mbps 缺失 4103 包与 queue_head 增量相等。后续固定 1024 分包的同一 1080p30 影片各约 151 秒，LAN / 内置直连 / HTTPS 中继在请求 5 Mbps 时分别有 0 / 2 / 53 次 >50 ms 渲染间隔；中继 4 Mbps 降到 1 次，再回 5 Mbps 升至 278 次。优先定位容量/排队，并补主机分段、更长时间及跨运营商验收，不认定某个队列为唯一根因或宣称支持 25 Mbps/4K。用户码率已恢复。见 design/NATURAL-VIDEO-20261023.md、RELAY-THROUGHPUT-20261023.md。
 - [x] 本机 / winserver / claw 的网络服务已部署；本机 UAC 安装成功，设备 UUID 保持不变，TCP / UDP 47995 同属统一服务，Tailscale 规则已核对。
@@ -73,6 +74,8 @@
 - Android 0.2.4 / code206 已正式发布到两个更新源，包含上述修复及配对即时保存、更新 null 修复；Windows 继续 0.2.3，原更新 feed 不变且旧版本包地址保留。两站各八资产和两个 latest feed 全部校验通过；64 项 JVM / 9 项发布前置测试通过。OPPO 尚未安装，新版外网媒体未验收，P0 保持未完成；后续 Android 更新 versionCode 必须大于 206。
 
 - Android 0.2.5 / code207 已正式发布到两个更新源，修复下载与安装衔接并包含初次连接取消；完整 102 项 JVM / 9 项发布前置测试通过，两站各十项匿名下载及 latest feed 校验通过。发布源码为 9fa6fd7aa1fd52dd13e630f4934a928637854a41，签名与旧版相同，Windows 仍为 0.2.3。OPPO 覆盖安装、实际安装器及外网媒体待确认，不因此勾选外网验收；后续 Android versionCode 必须大于 207。
+
+- Android 0.2.6 / code208 的 GitHub 正式发布完成，八资产和两个 latest feed 匿名校验通过；发布源码 5e902c9e1ee922a86a07b113790c94f84c8e275f，128 项 JVM / 9 项发布前置测试通过，签名与旧版相同。Gitee 因 winserver SSH 认证阶段重置尚未补发，仍为 0.2.5；Windows 继续 0.2.3。OPPO 未操作，实际媒体与系统安装仍未验收；后续 Android versionCode 必须大于 208。
 
 - 0.2.2 的 Windows 自动分包误传 `--packet-size 0`，底层 CLI 拒绝后等待错误窗口确认；已撤回 GitHub 稳定发布。
 - 修复为自动模式省略 CLI 参数，并显式恢复原生内部自动检测；非法参数通过动作状态返回并退出。修复后的自动与 Tailscale 模式均已收到首帧，CLI 拒绝参数也已验证不再等待弹窗。

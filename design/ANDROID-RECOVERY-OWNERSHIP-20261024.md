@@ -43,3 +43,22 @@ OPPO 仍按用户要求暂停自动操作，外网媒体、网络切换及长时
 
 构建日志：`D:\RHRemoteTools\build-android-recovery-ownership-tests-20261024.log`。
 本次不改 Sunshine 主机、Tailscale 配置或用户码率及声音设置。
+
+## 发布记录
+
+0.2.6 / code208 的精确源码为 `5e902c9e1ee922a86a07b113790c94f84c8e275f`，标签 `v0.2.6`。
+APK 为 26,422,935 字节，SHA-256 为
+`f69cbc77f4bde580a6b065885aefc3f24989812d963fa671fcccddc79dcb4cfd`，签名与旧稳定版相同。
+GitHub 正式 release 422114480 已发布，八资产和两个 latest feed 的无凭据下载及哈希校验全部通过。
+Windows 0.2.3 的 feed 与 RELEASES 原样保留。
+
+Gitee 发布尚未执行：用于读取其 DPAPI 令牌的 winserver 在 SSH 服务接受后、用户认证时重置连接。
+通过 Tailscale 与局域网均重现，claw 转接也未成功；未降低主机密钥检查，未重启 sshd 或远程服务。
+同机 Sunshine serverinfo HTTP 返回 200、UUID 与已知 winserver 一致，因此不把 SSH 故障写成远程串流服务离线。
+Gitee 的源码与更新源仍保留先前状态，正式 APK 最新版本仍为 0.2.5。后续重试同一候选和同一精确提交，
+不能覆盖已经发布的 GitHub 资产。
+
+- 不可变候选：`D:\git\RHRemote\dist\release-candidates\0.2.6-42e0cdc5c3584f7d92edc7094d222c15`
+- 构建与测试记录：`D:\RHRemoteTools\android-recovery-ownership-verified-20261024.json`
+- 发布／匿名校验记录：`D:\RHRemoteTools\android-stable-v026-verification-20261024.json`
+- SSH 诊断：`D:\RHRemoteTools\winserver-ssh-release-20261024.log`
