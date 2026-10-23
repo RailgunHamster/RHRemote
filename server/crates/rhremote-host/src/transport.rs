@@ -119,23 +119,8 @@ fn enroll(state: &State, id: &str) -> Result<(), String> {
         .as_str()
         .unwrap_or(DEFAULT_RELAY)
         .to_owned();
-    let target = url::Url::parse(&relay).map_err(|e| e.to_string())?;
-    // The signed enrollment listener is adjacent to the relay port. No secrets
-    // are put in its URL or HTTP body; the signature binds the root and client.
-    let port = target.port_or_known_default().ok_or("Invalid relay port")?;
-    let host = target.host_str().ok_or("Invalid relay host")?;
-    let authority = if host.contains(':') {
-        format!("[{host}]")
-    } else {
-        host.to_owned()
-    };
-    let url = format!(
-        "{}://{}:{}/v1/grants",
-        target.scheme(),
-        authority,
-        port.checked_add(1).ok_or("Invalid relay port")?
-    );
-    let response = ureq::post(&url)
+    let target = enrollment_url(&relay)?;
+    let response = ureq::post(target.as_str())
         .timeout(std::time::Duration::from_secs(3))
         .send_json(serde_json::to_value(ticket).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -143,4 +128,73 @@ fn enroll(state: &State, id: &str) -> Result<(), String> {
         return Err("Relay enrollment rejected".into());
     }
     Ok(())
+}
+
+// HTTPS uses one public origin for media and signed enrollment. Keep the
+// adjacent HTTP listener for compatibility with already deployed clients.
+fn enrollment_url(relay: &str) -> Result<url::Url, String> {
+    let mut target = url::Url::parse(relay).map_err(|e| e.to_string())?;
+    if !matches!(target.scheme(), "http" | "https")
+        || target.host_str().is_none()
+        || !target.username().is_empty()
+        || target.password().is_some()
+        || target.query().is_some()
+        || target.fragment().is_some()
+        || !matches!(target.path(), "" | "/")
+    {
+        return Err("Relay requires an HTTP(S) origin without credentials or a path".into());
+    }
+    if target.scheme() == "https" {
+        target.set_path("/rhremote/v1/grants");
+    } else {
+        let port = target.port_or_known_default().ok_or("Invalid relay port")?;
+        target
+            .set_port(Some(port.checked_add(1).ok_or("Invalid relay port")?))
+            .map_err(|_| "Invalid relay port")?;
+        target.set_path("/v1/grants");
+    }
+    Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn https_enrollment_uses_the_same_origin() {
+        assert_eq!(
+            enrollment_url("https://relay.example/").unwrap().as_str(),
+            "https://relay.example/rhremote/v1/grants"
+        );
+        assert_eq!(
+            enrollment_url("https://101.43.203.147:33449/")
+                .unwrap()
+                .as_str(),
+            "https://101.43.203.147:33449/rhremote/v1/grants"
+        );
+        assert_eq!(
+            enrollment_url("https://[2001:db8::1]:8443/")
+                .unwrap()
+                .as_str(),
+            "https://[2001:db8::1]:8443/rhremote/v1/grants"
+        );
+    }
+    #[test]
+    fn http_keeps_legacy_port_and_rejects_ambiguous_origins() {
+        assert_eq!(
+            enrollment_url("http://101.43.203.147:33447/")
+                .unwrap()
+                .as_str(),
+            "http://101.43.203.147:33448/v1/grants"
+        );
+        for value in [
+            "http://host:65535/",
+            "https://user:secret@host/",
+            "https://host/prefix",
+            "https://host/?token=secret",
+            "https://host/#fragment",
+            "ftp://host/",
+        ] {
+            assert!(enrollment_url(value).is_err(), "{value}");
+        }
+    }
 }
