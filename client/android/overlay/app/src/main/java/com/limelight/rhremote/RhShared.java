@@ -148,6 +148,30 @@ public final class RhShared {
         for(int i=0;i<devices.length();i++)if(uuid.equals(devices.getJSONObject(i).getString("uuid"))){devices.getJSONObject(i).put("address",primary).put("addresses",normalized);found=true;}
         if(!found)throw new IOException("未找到设备");validate(shared);write(file(c),shared);
     }
+    /** Called only with network information received over the paired host's mutual TLS. */
+    public static synchronized void rememberNetwork(Context c,ComputerDetails source,JSONObject response)throws Exception {
+        JSONObject shared=capture(c,Collections.singletonList(source));
+        JSONArray devices=shared.getJSONArray("devices");
+        for(int i=0;i<devices.length();i++) {
+            JSONObject device=devices.getJSONObject(i);if(!source.uuid.equals(device.getString("uuid")))continue;
+            List<String> saved=RhNetwork.addresses(device);LinkedHashMap<String,String> merged=new LinkedHashMap<>();
+            for(String value:saved)merged.put(value.replace("[","").replace("]","").toLowerCase(Locale.ROOT),value);
+            JSONArray learned=response.optJSONArray("addresses");if(learned==null)learned=new JSONArray();else learned=new JSONArray(learned.toString());
+            JSONObject transport=response.optJSONObject("transport");String endpoint=transport==null?"":transport.optString("address");
+            if(endpoint.matches("rhr:[0-9a-fA-F]{64}"))learned.put(endpoint);
+            for(int n=0;n<learned.length()&&merged.size()<8;n++) {
+                String value=learned.optString(n),kind=RhNetwork.kind(value);
+                // Host-reported VPN addresses must be literal Tailscale addresses;
+                // do not import arbitrary hostnames or URLs from this field.
+                if(!kind.equals("tailscale")&&!kind.equals("transport"))continue;
+                try{RhNetwork.validate(value);}catch(IOException invalid){continue;}
+                merged.putIfAbsent(value.replace("[","").replace("]","").toLowerCase(Locale.ROOT),value);
+            }
+            if(merged.size()==saved.size())return;
+            JSONArray extra=new JSONArray();boolean primary=true;for(String value:merged.values()){if(primary){primary=false;continue;}extra.put(value);}
+            device.put("addresses",extra);validate(shared);write(file(c),shared);return;
+        }
+    }
     public static synchronized void saveProfile(Context c,ComputerDetails d,RhProfile p,String displayName)throws Exception {
         displayName=validateDisplayName(displayName);
         JSONObject shared=capture(c,Collections.singletonList(d));

@@ -13,6 +13,7 @@
 - [x] 使用现有 Tailscale 打洞与中继：直连成功走直连，失败由其持续转发加密数据；发现/协调服务与实际流量中继分开描述。
 - [x] 验证 Windows 通过 Tailscale 地址连接 winserver，断开和回退路径正常；Android 编译与自动化测试。
 - [ ] 外网实测：蜂窝网络 + Tailscale、直连失败时回退、网络切换后的恢复。家中局域网测试不能代替蜂窝验收。
+- [ ] OPPO 外网全离线回归：已修复 Android 列表轮询遗漏同步备用地址，以及自动学习遗漏主机 Tailscale 地址；42 项 JVM 测试与 APK 编译通过。当前本机看到 OPPO 的 Tailscale 节点离线（最后在线 18:12），三台服务器的 VPN Sunshine 均响应正确 UUID。等待平板连接状态确认和修复版外网实测，详见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
 - [x] 用户提供 SSH 别名 tc，已确认并复用其现有 DERP；独立临时测试端经公网完成双向实际转发，未改动现有 Tailscale / DERP 服务。
 - [ ] tc 中继能力：独立 TCP 下载约 5.965 Mbps，DERP 25 Mbps 缺失 4103 包与 queue_head 增量相等。后续固定 1024 分包的同一 1080p30 影片各约 151 秒，LAN / 内置直连 / HTTPS 中继在请求 5 Mbps 时分别有 0 / 2 / 53 次 >50 ms 渲染间隔；中继 4 Mbps 降到 1 次，再回 5 Mbps 升至 278 次。优先定位容量/排队，并补主机分段、更长时间及跨运营商验收，不认定某个队列为唯一根因或宣称支持 25 Mbps/4K。用户码率已恢复。见 design/NATURAL-VIDEO-20261023.md、RELAY-THROUGHPUT-20261023.md。
 - [x] 本机 / winserver / claw 的网络服务已部署；本机 UAC 安装成功，设备 UUID 保持不变，TCP / UDP 47995 同属统一服务，Tailscale 规则已核对。

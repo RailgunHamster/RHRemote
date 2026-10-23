@@ -36,4 +36,32 @@ public class RhNetworkTest {
         RhShared.capture(c,java.util.Collections.singletonList(d));RhShared.saveAddresses(c,d.uuid,"192.168.0.104",new JSONArray().put("100.73.139.109"));
         assertEquals("100.73.139.109",RhNetwork.host(c,d.uuid).getJSONArray("addresses").getString(0));
     }
+    @Test public void backgroundPollingIncludesSyncedTailnetAddressesWithoutStartingATunnel()throws Exception{
+        android.content.Context c=org.robolectric.RuntimeEnvironment.getApplication();
+        com.limelight.nvstream.http.ComputerDetails d=new com.limelight.nvstream.http.ComputerDetails();d.uuid="vpn-host";d.name="PC";
+        d.manualAddress=new com.limelight.nvstream.http.ComputerDetails.AddressTuple("192.168.0.104",47989);
+        RhShared.capture(c,java.util.Collections.singletonList(d));
+        RhShared.saveAddresses(c,d.uuid,"192.168.0.104",new JSONArray().put("100.73.139.109").put("[fd7a:115c:a1e0::1]").put("rhr:"+String.join("",java.util.Collections.nCopies(64,"a"))));
+        java.util.List<com.limelight.nvstream.http.ComputerDetails.AddressTuple> addresses=RhNetwork.pollingAddresses(c,d);
+        assertEquals(3,addresses.size());assertEquals("100.73.139.109",addresses.get(1).address);assertEquals(47989,addresses.get(1).port);
+        assertEquals("fd7a:115c:a1e0::1",addresses.get(2).address);assertEquals(0,RhTunnel.state().length());
+        d.uuid=null;assertTrue(RhNetwork.pollingAddresses(c,d).isEmpty());
+    }
+    @Test public void pairedHostNetworkFactsAreLearnedWithoutChangingPrimaryOrProfile()throws Exception{
+        android.content.Context c=org.robolectric.RuntimeEnvironment.getApplication();
+        com.limelight.nvstream.http.ComputerDetails d=new com.limelight.nvstream.http.ComputerDetails();d.uuid="learn-host";d.name="PC";
+        d.manualAddress=new com.limelight.nvstream.http.ComputerDetails.AddressTuple("192.168.0.104",47989);
+        RhShared.saveProfile(c,d,profile(),"办公室");
+        RhShared.saveAddresses(c,d.uuid,"192.168.0.104",new JSONArray().put("manual.example").put("[fd7a:115c:a1e0::1]"));
+        String profiles=RhShared.canonical(RhShared.read(c).getJSONObject("profiles"));
+        String endpoint="rhr:"+String.join("",java.util.Collections.nCopies(64,"b"));
+        RhShared.rememberNetwork(c,d,RhActions.obj("addresses",new JSONArray().put("100.73.139.109").put("fd7a:115c:a1e0::1").put("http://bad.example/").put("other.example"),"transport",RhActions.obj("address",endpoint)));
+        JSONObject saved=RhNetwork.host(c,d.uuid);java.util.List<String> all=RhNetwork.addresses(saved);
+        assertEquals("192.168.0.104",saved.getString("address"));assertEquals("办公室",saved.getString("displayName"));assertEquals(5,all.size());
+        assertTrue(all.contains("manual.example"));assertTrue(all.contains("100.73.139.109"));assertTrue(all.contains(endpoint));
+        assertEquals(profiles,RhShared.canonical(RhShared.read(c).getJSONObject("profiles")));
+        // An older host without the transport extension can still teach its VPN address.
+        RhShared.rememberNetwork(c,d,RhActions.obj("addresses",new JSONArray().put("100.122.230.22")));
+        assertTrue(RhNetwork.addresses(RhNetwork.host(c,d.uuid)).contains("100.122.230.22"));
+    }
 }

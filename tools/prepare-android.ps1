@@ -48,6 +48,40 @@ Edit-Source 'app/src/main/AndroidManifest.xml' {param($s)
     $s=$s.Replace('android:icon="@mipmap/ic_launcher"','android:icon="@mipmap/rh_launcher" android:roundIcon="@mipmap/rh_launcher"').Replace('android:theme="@style/AppTheme"','android:theme="@style/RhTheme"')
     return $s
 }
+Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.java' {param($s)
+    $s=Replace-Once $s '        startParallelPollThread(ipv6Info, uniqueAddresses);' @'
+        startParallelPollThread(ipv6Info, uniqueAddresses);
+        // Saved Tailscale/public addresses participate in the same identity-checked
+        // polling as upstream addresses. Background discovery never opens a tunnel.
+        java.util.ArrayList<ParallelPollTuple> rhExtra = new java.util.ArrayList<>();
+        for (ComputerDetails.AddressTuple address : com.limelight.rhremote.RhNetwork.pollingAddresses(this, details)) {
+            ParallelPollTuple tuple = new ParallelPollTuple(address, details);
+            rhExtra.add(tuple);
+            startParallelPollThread(tuple, uniqueAddresses);
+        }
+'@
+    $anchor="        } finally {`n            // Stop any further polling if we've found a working address or we've been"
+    $s=$s.Replace("`r`n","`n")
+    $s=Replace-Once $s $anchor (@'
+            for (ParallelPollTuple tuple : rhExtra) {
+                synchronized (tuple) {
+                    while (!tuple.complete) tuple.wait();
+                    if (tuple.returnedDetails != null) {
+                        tuple.returnedDetails.activeAddress = tuple.address;
+                        return tuple.returnedDetails;
+                    }
+                }
+            }
+        } finally {
+            // Stop any further polling if we've found a working address or we've been
+'@).Replace("`r`n","`n")
+    $s=Replace-Once $s '            ipv6Info.interrupt();' "            ipv6Info.interrupt();`n            for (ParallelPollTuple tuple : rhExtra) tuple.interrupt();"
+    $s=Replace-Once $s '            details.update(polledDetails);' @'
+            details.update(polledDetails);
+            if (details.activeAddress != null) com.limelight.rhremote.RhNetwork.learn(getApplicationContext(), new ComputerDetails(details), details.activeAddress.address);
+'@
+    return $s
+}
 Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
     $s=Replace-Once $s 'private RelativeLayout noPcFoundLayout;' "private RelativeLayout noPcFoundLayout;`n    private com.limelight.rhremote.RhHome rhHome;"
     $s=Replace-Once $s '    private void initializeViews() {' @'

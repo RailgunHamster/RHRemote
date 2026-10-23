@@ -41,6 +41,21 @@ public final class RhNetwork {
     public static JSONObject metadata(Context c,ComputerDetails source)throws Exception {
         try{return host(c,source.uuid);}catch(IOException e){ComputerDetails.AddressTuple a=source.manualAddress!=null?source.manualAddress:source.activeAddress!=null?source.activeAddress:source.localAddress;if(a==null)throw e;return RhActions.obj("address",a.address);}
     }
+    /** Extra direct addresses for the normal UUID/certificate-checked discovery poll.
+     * Never opens the shared media tunnel or treats a relay identity as a hostname. */
+    public static List<ComputerDetails.AddressTuple> pollingAddresses(Context c,ComputerDetails source) {
+        List<ComputerDetails.AddressTuple> result=new ArrayList<>();
+        if(source.uuid==null)return result;
+        try {
+            for(String address:addresses(host(c,source.uuid))) {
+                if(kind(address).equals("transport"))continue;
+                String host=address.replace("[","").replace("]","");
+                if(host.startsWith("127.")||host.equals("::1"))continue;
+                result.add(new ComputerDetails.AddressTuple(host,47989));
+            }
+        }catch(Exception ignored){/* Discovery still has its original address tuples. */}
+        return result;
+    }
     private static String check(String address,String uuid)throws Exception {return check(address,uuid,47989);}
     private static String check(String address,String uuid,int port)throws Exception {
         String host=address.replace("[","").replace("]","");HttpURLConnection connection=(HttpURLConnection)new URI("http",null,host,port,"/serverinfo","uniqueid=0123456789ABCDEF",null).toURL().openConnection(Proxy.NO_PROXY);
@@ -94,15 +109,15 @@ public final class RhNetwork {
         if(options==null&&!selected.equals("127.77.0.2")&&source.serverCert!=null)learn(c.getApplicationContext(),source,selected);
         return resolved;
     }
-    private static void learn(Context context,ComputerDetails source,String address){
-        long now=System.nanoTime();Long previous=LEARNED.put(source.uuid,now);if(previous!=null&&now-previous<TimeUnit.SECONDS.toNanos(30))return;
+    public static void learn(Context context,ComputerDetails source,String address){
+        if(source.uuid==null||source.serverCert==null||address.equals("127.77.0.2"))return;
+        long now=System.nanoTime();boolean[] admitted={false};
+        LEARNED.compute(source.uuid,(key,previous)->{if(previous!=null&&now-previous<TimeUnit.SECONDS.toNanos(30))return previous;admitted[0]=true;return now;});
+        if(!admitted[0])return;
         try{PROBES.submit(()->{try{
             JSONObject response=RhHost.request(context,address,source.serverCert.getEncoded(),"/v1/network",null).getJSONObject("result");
-            JSONObject transport=response.optJSONObject("transport");if(transport==null)return;String endpoint=transport.optString("address");if(!endpoint.matches("rhr:[0-9a-fA-F]{64}"))return;
-            RhShared.capture(context,Collections.singletonList(source));JSONObject saved=host(context,source.uuid);JSONArray extra=saved.optJSONArray("addresses");if(extra==null)extra=new JSONArray();
-            for(int i=0;i<extra.length();i++)if(extra.optString(i).equals(endpoint))return;
-            if(extra.length()<7){extra.put(endpoint);RhShared.saveAddresses(context,source.uuid,saved.getString("address"),extra);}
-        }catch(Exception|LinkageError ignored){}});}catch(RejectedExecutionException ignored){}
+            RhShared.rememberNetwork(context,source,response);
+        }catch(Exception|LinkageError ignored){}});}catch(RejectedExecutionException ignored){LEARNED.remove(source.uuid,now);}
     }
     public static JSONObject diagnose(Context c,ComputerDetails source,RhProfile profile)throws Exception {return diagnose(c,source,profile,null);}
     public static JSONObject diagnose(Context c,ComputerDetails source,RhProfile profile,JSONObject options)throws Exception {
