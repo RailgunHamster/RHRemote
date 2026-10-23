@@ -96,6 +96,55 @@ mod packet_argument_tests {
 mod recovery_transport_tests {
     use super::*;
     #[test]
+    fn ui_trace_waits_for_a_pending_launch_to_return_before_finishing() {
+        let root = std::env::temp_dir().join(format!(
+            "rhremote-pending-trace-{}", rhremote_core::random_token().unwrap()
+        ));
+        let p = NativePlatform::new(PathBuf::from("missing-test-engine.exe"), "test-token".into(), root.clone()).unwrap();
+        {
+            let mut trace = p.statistics.lock().unwrap();
+            trace.configure(true).unwrap();
+            trace.session(&json!({})).unwrap();
+        }
+        let (release, waiting) = std::sync::mpsc::channel();
+        let mut recovery = Recovery::new(json!({}));
+        recovery.pending = Some(std::thread::spawn(move || {
+            waiting.recv().unwrap();
+            Err("fixture launch finished".into())
+        }));
+        *p.recovery.lock().unwrap() = Some(recovery);
+        assert_eq!(p.state().unwrap()["tracing"]["recording"], true);
+        release.send(()).unwrap();
+        let until = Instant::now() + Duration::from_secs(3);
+        while !p.recovery.lock().unwrap().as_ref().unwrap().pending.as_ref().unwrap().is_finished() {
+            assert!(Instant::now() < until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(p.state().unwrap()["tracing"]["recording"], false);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn ui_trace_waits_for_the_retiring_process_even_after_transport_release() {
+        let root = std::env::temp_dir().join(format!(
+            "rhremote-retiring-trace-{}", rhremote_core::random_token().unwrap()
+        ));
+        let p = NativePlatform::new(PathBuf::from("missing-test-engine.exe"), "test-token".into(), root.clone()).unwrap();
+        {
+            let mut trace = p.statistics.lock().unwrap();
+            trace.configure(true).unwrap();
+            trace.session(&json!({})).unwrap();
+        }
+        let child = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 20"])
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .creation_flags(0x08000000).spawn().unwrap();
+        p.retiring.lock().unwrap().push((child, Instant::now(), true));
+        assert_eq!(p.state().unwrap()["tracing"]["recording"], true);
+        p.stop_owned().unwrap();
+        assert_eq!(p.state().unwrap()["tracing"]["recording"], false);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn cancelling_pending_connection_does_not_wait_for_the_network_worker() {
         let root = std::env::temp_dir().join(format!(
             "rhremote-cancel-{}",
@@ -1018,6 +1067,16 @@ impl NativePlatform {
         {
             value["phase"] = json!("error");
             value["error"] = json!("串流进程已退出，请重新连接");
+        }
+        // Hold the admission locks until closing the old UI trace, so a new
+        // launch cannot create a trace between the idle check and this footer.
+        if !alive
+            && value["phase"] != "reconnecting"
+            && recovery.as_ref().is_none_or(|r| r.pending.is_none())
+            && self.retiring.lock().unwrap().is_empty()
+            && self.retired_launches.lock().unwrap().is_empty()
+        {
+            let _ = self.statistics.lock().unwrap().finish();
         }
         drop(slot);
         drop(recovery);

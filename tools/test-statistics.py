@@ -9,6 +9,50 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def run_files(self,files,contents,refresh=False):
+        with tempfile.TemporaryDirectory(prefix="rhremote-client-trace-") as directory:
+            root=Path(directory);manifest={"schema":"rhremote.statistics/v1","platform":"windows","files":files}
+            (root/"manifest.json").write_text(json.dumps(manifest),encoding="utf-8")
+            for name,rows in contents.items():(root/name).write_text("\n".join(json.dumps(row) for row in rows)+"\n",encoding="utf-8")
+            command=[sys.executable,str(Path(a.__file__)),str(root)]
+            subprocess.run(command,check=True,capture_output=True)
+            first=json.loads((root/"summary.json").read_text(encoding="utf-8"))
+            remaining={name:(root/name).exists() for name in contents}
+            if refresh:
+                subprocess.run(command+["--refresh-report"],check=True,capture_output=True)
+                second=json.loads((root/"summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(first["input_files"],second["input_files"])
+                self.assertEqual(first["warnings"],second["warnings"])
+            return first,remaining
+    def test_healthy_native_footer_cannot_hide_a_crashed_ui_writer(self):
+        summary,remaining=self.run_files(["ui.jsonl","native.jsonl"],{
+            "ui.jsonl":[e("connect_action",1000),e("native_spawn_begin",1100)],
+            "native.jsonl":[e("render_return",2000,1),e("trace_end",2100)]},refresh=True)
+        self.assertTrue(any("ui.jsonl" in warning and "found 0" in warning for warning in summary["warnings"]))
+        self.assertTrue(all(remaining.values()))
+    def test_missing_declared_file_and_file_cap_are_incomplete(self):
+        summary,remaining=self.run_files(["ui.jsonl","native.jsonl"],{"ui.jsonl":[e("connect_action",1000),e("trace_end",2000)]})
+        self.assertTrue(any("native.jsonl: file is missing" in warning for warning in summary["warnings"]))
+        self.assertTrue(remaining["ui.jsonl"])
+        for field,value in (("size_limit_reached",True),("lost_events",2),("lost_events","invalid")):
+            footer=dict(e("trace_end",2100),**{field:value})
+            summary,remaining=self.run_files(["ui.jsonl","native.jsonl"],{
+                "ui.jsonl":[e("connect_action",1000),e("trace_end",1900)],
+                "native.jsonl":[e("render_return",2000,1),footer]})
+            self.assertTrue(summary["warnings"],field);self.assertTrue(all(remaining.values()))
+    def test_independently_closed_files_can_be_deleted_after_report(self):
+        summary,remaining=self.run_files(["ui.jsonl","native.jsonl"],{
+            "ui.jsonl":[e("connect_action",1000),e("trace_end",1900)],
+            "native.jsonl":[e("render_return",2000,1),e("trace_end",2100)]},refresh=True)
+        self.assertFalse(summary["warnings"]);self.assertFalse(any(remaining.values()))
+    def test_duplicate_footer_late_and_truncated_rows_are_reported_per_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"native.jsonl"
+            path.write_text("\n".join(json.dumps(row) for row in [e("trace_end",10),e("render_return",20,1),e("trace_end",30)])+'\n{"event":',encoding="utf-8")
+            rows,health=a.read_client_file(path)
+            self.assertEqual(2,health["footer_count"]);self.assertEqual(1,health["events_after_footer"])
+            self.assertEqual(1,health["malformed_records"]);self.assertEqual(1,health["unterminated_lines"])
+            self.assertTrue(a.input_file_warnings([health]))
     def test_overlapped_display_preparation_is_metadata_not_an_extra_video_frame(self):
         rows=[e("connect_action",0),e("connection_begin",1_000_000),e("render_return",2_000_000,1),e("trace_end",2_100_000)]
         rows.append(dict(event="host_display_prepared",ts_us=900_000,frame=-1,fields={"path":"native","hostRequestMs":800,"workerMs":790,"captureMs":770}))

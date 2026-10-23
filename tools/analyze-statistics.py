@@ -128,6 +128,44 @@ def attach_host_frames(summary,frames,run,paths,keep_raw=False):
         reports.append(report)
     summary["host_frame_traces"]=reports
 
+def read_client_file(path):
+    """A closed native trace cannot make a crashed UI trace complete."""
+    health={"name":path.name,"exists":path.exists(),"footer_count":0,"events_after_footer":0,
+            "malformed_records":0,"unterminated_lines":0,"lost_events":0,"size_limit_reached":False,"invalid_footer":False}
+    rows=[]
+    if not health["exists"]:return rows,health
+    if path.stat().st_size>513*1024*1024:raise ValueError("Client statistics file exceeds its recorder limit")
+    with path.open(encoding="utf-8-sig") as source:
+        while True:
+            line=source.readline(524289)
+            if not line:break
+            if len(line)>524288:raise ValueError("Client statistics line exceeds the analysis limit")
+            if not line.endswith("\n"):health["unterminated_lines"]+=1
+            try:
+                row=json.loads(line)
+                if not isinstance(row,dict) or not isinstance(row.get("event"),str) or type(row.get("ts_us")) not in (int,float) or not math.isfinite(row["ts_us"]):raise ValueError("Invalid event")
+            except (json.JSONDecodeError,ValueError):health["malformed_records"]+=1;continue
+            if row["event"]=="trace_end":
+                health["footer_count"]+=1
+                if type(row.get("lost_events",0)) is not int or row.get("lost_events",0)<0 or type(row.get("size_limit_reached",False)) is not bool:health["invalid_footer"]=True;continue
+                else:
+                    health["lost_events"]+=row.get("lost_events",0)
+                    health["size_limit_reached"]|=row.get("size_limit_reached",False)
+            elif health["footer_count"]:health["events_after_footer"]+=1
+            rows.append(row)
+    return rows,health
+
+def input_file_warnings(health):
+    messages=[]
+    for item in health:
+        reasons=[]
+        if not item["exists"]:reasons.append("file is missing")
+        elif item["footer_count"]!=1:reasons.append("expected one trace_end, found "+str(item["footer_count"]))
+        for key in ("events_after_footer","malformed_records","unterminated_lines","lost_events","size_limit_reached","invalid_footer"):
+            if item[key]:reasons.append(key+"="+str(item[key]))
+        if reasons:messages.append(item["name"]+": "+"; ".join(reasons)+". Input is incomplete; raw retained.")
+    return messages
+
 def import_host(path,lo,hi):
     data=json.loads(path.read_text(encoding="utf-8-sig"));offset=data.get("clockOffsetUs",0);zone=dt.timezone(dt.timedelta(minutes=data.get("utcOffsetMinutes",480)));result=[];probe=None;encoding=None;scopes={}
     for line in data.get("log",[]):
@@ -194,22 +232,22 @@ def main():
                 if key in previous["summary"]:summary[key]=previous["summary"][key]
         if a.host_frame_trace:attach_host_frames(summary,frames,root,a.host_frame_trace,a.keep_raw)
         elif "host_frame_traces" in previous["summary"]:summary["host_frame_traces"]=previous["summary"]["host_frame_traces"]
+        if "input_files" in previous["summary"]:
+            summary["input_files"]=previous["summary"]["input_files"]
+            summary["warnings"]+=input_file_warnings(summary["input_files"])
         (root/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
         (root/"timeline.json").write_text(json.dumps(chrome(events),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
         (root/"report.html").write_text(report_html(summary,frames,events),encoding="utf-8")
         print(json.dumps({"report":str(root/"report.html"),"measurement":summary["connection_measurement"],"phases":summary["connection_phases"]},ensure_ascii=False,indent=2));return
-    events=[];raw=[];malformed=0
+    events=[];raw=[];input_files=[]
     for name in manifest["files"]:
         if Path(name).name!=name or not name.endswith(".jsonl"):raise ValueError("Invalid statistics input path")
         path=root/name
         if path.is_symlink():raise ValueError("Statistics symlinks are not accepted")
-        if not path.exists():continue
-        raw.append(path)
-        for line in path.read_text(encoding="utf-8-sig").splitlines():
-            try:events.append(json.loads(line))
-            except json.JSONDecodeError:malformed+=1
+        rows,health=read_client_file(path);events+=rows;input_files.append(health)
+        if path.exists():raw.append(path)
     summary,frames=analyze(events,manifest)
-    if malformed:summary["warnings"].append(f"Ignored {malformed} truncated JSON records.")
+    summary["input_files"]=input_files;summary["warnings"]+=input_file_warnings(input_files)
     if a.host_evidence and events:
         first=next((e["ts_us"] for e in events if e["event"]=="connect_action"),min(e["ts_us"] for e in events))
         host,alignment=import_host(a.host_evidence,first,max(e["ts_us"] for e in events));events+=host;summary["host_clock"]=alignment

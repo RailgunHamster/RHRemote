@@ -10,6 +10,7 @@ pub struct Statistics {
     root: PathBuf,
     enabled: bool,
     latest: Option<PathBuf>,
+    recording: bool,
     app: Vec<Value>,
     clock: Instant,
     origin: u128,
@@ -18,6 +19,104 @@ pub struct Statistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn fixture() -> (PathBuf, Statistics) {
+        let data = std::env::temp_dir().join(format!(
+            "rhremote-ui-footer-{}",
+            rhremote_core::random_token().unwrap()
+        ));
+        fs::create_dir_all(&data).unwrap();
+        let mut statistics = Statistics::new(&data);
+        statistics.configure(true).unwrap();
+        (data, statistics)
+    }
+    fn records(path: &Path) -> Vec<Value> {
+        fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+    #[test]
+    fn finish_is_idempotent_and_late_events_cannot_reopen_a_closed_file() {
+        let (data, mut statistics) = fixture();
+        let native = statistics.session(&json!({})).unwrap().unwrap();
+        let ui = native.parent().unwrap().join("ui.jsonl");
+        statistics.event("native_spawn_begin", json!({})).unwrap();
+        statistics.finish().unwrap();
+        let closed = fs::read(&ui).unwrap();
+        statistics.event("late_worker", json!({})).unwrap();
+        statistics.finish().unwrap();
+        assert_eq!(closed, fs::read(&ui).unwrap());
+        let rows = records(&ui);
+        assert_eq!(rows.last().unwrap()["event"], "trace_end");
+        assert_eq!(rows.iter().filter(|r| r["event"] == "trace_end").count(), 1);
+        assert_eq!(
+            statistics.state()["latest"],
+            json!(native.parent().unwrap())
+        );
+        assert_eq!(statistics.state()["recording"], false);
+        drop(statistics);
+        fs::remove_dir_all(data).unwrap();
+    }
+    #[test]
+    fn retry_closes_the_previous_ui_file_before_accepting_new_metadata() {
+        let (data, mut statistics) = fixture();
+        let first = statistics.session(&json!({})).unwrap().unwrap();
+        statistics
+            .event("network_resolve_failed", json!({}))
+            .unwrap();
+        let second = statistics.session(&json!({})).unwrap().unwrap();
+        statistics
+            .event("network_resolve_begin", json!({}))
+            .unwrap();
+        let first_rows = records(&first.parent().unwrap().join("ui.jsonl"));
+        assert_eq!(first_rows.last().unwrap()["event"], "trace_end");
+        assert!(
+            !first_rows
+                .iter()
+                .any(|r| r["event"] == "network_resolve_begin")
+        );
+        let second_rows = records(&second.parent().unwrap().join("ui.jsonl"));
+        assert!(!second_rows.iter().any(|r| r["event"] == "trace_end"));
+        drop(statistics);
+        assert_eq!(
+            records(&second.parent().unwrap().join("ui.jsonl"))
+                .last()
+                .unwrap()["event"],
+            "trace_end"
+        );
+        fs::remove_dir_all(data).unwrap();
+    }
+    #[test]
+    fn disabling_statistics_finishes_the_existing_file_but_creates_no_new_one() {
+        let (data, mut statistics) = fixture();
+        let trace = statistics.session(&json!({})).unwrap().unwrap();
+        statistics.configure(false).unwrap();
+        assert_eq!(
+            records(&trace.parent().unwrap().join("ui.jsonl"))
+                .last()
+                .unwrap()["event"],
+            "trace_end"
+        );
+        assert!(statistics.session(&json!({})).unwrap().is_none());
+        assert_eq!(fs::read_dir(data.join("statistics")).unwrap().count(), 1);
+        drop(statistics);
+        fs::remove_dir_all(data).unwrap();
+    }
+    #[test]
+    fn footer_write_failure_is_reported_and_does_not_keep_appending() {
+        let (data, mut statistics) = fixture();
+        let trace = statistics.session(&json!({})).unwrap().unwrap();
+        let ui = trace.parent().unwrap().join("ui.jsonl");
+        fs::remove_file(&ui).unwrap();
+        fs::create_dir(&ui).unwrap();
+        assert!(statistics.finish().is_err());
+        assert_eq!(statistics.state()["recording"], false);
+        statistics.event("late_event", json!({})).unwrap();
+        assert!(ui.is_dir());
+        drop(statistics);
+        fs::remove_dir_all(data).unwrap();
+    }
     #[test]
     fn fallback_attempts_preserve_the_original_connection_clock() {
         let data = std::env::temp_dir().join(format!(
@@ -114,6 +213,7 @@ impl Statistics {
             root: data.join("statistics"),
             enabled,
             latest: None,
+            recording: false,
             app: vec![],
             clock: Instant::now(),
             origin: SystemTime::now()
@@ -149,7 +249,7 @@ impl Statistics {
         );
     }
     pub fn event(&self, event: &str, fields: Value) -> Result<(), String> {
-        if !self.enabled {
+        if !self.enabled || !self.recording {
             return Ok(());
         }
         if let Some(dir) = &self.latest {
@@ -163,7 +263,7 @@ impl Statistics {
         Ok(())
     }
     pub fn state(&self) -> Value {
-        json!({"enabled":self.enabled,"directory":self.root,"latest":self.latest,"format":"rhremote.statistics/v1","frameData":"metadata_only","presentSemantics":"Windows render_return is CPU submission completion, not physical scanout"})
+        json!({"enabled":self.enabled,"recording":self.recording,"directory":self.root,"latest":self.latest,"format":"rhremote.statistics/v1","frameData":"metadata_only","presentSemantics":"Windows render_return is CPU submission completion, not physical scanout"})
     }
     pub fn configure(&mut self, enabled: bool) -> Result<Value, String> {
         let path = self.root.parent().unwrap().join("statistics-settings.json");
@@ -173,7 +273,28 @@ impl Statistics {
         )
         .map_err(|e| e.to_string())?;
         self.enabled = enabled;
+        if !enabled {
+            self.finish()?;
+        }
         Ok(self.state())
+    }
+    /// Close this UI metadata file once; the native process has its own footer.
+    pub fn finish(&mut self) -> Result<(), String> {
+        if !self.recording {
+            return Ok(());
+        }
+        self.recording = false;
+        let Some(dir) = &self.latest else {
+            return Ok(());
+        };
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join("ui.jsonl"))
+            .map_err(|error| error.to_string())?;
+        writeln!(file, "{}", json!({"event":"trace_end","ts_us":self.now(),"frame":-1,"thread":"rust-ui","lost_events":0,"size_limit_reached":false}))
+            .map_err(|error| error.to_string())?;
+        file.sync_data().map_err(|error| error.to_string())
     }
     #[cfg(test)]
     pub fn session(&mut self, profile: &Value) -> Result<Option<PathBuf>, String> {
@@ -184,6 +305,7 @@ impl Statistics {
         profile: &Value,
         origin: Option<u128>,
     ) -> Result<Option<PathBuf>, String> {
+        self.finish()?;
         if !self.enabled {
             return Ok(None);
         }
@@ -208,6 +330,7 @@ impl Statistics {
         fs::write(dir.join("ui.jsonl"), text).map_err(|e| e.to_string())?;
         fs::write(dir.join("manifest.json"),serde_json::to_vec_pretty(&json!({"schema":"rhremote.statistics/v1","platform":"windows","createdUtcMs":rhremote_core::now_ms(),"profile":profile,"clock":"monotonic_anchored_utc_us","files":["ui.jsonl","native.jsonl"],"containsPixels":false,"containsAudio":false,"networkTimestampsPrecisionUs":1000,"hostStages":"Sunshine log; requires host clock offset measurement"})).unwrap()).map_err(|e|e.to_string())?;
         self.latest = Some(dir.clone());
+        self.recording = true;
         Ok(Some(dir.join("native.jsonl")))
     }
     pub fn prune(&self) -> Result<(), String> {
@@ -230,5 +353,11 @@ impl Statistics {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for Statistics {
+    fn drop(&mut self) {
+        let _ = self.finish();
     }
 }
