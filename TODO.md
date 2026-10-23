@@ -13,7 +13,7 @@
 - [x] 使用现有 Tailscale 打洞与中继：直连成功走直连，失败由其持续转发加密数据；发现/协调服务与实际流量中继分开描述。
 - [x] 验证 Windows 通过 Tailscale 地址连接 winserver，断开和回退路径正常；Android 编译与自动化测试。
 - [ ] 外网实测：蜂窝网络 + Tailscale、直连失败时回退、网络切换后的恢复。家中局域网测试不能代替蜂窝验收。
-- [ ] OPPO 外网全离线回归：用户确认 Tailscale 下 SMB、其他服务和 Sunshine serverinfo XML 均可用，目前实际客户端为 0.2.3，未安装预览修复。Android 列表备用地址、主机 Tailscale 地址学习、冷启动配对、VPN 发现竞争和配对持久化已修复。更新页 null 显示已修正，64 项 JVM 测试通过，准备通过 0.2.4 正式更新通道交付；仍待升级后实际外网验收。详见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
+- [ ] OPPO 外网全离线回归：用户确认 Tailscale 下 SMB、其他服务和 Sunshine serverinfo XML 均可用，实际客户端为 0.2.3，未安装预览修复。Android 列表备用地址、主机 Tailscale 地址学习、冷启动配对、VPN 发现竞争和配对持久化已修复，更新页 null 显示已修正。64 项 JVM / 9 项发布前置测试通过；0.2.4 正式更新已在 GitHub / Gitee 发布，两站各十项匿名下载及 latest feed 校验通过。仍待用户升级后实际外网验收。详见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
 - [x] Android VPN 发现竞争修复：移除 STUN 期间整个应用的临时底层网络绑定；VPN 下跳过客户端公网地址推断，保留主机上报地址并检查查询期间的网络切换。新增四项旧代码失败/修复后通过的回归，完整 49 项 JVM 测试和双 APK 编译通过；不当作 OPPO 现场根因的实机证明。
 - [x] Android 同步设备首次配对持久化：成功前立即写入 SQLite；保存失败保留旧证书，轮询及迟到发现不能恢复旧证书，代理地址不持久化。11 项实际 PcView / SQLite 回归通过，完整 60 项 JVM 测试零失败；未当作 OPPO 实机验收。见 design/ANDROID-PAIRING-PERSISTENCE-20261023.md。
 - [ ] Android 连接入口取消：当前选路 / JNI 隧道启动期间仅有 networkBusy，尚无完整的取消及清理占用语义；补同一按钮/API 的可取消状态，旧任务清理完成前禁止后续任务抢占隧道，验证迟到结果不会启动串流。
@@ -67,6 +67,8 @@
 ## 发布回归补充
 
 - Android 外网修复预览版 0.2.4-preview.1 / preview.2 已在 GitHub 发布；最新 preview.2 含 VPN 发现修复，49 项 JVM / 8 项发布前置回归通过，匿名下载四个资产并核对哈希；签名与 0.2.3 一致。双站稳定 feed 未变，preview.2 code205，后续 Android 稳定版 versionCode 至少 206。安装到 OPPO 及外网实际验收仍待完成，不能把发布预览包当作 P0 完成。见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
+
+- Android 0.2.4 / code206 已正式发布到两个更新源，包含上述修复及配对即时保存、更新 null 修复；Windows 继续 0.2.3，原更新 feed 不变且旧版本包地址保留。两站各八资产和两个 latest feed 全部校验通过；64 项 JVM / 9 项发布前置测试通过。OPPO 尚未安装，新版外网媒体未验收，P0 保持未完成；后续 Android 更新 versionCode 必须大于 206。
 
 - 0.2.2 的 Windows 自动分包误传 `--packet-size 0`，底层 CLI 拒绝后等待错误窗口确认；已撤回 GitHub 稳定发布。
 - 修复为自动模式省略 CLI 参数，并显式恢复原生内部自动检测；非法参数通过动作状态返回并退出。修复后的自动与 Tailscale 模式均已收到首帧，CLI 拒绝参数也已验证不再等待弹窗。

@@ -138,3 +138,22 @@ socket。原锁只约束这段发现代码，不能约束其他网络组件。
 准备发布 Android 0.2.4 / code206 到两个正式更新源，签名与 0.2.3 一致。Windows 仍为 0.2.3，
 新发布携带原 Windows feed / RELEASES，Windows 包继续从原版本下载。
 这次发包只交付已完成的修复，不宣称 OPPO 外网媒体已经验收，不操作或安装到用户平板。
+
+## 正式更新已发布并核对
+
+Android [0.2.4](https://github.com/RailgunHamster/RHRemote/releases/tag/v0.2.4)
+已在 GitHub / Gitee 正式发布，tag 对应源码 `64a5993049381a92f64384cebcfdd898460d356b`。
+GitHub release ID 422014985，Gitee release ID 1234767，两个 latest Android feed 均为
+versionCode 206。GitHub latest 确认为 v0.2.4，draft / prerelease 均为 false。
+
+APK 大小 26,350,431 字节，SHA256：
+`74421c39fbf6d3546fb9c26d913f231bc0c55a7162cd998f4a28fb2fdc33a8f9`。
+原签名保持一致，可以从 0.2.3 和两个已发布预览版覆盖升级。八个公开资产分别匿名下载校验，
+两个 latest feed 再核对，GitHub / Gitee 各十项全部通过：
+`results/clients-v2/github-release-downloads.json`、`results/clients-v2/gitee-release-downloads.json`。
+Windows feed 仍与原 0.2.3 完全一致。
+
+正式构建日志 `D:\RHRemoteTools\build-android-stable-v024-final-20261023.log`，64 项 JVM
+测试零失败；发布前置校验 9 项通过。发布 stage 和 hash 保留在
+`D:\RHRemoteTools\android-stable-v024-stage-20261023.json`。
+没有替用户安装新版、操作平板或改动 Tailscale。用户升级后的视频、输入及网络切换仍待验收。
