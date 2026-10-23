@@ -79,7 +79,10 @@ serverinfo 声明 `RHLaunchCancel=1`。新客户端在每次实际 launch/resume
 Windows / Android 请求生命周期已接入下述本地候选，实际新服务端 HTTPS 及立即重连
 回归尚未完成。不能把以上源码或单独的注册表回归视为整个问题已解决。
 
-最新服务端候选为 2ae02f8915cc75bb8fb2243c54902a138ae09beb，完整 CI 40034197133 正在运行；独立回归与 ThreadSanitizer 已通过。该候选尚未部署；客户端候选已构建，等待新服务端联测。
+服务端版本为 2ae02f8915cc75bb8fb2243c54902a138ae09beb，完整 CI 40034197133 已成功，
+90 项引擎回归零失败（其中槽位 10 项、TLS／队列 4 项、证书授权 7 项）；独立回归与
+ThreadSanitizer 通过。147 文件包验证后已部署 winserver / claw，配置、UUID、6 / 4 个
+配对均保留，TLS 中继重连成功；本机待管理员升级。
 
 ## Windows 客户端接入
 
@@ -124,3 +127,44 @@ TLS 使用现场新生成的测试证书与实际 NvHTTP、NvConnection.stop，�
 `D53C7BE0A887B19FB572399B93D27D40C8B71281AEE9DA19FFADC2F540E60770`。
 完整日志为 `D:\RHRemoteTools\build-android-launch-cancellation-20261024.log`。
 OPPO 未操作，Android 实际视频、网络切换与服务端联测仍未验收。
+
+## 新服务端的实际原生退出回归
+
+Windows 原生与新服务端已完成两台主机的同一 HTTP 内退出场景。测试用独立、低负载
+归属进程触发真实退出监听，并保留普通 UI 和本地转发服务；不以脚本直接调用全局 cancel。
+退出日志必须实际落在 http_launch / http_resume 内，且 protocol 尚未开始。
+两台都通过配对 HTTPS 收到 `cancelled`，随后仅一次立即重试即记录实际 render_return。
+
+| 指标 | winserver | claw |
+|---|---:|---:|
+| 原生正常退出 | 212.361 ms | 197.337 ms |
+| 重试首次实际画面（从启动重试进程计） | 1828.331 ms | 754.782 ms |
+| 从归属进程退出到重试收到画面 | 2105.021 ms | 984.080 ms |
+| 原生结束记录 | 1 个完整 footer | 1 个完整 footer |
+
+winserver 的重试进程在退出后约 276 ms 已开始，脚本没有等待 11 秒；原 native 配置哈希
+保持，服务及配对不变。winserver 两个原有显示路径的大小、位置、刷新与旋转均核对未变。
+这证明该槽位取消／原生退出路径已经修复，不是稳定首帧上限、帧率或全部界面取消的验收。
+
+claw 首轮边界观测失败的原报告保留：实际已收到 458 次渲染，HTTP launch 在原生启动约
+532 ms 时发生，观察器要求 800 ms 或长空闲，因此错过窗口，并非连接失败。
+根据真实 HTTP 序列改为第三条 TLS 流触发，后验仍严格要求 HTTP 内退出、未启动协议，
+才得到上表的有效结果，没有把先前不合格用例改写成通过。
+
+文件为 `D:\RHRemoteTools\light-owner-cancel-fixed-lan-first-20261024.json`、
+`light-owner-cancel-fixed-claw-thirdflow-20261024.json`；原始失败与裁定为
+`light-owner-cancel-fixed-claw-first-20261024.json`、
+`claw-first-pending-boundary-adjudication-20261024.json`。
+
+## 尚需修复和验收
+
+源检查发现 Windows Rust UI 的 stream.disconnect 在非 streaming 状态仍走 stop_owned，
+会强制结束子进程；取消后的后台 LaunchOutcome 和窗口关闭也存在 OwnedChild::drop／
+stop_owned 的强制结束路径。这会绕过已实现的原生清理。下一步应先请求控制接口，
+在后台保持连接占用与 transport，等待真实清理，不阻塞 UI；必须覆盖尚未收到原生控制
+端口、后台启动刚交接、API 取消、窗口关闭、失败清理，不能只修连接成功后的按钮。
+
+此外 Network 当前在 UI 进程内持有 QUIC Client。上表保留普通 UI，只终止轻量归属进程；
+不能据此推广到中继下真正的 UI 崩溃。需验证并解决 UI 退出后取消通道的存活，再做
+HTTPS 中继的完整退出／立即重试。Android 当前只验收了 JVM 实际 TLS，未验收 OPPO。
+正式更新仍为 Android 0.2.6、Windows 0.2.3，0.2.7 APK 暂未发布。
