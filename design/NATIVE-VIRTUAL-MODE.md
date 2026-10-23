@@ -13,3 +13,26 @@
 - 统计包含 `modeChanged`、`modeValidationMs`、`modeApplyMs`、`modeVerificationMs` 和 `captureMs`；原有 hostRequest/worker 计时保留。
 
 本地 `cargo +1.92.0 test --locked -p rhremote-host -j4`：21 项通过，包含 11 项模式事务测试；覆盖竖屏、4K、驱动身份、越界/重叠、失败前后状态、捕获失败回滚及并发修改。Release 主机构建成功。单元测试使用故障注入后端，不能代替驱动和实际串流验收；部署与耗时对照结果另行记录。
+
+## 部署和实测
+
+Rust 主机提交 `2051377f7968acf76badaa9aa3dace438641b270`，主机二进制 SHA256 `42838AFBE910FF9B4E6D650C88C6837BEF91356B63ADBCD89F57D7AA75C3D065`。沿用已验证的 Sunshine 引擎提交 `7332952e926092604674c0e978ebc72b7a2d3923`，引擎二进制 SHA256 `16220DC5545A74C4CBD5F4DD961C2888C3BBEE7CDD3399B81F8AC47E64E99585`；包清单分别记录二者来源。winserver 和 claw 均已通过正常统一服务安装器部署，保留备份；安装前后的 Sunshine 配置、应用配置、网络配置和配对状态哈希一致。串流后再次核对，两台配对状态仍分别为原来的 6 / 4 个客户端。
+
+Windows 客户端沿用 `128cc268` 的普通运行模式；声音关闭，OPPO 未操作。winserver 物理 LG 屏保持 1920×1080、位置及刷新率不变，仅调整原有自有虚拟屏，测试结束恢复 2520×1680。客户端配置、选中设备、统计设置及 WebDAV 自动同步均恢复。
+
+| 用例 | 首帧 render_return | 主机显示准备 | 其中应用模式 | 其中捕获输出验证 | Sunshine 编码能力探测 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 服务升级后首轮，虚拟屏 2520×1680 → 1080p，LAN launch | 12015.761 ms | 4741.291 ms | 252.996 ms | 4217.325 ms | 4784.113 ms |
+| 后续虚拟屏 2520×1680 → 1080p，LAN resume | 6852.483 ms | 2543.595 ms | 167.150 ms | 2327.167 ms | 2931.624 ms |
+| 保持同一 1080p 模式，独立 HTTPS 中继 resume | 3921.422 ms | 1256.972 ms | 未调整 | 1216.505 ms | 7.244 ms |
+| 虚拟屏恢复 2520×1680，LAN resume | 6651.285 ms | 2440.646 ms | 170.306 ms | 2225.163 ms | 2788.496 ms |
+
+以上连接与路径、服务热状态不同，**不能当作严格配对 A/B，不能把 5.039 → 2.544 秒全部归因于去掉 PowerShell**。已确认分辨率变更使用 `path=native, modeChanged=true`，无重复 PowerShell 准备；剩余时间主要在 D3D 设备创建/释放和 Sunshine 的重复能力验证。首轮捕获验证中设备创建 3341.675 ms、释放 849.021 ms，模式设置自身仅 252.996 ms。后续两轮设置模式约 167–170 ms。用户看到的长等待仍未完全解决。
+
+源码关联：`platform/windows/display_base.cpp::needs_encoder_reenumeration()` 遇到 `IDXGIFactory::IsCurrent()==false` 就要求完整重探，`video.cpp::probe_encoders()` 因此即使显式 software 也重新验证。分辨率变化的两轮出现约 2.8–2.9 秒重探，不变的一轮仅约 7 ms。下一步需区分仅模式变化和实际显卡/驱动/捕获能力变化，不能直接跳过所有新鲜校验。
+
+首轮还完成约 60.67 秒全画面合成高运动：源绘制约 29.999 FPS，渲染约 38.656 FPS（服务器 minimum_fps_target=60，重复帧不代表 60 FPS 内容），最少完整一秒 35 帧，两个渲染间隔超过 50 ms、最大 58.053 ms，无超过 100 ms 间隔，统计无明确 frame_drop。编码载荷约 3.687 Mbps，请求 5 Mbps。此项是有边界的回归，不是零顿挫、自然视频或物理扫描验收。
+
+claw 升级后的独立 HTTPS 中继静态桌面短测首帧 2634.848 ms，自动选屏准备 83.504 ms，115 次 render_return、正常 trace_end；静态内容约 14 FPS，不用于宣称稳定 30 FPS。未扩容虚拟机、停止业务服务或操作平板。本机服务仍待用户方便时完成普通管理员安装。
+
+本地证据：`D:\RHRemoteTools\native-mode-short-20261023.json`、`native2051377-highmotion-lan-5-20261023.json`、`windows-native-mode-claw-both-tls-relay-validation-20261023.json` 以及两台 `*-native-mode-deployment-20261023.json`。对应统计编号为 `1792750241610-dd81408590ed`、`1792750620234-285d109c6dad`、`1792750635768-104182bef595`、`1792750648237-9015c2bdd521`、`1792750752489-9409822b75b4`。原始逐帧数据已分析后删除；仍用于本次根因对照的报告保留。
