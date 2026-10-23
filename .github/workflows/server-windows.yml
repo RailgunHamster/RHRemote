@@ -76,6 +76,8 @@ jobs:
           ./test-rhremote-device-probe.exe
           g++ -std=c++23 -DRHREMOTE_ENCODER_PROBE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_encoder_probe.cpp -o test-rhremote-encoder-probe.exe
           ./test-rhremote-encoder-probe.exe
+          g++ -std=c++23 -DRHREMOTE_INITIAL_DISPLAY_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_initial_display.cpp -o test-rhremote-initial-display.exe
+          ./test-rhremote-initial-display.exe
           cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
           cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine --parallel 3
           cmake --install .deps/cmake-build-server --prefix "$PWD/.deps/server-stage"
@@ -83,7 +85,7 @@ jobs:
       - name: Test pairing sessions and client authorization
         shell: msys2 {0}
         working-directory: .deps/cmake-build-server/tests
-        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteDeviceProbe*' --gtest_output=xml:pairing-results.xml
+        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*' --gtest_output=xml:pairing-results.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

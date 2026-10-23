@@ -39,4 +39,20 @@ public class RhDisplayTest {
         display.prepare();assertEquals("主机辅助服务未安装",display.state().getString("error"));assertEquals(0,display.state().getJSONArray("displays").length());
         profile.displayMode="virtual";try{display.prepare();fail("Explicit virtual display must not silently fall back");}catch(IOException expected){assertEquals("主机辅助服务未安装",expected.getMessage());}
     }
+    @Test public void acknowledgedInitialSourceDoesNotSendPostStartHotkey()throws Exception{
+        RhDisplay display=new RhDisplay(profile(),(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("id","virtual","gdi","\\\\.\\DISPLAY25","captureIndex",2),"initialCaptureIndex",1)));
+        display.prepare();assertEquals("&rhrdisplay=%5C%5C.%5CDISPLAY25",display.launchQuery());
+        display.acknowledgeInitial("\\\\.\\DISPLAY25");display.applyInitial(); // A JNI call here would fail this JVM test.
+        try{display.acknowledgeInitial("\\\\.\\DISPLAY1");fail("Wrong source must be rejected");}catch(IOException expected){}
+        display.acknowledgeInitial(null);display.acknowledgeInitial(""); // Older servers use the legacy hotkey.
+    }
+    @Test public void malformedPreparedSourceCannotEnterLaunchQuery()throws Exception{
+        for(String source:new String[]{"bad","\\\\.\\DISPLAY0","\\\\.\\DISPLAY01","\\\\.\\DISPLAY1&mode=1","\\\\.\\DISPLAY1\u0000"}){
+            RhDisplay display=new RhDisplay(profile(),(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("gdi",source))));
+            display.prepare();try{display.launchQuery();fail(source);}catch(IOException expected){}
+        }
+        RhDisplay missing=new RhDisplay(profile(),(path,body)->{throw new IOException("legacy host");});
+        missing.prepare();assertEquals("",missing.launchQuery());
+        try{missing.acknowledgeInitial("\\\\.\\DISPLAY1");fail("Unrequested acknowledgement");}catch(IOException expected){}
+    }
 }

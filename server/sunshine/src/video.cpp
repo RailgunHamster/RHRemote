@@ -34,6 +34,7 @@ extern "C" {
 #include "logging.h"
 #include "nvenc/nvenc_encoder.h"
 #include "platform/common.h"
+#include "rhremote_initial_display.h"
 #include "sync.h"
 #include "video.h"
 
@@ -1476,8 +1477,10 @@ namespace video {
    * @param dev_type The encoder device type used for display lookup.
    * @param display_names The list of display names to repopulate.
    * @param current_display_index The current display index or -1 if not yet known.
+   * @param initial_display Optional exact initial source; absent targets fail without fallback.
+   * @return Whether the initial target was found, or legacy selection was retained.
    */
-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+  bool refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index, std::string_view initial_display = {}) {
     rhremote::scope refresh_scope("capture_refresh_displays");
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
     const auto output_name {display_device::map_output_name(config::video.output_name)};
@@ -1492,11 +1495,22 @@ namespace video {
     auto old_display_names = std::move(display_names);
     display_names = platf::display_names(dev_type);
 
+    if (!initial_display.empty()) {
+      const auto selected = rhremote::initial_display_index(initial_display, display_names);
+      current_display_index = selected.value_or(-1);
+      if (!selected) {
+        BOOST_LOG(error) << "Requested initial display is absent or ambiguous in the fresh capture enumeration"sv;
+        return false;
+      }
+      BOOST_LOG(info) << "RHRemote initial capture source ["sv << display_names[*selected] << ']';
+      return true;
+    }
+
     // If we now have no displays, let's put the old display array back and fail
     if (display_names.empty() && !old_display_names.empty()) {
       BOOST_LOG(error) << "No displays were found after reenumeration!"sv;
       display_names = std::move(old_display_names);
-      return;
+      return true;
     } else if (display_names.empty()) {
       display_names.emplace_back(output_name);
     }
@@ -1509,7 +1523,7 @@ namespace video {
       for (int x = 0; x < display_names.size(); ++x) {
         if (display_names[x] == current_display_name) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
 
@@ -1519,10 +1533,11 @@ namespace video {
       for (int x = 0; x < display_names.size(); ++x) {
         if (display_names[x] == output_name) {
           current_display_index = x;
-          return;
+          return true;
         }
       }
     }
+    return true;
   }
 
   /**
@@ -1566,7 +1581,12 @@ namespace video {
     // get the most up-to-date list available monitors
     std::vector<std::string> display_names;
     int display_p = -1;
-    refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+    if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, capture_ctxs.front().config.initial_display)) {
+      return;
+    }
+    if (!capture_ctxs.front().config.initial_display.empty()) {
+      switch_display_event->pop(0s);  // Discard a switch left by a preceding session before this explicit launch.
+    }
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
@@ -2679,13 +2699,19 @@ namespace video {
       synced_session_ctxs.emplace_back(std::make_unique<sync_session_ctx_t>(std::move(*ctx)));
     }
 
+    const auto initial_display = display_p < 0 ? synced_session_ctxs.front()->config.initial_display : std::string {};
     while (encode_session_ctx_queue.running()) {
       // Refresh display names since a display removal might have caused the reinitialization
-      refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
+      if (!refresh_displays(encoder.platform_formats->dev_type, display_names, display_p, initial_display)) {
+        return encode_e::error;
+      }
 
       // Process any pending display switch with the new list of displays
       if (switch_display_event->peek()) {
-        display_p = std::clamp(*switch_display_event->pop(), 0, static_cast<int>(display_names.size()) - 1);
+        const auto requested_index = *switch_display_event->pop();
+        if (initial_display.empty()) {
+          display_p = std::clamp(requested_index, 0, static_cast<int>(display_names.size()) - 1);
+        }
       }
 
       // reset_display() will sleep between retries

@@ -312,11 +312,11 @@ bool Session::populateDecoderProperties(SDL_Window* window)
         auto reply=m_RhDisplayPreparation.valid()
             ? m_RhDisplayPreparation.get()
             : QJsonObject{{"ok",false},{"error","Display preparation did not start"}};
-        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.firstFrame=false;r.localDisconnect=false;r.retryEligible=false;r.routeRetryEligible=false;
+        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.displays={};r.selectedDisplay={};r.firstFrame=false;r.localDisconnect=false;r.retryEligible=false;r.routeRetryEligible=false;
             if(reply["ok"].toBool()){auto data=reply["result"].toObject();r.displays=data["displays"].toArray();r.selectedDisplay=data["selected"].toObject();int index=r.selectedDisplay["captureIndex"].toInt();r.initialDisplay=index==data["initialCaptureIndex"].toInt()?0:index;r.displayError.clear();}
             else{r.displayError=reply["error"].toString();}
         }
-        if(!reply["ok"].toBool()&&displayMode=="virtual"){const auto error=reply["error"].toString();RhRuntime::status("error",error);emit displayLaunchError(error);return false;}
+        if(!reply["ok"].toBool()&&(displayMode!="auto"||!qgetenv("RHREMOTE_RESUME_SELECTION").isEmpty())){const auto error=reply["error"].toString();RhRuntime::status("error",error);emit displayLaunchError(error);return false;}
     }
     QString rtspSessionUrl;
 '@
@@ -479,4 +479,6 @@ if($LASTEXITCODE -ne 0){throw 'Windows statistics instrumentation failed.'}
 if($LASTEXITCODE -ne 0){throw 'Windows tunnel adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-pairing.py') windows $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Windows pairing adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-initial-display.py') windows $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Windows initial display adaptation failed.'}
 'Windows RHRemote source prepared; prior engine experiments and upstream UI originals retained.'

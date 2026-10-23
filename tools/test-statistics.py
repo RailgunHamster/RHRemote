@@ -82,6 +82,16 @@ class StatisticsTest(unittest.TestCase):
     def test_android_uses_callback_arrival_not_reported_presentation_time(self):
         m,_=a.connection_measurement([e("connect_action",0),e("surface_rendered",9_000_000,1),e("surface_render_callback",9_200_000,1)],"android")
         self.assertEqual(m["origin_us"],0);self.assertEqual(m["total_ms"],9200)
+    def test_first_frame_selection_scope_requires_current_attempt_ack(self):
+        base=[e("connect_action",1000),e("render_return",5000,1)]
+        m,_=a.connection_measurement(base,"windows");self.assertIsNone(m["initial_display_before_capture_accepted"])
+        for value in [False,True]:
+            selection=dict(e("initial_display_launch",3000),fields={"beforeCapture":value})
+            m,_=a.connection_measurement(base+[selection],"windows")
+            self.assertIs(m["initial_display_before_capture_accepted"],value);self.assertFalse(m["physical_scanout_measured"])
+        for stamp in [500,6000]:
+            m,_=a.connection_measurement(base+[dict(e("initial_display_launch",stamp),fields={"beforeCapture":True})],"windows")
+            self.assertIsNone(m["initial_display_before_capture_accepted"])
     def test_frame_identity_and_stage_durations(self):
         rows=[e("connect_action",1000),e("host_launch_request",2000,dur_us=37000000),e("packet_first",38000000,17),e("frame_assembled",38002000,17),e("decode_submit",38003000,17),e("decode_submit_return",38004000,17),e("decode_output",38007000,17),e("render_submit",38009000,17),e("render_return",38010000,17),e("trace_end",39000000)]
         s,f=a.analyze(rows,{"platform":"windows"});self.assertFalse(s["warnings"]);self.assertEqual(f[0]["decode_ms"],4);self.assertEqual(f[0]["pacing_ms"],2);self.assertEqual(s["startup_spans"][0]["ms"],37000);self.assertIsNone(s["frame_metrics"]["surface_callback_delay_ms"])

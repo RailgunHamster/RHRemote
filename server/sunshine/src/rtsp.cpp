@@ -756,6 +756,10 @@ namespace rtsp_stream {
     return server.session_count();
   }
 
+  bool launch_pending() {
+    return static_cast<bool>(server.launch_event.view(0s));
+  }
+
   void terminate_sessions() {
     server.clear(true);
     input::terminate_gamepads();
@@ -1140,6 +1144,8 @@ namespace rtsp_stream {
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
 
     stream::config_t config;
+
+    config.monitor.initial_display = session.initial_display;
 
     std::int64_t configuredBitrateKbps;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;

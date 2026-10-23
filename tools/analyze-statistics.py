@@ -25,6 +25,10 @@ def connection_measurement(events,platform):
     endpoint="render_return" if platform=="windows" else "surface_render_callback"
     end=first(endpoint)
     measurement={"origin_event":"connect_action","origin_us":start,"endpoint_event":endpoint,"endpoint_us":end["ts_us"] if end else None,"endpoint_frame":end.get("frame") if end else None,"total_ms":round((end["ts_us"]-start)/1000,3) if end else None,"session_kind":"resume" if first("http_resume") else "launch" if first("http_launch") else "unknown","physical_scanout_measured":False}
+    selections=[e for e in events if e["event"]=="initial_display_launch" and start<=e["ts_us"]<=(end["ts_us"] if end else float("inf"))]
+    selection=max(selections,key=lambda e:e["ts_us"],default=None)
+    measurement["initial_display_before_capture_accepted"]=selection.get("fields",{}).get("beforeCapture") if selection else None
+    measurement["display_timing_scope"]="host accepted per-launch source before capture" if measurement["initial_display_before_capture_accepted"] is True else "initial render only; target-display first frame unverified"
     labels={"connect_request_received":"客户端操作排队","native_spawn_begin":"连接请求处理","connection_begin":"客户端连接准备","connection_ready":"串流协议握手","packet_first":"等待视频首包","decode_output":"首帧组帧及解码",endpoint:"首帧排队及渲染提交" if platform=="windows" else "首帧排队及系统回调"}
     phases=[];previous=origin
     for name in ["connect_request_received","native_spawn_begin","connection_begin","connection_ready","packet_first","decode_output",endpoint]:

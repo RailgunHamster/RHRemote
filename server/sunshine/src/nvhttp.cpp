@@ -33,6 +33,7 @@
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "process.h"
+#include "rhremote_initial_display.h"
 #include "rtsp.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -49,6 +50,12 @@ namespace nvhttp {
   namespace pt = boost::property_tree;
 
   crypto::cert_chain_t cert_chain;  ///< Enabled paired-client certificates accepted by Sunshine's GameStream HTTPS server.
+
+  /** @brief Serialize HTTP launch preparation and cancellation. @return Mutex protecting admission through RTSP publication. */
+  std::mutex &launch_mutex() {
+    static std::mutex mutex;
+    return mutex;
+  }
 
   /**
    * @brief Get the mutex protecting paired-client authorization state.
@@ -524,6 +531,29 @@ namespace nvhttp {
     auto prepend_iv_p = (uint8_t *) &prepend_iv;
     std::copy(prepend_iv_p, prepend_iv_p + sizeof(prepend_iv), std::begin(launch_session->iv));
     return launch_session;
+  }
+
+  /** @brief Validate an optional initial source before global display or application changes. @param args Paired HTTPS query. @param session Launch receiving the target. @param tree Error response on rejection. @return Whether launch preparation may continue. */
+  bool prepare_initial_display(const args_t &args, rtsp_stream::launch_session_t &session, pt::ptree &tree) {
+    const auto name = get_arg(args, "rhrdisplay", "");
+#ifdef _WIN32
+    constexpr bool supported = true;
+#else
+    constexpr bool supported = false;
+#endif
+    // ANNOUNCE inserts an active session before PLAY releases the pending slot.
+    // Read pending first so that transition cannot appear idle between two reads.
+    const bool pending = rtsp_stream::launch_pending();
+    const auto admission = rhremote::admit_initial_display(name, rtsp_stream::session_count(), pending, supported);
+    if (admission == rhremote::initial_display_admission::busy || admission == rhremote::initial_display_admission::invalid) {
+      tree.put("root.<xmlattr>.status_code", admission == rhremote::initial_display_admission::busy ? 409 : 400);
+      tree.put("root.<xmlattr>.status_message", admission == rhremote::initial_display_admission::busy ? "Another launch or stream is using this host; disconnect it before choosing an initial display" : "Invalid or unsupported initial display source");
+      tree.put("root.resume", 0);
+      tree.put("root.gamesession", 0);
+      return false;
+    }
+    session.initial_display = name;
+    return true;
   }
 
   /**
@@ -1320,6 +1350,7 @@ namespace nvhttp {
    */
   void launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+    std::scoped_lock launch_lock {launch_mutex()};
 
     pt::ptree tree;
     bool revert_display_configuration {false};
@@ -1366,6 +1397,10 @@ namespace nvhttp {
 
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
+
+    if (!prepare_initial_display(args, *launch_session, tree)) {
+      return;
+    }
 
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
@@ -1423,6 +1458,10 @@ namespace nvhttp {
     );
     tree.put("root.gamesession", 1);
 
+    if (!launch_session->initial_display.empty()) {
+      tree.put("root.RHInitialDisplay", launch_session->initial_display);
+    }
+
     rtsp_stream::launch_session_raise(launch_session);
 
     // Stream was started successfully, we will revert the config when the app or session terminates
@@ -1438,6 +1477,7 @@ namespace nvhttp {
    */
   void resume(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+    std::scoped_lock launch_lock {launch_mutex()};
 
     pt::ptree tree;
     auto g = util::fail_guard([&]() {
@@ -1482,6 +1522,10 @@ namespace nvhttp {
     }
     const auto launch_session = make_launch_session(host_audio, args);
 
+    if (!prepare_initial_display(args, *launch_session, tree)) {
+      return;
+    }
+
     if (no_active_sessions) {
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
@@ -1524,6 +1568,10 @@ namespace nvhttp {
     );
     tree.put("root.resume", 1);
 
+    if (!launch_session->initial_display.empty()) {
+      tree.put("root.RHInitialDisplay", launch_session->initial_display);
+    }
+
     rtsp_stream::launch_session_raise(launch_session);
   }
 
@@ -1535,6 +1583,7 @@ namespace nvhttp {
    */
   void cancel(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
+    std::scoped_lock launch_lock {launch_mutex()};
 
     pt::ptree tree;
     auto g = util::fail_guard([&]() {
