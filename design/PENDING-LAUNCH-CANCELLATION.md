@@ -76,7 +76,51 @@ serverinfo 声明 `RHLaunchCancel=1`。新客户端在每次实际 launch/resume
 排队满或关闭返回 503，非法或重复参数 400，其他证书的凭据 403，预先取消的启动请求 410。
 新增四组 TLS 绑定／队列测试和两组真实证书／生产取消处理回归。
 
-Windows / Android 请求生命周期尚未接入，实际 HTTPS 及立即重连回归尚未完成。
-不能把以上源码或单独的注册表回归视为整个问题已解决。
+Windows / Android 请求生命周期已接入下述本地候选，实际新服务端 HTTPS 及立即重连
+回归尚未完成。不能把以上源码或单独的注册表回归视为整个问题已解决。
 
-最新服务端候选为 2ae02f8915cc75bb8fb2243c54902a138ae09beb，完整 CI 40034197133 正在运行；独立回归与 ThreadSanitizer 已通过。该候选尚未部署，客户端仍未发送启动归属凭据。
+最新服务端候选为 2ae02f8915cc75bb8fb2243c54902a138ae09beb，完整 CI 40034197133 正在运行；独立回归与 ThreadSanitizer 已通过。该候选尚未部署；客户端候选已构建，等待新服务端联测。
+
+## Windows 客户端接入
+
+只从已固定证书验证的 HTTPS serverinfo 学习能力，作为临时设备属性传入实际连接，
+不持久化到配置或 WebDAV。每次 launch/resume 使用系统随机源产生独立 256 位凭据，
+建立独立 Qt 清理线程，持有原地址、端口和配对证书快照；正常旧主机不发送扩展。
+退出监听、控制接口、窗口退出、阶段失败和正常停止均触发同一请求的幂等取消。
+取消请求不随应用 aboutToQuit 中断，使用独立 NvHTTP 与三秒超时；退出前等待其结束，
+失败记录为未确认、停止自动回退。普通 URL 日志和 Qt 网络错误隐藏请求凭据。
+
+显示准备完成后不再重置已经发生的取消。阶段回调和协议开始前也检查取消状态，
+只有新 Session 开始时才初始化本地停止标记。HTTPS 已配对连接在 encrypted 回调
+检查实际叶证书，即使证书通过公共 CA 验证也不能替换原配对身份。
+
+原生生命周期回归与完整 Windows 构建通过，最终 native SHA-256 为
+`D8C9935D7D57579CC4F5442AE39032F0A4A363BB622AC75C6121FCEAFD6894F1`，
+构建记录 `D:\RHRemoteTools\build-launch-client-stop-hooks-20261024.log`。
+源准备重复运行的五个被适配文件哈希一致。
+
+普通 Windows 客户端已使用该 native，Rust UI 保留原版本。对仍为 12e49a20、
+不声明新能力的 winserver 再做轻量归属回归：准确落在 HTTP 内退出，约 103 ms
+正常结束，立即重试仍 409，退出后 11 秒的第二次尝试收到实际画面。
+这证明旧主机兼容及原问题仍存在，不能视为新的按次取消已经实机通过。
+原 native 配置文件哈希不变，API 清理完成，未录音；测试文件为
+`D:\RHRemoteTools\light-owner-reconnect-legacy-newnative-20261024.json`。
+
+## Android 客户端接入
+
+NvConnection 使用严格配对证书验证，只从该 HTTPS serverinfo 学习能力。
+每个实际请求有独立 SecureRandom 凭据；取消早于请求登记也会触发独立 TLS 清理。
+清理不使用已取消的 NvHTTP 及其 dispatcher，请求和调用均有三秒上限。
+协议路径保留斜杠，不把 `/rhremote/launch/cancel` 编成一个带 `%2F` 的路径段。
+停止等待同时覆盖 JNI 启动线程和本请求清理；未确认时保留占用，相同凭据在退避后
+可继续确认，不拿客户端自行等待当作服务端释放的证明。恢复等待失败时休眠，避免忙循环。
+请求 URL 和网络异常隐藏凭据，保留 TLS／证书错误的分类。旧主机不发送新凭据或接口。
+
+完整 143 项 JVM 回归零失败，新增 7 项请求生命周期和 4 项真实双向 TLS 测试；
+TLS 使用现场新生成的测试证书与实际 NvHTTP、NvConnection.stop，原生 ARM 方法除
+静态加载／查询参数外不被伪装成已经执行。覆盖响应未知时停止、等待取消确认、
+取消早于请求登记、TLS 拒绝后不能释放占用及同凭据重试、旧主机。
+应用和测试 APK 构建通过；0.2.7 / code209 仍是未正式发布的候选，SHA-256 为
+`D53C7BE0A887B19FB572399B93D27D40C8B71281AEE9DA19FFADC2F540E60770`。
+完整日志为 `D:\RHRemoteTools\build-android-launch-cancellation-20261024.log`。
+OPPO 未操作，Android 实际视频、网络切换与服务端联测仍未验收。
