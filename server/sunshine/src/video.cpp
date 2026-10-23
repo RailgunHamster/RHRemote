@@ -2498,6 +2498,7 @@ namespace video {
     // set max frame time based on client-requested target framerate.
     double minimum_fps_target = rhremote::minimum_refresh_target(config::video.minimum_fps_target, config.framerate);
     std::chrono::duration<double, std::milli> max_frametime {1000.0 / minimum_fps_target};
+    rhremote::refresh_budget refresh_budget {minimum_fps_target};
     BOOST_LOG(info) << "Minimum FPS target set to ~"sv << minimum_fps_target << "fps ("sv << max_frametime.count() << "ms)"sv;
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
@@ -2542,7 +2543,7 @@ namespace video {
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
-        if (auto img = images->pop(max_frametime)) {
+        if (auto img = images->pop(refresh_budget.remaining(std::chrono::steady_clock::now()))) {
           frame_timestamp = img->frame_timestamp;
           rh_source = img->rh_capture;
           rh_frame.source = rh_source;
@@ -2570,6 +2571,7 @@ namespace video {
         break;
       }
 
+      refresh_budget.submitted(std::chrono::steady_clock::now());
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, rh_frame)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
