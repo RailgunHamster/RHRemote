@@ -51,6 +51,72 @@ Edit-Source 'app/src/main/AndroidManifest.xml' {param($s)
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.java' {param($s)
+    $s=Replace-Once $s '    private ComputerDatabaseManager dbManager;' "    private ComputerDatabaseManager dbManager;`n    private final Object rhPairingStoreLock = new Object();"
+    $persistStart=$s.IndexOf('        // If it''s online, update our persistent state')
+    if($persistStart -lt 0){throw 'Android discovery persistence anchor missing'}
+    $persistEnd=$s.IndexOf('        // Don''t call the listener if this is a failed lookup of a new PC',$persistStart)
+    if($persistEnd -le $persistStart){throw 'Android discovery persistence end anchor missing'}
+    $persistence=@'
+        if (details.state == ComputerDetails.State.ONLINE) {
+            // Optional discovery runs outside the credential write lock.
+            if (newPc && details.remoteAddress == null && dbManager.getComputerByUUID(details.uuid) == null) {
+                try {
+                    if (InetAddress.getByName(details.activeAddress.address).isSiteLocalAddress()) populateExternalAddress(details);
+                } catch (UnknownHostException ignored) {}
+            }
+            synchronized (rhPairingStoreLock) {
+                if (!com.limelight.rhremote.RhPairingStore.savePoll(dbManager, details, newPc)) {
+                    releaseLocalDatabaseReference();
+                    return false;
+                }
+            }
+        }
+
+'@
+    $s=$s.Remove($persistStart,$persistEnd-$persistStart).Insert($persistStart,$persistence+"`n")
+    $s=$s.Replace("`r`n","`n")
+    $tupleAnchor="    private void addTuple(ComputerDetails details) {`n        synchronized (pollingTuples) {"
+    $s=Replace-Once $s $tupleAnchor (@'
+    private void addTuple(ComputerDetails details) {
+        synchronized (pollingTuples) {
+            synchronized (rhPairingStoreLock) {
+                com.limelight.rhremote.RhPairingStore.refreshLocalPin(dbManager, details);
+            }
+'@).Replace("`r`n","`n")
+    $s=Replace-Once $s '        public void invalidateStateForComputer(String uuid) {' @'
+        public ComputerDetails saveRhPairing(ComputerDetails verified, java.security.cert.X509Certificate certificate) throws IOException {
+            if (verified == null || verified.uuid == null) throw new IOException("Missing pairing identity");
+            if (!getLocalDatabaseReference()) throw new IOException("Connection manager unavailable");
+            try {
+                ComputerDetails saved;
+                synchronized (pollingTuples) {
+                    PollingTuple existing = null;
+                    for (PollingTuple tuple : pollingTuples) if (tuple.computer.uuid.equals(verified.uuid)) { existing = tuple; break; }
+                    Object gate = existing == null ? pollingTuples : existing.networkLock;
+                    synchronized (gate) {
+                      synchronized (rhPairingStoreLock) {
+                        try {
+                            saved = com.limelight.rhremote.RhPairingStore.save(getApplicationContext(), dbManager, verified, certificate);
+                        } catch (RuntimeException storageFailure) {
+                            throw new IOException("Local pairing record could not be saved", storageFailure);
+                        }
+                        addTuple(saved);
+                        ComputerDetails live = getComputer(saved.uuid);
+                        // update() intentionally ignores null tuples; explicitly clear
+                        // transient proxy addresses removed by the persistence helper.
+                        live.manualAddress = saved.manualAddress; live.localAddress = saved.localAddress;
+                        live.remoteAddress = saved.remoteAddress; live.ipv6Address = saved.ipv6Address;
+                        live.activeAddress = saved.activeAddress;
+                      }
+                    }
+                }
+                ComputerManagerListener current = listener;
+                if (current != null) current.notifyComputerUpdated(new ComputerDetails(saved));
+                return new ComputerDetails(saved);
+            } finally { releaseLocalDatabaseReference(); }
+        }
+        public void invalidateStateForComputer(String uuid) {
+'@
     $start=$s.IndexOf('    private void populateExternalAddress(ComputerDetails details) {')
     if($start -lt 0){throw 'Android discovery network anchor missing'}
     $end=$s.IndexOf('    private MdnsDiscoveryListener createDiscoveryListener()', $start)
@@ -107,6 +173,14 @@ Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.ja
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
+    $s=Replace-Once $s '                            managerBinder.getComputer(computer.uuid).serverCert = pm.getPairedCert();' @'
+                            try {
+                                computer.update(managerBinder.saveRhPairing(computer, pm.getPairedCert()));
+                            } catch (IOException persistenceFailure) {
+                                success = false;
+                                throw persistenceFailure;
+                            }
+'@
     $s=Replace-Once $s 'private RelativeLayout noPcFoundLayout;' "private RelativeLayout noPcFoundLayout;`n    private com.limelight.rhremote.RhHome rhHome;"
     $s=Replace-Once $s '    private void initializeViews() {' @'
     private void initializeViews() {
@@ -156,7 +230,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         if(rhPairOperation!=null&&!rhPairOperation.cancelled)return;
         final RhPairOperation operation=new RhPairOperation();rhPairOperation=operation;
         new Thread(() -> {
-            boolean paired=false;String result="配对失败，请重试";
+            boolean paired=false;String result="配对失败，请重试";ComputerDetails savedPair=null;
             try {
                 if(managerBinder==null)throw new IOException("manager unavailable");
                 stopComputerUpdates(true);
@@ -165,12 +239,12 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
                 if(operation.cancelled){http.cancelRhPairing();throw new IOException("cancelled");}
                 PairingManager pairing=http.getPairingManager();
                 PairState state=pairing.pair(http.getServerInfo(true),pin);
-                if(state==PairState.PAIRED && !operation.cancelled){managerBinder.getComputer(computer.uuid).serverCert=pairing.getPairedCert();managerBinder.invalidateStateForComputer(computer.uuid);paired=true;result="配对完成";}
+                if(state==PairState.PAIRED && !operation.cancelled){savedPair=managerBinder.saveRhPairing(computer,pairing.getPairedCert());paired=true;result="配对完成";}
                 else if(state==PairState.ALREADY_IN_PROGRESS)result="主机已有配对请求，请稍后重试";
                 else if(state==PairState.PIN_WRONG)result="配对码不正确";
             }catch(Exception e){if(e.getMessage()!=null)result="配对失败："+e.getMessage();}finally{operation.http=null;}
-            final boolean success=paired;final String message=operation.cancelled?"已取消配对":result;
-            runOnUiThread(()->{if(rhPairOperation!=operation)return;rhPairOperation=null;if(rhHome!=null)rhHome.pairFinished(success,message);startComputerUpdates();});
+            final boolean success=paired;final String message=operation.cancelled?"已取消配对":result;final ComputerDetails stored=savedPair;
+            runOnUiThread(()->{if(rhPairOperation!=operation)return;rhPairOperation=null;if(rhHome!=null){if(success)rhHome.update(stored);rhHome.pairFinished(success,message);}startComputerUpdates();});
         },"RHRemote Pair").start();
     }
     private void launchRhDesktop(ComputerDetails computer) {
