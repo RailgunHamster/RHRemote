@@ -57,6 +57,33 @@ Sunshine 的该槽按 ping_timeout（默认 10 秒）过期。还需实测立即
 再在实际 HTTP 流内结束该归属进程并事后核对 scope。禁止通过不断重跑有竞争的旧脚本
 把偶然进程消失当作正确取消。当前没有增加全局取消调用或修改其他客户端会话。
 
+## 轻量归属进程已复现服务端残留
+
+上述边界现已使用独立、无图形资源的归属进程复现。原生客户端使用正常启动参数和
+现有配对状态的隔离副本，继续走已配对 TLS；读取该准确 PID 的 HTTPS 流来选择
+中断时刻，事后再以原生事件确认 ownerDuringLaunch=true、connection_begin 不存在。
+这不是靠进程消失猜测中断发生在什么阶段。
+
+最终测试 `light-owner-reconnect-state-api-20261024.json` 中，归属进程约 9.563 ms
+发出退出信号，原生约 162.800 ms 正常结束，具有正常清理标记和唯一尾部。
+第一次立即重试在归属进程退出后约 1.757 秒被主机 HTTP 409 拒绝，错误为另一个
+launch/stream 正在占用主机；该次没有进入串流协议，也没有渲染。
+等到退出后 11 秒再次发起，约 1.628 秒收到画面，状态接口和两条实际 render_return
+同时确认。此实验给出了拒绝和恢复的观测边界，没有精确测量槽位的过期瞬间。
+
+首次轻量测试的最终断言失败来自测试脚本：状态文件只在阶段变化时持久化，connected
+写入时 firstFrame 仍为 false，后续实际已经有 539 条 render_return。原始失败结果
+保留，没有改成成功；脚本改读实际 /v1/state，并在结束后核对原始渲染事件，再得到
+上述独立成功复现。不能将那次脚本等待 25 秒当作产品迟迟没出画面的证据。
+
+测试前后原生原始配置哈希不变，winserver 配置和 6 个配对保留，服务 PID 14172、
+引擎 PID 30888 保持，两个显示路径的尺寸、位置、刷新率和旋转均不变。
+仅停止测试自身的准确进程；普通客户端保持空闲，OPPO 未操作。
+
+已经确认客户端本地结束并不能清掉已接受的服务端待 RTSP 请求，需要按该请求归属
+取消。完整实现与并发要求见 [PENDING-LAUNCH-CANCELLATION.md](PENDING-LAUNCH-CANCELLATION.md)。
+该故障路径与正常初次连接、实际串流结束超时或解锁恢复不是同一项验收。
+
 ## 本地证据
 
 - D:\RHRemoteTools\test-windows-parent-lifetime-20261024.log
@@ -67,3 +94,7 @@ Sunshine 的该槽按 ping_timeout（默认 10 秒）过期。还需实测立即
 - D:\RHRemoteTools\owner-exit-initializing-fixed-20261024.json
 - D:\RHRemoteTools\winserver-idle-after-owner-tests-20261024.json
 - D:\RHRemoteTools\winserver-provenance-after-owner-tests-20261024.json
+- D:\RHRemoteTools\test-light-owner-reconnect-20261024.ps1
+- D:\RHRemoteTools\light-owner-reconnect-state-api-20261024.json
+- D:\RHRemoteTools\winserver-provenance-after-lightowner-20261024.json
+- D:\RHRemoteTools\display-after-lightowner-20261024.json
