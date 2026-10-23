@@ -1258,12 +1258,13 @@ impl Platform for NativePlatform {
             }
             "pair.cancel" => {
                 let operation=self.pairing.lock().unwrap().take();
+                let pair_id=operation.as_ref().map(|p|p.cancellation.id().to_owned());
                 if let Some(mut child) = self.child.lock().unwrap().take() {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
                 if let Some(operation)=operation {operation.cancellation.finish(true);}
-                Ok(json!({"cancelled":true}))
+                Ok(json!({"cancelled":true,"pairId":pair_id}))
             }
             "stream.disconnect" => {
                 self.cancel_recovery();

@@ -1,5 +1,5 @@
 //! Attempt-scoped cancellation. Native code signs; Rust never reads its private key.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::Read,
@@ -11,6 +11,15 @@ pub(crate) struct Cancellation {
     id: String,
     path: PathBuf,
     endpoint: url::Url,
+    report: Option<PathBuf>,
+}
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum CleanupOutcome {
+    Cancelled,
+    Unsupported,
+    Unconfirmed,
+    NoProof,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -38,6 +47,8 @@ impl Cancellation {
             .map_err(|e| e.to_string())?;
         Ok(Self {
             path: data.join(format!("pair-cancel-{id}.json")),
+            report: (std::env::var("RHREMOTE_TEST_MODE").as_deref() == Ok("1"))
+                .then(|| data.join(format!("pair-cancel-result-{id}.json"))),
             id,
             endpoint,
         })
@@ -61,7 +72,7 @@ impl Cancellation {
             && hex(&proof.signature))
         .then_some(proof)
     }
-    fn send(mut endpoint: url::Url, proof: Proof) {
+    fn send(mut endpoint: url::Url, proof: Proof) -> CleanupOutcome {
         let mut information = endpoint.clone();
         information.set_path("/serverinfo");
         information.set_query(Some("uniqueid=0123456789ABCDEF"));
@@ -78,33 +89,34 @@ impl Cancellation {
             .build();
         // Old Sunshine does not recognize rhcancel. Use only its advertised
         // extension; fresh IDs still allow independent retries on legacy hosts.
-        let supported = agent
-            .get(information.as_str())
-            .call()
-            .ok()
-            .and_then(|response| {
-                let mut body = String::new();
-                response
-                    .into_reader()
-                    .take(65537)
-                    .read_to_string(&mut body)
-                    .ok()?;
-                if body.len() > 65536 {
-                    return None;
-                }
-                let doc = roxmltree::Document::parse(&body).ok()?;
-                let root = doc.root_element();
-                Some(
-                    root.has_tag_name("root")
-                        && root.attribute("status_code") == Some("200")
-                        && root.children().any(|node| {
-                            node.has_tag_name("RHPairingCancel") && node.text() == Some("1")
-                        }),
-                )
-            })
-            .unwrap_or(false);
-        if !supported {
-            return;
+        let supported =
+            agent
+                .get(information.as_str())
+                .call()
+                .ok()
+                .and_then(|response| {
+                    let mut body = String::new();
+                    response
+                        .into_reader()
+                        .take(65537)
+                        .read_to_string(&mut body)
+                        .ok()?;
+                    if body.len() > 65536 {
+                        return None;
+                    }
+                    let doc = roxmltree::Document::parse(&body).ok()?;
+                    let root = doc.root_element();
+                    if !root.has_tag_name("root") || root.attribute("status_code") != Some("200") {
+                        return None;
+                    }
+                    Some(root.children().any(|node| {
+                        node.has_tag_name("RHPairingCancel") && node.text() == Some("1")
+                    }))
+                });
+        match supported {
+            Some(true) => {}
+            Some(false) => return CleanupOutcome::Unsupported,
+            None => return CleanupOutcome::Unconfirmed,
         }
         // A just-written initial request may still be entering the host event loop.
         // A delayed proof never matches the new attempt's random ID and salt.
@@ -115,20 +127,42 @@ impl Cancellation {
                     .ok()
                     .is_some_and(|body| body.contains("<cancelled>1</cancelled>"))
                 {
-                    return;
+                    return CleanupOutcome::Cancelled;
                 }
             }
             if attempt < 2 {
                 std::thread::sleep(Duration::from_millis(200));
             }
         }
+        CleanupOutcome::Unconfirmed
+    }
+    fn report(path: Option<PathBuf>, id: &str, outcome: CleanupOutcome, elapsed: Duration) {
+        if let Some(path) = path {
+            let data =
+                serde_json::json!({"pairId":id,"outcome":outcome,"elapsedMs":elapsed.as_millis()});
+            let temporary = path.with_extension("tmp");
+            if fs::write(&temporary, data.to_string()).is_ok() {
+                let _ = fs::rename(temporary, path);
+            }
+        }
     }
     pub fn finish(self, cancelled: bool) {
+        let began = std::time::Instant::now();
         let proof = if cancelled { self.read_proof() } else { None };
         // This exact generated file is owned by the completed native child.
         let _ = fs::remove_file(&self.path);
         if let Some(proof) = proof {
-            std::thread::spawn(move || Self::send(self.endpoint, proof));
+            std::thread::spawn(move || {
+                let result = Self::send(self.endpoint, proof);
+                Self::report(self.report, &self.id, result, began.elapsed());
+            });
+        } else if cancelled {
+            Self::report(
+                self.report,
+                &self.id,
+                CleanupOutcome::NoProof,
+                began.elapsed(),
+            );
         }
     }
 }
@@ -226,7 +260,7 @@ mod tests {
                 .respond(tiny_http::Response::empty(302).with_header(redirect))
                 .unwrap();
         }
-        worker.join().unwrap();
+        assert_eq!(worker.join().unwrap(), CleanupOutcome::Unconfirmed);
         assert!(target.try_recv().unwrap().is_none());
     }
     #[test]
@@ -253,7 +287,7 @@ mod tests {
                 "<root status_code=\"200\"><appversion>7.1.431.-1</appversion></root>",
             ))
             .unwrap();
-        worker.join().unwrap();
+        assert_eq!(worker.join().unwrap(), CleanupOutcome::Unsupported);
         assert!(server.try_recv().unwrap().is_none());
     }
     #[test]
