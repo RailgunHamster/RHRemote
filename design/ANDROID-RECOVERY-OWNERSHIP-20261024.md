@@ -52,13 +52,26 @@ APK 为 26,422,935 字节，SHA-256 为
 GitHub 正式 release 422114480 已发布，八资产和两个 latest feed 的无凭据下载及哈希校验全部通过。
 Windows 0.2.3 的 feed 与 RELEASES 原样保留。
 
-Gitee 发布尚未执行：用于读取其 DPAPI 令牌的 winserver 在 SSH 服务接受后、用户认证时重置连接。
-通过 Tailscale 与局域网均重现，claw 转接也未成功；未降低主机密钥检查，未重启 sshd 或远程服务。
-同机 Sunshine serverinfo HTTP 返回 200、UUID 与已知 winserver 一致，因此不把 SSH 故障写成远程串流服务离线。
-Gitee 的源码与更新源仍保留先前状态，正式 APK 最新版本仍为 0.2.5。后续重试同一候选和同一精确提交，
-不能覆盖已经发布的 GitHub 资产。
+Gitee 后续已补齐，正式 release 1235002。两个源各八资产及两个 latest feed 均通过匿名下载与哈希校验。
+最初 winserver 的 SSH 在用户认证时重置，后来自行恢复；未降低主机密钥检查，未重启 sshd 或远程服务。
+同机 Sunshine serverinfo 一直返回 200 和正确 UUID，不能将 SSH 故障写成串流服务离线。
+
+继续发布时，Gitee 对同一源码 ZIP 的 .NET HttpClient 普通／直连上传均返回 HTTP400
+`AttachFile::upload_attach_file raise: File upload error`；APK、文字附件可上传。
+改用 curl 直连后，同一份 33,076,328 字节 ZIP 上传成功，哈希未变。没有证据确定是配额、文件内容或代理问题。
+使用同一不可变候选完成原发布，不重写 GitHub 资产。
+
+发布工具仅对上述明确的 Gitee 错误增加一次 curl 回退，不对认证错误、未知结果或其他源盲目重复上传。
+PAT 保留在凭据所在主机；curl 配置先设置为仅当前用户可读写，UTF-8 无 BOM，结束或异常后删除。
+命令行仅传配置文件路径，响应正文和错误输出不打印；实际上传仍检查固定仓库及原候选的文件名、大小和哈希。
+Windows PowerShell 5.1 向 stdin 写配置时会带 BOM，因此改用受保护的配置文件。
+9 项发布前置测试通过；10 项回退回归分别在 PowerShell 7 和 5.1 通过，其中包含真实 Upload 分支的一次回退、
+失败停止、认证错误不重试、ACL 与配置清理，以及无需网络的实际 curl 进程解析。
+`.github/workflows/release-tools.yml` 在 Windows 上持续执行这些测试。
 
 - 不可变候选：`D:\git\RHRemote\dist\release-candidates\0.2.6-42e0cdc5c3584f7d92edc7094d222c15`
 - 构建与测试记录：`D:\RHRemoteTools\android-recovery-ownership-verified-20261024.json`
 - 发布／匿名校验记录：`D:\RHRemoteTools\android-stable-v026-verification-20261024.json`
 - SSH 诊断：`D:\RHRemoteTools\winserver-ssh-release-20261024.log`
+- 实际备用上传：`D:\RHRemoteTools\gitee-v026-source-curl-20261024.log`
+- 回退回归：`D:\RHRemoteTools\test-release-curl-pwsh-20261024.log`、`test-release-curl-ps51-20261024.log`

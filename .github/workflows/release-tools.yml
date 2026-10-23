@@ -1,0 +1,29 @@
+name: RHRemote release tooling regressions
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/publish-release.ps1'
+      - 'tools/test_preview_publish.py'
+      - 'tools/test_release_curl.py'
+      - '.github/workflows/release-tools.yml'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Test preflight and private curl fallback with fixture credentials
+        shell: pwsh
+        run: |
+          python tools/test_preview_publish.py
+          if($LASTEXITCODE-ne0){throw 'Release preflight regressions failed'}
+          python tools/test_release_curl.py
+          if($LASTEXITCODE-ne0){throw 'Curl fallback regressions failed'}
+          $env:RHREMOTE_TEST_POWERSHELL='powershell'
+          python tools/test_release_curl.py
+          if($LASTEXITCODE-ne0){throw 'Windows PowerShell 5.1 fallback regressions failed'}

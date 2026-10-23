@@ -22,6 +22,51 @@ foreach($asset in $plan.artifacts){
  $file=Join-Path $candidate $asset.fileName
  if((Get-Item -LiteralPath $file).Length -ne $asset.size -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $asset.sha256){throw ('Asset changed: '+$asset.fileName)}
 }
+function Test-ReleaseCurlRetry([string]$Provider,[int]$Status,[string]$Body){
+ if($Provider-ne'gitee'-or$Status-ne400-or$Body.Length-gt8192){return $false}
+ try{$reply=$Body|ConvertFrom-Json;foreach($key in @('message','error')){if($reply.$key-is[string]-and$reply.$key.Contains('AttachFile::upload_attach_file')-and$reply.$key.Contains('File upload error')){return $true}}}catch{}
+ return $false
+}
+function Invoke-ReleaseCurlProcess([string]$Curl,[string]$ConfigPath){
+ $psi=New-Object Diagnostics.ProcessStartInfo $Curl;$psi.Arguments='--config "'+$ConfigPath+'"'
+ $psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
+ $process=[Diagnostics.Process]::Start($psi)
+ try{
+  $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
+  if(-not$process.WaitForExit(100000)){$process.Kill();$process.WaitForExit();throw 'Upload process timed out'}
+  $lines=$stdout.Result.TrimEnd()-split "`r?`n";$status=0
+  $null=[int]::TryParse($lines[-1],[ref]$status)
+  # Neither response bodies nor stderr are printed: they may contain remote credentials.
+  [pscustomobject]@{ExitCode=$process.ExitCode;StatusCode=$status}
+ }finally{$process.Dispose()}
+}
+function Invoke-ReleaseCurlUpload([int]$ReleaseId,[string]$Path,[string]$FileName,[string]$Token){
+ if($ReleaseId-lt1-or$FileName-notmatch'^[A-Za-z0-9._-]+$'-or$Path-match'[;"\r\n]'-or[string]::IsNullOrEmpty($Token)-or$Token-match'[\r\n]'){throw 'Invalid curl upload parameters'}
+ $curl=(Get-Command curl.exe -ErrorAction Stop).Source
+ $configPath=Join-Path ([Environment]::GetFolderPath('UserProfile')) ('.rhremote-upload-'+[guid]::NewGuid().ToString('N')+'.cfg')
+ try{
+  # Create an empty file first, protect its ACL, then write the credential-bearing config.
+  $empty=[IO.File]::Open($configPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$empty.Dispose()
+  $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=New-Object Security.AccessControl.FileSecurity
+  $acl.SetAccessRuleProtection($true,$false);$acl.SetOwner($owner)
+  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($owner,'FullControl','Allow')))
+  Set-Acl -LiteralPath $configPath -AclObject $acl
+  $escaped=$Token.Replace('\','\\').Replace('"','\"')
+  $mime=if($FileName.EndsWith('.zip')){'application/zip'}else{'application/octet-stream'}
+  $config=@(('url = "https://gitee.com/api/v5/repos/railgunhamster/RHRemote/releases/'+$ReleaseId+'/attach_files"'),
+   'request = "POST"','silent','show-error','connect-timeout = 10','max-time = 90','noproxy = "*"','proto = "=https"',
+   ('header = "Authorization: Bearer '+$escaped+'"'),('form = "access_token='+$escaped+'"'),
+   ('form = "file=@'+$Path.Replace([char]92,[char]47)+';filename='+$FileName+';type='+$mime+'"'),'write-out = "\n%{http_code}"')-join "`n"
+  # Windows PowerShell 5.1 adds a BOM to redirected stdin; curl reads a protected UTF-8 file instead.
+  [IO.File]::WriteAllText($configPath,$config,[Text.UTF8Encoding]::new($false))
+  $result=Invoke-ReleaseCurlProcess $curl $configPath
+  if($result.ExitCode-ne0-or$result.StatusCode-ne201){throw 'Upload was not confirmed'}
+ }catch{throw 'Gitee curl upload failed (credentials suppressed)'}
+ finally{
+  if(Test-Path -LiteralPath $configPath){Remove-Item -LiteralPath $configPath -Force -ErrorAction Stop}
+  $Token=$null;$escaped=$null;$config=$null
+ }
+}
 if($ValidateOnly){[pscustomobject]@{provider=$Provider;version=$plan.version;tag=$tag;prerelease=[bool]$Preview;makeLatest=(-not $Preview);artifacts=@($plan.artifacts).Count};return}
 $token=$null;$pointer=[IntPtr]::Zero;$headers=$null;$credentialOutput=$null
 try{
@@ -104,7 +149,15 @@ try{
     $multipart.Add((New-Object Net.Http.StringContent($token)),'access_token');$multipart.Add($content,'file',$Asset.fileName)
     $response=$client.PostAsync(($api+'/releases/'+$Release.id+'/attach_files'),$multipart).GetAwaiter().GetResult()
    }
-   if(-not $response.IsSuccessStatusCode){throw "$Provider upload $($Asset.fileName) failed (HTTP $([int]$response.StatusCode); response suppressed)"}
+   if(-not $response.IsSuccessStatusCode){
+    $status=[int]$response.StatusCode;$body=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult();$response.Dispose()
+    if(Test-ReleaseCurlRetry $Provider $status $body){
+     # Only retry this definite Gitee rejection, once, with the same validated immutable asset.
+     Invoke-ReleaseCurlUpload $Release.id $file $Asset.fileName $token
+     Write-Output "$Provider uploaded $($Asset.fileName) ($($Asset.size) bytes; curl fallback)";return
+    }
+    throw "$Provider upload $($Asset.fileName) failed (HTTP $status; response suppressed)"
+   }
    $response.Dispose();Write-Output "$Provider uploaded $($Asset.fileName) ($($Asset.size) bytes)"
   }finally{if($multipart){$multipart.Dispose()}elseif($content){$content.Dispose()};$stream.Dispose()}
  }
