@@ -68,6 +68,9 @@ Windows PowerShell 5.1 向 stdin 写配置时会带 BOM，因此改用受保护�
 9 项发布前置测试通过；10 项回退回归分别在 PowerShell 7 和 5.1 通过，其中包含真实 Upload 分支的一次回退、
 失败停止、认证错误不重试、ACL 与配置清理，以及无需网络的实际 curl 进程解析。
 `.github/workflows/release-tools.yml` 在 Windows 上持续执行这些测试。
+提交 `794faf8da9b2d1958e83f480fb717387b206deff` 的 Windows CI
+[39998388848](https://github.com/RailgunHamster/RHRemote/actions/runs/39998388848) 已成功，
+日志分别确认 9 / 10 / 10 项测试通过，不包含真实凭据或外部上传。
 
 - 不可变候选：`D:\git\RHRemote\dist\release-candidates\0.2.6-42e0cdc5c3584f7d92edc7094d222c15`
 - 构建与测试记录：`D:\RHRemoteTools\android-recovery-ownership-verified-20261024.json`
