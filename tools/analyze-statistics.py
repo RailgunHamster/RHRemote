@@ -2,6 +2,7 @@
 import argparse
 import csv
 import datetime as dt
+import importlib.util
 import json
 import math
 import re
@@ -94,7 +95,38 @@ def analyze(events,manifest):
     summary["connection_measurement"],summary["connection_phases"]=connection_measurement(events,manifest.get("platform"))
     preparation=by_name["host_display_prepared"]
     if preparation:summary["display_preparation"]=preparation[-1].get("fields",{})
+    requests=by_name["host_frame_trace_request"]
+    summary["host_frame_trace_request"]=requests[-1].get("fields",{}) if requests else {"status":"not_recorded"}
     return summary,list(frames.values())
+
+def attach_host_frames(summary,frames,run,paths,keep_raw=False):
+    """Attach independently timed host reports, validating the opaque run label first."""
+    spec=importlib.util.spec_from_file_location("host_frame_analysis",Path(__file__).with_name("analyze-host-frames.py"))
+    host=importlib.util.module_from_spec(spec);spec.loader.exec_module(host)
+    candidates=[];identities=set()
+    for path in paths:
+        host.no_symlink(path.absolute())
+        rows,issues,_=host.load(path)
+        parsed,_,_,_=host.analyze(rows,issues)
+        if parsed["client_id"]!=run.name:raise ValueError("Host frame trace belongs to a different client statistics run")
+        if parsed["trace_id"] in identities:raise ValueError("Duplicate host trace identity")
+        identities.add(parsed["trace_id"]);candidates.append((path,parsed["trace_id"]))
+    reports=[]
+    received={f["frame"] for f in frames if "frame_assembled" in f.get("events",{})}
+    for path,identity in candidates:
+        report,destination=host.export(path,run/"host-frames"/identity,keep_raw=keep_raw)
+        # IDs are useful for finding corresponding rows. They do not synchronize clocks.
+        import csv as host_csv
+        with (destination/"frames.csv").open(encoding="utf-8",newline="") as source:
+            sent=defaultdict(set)
+            for row in host_csv.DictReader(source):
+                if int(row.get("sent_packets") or 0):sent[int(row["frame"])].add(int(row["generation"]))
+        report["client_frame_number_overlap"]={"unambiguous":sum(n in received and len(g)==1 for n,g in sent.items()),
+            "ambiguous_encoder_generations":sum(n in received and len(g)>1 for n,g in sent.items()),
+            "alignment":"frame numbers only; no cross-machine latency or receipt timing inferred"}
+        report["artifacts"]=str(destination.relative_to(run)).replace("\\","/")
+        reports.append(report)
+    summary["host_frame_traces"]=reports
 
 def import_host(path,lo,hi):
     data=json.loads(path.read_text(encoding="utf-8-sig"));offset=data.get("clockOffsetUs",0);zone=dt.timezone(dt.timedelta(minutes=data.get("utcOffsetMinutes",480)));result=[];probe=None;encoding=None;scopes={}
@@ -142,7 +174,7 @@ def report_html(summary,frames,events):
     return template.replace("/*RHREMOTE_DATA*/",payload)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument("run",type=Path);p.add_argument("--host-evidence",type=Path);p.add_argument("--refresh-report",action="store_true",help="Refresh an analyzed report from its embedded events without recapturing or recreating deleted raw traces");p.add_argument("--keep-raw",action="store_true",help="Keep only while needed for further investigation; creates a keep marker")
+    p=argparse.ArgumentParser();p.add_argument("run",type=Path);p.add_argument("--host-evidence",type=Path);p.add_argument("--host-frame-trace",type=Path,action="append",default=[],help="Closed host frames.jsonl matching this client run; may repeat for reconnects");p.add_argument("--refresh-report",action="store_true",help="Refresh an analyzed report from its embedded events without recapturing or recreating deleted raw traces");p.add_argument("--keep-raw",action="store_true",help="Keep only while needed for further investigation; creates a keep marker")
     a=p.parse_args();root=a.run.resolve();manifest=json.loads((root/"manifest.json").read_text(encoding="utf-8-sig"))
     if manifest.get("schema")!="rhremote.statistics/v1":raise ValueError("Not a RHRemote statistics run")
     if a.refresh_report:
@@ -160,6 +192,8 @@ def main():
         else:
             for key in ["host_clock","host_spans"]:
                 if key in previous["summary"]:summary[key]=previous["summary"][key]
+        if a.host_frame_trace:attach_host_frames(summary,frames,root,a.host_frame_trace,a.keep_raw)
+        elif "host_frame_traces" in previous["summary"]:summary["host_frame_traces"]=previous["summary"]["host_frame_traces"]
         (root/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
         (root/"timeline.json").write_text(json.dumps(chrome(events),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
         (root/"report.html").write_text(report_html(summary,frames,events),encoding="utf-8")
@@ -181,6 +215,7 @@ def main():
         host,alignment=import_host(a.host_evidence,first,max(e["ts_us"] for e in events));events+=host;summary["host_clock"]=alignment
         summary["host_spans"]=[{"name":e["event"],"ms":round(e["dur_us"]/1000,3)} for e in host if e.get("dur_us")]
     events.sort(key=lambda e:e["ts_us"])
+    if a.host_frame_trace:attach_host_frames(summary,frames,root,a.host_frame_trace,a.keep_raw)
     (root/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
     (root/"timeline.json").write_text(json.dumps(chrome(events),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
     columns=["frame","bytes","host_processing_us","drop_reason",*PAIRS]

@@ -6,7 +6,15 @@
 
 当前已添加有界后台记录模块，并接入两种捕获路径、转换、AVCodec / NVENC 输出及发送阶段；
 PTS 历史只弱引用追踪对象，避免异步编码器清理长期挂起时保留统计文件。
-客户端启用与确认、分析器、完整编译和实际采集仍待完成；下文是实现契约，不能把新增源码当作已部署或通过验证。
+Windows / Android 已接入测试模式的 launch / resume 标记和可选响应确认，普通连接不启用。
+Windows Qt 原生客户端完整编译通过，Android 开发版 0.2.7 / code209 构建及 132 项 JVM 测试通过，
+Windows 独立请求契约测试通过。分析器 18 项测试及原客户端分析器 11 项测试通过。
+这不等于实际主机采集或外网验证已完成。
+
+首轮完整 Windows 主机构建 40001890004 的 12 项独立记录器回归成功，
+但 video.cpp 中两处聚合初始化的逗号被上游 KITTY_WHILE_LOOP 宏当作额外参数，导致编译失败。
+已改为逐字段赋值，等待修正后的完整构建；未将失败包部署到主机。
+下文是实现契约，不能把新增源码或客户端测试当作已部署或端到端验收。
 
 ## 记录契约
 
@@ -49,3 +57,23 @@ PTS 历史只弱引用追踪对象，避免异步编码器清理长期挂起时�
 在 Windows MSYS2 / UCRT64 和 `test_sunshine` 中验证后，完整构建并部署到允许测试的主机。
 Windows 客户端使用主屏做静音 1080p30 的局域网／中继自然视频对照，核对实际编码包、RTP 和客户端帧编号，
 结束后恢复用户参数与屏幕布局。OPPO 自动测试仍暂停，不能用 Windows 结果替代 Android 或实际蜂窝网络验收。
+
+## 使用分析器
+
+先结束测试连接，等待主机文件出现 `trace_end`。从该客户端编号对应的主机生成目录收集
+`frames.jsonl`，保留主机目录名（`trace_id`），不要把两个会话的同名文件拼接。
+
+```powershell
+python tools/analyze-host-frames.py D:/RHRemoteTools/host-traces/<trace_id>/frames.jsonl
+python tools/analyze-statistics.py <client-run-folder> --host-frame-trace D:/RHRemoteTools/host-traces/<trace_id>/frames.jsonl --keep-raw
+```
+
+第一条用于单独分析，第二条用于导入客户端离线报告，也可在已有报告上加 `--refresh-report`。
+导入前核对 `client_id` 等于客户端运行目录名；同一次运行的多份主机记录可重复传入参数，仍保留独立时间线。
+已完成单独分析并删除原始文件时，应保留分析产物；若还需要导入客户端报告，第一次加 `--keep-raw`。
+
+输出 `summary.json`、`frames.csv`、`packets.csv`、`timeline.json`。时间线可以导入 Perfetto，
+含主机单调时钟下的实际事件和调用跨度，不伪装为已经与客户端时钟对齐。
+只有完整、未变化且路径符合主机生成目录契约的原始文件才会在所有分析产物持久化后自动删除；
+文件名不符合契约、指定 `--keep-raw`、缺少阶段／尾部、记录溢出、文件封顶或写入失败时保留原始记录。
+转换预热、重复输入、同 PTS 多个输出和编码器代次均单独处理；不会把编码包数量当作独特画面帧率。

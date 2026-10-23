@@ -1,6 +1,6 @@
 param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[switch]$BuildTests,[string]$NdkDir="$env:LOCALAPPDATA\Android\Sdk\ndk\29.0.14206865",
- [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.6',
- [ValidateRange(1,2100000000)][int]$VersionCode=208)
+ [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.7',
+ [ValidateRange(1,2100000000)][int]$VersionCode=209)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $toolchain=Join-Path $NdkDir 'toolchains/llvm/prebuilt/windows-x86_64/bin'

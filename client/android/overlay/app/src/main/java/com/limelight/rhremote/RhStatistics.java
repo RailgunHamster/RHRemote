@@ -16,6 +16,7 @@ public final class RhStatistics {
     public static long originUs(){return requestedUs;}
     public static void initialize(Context c){context=c.getApplicationContext();}
     public static boolean enabled(){return context!=null&&context.getSharedPreferences("rhremote.statistics",0).getBoolean("enabled",false);}
+    public static String launchQuery(){Session session=current;return RhHostFrameTrace.query(session!=null&&!session.stopping,new File(latest).getName());}
     public static JSONObject state(){Session s=current;return RhActions.obj("enabled",enabled(),"latest",latest,"recording",s!=null,"lostEvents",s==null?0:s.lost.get(),"format","rhremote.statistics/v1");}
     public static JSONObject configure(boolean enabled){if(current!=null)throw new IllegalStateException("disconnect before changing test mode");context.getSharedPreferences("rhremote.statistics",0).edit().putBoolean("enabled",enabled).apply();return state();}
     public static synchronized void begin(RhProfile profile)throws IOException{beginAt(profile,System.currentTimeMillis()*1000);}

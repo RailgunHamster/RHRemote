@@ -2,6 +2,8 @@
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QThread>
@@ -10,6 +12,7 @@
 #include <deque>
 #include <mutex>
 #include <thread>
+#include "rhhostframetrace.h"
 
 // Opt-in, metadata-only trace. Disk I/O never runs on decoder/render threads.
 class RhStatistics {
@@ -39,6 +42,7 @@ public:
     void finish(){enabled=false;if(writer.joinable()){{std::lock_guard<std::mutex> lock(mutex);stopping=true;}wake.notify_one();writer.join();}}
     static void finishNow(){get().finish();}
     static bool active(){return get().enabled;}
+    static QString launchQuery(){return RhHostFrameTrace::query(active(),QFileInfo(qEnvironmentVariable("RHREMOTE_STATISTICS_FILE")).dir().dirName());}
     static qint64 now(){auto& s=get();return s.origin+s.clock.nsecsElapsed()/1000;}
     static void event(const QString& name,qint64 frame=-1,QJsonObject fields={},qint64 at=0,qint64 duration=0){
         auto& s=get();if(!s.enabled)return;

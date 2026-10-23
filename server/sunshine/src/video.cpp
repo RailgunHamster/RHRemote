@@ -1711,7 +1711,11 @@ namespace video {
 
           if (frame_captured) {
             if (auto trace = capture_ctx->config.frame_trace.lock()) {
-              rhremote::frame_context context {trace, img->rh_capture, 0, true, true};
+              rhremote::frame_context context;
+              context.trace = trace;
+              context.source = img->rh_capture;
+              context.fresh = true;
+              context.known = true;
               trace->emit(rhremote::frame_row(context, rhremote::frame_stage::capture_ready, -1));
             }
             capture_ctx->images->raise(img);
@@ -2854,7 +2858,12 @@ namespace video {
             ctx->idr_events->pop();
           }
 
-          rhremote::frame_context rh_frame {ctx->config.frame_trace.lock(), ctx->rh_source, pos->session->rh_frames.generation(), frame_captured, true};
+          rhremote::frame_context rh_frame;
+          rh_frame.trace = ctx->config.frame_trace.lock();
+          rh_frame.source = ctx->rh_source;
+          rh_frame.generation = pos->session->rh_frames.generation();
+          rh_frame.fresh = frame_captured;
+          rh_frame.known = true;
           if (frame_captured && img) {
             ctx->rh_source = img->rh_capture;
             rh_frame.source = ctx->rh_source;

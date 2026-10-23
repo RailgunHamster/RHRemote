@@ -1,6 +1,6 @@
 param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',
- [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.6',
- [ValidateRange(1,2100000000)][int]$VersionCode=208)
+ [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.7',
+ [ValidateRange(1,2100000000)][int]$VersionCode=209)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $expected='b48494cb96bff23d8886c4775cc4f39a1075495d'
@@ -437,4 +437,6 @@ if($LASTEXITCODE -ne 0){throw 'Android recovery adaptation failed.'}
 if($LASTEXITCODE -ne 0){throw 'Android pairing adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-initial-display.py') android $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android initial display adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-frame-trace.py') android $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Android host frame trace adaptation failed.'}
 Write-Output 'Android RHRemote source prepared. Upstream originals retained locally; no host or device settings changed.'
