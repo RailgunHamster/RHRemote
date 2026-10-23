@@ -18,6 +18,8 @@ Android 应用运行时监听 `127.0.0.1:48752`，64 字符随机令牌保存在
 
 动作全集以 `client/crates/rhremote-core/src/actions.json` 为准。部分动作只适用于特定平台：Windows 提供窗口最小化、最大化、关闭和本应用预览；Android 提供触屏控制面板、键盘、平移和缩放。不适用的动作返回错误，不能作为成功验收。
 
+Windows 回归模式下，`device.pair` 可显式传入布尔参数 `testPairPending: true`，让已有授权的测试身份建立自己的新挂起请求，用于验证中继取消。仅 RHREMOTE_TEST_MODE=1 接受，正常模式返回 HTTP 422；服务端 PIN、证书、签名和授权检查继续执行。它不创建公开配对入口，也不代表未配对身份可以使用中继。
+
 ```json
 {"id":"device.settings.open","args":{"uuid":"<Sunshine UUID>"}}
 {"id":"settings.set","args":{"key":"resolution","value":[1920,1080]}}

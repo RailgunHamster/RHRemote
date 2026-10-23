@@ -1,6 +1,6 @@
 # 配对取消与立即重试
 
-2026-10-23，开发候选。Windows 局域网和两台主机部署已验收；Android、独立中继路径和本机主机服务仍有验收项。
+2026-10-23，开发候选。Windows 局域网及独立中继的取消已验证，两台远程主机已部署；Android 和本机主机服务仍有验收项。
 
 Windows 原先取消配对只终止原生进程。Sunshine 的未完成会话最多保留五分钟，而 Moonlight 在 Windows / Android 中均固定使用 uniqueid=0123456789ABCDEF，因此旧会话会阻止立即重试，返回 409。现有 /unpair 请求不是 Sunshine 的取消接口，不能依赖它清理请求。
 
@@ -42,5 +42,26 @@ Windows 原生引擎及 Rust UI 已构建；35 项 Windows UI 库测试通过，
 四次尝试的编号不同，服务端均确认清理，立即重试未出现 409。安装前后及测试后的 Sunshine 配对状态文件哈希相同，UUID、原配对和配置保留。既有 Windows 身份随后经 HTTPS 中继连接两台主机收到真实画面，统计均正常结束且静音；原连接偏好已恢复。取消耗时不代表首帧时间，本轮视频首帧仍为约 5.80 / 2.56 秒。
 
 后台清理报告仅在 RHREMOTE_TEST_MODE=1 时写入按次文件，包含编号、结果和耗时，不包含 PIN、签名或私钥；正常使用不会累积这些报告。原始视频统计分析完成后按既有流程清理，必要报告保留用于启动耗时分析。
+
+## Windows 独立中继取消
+
+继续使用正常产品动作和现有已配对身份，强制走正式 HTTPS 中继，未另起诊断 Sunshine 代理或复制任何私钥。旧原生 CLI 在发现已配对时会直接退出，因此新增仅供回归的 `device.pair {testPairPending: true}`：Rust 只在 RHREMOTE_TEST_MODE=1 时接受；原生端还同时要求配对操作及显式回归标记。它只允许已配对客户端进入自己的新配对请求，不改变服务端 PIN、配对证书、签名验证或传输授权。测试没有向服务端提交 PIN，没有新增或移除可信客户端。
+
+| 主机 | 两次配对动作受理 | 两次取消动作返回 | 两次服务端清理确认 |
+| --- | --- | --- | --- |
+| winserver | 902 / 81 ms | 43 / 37 ms | 116 / 109 ms |
+| claw | 427 / 83 ms | 51 / 38 ms | 110 / 108 ms |
+
+两次尝试使用不同编号，第一次取消后未等待清理报告便发起下一次。四次实际请求均经 relay 路径，服务端确认 cancelled=1，立即重试没有 409。原配对文件哈希与之前基线相同，仍为 6 / 4 个可信客户端。随后恢复正常运行模式，实测相同回归参数被 HTTP 422 拒绝；正常模式不会因这个参数启动新的原生配对请求。
+
+此项覆盖已有授权的中继路径上的挂起请求、签名取消和立即重试，不证明全新、未授权客户端能直接经中继完成首次配对。Android 仍未实机验证。
+
+## 代理地址与主机身份
+
+代码审查发现不同主机都可能使用本地传输地址 127.77.0.2，原生缓存按地址匹配时不能仅凭该地址选择主机。Windows 配对现在传递选定 UUID 和地址；原生 ComputerSeeker 在构造及后续匹配中先排除其他 UUID。原有 TLS 和服务端 UUID 校验继续保留，未指定目标的上游界面行为保持原样。
+
+36 项 Windows UI 库回归通过；原生引擎与 Rust UI 的 release 构建成功。恢复正常模式后，winserver、claw 均经 HTTPS 中继收到实际视频，统计正常结束、静音且偏好已恢复；首帧分别为 8241.273 / 3072.239 ms，不能据此宣布启动耗时已解决。原生引擎 SHA256 为 7A59114BF4D317954BF96D1F4787B77A6FA425D7963F4A7C4E8401DEF5D34D3D，Rust UI 为 3256CC352E9E3707A1B157AF7F2893999CBA97D9A1C13035C9AC458E0C9DDF0C。
+
+新增证据：D:\RHRemoteTools\pair-cancel-relay-acceptance-20261023.json、pair-pending-production-guard-20261023.json、winserver-pair-relay-state-after-20261023.json、claw-pair-relay-state-after-20261023.json 和 windows-pair-cancel-target-bound-both-tls-relay-validation-20261023.json。
 
 证据位于本机 D:\RHRemoteTools\pair-cancel-acceptance-20261023\result.json、install-winserver-pair-cancel-7332952e-20261023-result.json、install-claw-pair-cancel-7332952e-20261023-result.json，以及 windows-pair-cancel-deployed-both-tls-relay-validation-20261023.json。Android 安装与实机操作保持暂停；本轮未替换 RailgunHamster 的主机服务，也未发布新稳定版。

@@ -1219,6 +1219,10 @@ impl Platform for NativePlatform {
                 Ok(json!({"accepted":true}))
             }
             "device.pair" => {
+                let pending_regression = crate::pairing::pending_regression(
+                    args,
+                    std::env::var("RHREMOTE_TEST_MODE").as_deref() == Ok("1"),
+                )?;
                 let mut pending = self.pairing.lock().unwrap();
                 let mut slot = self.child.lock().unwrap();
                 if slot
@@ -1241,6 +1245,9 @@ impl Platform for NativePlatform {
                 *slot = Some(
                     self.command()
                         .env("RHREMOTE_PAIR_OPERATION", "1")
+                        .env("RHREMOTE_TARGET_UUID", &device.uuid)
+                        .env("RHREMOTE_CONNECT_ADDRESS", &pair_address)
+                        .env("RHREMOTE_TEST_PAIR_PENDING", if pending_regression { "1" } else { "0" })
                         .env("RHREMOTE_PAIR_ID", cancellation.id())
                         .env("RHREMOTE_PAIR_CANCEL_FILE", cancellation.path())
                         .env("RHREMOTE_SESSION_STATUS", &self.session_status)

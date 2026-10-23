@@ -31,6 +31,16 @@ struct Proof {
 fn hex(value: &str) -> bool {
     value.bytes().all(|b| b.is_ascii_hexdigit())
 }
+/// A regression may reuse its own enrolled identity without deleting trust or
+/// copying private keys. This only permits entering the client's pairing UI;
+/// the host still requires its normal PIN exchange and signed cancellation.
+pub(crate) fn pending_regression(args: &serde_json::Value, test_mode: bool) -> Result<bool, String> {
+    match args.get("testPairPending") {
+        None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false)) => Ok(false),
+        Some(serde_json::Value::Bool(true)) if test_mode => Ok(true),
+        _ => Err("配对回归参数仅允许在 Windows 测试模式使用".into()),
+    }
+}
 impl Cancellation {
     pub fn new(data: &Path, address: &str, offset: u16) -> Result<Self, String> {
         rhremote_core::network::validate_address(address)?;
@@ -171,6 +181,16 @@ impl Cancellation {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn pending_regression_requires_explicit_test_mode_and_boolean_opt_in() {
+        for enabled in [false, true] {
+            assert!(!pending_regression(&json!({}), enabled).unwrap());
+            assert!(!pending_regression(&json!({"testPairPending":false}), enabled).unwrap());
+            assert!(pending_regression(&json!({"testPairPending":"true"}), enabled).is_err());
+        }
+        assert!(pending_regression(&json!({"testPairPending":true}), false).is_err());
+        assert!(pending_regression(&json!({"testPairPending":true}), true).unwrap());
+    }
     #[test]
     fn attempts_are_unique_and_proofs_cannot_be_reused_for_another_attempt() {
         let root = std::env::temp_dir().join(format!(

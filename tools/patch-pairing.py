@@ -12,6 +12,21 @@ def replace(text, before, after):
 
 
 def windows(root):
+    path = root / 'app/backend/computerseeker.cpp'
+    text = path.read_text(encoding='utf-8')
+    text = replace(text, '    QString value = m_ComputerName.toLower();', '''    // Several remote hosts can share the local transport proxy address.
+    // A cached address match must not select another host, even before polling.
+    const auto target=qEnvironmentVariable("RHREMOTE_TARGET_UUID");
+    if(!target.isEmpty() && computer->uuid.compare(target,Qt::CaseInsensitive)!=0)return false;
+    QString value = m_ComputerName.toLower();''')
+    path.write_text(text, encoding='utf-8', newline='\n')
+    path = root / 'app/cli/pair.cpp'
+    text = path.read_text(encoding='utf-8')
+    text = replace(text, '#include "backend/computermanager.h"',
+                   '#include "backend/computermanager.h"\n#include "gui/rhpairing.h"')
+    text = replace(text, '                if (event.computer->pairState == NvComputer::PS_PAIRED) {',
+                   '                if (event.computer->pairState == NvComputer::PS_PAIRED && !RhPairing::pendingRegression()) {')
+    path.write_text(text, encoding='utf-8', newline='\n')
     path = root / 'app/backend/nvhttp.cpp'
     text = path.read_text(encoding='utf-8')
     text = replace(text, '    url.setQuery("uniqueid=0123456789ABCDEF&uuid=" +', '''    // Pairing uses a fresh ID; streaming retains GameStream's shared quit identity.

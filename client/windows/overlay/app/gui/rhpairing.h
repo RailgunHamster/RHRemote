@@ -7,6 +7,13 @@
 
 // Only public, attempt-scoped proof crosses the process boundary; the key stays native.
 struct RhPairing {
+    // Only a regression explicitly requested by the authenticated test shell.
+    // Server PIN checks, certificates, grants and existing trust are unchanged.
+    static bool pendingRegression() {
+        return qgetenv("RHREMOTE_TEST_MODE")=="1" &&
+               qgetenv("RHREMOTE_PAIR_OPERATION")=="1" &&
+               qgetenv("RHREMOTE_TEST_PAIR_PENDING")=="1";
+    }
     static QByteArray id() { return qgetenv("RHREMOTE_PAIR_ID"); }
     static QByteArray message(const QByteArray& salt) {
         return QByteArray("RHREMOTE-PAIR-CANCEL-1\n") + id() + "\n" + salt;
