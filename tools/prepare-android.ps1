@@ -170,6 +170,36 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($s)
+    $s=Replace-Once $s '    private X509Certificate serverCert;' "    private X509Certificate serverCert;`n    private final boolean rhStrictPin;"
+    $s=Replace-Once $s '    public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {' @'
+    public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
+        this(address, httpsPort, uniqueId, serverCert, cryptoProvider, false);
+    }
+    public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider, boolean strictPin) throws IOException {
+        this.rhStrictPin = strictPin;
+'@
+    $s=Replace-Once $s '            public void checkServerTrusted(X509Certificate[] certs, String authType) throws CertificateException {' @'
+            public void checkServerTrusted(X509Certificate[] certs, String authType) throws CertificateException {
+                if (rhStrictPin && NvHTTP.this.serverCert != null) {
+                    if (certs.length != 1 || !certs[0].equals(NvHTTP.this.serverCert)) throw new CertificateException("Paired certificate mismatch");
+                    return;
+                }
+'@
+    $s=Replace-Once $s '                // Fall back to default HostnameVerifier for validating CA-issued certs' @'
+                if (rhStrictPin && NvHTTP.this.serverCert != null) return false;
+                // Fall back to default HostnameVerifier for validating CA-issued certs
+'@
+    $s=Replace-Once $s '    public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {' @'
+    // Connection admission must not turn a certificate failure into an unpaired
+    // HTTP response. The upstream discovery/re-pair fallback remains separate.
+    public ComputerDetails getRhConnectionDetails() throws IOException, XmlPullParserException {
+        if (serverCert == null) return getComputerDetails(false);
+        String response = openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "serverinfo");
+        getServerVersion(response);
+        return getComputerDetails(response);
+    }
+    public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {
+'@
     $s=Replace-Once $s '    public void unpair() throws IOException {' @'
     public void cancelRhRequests() {
         httpClientLongConnectTimeout.dispatcher().cancelAll();

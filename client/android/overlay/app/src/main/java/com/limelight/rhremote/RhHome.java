@@ -77,7 +77,7 @@ public final class RhHome implements RhActions.Target {
     }
     private void card(ComputerDetails d,boolean canMoveUp,boolean canMoveDown){
         boolean preferred=d.name!=null&&d.name.equalsIgnoreCase("winserver");boolean online=d.state==ComputerDetails.State.ONLINE;
-        boolean paired=d.pairState==PairingManager.PairState.PAIRED;
+        boolean paired=RhNetwork.connectInsteadOfPair(d);
         LinearLayout card=column();card.setPadding(dp(18),dp(15),dp(18),dp(15));card.setBackground(bg(preferred?blueSoft:surface,preferred?blue:line,18));
         LinearLayout.LayoutParams margin=new LinearLayout.LayoutParams(-1,-2);margin.setMargins(0,0,0,dp(12));content.addView(card,margin);
         LinearLayout info=row();TextView monitor=text("▣",25,blue,false);monitor.setGravity(Gravity.CENTER);monitor.setBackground(bg(blueSoft,0,12));info.addView(monitor,new LinearLayout.LayoutParams(dp(44),dp(44)));
@@ -173,8 +173,8 @@ public final class RhHome implements RhActions.Target {
                 boolean connect=id.equals("device.connect");String pin=args.optString("pin",String.format(Locale.ROOT,"%04d",new java.security.SecureRandom().nextInt(10000)));if(!pin.matches("[0-9]{4}"))throw new IllegalArgumentException("PIN must contain four digits");
                 networkBusy=true;message("正在检查连接地址…");NETWORK.execute(()->{try{
                     if(connect)RhStatistics.begin(RhProfile.load(activity,target.uuid));
-                    ComputerDetails resolved=RhNetwork.resolve(activity,target,RhProfile.load(activity,target.uuid));
-                    activity.runOnUiThread(()->{networkBusy=false;if(connect){actions.connect(resolved);}else{pairPin=pin;pairing=true;showPair();actions.pair(resolved,pairPin);}});
+                    ComputerDetails resolved=RhNetwork.refreshConnectionDetails(activity,RhNetwork.resolve(activity,new ComputerDetails(target),RhProfile.load(activity,target.uuid)));
+                    activity.runOnUiThread(()->{networkBusy=false;update(resolved);if(connect){actions.connect(resolved);}else{pairPin=pin;pairing=true;showPair();actions.pair(resolved,pairPin);}});
                 }catch(Exception e){if(connect)RhStatistics.finish();activity.runOnUiThread(()->{networkBusy=false;message("连接失败："+e.getMessage());});}});break;
             }
             case "pair.cancel":if(!pairing)throw new IllegalStateException("no active pairing");actions.cancelPair();message("正在取消配对…");break;

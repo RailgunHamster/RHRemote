@@ -2,6 +2,9 @@ package com.limelight.rhremote;
 
 import android.content.Context;
 import com.limelight.nvstream.http.ComputerDetails;
+import com.limelight.nvstream.http.NvHTTP;
+import com.limelight.nvstream.http.PairingManager;
+import com.limelight.binding.PlatformBinding;
 import org.json.*;
 import java.net.*;
 import java.io.*;
@@ -54,6 +57,23 @@ public final class RhNetwork {
                 result.add(new ComputerDetails.AddressTuple(host,47989));
             }
         }catch(Exception ignored){/* Discovery still has its original address tuples. */}
+        return result;
+    }
+    static boolean connectInsteadOfPair(ComputerDetails source) {
+        return source.pairState==PairingManager.PairState.PAIRED ||
+            source.pairState==null&&source.serverCert!=null;
+    }
+    /** Refresh transient details lost on process restart only at connection admission.
+     * A stored certificate must be verified over HTTPS, without HTTP downgrade. */
+    static ComputerDetails refreshConnectionDetails(Context context,ComputerDetails source)throws Exception {
+        if(source.pairState!=null&&source.httpsPort!=0)return source;
+        ComputerDetails.AddressTuple address=source.activeAddress;
+        if(address==null)throw new IOException("未选择连接地址");
+        NvHTTP http=new NvHTTP(address,source.httpsPort,"0123456789ABCDEF",source.serverCert,PlatformBinding.getCryptoProvider(context),true);
+        ComputerDetails fresh=http.getRhConnectionDetails();
+        if(fresh.uuid==null||!source.uuid.equalsIgnoreCase(fresh.uuid))throw new IOException("uuid_mismatch");
+        ComputerDetails result=new ComputerDetails(source);result.update(fresh);
+        result.activeAddress=address;result.manualAddress=address;
         return result;
     }
     private static String check(String address,String uuid)throws Exception {return check(address,uuid,47989);}
