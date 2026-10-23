@@ -1,6 +1,6 @@
 # 软件编码器的模式变化复用
 
-2026-10-23，针对 `NATIVE-VIRTUAL-MODE.md` 中分辨率变化后重复约 2.8–4.8 秒的编码能力验证。该改动仍需完整构建和部署后验收，不预先声称消除了这段等待。
+2026-10-23，已在 winserver / claw 部署 `f517c155`。winserver 分辨率变化后的编码能力检查从对照中的 2206 / 3009 ms 降到约 12–17 ms，日志确认使用了经过检查的模式变化复用。显示准备中的 D3D 开销仍有明显波动，启动优化继续进行。
 
 仅在已经成功选择、且服务端明确配置 `encoder=software` 时启用新判断。自动选择和硬件编码器保持原有 DXGI 失效策略；实际捕获输出、捕获设备、会话编码器和首帧仍正常创建、校验，不缓存旧输出索引。
 
@@ -22,3 +22,25 @@
 对照基线使用旧引擎 `7332952e`、新 Rust 主机 `2051377`，同一 Windows 客户端 `128cc268`、LAN、静音、H.264、请求 30 FPS / 5 Mbps：三个用例首帧为 6572.356、2549.520、7166.155 ms。证据 `D:\RHRemoteTools\encoder-env-short-20261023.json`；配置、同步、选中设备和原有虚拟屏模式已恢复。OPPO 未操作。
 
 API 语义依据：[IsCurrent](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgifactory1-iscurrent)、[CheckInterfaceSupport](https://learn.microsoft.com/en-us/windows/win32/api/dxgi/nf-dxgi-idxgiadapter-checkinterfacesupport)。驱动版本查询不用于推断 D3D11 接口支持；查询不支持时保留其结果，并仍要求旧真实设备健康及其他完整元数据相同。
+
+## 完整构建与运行验证
+
+CI `39941535609` 成功，源代码 `f517c155f5f5e9c88232036358441b18ab616396`。XML 中 47 项测试全部通过，包含 6 项环境/健康状态回归、1 项设备所有权回归及 40 项配对/授权回归；Rust 主机的 21 项测试也通过。安装包 147 个文件逐一校验，主机 SHA256 `55FEAC52F2B70026EDB77BEF5D171D0487A70FECC80F1B66808F6BDC58F3D0E5`、引擎 SHA256 `169A4C1870728A7C4A00D2DF7C117A9BDA6903493BEF47D57FCAE7C53E8DE644`。
+
+两台均通过统一安装器正常升级并保留备份，配置文件和配对状态哈希保持原样。六轮 winserver 连接及一轮 claw 中继连接之后，再次确认两台原配对状态仍为 6 / 4 个客户端。
+
+| 同一 LAN 用例 | 旧引擎首帧 | 新版第一轮首帧 | 新版复测首帧 | 新版两轮编码能力检查 |
+| --- | ---: | ---: | ---: | ---: |
+| 2520×1680 → 1080p | 6572.356 ms | 3433.090 ms | 4779.996 ms | 12.405 / 16.362 ms |
+| 保持 1080p | 2549.520 ms | 1982.335 ms | 2202.254 ms | 13.531 / 13.483 ms |
+| 恢复 2520×1680 | 7166.155 ms | 2784.507 ms | 3681.985 ms | 15.777 / 17.340 ms |
+
+两轮变化模式的日志均记录 `Reusing software encoder capabilities after verified mode-only change`。环境检查自身约 3–5 ms。数据来自顺序运行，不能把总首帧的全部变化归给能力缓存：显示准备也有波动；复测 1080p 模式变化的显示请求 2852.617 ms，其中 D3D 创建设备 1561.962 ms、释放设备 1016.016 ms。继续优化的主要目标是交互式 Rust worker 的设备创建/释放和生命周期。
+
+全部连接正常结束、统计 trace_end 完整；六轮 winserver 期间主机 PID 38452、引擎 PID 30500 及启动时间保持一致。客户端配置、同步、选中设备和所有显示模式恢复。本机服务升级、OPPO 和实际锁屏/解锁复测仍待用户方便时进行，本轮未操作。
+
+winserver 引擎私有内存：旧版关闭会话后约 26.20 MiB，新版启动后约 36.58 MiB，三轮后 39.22 MiB，六轮后 38.58 MiB。保留健康引用有约十几 MiB 的可见开销；这六轮没有持续上升趋势，不能据此证明长期或显存无泄漏。
+
+claw 新版通过独立 HTTPS 中继的静音短测首帧 2518.112 ms，自动选屏准备 76.555 ms，114 次 render_return、正常结束。该用例是静态桌面，不证明持续 30 FPS；未扩容或停止行情采集。
+
+证据在 `D:\RHRemoteTools\encoder-reuse-short-20261023.json`、`encoder-reuse-repeat-20261023.json`、`windows-encoder-reuse-claw-both-tls-relay-validation-20261023.json`、两台 `*-encoder-mode-deployment-20261023.json` 和 `encoder-mode-memory-after-*.json`。原始逐帧记录已分析后删除，需要继续对照的报告保留。
