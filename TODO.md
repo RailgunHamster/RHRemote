@@ -63,6 +63,8 @@
 
 ## 发布回归补充
 
+- Android 外网修复预览版 0.2.4-preview.1 已在 GitHub 发布，45 项 JVM / 8 项发布前置回归通过，匿名下载四个资产并核对哈希；签名与 0.2.3 一致。双站稳定 feed 未变，后续 Android 稳定版 versionCode 至少 205。安装到 OPPO 及外网实际验收仍待完成，不能把发布预览包当作 P0 完成。见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
+
 - 0.2.2 的 Windows 自动分包误传 `--packet-size 0`，底层 CLI 拒绝后等待错误窗口确认；已撤回 GitHub 稳定发布。
 - 修复为自动模式省略 CLI 参数，并显式恢复原生内部自动检测；非法参数通过动作状态返回并退出。修复后的自动与 Tailscale 模式均已收到首帧，CLI 拒绝参数也已验证不再等待弹窗。
 - 修正版版本号 0.2.3；原 APK 0.2.2 的网络功能不受该 Windows 参数错误影响。

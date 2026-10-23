@@ -72,3 +72,22 @@ loopback TLS 的正确证书/错误证书及无 HTTP 降级测试，以及冷启
 不符拒绝、已有状态无额外请求。最新 APK SHA256：
 `2A9DD9A182A5C9AFFED3EEBD0A01CD27DAD886FA1C86DE06E03A61A47BC2ECCC`。
 这替代本地开发构建，不改变已发布稳定资产；尚未安装到 OPPO。
+
+## 可下载的预览包
+
+GitHub 已发布 [0.2.4-preview.1](https://github.com/RailgunHamster/RHRemote/releases/tag/v0.2.4-preview.1)，
+精确源码 `12e840f069a1f7f84561c37e994ff66cae1ef809`，Android versionCode 204。
+[APK](https://github.com/RailgunHamster/RHRemote/releases/download/v0.2.4-preview.1/RHRemote-Android-0.2.4-preview.1-arm64-v8a.apk)
+大小 26,350,431 字节，SHA256
+`f28891df910216b2a208e95a790829f0afe37c542e9bcf308222604c49b25ebd`。
+签名证书 SHA256 与原稳定版一致：
+`2f6464fe50d23ef17e4fdab8c1dcc7b6ec4171b890158738653c51854031dadc`。
+45 项 JVM 测试、8 项发布前置校验测试通过；匿名下载四个发布资产，大小和哈希全部一致。
+
+发布元数据确认为 prerelease=true。发布后的 GitHub latest 仍为原 0.2.3、同一 release ID；
+GitHub 和 Gitee 的 Windows / Android 四份稳定更新 feed 的哈希与发布前一致。
+核对记录：`results/clients-v2/github-preview-downloads-v0.2.4-preview.1.json`。
+Gitee 预览发布的 latest 行为尚未验收，所以本次只在 GitHub 放预览安装包，源码继续双站同步。
+后续稳定版必须使用至少 205 的 Android versionCode，才能从此预览继续升级。
+
+已知无线调试端口不可达，尚未替用户安装，实际外网媒体和网络切换仍未验收。
