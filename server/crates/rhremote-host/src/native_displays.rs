@@ -1,6 +1,8 @@
-//! Read-only display preparation in the existing interactive Rust worker.
-//! Virtual monitor creation and mode changes retain the transactional helper.
+//! Display preparation in the existing interactive Rust worker.
+//! Existing owned virtual modes use a checked transaction; creation retains the helper.
 //! No display eligibility or capture ordering is cached across requests.
+#[path = "native_display_mode.rs"]
+mod mode_change;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{fs, mem::size_of, path::Path, time::Instant};
@@ -9,7 +11,7 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Display {
     id: String,
@@ -20,6 +22,8 @@ struct Display {
     #[serde(rename = "virtual")]
     is_virtual: bool,
     owned: bool,
+    #[serde(skip)]
+    driver_virtual: bool,
     width: u32,
     height: u32,
     x: i32,
@@ -147,10 +151,10 @@ fn query(owned: &str) -> Result<Vec<Display>, String> {
                 let is_owned =
                     !owned.is_empty() && id.replace('#', "\\").to_ascii_lowercase().contains(owned);
                 let hardware = hardware_id(&string(&adapter.adapterDevicePath));
-                let is_virtual = is_owned
-                    || ["usbmmidd", "parsec", "iddsample", "virtualdisplay"]
-                        .iter()
-                        .any(|v| hardware.contains(v));
+                let driver_virtual = ["usbmmidd", "parsec", "iddsample", "virtualdisplay"]
+                    .iter()
+                    .any(|v| hardware.contains(v));
+                let is_virtual = is_owned || driver_virtual;
                 result.push(Display {
                     id,
                     name: string(&target.monitorFriendlyDeviceName),
@@ -158,6 +162,7 @@ fn query(owned: &str) -> Result<Vec<Display>, String> {
                     available: path.targetInfo.targetAvailable.as_bool(),
                     is_virtual,
                     owned: is_owned,
+                    driver_virtual,
                     width: mode.width,
                     height: mode.height,
                     x: mode.position.x,
@@ -197,8 +202,22 @@ fn select<'a>(
         .iter()
         .find(|d| d.available && d.owned && d.width == width && d.height == height)
 }
-fn topology(displays: &[Display]) -> Vec<(&str, &str, u32, u32, i32, i32, i32, u32, u32)> {
-    displays
+type Shape<'a> = (
+    &'a str,
+    &'a str,
+    u32,
+    u32,
+    i32,
+    i32,
+    i32,
+    u32,
+    u32,
+    bool,
+    bool,
+    bool,
+);
+fn topology(displays: &[Display]) -> Vec<Shape<'_>> {
+    let mut rows: Vec<_> = displays
         .iter()
         .map(|d| {
             (
@@ -211,35 +230,20 @@ fn topology(displays: &[Display]) -> Vec<(&str, &str, u32, u32, i32, i32, i32, u
                 d.rotation,
                 d.refresh_numerator,
                 d.refresh_denominator,
+                d.available,
+                d.owned,
+                d.driver_virtual,
             )
         })
-        .collect()
+        .collect();
+    rows.sort_unstable();
+    rows
 }
-pub fn prepare(request: &Value, root: &Path) -> Result<Option<Value>, String> {
-    let mode = request["mode"].as_str().ok_or("Display mode missing")?;
-    if !["list", "auto", "physical", "virtual"].contains(&mode) {
-        return Err("Unknown display mode".into());
-    }
-    let started = Instant::now();
-    let desktop = crate::console::sync_input_desktop()?;
-    let owned = fs::read(root.join("owned-monitor.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-        .and_then(|v| v["device_id"].as_str().map(str::to_ascii_lowercase))
-        .unwrap_or_default();
-    let before = query(&owned)?;
-    let query_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let capture_started = Instant::now();
-    let capture = crate::displays::capture_order()?;
-    let capture_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
-    let mut displays = query(&owned)?;
-    if topology(&before) != topology(&displays) {
-        return Err("Display topology changed during capture enumeration".into());
-    }
+fn map_capture(displays: &mut [Display], capture: &Value) -> Result<(), String> {
     let names = capture["names"]
         .as_array()
         .ok_or("Invalid capture inventory")?;
-    for display in &mut displays {
+    for display in displays {
         display.capture_index = names
             .iter()
             .position(|v| v.as_str() == Some(&display.gdi))
@@ -247,25 +251,9 @@ pub fn prepare(request: &Value, root: &Path) -> Result<Option<Value>, String> {
             .unwrap_or(0);
         display.available &= display.capture_index > 0;
     }
-    let selected = if mode == "list" {
-        None
-    } else {
-        select(
-            &displays,
-            mode,
-            request["displayId"].as_str().unwrap_or(""),
-            request["width"].as_u64().unwrap_or(0) as u32,
-            request["height"].as_u64().unwrap_or(0) as u32,
-        )
-    };
-    if mode != "list" && selected.is_none() {
-        if mode == "physical" {
-            return Ok(Some(
-                json!({"ok":false,"error":"The selected monitor is unavailable. Refresh the monitor list."}),
-            ));
-        }
-        return Ok(None);
-    }
+    Ok(())
+}
+fn initial_capture_index(root: &Path) -> Result<i32, String> {
     let settings: Value = fs::read(root.join("host-settings.json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -285,8 +273,75 @@ pub fn prepare(request: &Value, root: &Path) -> Result<Option<Value>, String> {
         .map(|(_, v)| v.trim())
         .last()
         .unwrap_or("");
+    Ok(if output.is_empty() { 1 } else { 0 })
+}
+pub fn prepare(request: &Value, root: &Path) -> Result<Option<Value>, String> {
+    let mode = request["mode"].as_str().ok_or("Display mode missing")?;
+    if !["list", "auto", "physical", "virtual"].contains(&mode) {
+        return Err("Unknown display mode".into());
+    }
+    let started = Instant::now();
+    let desktop = crate::console::sync_input_desktop()?;
+    let owned = fs::read(root.join("owned-monitor.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v["device_id"].as_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    let before = query(&owned)?;
+    let query_ms = started.elapsed().as_secs_f64() * 1000.0;
+    // A mode change invalidates capture objects. Enumerate eligible outputs only
+    // after it succeeds, rather than probing here and repeating in PowerShell.
+    if let Some(result) =
+        mode_change::prepare(request, &before, &owned, root, &desktop, started, query_ms)
+    {
+        return Ok(Some(result));
+    }
+    let capture_started = Instant::now();
+    let capture = crate::displays::capture_order()?;
+    let capture_ms = capture_started.elapsed().as_secs_f64() * 1000.0;
+    let mut displays = query(&owned)?;
+    if topology(&before) != topology(&displays) {
+        return Err("Display topology changed during capture enumeration".into());
+    }
+    map_capture(&mut displays, &capture)?;
+    let selected = if mode == "list" {
+        None
+    } else {
+        select(
+            &displays,
+            mode,
+            request["displayId"].as_str().unwrap_or(""),
+            request["width"].as_u64().unwrap_or(0) as u32,
+            request["height"].as_u64().unwrap_or(0) as u32,
+        )
+    };
+    if mode != "list" && selected.is_none() {
+        if mode == "physical" {
+            return Ok(Some(
+                json!({"ok":false,"error":"The selected monitor is unavailable. Refresh the monitor list."}),
+            ));
+        }
+        // A physically attached output may be ineligible for capture. Reuse the
+        // fresh raw inventory when auto then needs the owned virtual monitor.
+        let raw = query(&owned)?;
+        let mut virtual_request = request.clone();
+        virtual_request["mode"] = json!("virtual");
+        if let Some(result) = mode_change::prepare(
+            &virtual_request,
+            &raw,
+            &owned,
+            root,
+            &desktop,
+            started,
+            query_ms,
+        ) {
+            return Ok(Some(result));
+        }
+        return Ok(None);
+    }
+    let initial_index = initial_capture_index(root)?;
     Ok(Some(
-        json!({"ok":true,"schema":"rhremote.displays/v1","displays":displays,"selected":selected,"created":false,"captureDiagnostics":capture["diagnostics"],"inputDesktop":desktop,"initialCaptureIndex":if output.is_empty(){1}else{0},"timings":{"path":"native","queryMs":query_ms,"captureMs":capture_ms,"captureBreakdown":capture["timings"],"nativeMs":started.elapsed().as_secs_f64()*1000.0}}),
+        json!({"ok":true,"schema":"rhremote.displays/v1","displays":displays,"selected":selected,"created":false,"captureDiagnostics":capture["diagnostics"],"inputDesktop":desktop,"initialCaptureIndex":initial_index,"timings":{"path":"native","queryMs":query_ms,"captureMs":capture_ms,"captureBreakdown":capture["timings"],"nativeMs":started.elapsed().as_secs_f64()*1000.0}}),
     ))
 }
 
@@ -301,6 +356,7 @@ mod tests {
             owned,
             available,
             is_virtual: owned,
+            driver_virtual: owned,
             width: 2520,
             height: 1680,
             ..Default::default()
