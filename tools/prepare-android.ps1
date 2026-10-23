@@ -60,7 +60,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
             public void add(String address) { addRhComputer(address); }
             public void advanced() { startActivity(new Intent(PcView.this, StreamSettings.class)); }
             public void pair(ComputerDetails d,String pin) { startRhPair(d,pin); }
-            public void cancelPair() { rhPairCancelled=true;NvHTTP current=rhPairHttp;if(current!=null)current.cancelRhRequests(); }
+            public void cancelPair() { RhPairOperation operation=rhPairOperation;if(operation!=null){operation.cancelled=true;NvHTTP current=operation.http;if(current!=null)current.cancelRhPairing();} }
             public void refresh() { if(managerBinder!=null) for(int i=0;i<pcGridAdapter.getCount();i++)managerBinder.invalidateStateForComputer(((ComputerObject)pcGridAdapter.getItem(i)).details.uuid);startComputerUpdates(); }
         });
         noPcFoundLayout = rhHome.emptyView();
@@ -92,26 +92,27 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
             } catch(Exception e) { runOnUiThread(() -> rhHome.message("添加失败："+e.getMessage())); }
         },"RHRemote Add").start();
     }
-    private volatile NvHTTP rhPairHttp;
-    private volatile boolean rhPairCancelled;
+    private static final class RhPairOperation {volatile NvHTTP http;volatile boolean cancelled;}
+    private volatile RhPairOperation rhPairOperation;
     private void startRhPair(ComputerDetails computer,String pin) {
-        rhPairCancelled=false;
+        if(rhPairOperation!=null&&!rhPairOperation.cancelled)return;
+        final RhPairOperation operation=new RhPairOperation();rhPairOperation=operation;
         new Thread(() -> {
             boolean paired=false;String result="配对失败，请重试";
             try {
                 if(managerBinder==null)throw new IOException("manager unavailable");
                 stopComputerUpdates(true);
                 NvHTTP http=new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),computer.httpsPort,managerBinder.getUniqueId(),computer.serverCert,PlatformBinding.getCryptoProvider(this));
-                rhPairHttp=http;
-                if(rhPairCancelled)throw new IOException("cancelled");
+                operation.http=http;
+                if(operation.cancelled){http.cancelRhPairing();throw new IOException("cancelled");}
                 PairingManager pairing=http.getPairingManager();
                 PairState state=pairing.pair(http.getServerInfo(true),pin);
-                if(state==PairState.PAIRED && !rhPairCancelled){managerBinder.getComputer(computer.uuid).serverCert=pairing.getPairedCert();managerBinder.invalidateStateForComputer(computer.uuid);paired=true;result="配对完成";}
+                if(state==PairState.PAIRED && !operation.cancelled){managerBinder.getComputer(computer.uuid).serverCert=pairing.getPairedCert();managerBinder.invalidateStateForComputer(computer.uuid);paired=true;result="配对完成";}
                 else if(state==PairState.ALREADY_IN_PROGRESS)result="主机已有配对请求，请稍后重试";
                 else if(state==PairState.PIN_WRONG)result="配对码不正确";
-            }catch(Exception ignored){}finally{rhPairHttp=null;}
-            final boolean success=paired;final String message=rhPairCancelled?"已取消配对":result;
-            runOnUiThread(()->{if(rhHome!=null)rhHome.pairFinished(success,message);startComputerUpdates();});
+            }catch(Exception e){if(e.getMessage()!=null)result="配对失败："+e.getMessage();}finally{operation.http=null;}
+            final boolean success=paired;final String message=operation.cancelled?"已取消配对":result;
+            runOnUiThread(()->{if(rhPairOperation!=operation)return;rhPairOperation=null;if(rhHome!=null)rhHome.pairFinished(success,message);startComputerUpdates();});
         },"RHRemote Pair").start();
     }
     private void launchRhDesktop(ComputerDetails computer) {
@@ -145,6 +146,7 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($
 '@
     return $s
 }
+Edit-Source 'app/src/main/java/com/limelight/nvstream/http/PairingManager.java' {param($s)return $s}
 Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
     $s=Replace-Once $s '    private final TouchContext[] touchContextMap' '    private com.limelight.rhremote.RhTouchController rhTouch;
     private com.limelight.rhremote.RhStreamControls rhControls;
@@ -204,4 +206,6 @@ if($LASTEXITCODE -ne 0){throw 'Android statistics instrumentation failed.'}
 if($LASTEXITCODE -ne 0){throw 'Android tunnel adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-android-recovery.py') $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android recovery adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-pairing.py') android $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Android pairing adaptation failed.'}
 Write-Output 'Android RHRemote source prepared. Upstream originals retained locally; no host or device settings changed.'

@@ -437,6 +437,7 @@ namespace {
       server_->config.timeout_request = 5;
       server_->config.timeout_content = 5;
       server_->resource["^/pair$"]["GET"] = nvhttp::test_support::pair_http;
+      server_->resource["^/serverinfo$"]["GET"] = nvhttp::test_support::serverinfo_http;
       server_thread_ = std::jthread([this]() {
         server_->start([this](const unsigned short assigned_port) {
           port_ = assigned_port;
@@ -529,6 +530,12 @@ TEST_F(PairingHttpHandlerTest, ImmediateRequestsReturnExpectedStatus) {
   EXPECT_NE(request("/pair?uniqueid=out-of-order&clientchallenge=00"sv).find("Out of order"), std::string::npos);
 }
 
+TEST_F(PairingHttpHandlerTest, DiscoveryExplicitlyAdvertisesSignedCancellation) {
+  const auto response = request("/serverinfo?uniqueid=probe"sv);
+  EXPECT_NE(response.find("status_code=\"200\""), std::string::npos);
+  EXPECT_NE(response.find("<RHPairingCancel>1</RHPairingCancel>"), std::string::npos);
+}
+
 TEST_F(PairingHttpHandlerTest, WebApprovalRequestRemainsPendingUntilCancelled) {
   std::packaged_task<std::string()> request_task {[this]() {
     return request(server_certificate_target("pending"));
@@ -577,6 +584,20 @@ TEST_F(PairingHttpHandlerTest, SignedClientCancellationAllowsImmediateRetry) {
   ASSERT_FALSE(retry_id.empty());
   EXPECT_TRUE(cancel_pairing(retry_id));
   EXPECT_NE(retry.get().find("cancelled by operator"), std::string::npos);
+}
+
+TEST_F(PairingHttpHandlerTest, InvalidClientCancellationDoesNotFallThroughToDestructivePairingFailure) {
+  auto start = std::async(std::launch::async, [this]() {
+    return request(server_certificate_target("aabb"));
+  });
+  const auto approval = wait_for_pending_pairing();
+  ASSERT_FALSE(approval.empty());
+  const auto response = request("/pair?uniqueid=aabb&phrase=rhcancel&rhcancel_salt=ff5dc6eda99339a8a0793e216c4257c4&rhcancel_sig=invalid"sv);
+  EXPECT_NE(response.find("status_code=\"403\""), std::string::npos);
+  ASSERT_EQ(get_pending_pairings().size(), 1);
+  EXPECT_EQ(get_pending_pairings().front().id, approval);
+  EXPECT_TRUE(cancel_pairing(approval));
+  EXPECT_NE(start.get().find("cancelled by operator"), std::string::npos);
 }
 
 TEST_F(PairingHttpHandlerTest, ConsolePinCompletesOrRejectsTheCertificatePhase) {

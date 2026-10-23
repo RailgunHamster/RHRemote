@@ -14,6 +14,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+struct PendingPair {
+    attempt: u64,
+    device: Device,
+    cancellation: crate::pairing::Cancellation,
+}
 struct Recovery {
     args: Value,
     policy: crate::recovery::Policy,
@@ -399,7 +404,7 @@ pub struct NativePlatform {
     child: Mutex<Option<Child>>,
     retiring: Mutex<Vec<(Child, Instant, bool)>>,
     state_agent: ureq::Agent,
-    pairing: Mutex<Option<(u64, Device)>>,
+    pairing: Mutex<Option<PendingPair>>,
     recovery: Mutex<Option<Recovery>>,
     token: String,
     port: u16,
@@ -657,7 +662,8 @@ impl NativePlatform {
         }
         let mut child = self.child.lock().unwrap();
         let status = child.as_mut()?.try_wait().ok()??;
-        let (attempt, device) = pending.take()?;
+        let operation = pending.take()?;
+        let (attempt, device) = (operation.attempt, operation.device);
         child.take();
         drop(child);
         drop(pending);
@@ -665,6 +671,7 @@ impl NativePlatform {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(Value::Null);
+        operation.cancellation.finish(outcome["phase"] != "paired");
         let mut device = self.probe(&device);
         if outcome["phase"] == "paired" {
             device.paired = true;
@@ -1038,10 +1045,12 @@ impl NativePlatform {
     }
     fn stop_owned(&self) -> Result<Value, String> {
         self.cancel_recovery();
+        let pairing=self.pairing.lock().unwrap().take();
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
             let _ = child.wait();
         }
+        if let Some(pairing)=pairing {pairing.cancellation.finish(true);}
         for (mut child, _, _) in self.retiring.lock().unwrap().drain(..) {
             let _ = child.kill();
             let _ = child.wait();
@@ -1223,6 +1232,7 @@ impl Platform for NativePlatform {
                     serde_json::from_value(args["device"].clone()).map_err(|e| e.to_string())?;
                 let profile:rhremote_core::Profile=serde_json::from_value(args["profile"].clone()).map_err(|e|e.to_string())?;
                 let (pair_address,_)=self.network.resolve(&device,&profile)?;
+                let cancellation=crate::pairing::Cancellation::new(&self.native_data,&pair_address,self.network.native_environment().0)?;
                 fs::write(
                     &self.session_status,
                     b"{\"streaming\":false,\"phase\":\"pairing\",\"error\":\"\"}",
@@ -1231,6 +1241,8 @@ impl Platform for NativePlatform {
                 *slot = Some(
                     self.command()
                         .env("RHREMOTE_PAIR_OPERATION", "1")
+                        .env("RHREMOTE_PAIR_ID", cancellation.id())
+                        .env("RHREMOTE_PAIR_CANCEL_FILE", cancellation.path())
                         .env("RHREMOTE_SESSION_STATUS", &self.session_status)
                         .args([
                             "pair",
@@ -1241,15 +1253,16 @@ impl Platform for NativePlatform {
                         .spawn()
                         .map_err(|e| e.to_string())?,
                 );
-                *pending = Some((attempt, device));
+                *pending = Some(PendingPair {attempt, device, cancellation});
                 Ok(json!({"accepted":true}))
             }
             "pair.cancel" => {
-                self.pairing.lock().unwrap().take();
+                let operation=self.pairing.lock().unwrap().take();
                 if let Some(mut child) = self.child.lock().unwrap().take() {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
+                if let Some(operation)=operation {operation.cancellation.finish(true);}
                 Ok(json!({"cancelled":true}))
             }
             "stream.disconnect" => {
@@ -1296,6 +1309,7 @@ impl LaunchContext {
             .env_remove("RHREMOTE_CONTROL_PORT")
             .env_remove("RHREMOTE_CONTROL_TOKEN")
             .env_remove("RHREMOTE_TARGET_UUID");
+        command.env_remove("RHREMOTE_PAIR_ID").env_remove("RHREMOTE_PAIR_CANCEL_FILE");
         command.current_dir(&self.native_data);
         command
             .stdin(Stdio::null())

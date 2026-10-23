@@ -365,6 +365,16 @@ namespace nvhttp {
    */
   namespace test_support {
     /**
+     * @brief Dispatch plain-HTTP capability discovery through the production handler.
+     * @param response HTTP response object to populate.
+     * @param request HTTP request data from the test client.
+     */
+    void serverinfo_http(
+      std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response> response,
+      std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request
+    );
+
+    /**
      * @brief Dispatch a plain-HTTP pairing request through the production handler.
      *
      * @param response HTTP response object to populate.

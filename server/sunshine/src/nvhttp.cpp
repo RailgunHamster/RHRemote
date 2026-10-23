@@ -1214,6 +1214,7 @@ namespace nvhttp {
     tree.put("root.hostname", config::nvhttp.sunshine_name);
 
     tree.put("root.appversion", VERSION);
+    tree.put("root.RHPairingCancel", 1);
     tree.put("root.GfeVersion", GFE_VERSION);
     tree.put("root.uniqueid", http::unique_id);
     tree.put("root.HttpsPort", net::map_port(PORT_HTTPS));
@@ -1800,6 +1801,13 @@ namespace nvhttp {
 
 #ifdef SUNSHINE_TESTS
   namespace test_support {
+    void serverinfo_http(
+      std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response> response,
+      std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request
+    ) {
+      serverinfo<SimpleWeb::HTTP>(std::move(response), std::move(request));
+    }
+
     void pair_http(
       std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response> response,
       std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request

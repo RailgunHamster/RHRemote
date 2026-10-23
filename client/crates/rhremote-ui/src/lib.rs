@@ -6,6 +6,7 @@ mod config_sync;
 mod devices;
 mod network;
 mod overlay;
+mod pairing;
 mod platform;
 mod recovery;
 mod statistics;

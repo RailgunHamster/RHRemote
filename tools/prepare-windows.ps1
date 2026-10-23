@@ -169,6 +169,7 @@ Edit-Source 'app/gui/CliPair.qml' {param($s)
 '@
     return $s.Replace('        pairCompleteDialog.open()',"        if(RhProfiles.pairingControlled())RhProfiles.connectionStatus(`"paired`",`"`")`n        console.log(`"RHREMOTE_PAIR_SUCCESS`")`n        Qt.quit()")
 }
+Edit-Source 'app/backend/nvpairingmanager.cpp' {param($s)return $s}
 Edit-Source 'app/gui/CliStartStreamSegue.qml' {param($s)
     $s="import RhProfiles 1.0`n"+$s
     $s=Replace-Once $s '    function onSearchingComputer() {' "    function onSearchingComputer() {`n        RhProfiles.connectionStatus(`"connecting`",`"`")"
@@ -456,7 +457,7 @@ bool Session::testAudio(int audioConfiguration)
 Edit-Source 'app/app.pro' {param($s)return $s+@'
 
 # RHRemote native shell; the existing streaming implementation remains intact.
-HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h gui/rhprobecache.h gui/rhd3d11probe.h gui/rhcapturetools.h gui/rhwindowbridge.h
+HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h gui/rhprobecache.h gui/rhd3d11probe.h gui/rhcapturetools.h gui/rhwindowbridge.h gui/rhpairing.h
 win32 {
     TARGET = RHRemote
     QMAKE_TARGET_COMPANY = RHRemote
@@ -476,4 +477,6 @@ Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
 if($LASTEXITCODE -ne 0){throw 'Windows statistics instrumentation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-tunnel.py') windows $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Windows tunnel adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-pairing.py') windows $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Windows pairing adaptation failed.'}
 'Windows RHRemote source prepared; prior engine experiments and upstream UI originals retained.'
