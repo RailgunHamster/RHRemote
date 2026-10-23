@@ -1353,7 +1353,8 @@ namespace nvhttp {
   }
 
   /** @brief Serialize a protocol result without including any request secrets. @param response Owned HTTPS response. @param tree Protocol result. */
-  void write_launch_result(const resp_https_t &response, const pt::ptree &tree) {
+  template<class Response>
+  void write_launch_result(const std::shared_ptr<Response> &response, const pt::ptree &tree) {
     std::ostringstream data;
     pt::write_xml(data, tree);
     response->write(data.str());
@@ -1368,6 +1369,16 @@ namespace nvhttp {
     tree.put("root.resume", 0);
     tree.put("root.gamesession", 0);
     return tree;
+  }
+
+  /** @brief Keep process-state readers on the same serial worker as launch/resume. @tparam Response HTTP response type. @tparam Request HTTP request type. @tparam Handler Existing protocol handler. @param worker Owned bounded queue. @param response Owned response. @param request Accepted request. @param handler Existing server-info or app handler. */
+  template<class Response, class Request, class Handler>
+  void defer_process_read(rhremote::launch_worker &worker, std::shared_ptr<Response> response, std::shared_ptr<Request> request, Handler handler) {
+    if (!worker.submit([response, request, handler] {
+          handler(response, request);
+        })) {
+      write_launch_result(response, launch_error(503, "Host state queue is full or closed"));
+    }
   }
 
   /** @brief Recheck the snapshotted peer under the authorization mutex. @param peer Actual TLS peer. @note Caller must hold client_auth_mutex(). @return Whether that exact certificate is still enabled. */
@@ -1933,12 +1944,18 @@ namespace nvhttp {
     };
 
     https_server.default_resource["GET"] = not_found<SunshineHTTPS>;
-    https_server.resource["^/serverinfo$"]["GET"] = serverinfo<SunshineHTTPS>;
+    https_server.resource["^/serverinfo$"]["GET"] = [&worker](auto resp, auto req) {
+      defer_process_read(worker, resp, req, serverinfo<SunshineHTTPS>);
+    };
     https_server.resource["^/pair$"]["GET"] = [](auto resp, auto req) {
       pair<SunshineHTTPS>(resp, req);
     };
-    https_server.resource["^/applist$"]["GET"] = applist;
-    https_server.resource["^/appasset$"]["GET"] = appasset;
+    https_server.resource["^/applist$"]["GET"] = [&worker](auto resp, auto req) {
+      defer_process_read(worker, resp, req, applist);
+    };
+    https_server.resource["^/appasset$"]["GET"] = [&worker](auto resp, auto req) {
+      defer_process_read(worker, resp, req, appasset);
+    };
     https_server.resource["^/launch$"]["GET"] = [&host_audio, &https_server, &worker](auto resp, auto req) {
       defer_launch(https_server, worker, host_audio, resp, req);
     };
@@ -1959,7 +1976,9 @@ namespace nvhttp {
     https_server.config.port = port_https;
 
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
-    http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
+    http_server.resource["^/serverinfo$"]["GET"] = [&worker](auto resp, auto req) {
+      defer_process_read(worker, resp, req, serverinfo<SimpleWeb::HTTP>);
+    };
     http_server.resource["^/pair$"]["GET"] = [](auto resp, auto req) {
       pair<SimpleWeb::HTTP>(resp, req);
     };

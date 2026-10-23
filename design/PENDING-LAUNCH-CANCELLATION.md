@@ -61,6 +61,8 @@ CI 40032402942 仍在构建；尚未部署这一阶段。
 不再使用 last_verified 全局身份。launch/resume 和原有全局 cancel 移到单个工作线程，
 最多排队两项，HTTPS 线程继续处理按次取消。关闭时先停止请求受理并排空工作线程，
 再停止 HTTP，避免延迟 Response 析构访问已销毁的 Server。
+主机状态和应用读取也进入同一队列，防止把 launch 移到工作线程后，与原 HTTP 线程
+同时调用会修改进程状态的 proc.running。按次取消不读取进程状态，始终直接处理。
 
 serverinfo 声明 `RHLaunchCancel=1`。新客户端在每次实际 launch/resume 发送
 64 位小写十六进制 `rhremoteLaunchToken`（256 位随机值），仅通过已配对 TLS，
