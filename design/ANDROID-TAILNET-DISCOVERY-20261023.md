@@ -114,3 +114,12 @@ socket。原锁只约束这段发现代码，不能约束其他网络组件。
 修复后同四个测试全部通过，完整 49 项 JVM 测试零失败，APK / 测试 APK 构建成功。
 这是代码路径和竞争条件的回归证据，未证明此前 OPPO 的实际故障恰好由这条路径触发。
 本机浏览器测试结果及实际外网媒体仍待用户反馈。
+
+包含该修复的 [preview.2](https://github.com/RailgunHamster/RHRemote/releases/tag/v0.2.4-preview.2)
+已发布，精确源码 `4d6039d8283ecc75e1530905f2c0b53701ec4735`，Android versionCode 205。
+[APK](https://github.com/RailgunHamster/RHRemote/releases/download/v0.2.4-preview.2/RHRemote-Android-0.2.4-preview.2-arm64-v8a.apk)
+大小 26,350,435 字节，SHA256
+`e8da87fd2c2934290677424d477871e32d765bd2b79be01b3cecc07c14477768`。
+签名仍与 0.2.3 / preview.1 一致，匿名下载四资产及预览通道、稳定入口共十项检查全部通过。
+记录为 `results/clients-v2/github-preview-downloads-v0.2.4-preview.2.json`。
+后续稳定版 Android versionCode 要至少 206；前文 205 是发布 preview.1 时的历史下限。
