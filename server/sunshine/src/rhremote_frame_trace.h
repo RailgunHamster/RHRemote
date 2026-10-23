@@ -69,6 +69,7 @@ namespace rhremote {
     encode_begin,  ///< A numbered frame was submitted for encoding.
     encode_end,  ///< The encoder call returned, which is distinct from packet output.
     encode_output,  ///< A packet with an actual output PTS was produced.
+    input_abandoned,  ///< A converted candidate was superseded or its encoder released before submission.
     metadata_evicted,  ///< A pending PTS mapping was evicted before output.
     metadata_missing,  ///< Output could not be matched to its original submission.
     send_begin,  ///< The sender dequeued an encoded packet.
@@ -91,6 +92,8 @@ namespace rhremote {
         return "encode_end";
       case frame_stage::encode_output:
         return "encode_output";
+      case frame_stage::input_abandoned:
+        return "input_abandoned";
       case frame_stage::metadata_evicted:
         return "metadata_evicted";
       case frame_stage::metadata_missing:
@@ -430,8 +433,21 @@ namespace rhremote {
     };
 
     std::array<entry, 256> entries_;  ///< Fixed history, independent of queue or output delay.
+    std::optional<entry> converted_;  ///< Last successful conversion not yet submitted; never strongly retains a trace.
     std::weak_ptr<frame_trace> trace_;  ///< Diagnostic destination for unmatched output.
-    std::uint64_t generation_;  ///< Stable encoder generation, including across object moves.
+    std::uint64_t generation_;  ///< Process-local identity of this encoder lifetime.
+
+    /** @brief Record a real terminal transition for a converted but unsubmitted candidate. @param reason One for supersession, two for encoder release. */
+    void abandon_converted(int reason) noexcept {
+      if (converted_) {
+        if (auto owner = converted_->trace.lock()) {
+          auto row = frame_row(converted_->context, frame_stage::input_abandoned, converted_->frame);
+          row.result = reason;
+          owner->emit(row);
+        }
+        converted_.reset();
+      }
+    }
 
   public:
     /** @brief Allocate a distinct encoder generation. */
@@ -440,15 +456,47 @@ namespace rhremote {
       generation_ = ++serial;
     }
 
+    /** @brief Finish the conversion candidate before discarding this encoder's metadata. */
+    ~frame_tracker() {
+      abandon_converted(2);
+    }
+
+    /** @brief Encoder histories have one lifetime owner and cannot be copied. */
+    frame_tracker(const frame_tracker &) = delete;
+    /** @brief Encoder histories cannot replace another lifetime owner. */
+    frame_tracker &operator=(const frame_tracker &) = delete;
+
     /** @brief Return the encoder generation. @return Process-local encoder identity. */
     std::uint64_t generation() const {
       return generation_;
+    }
+
+    /** @brief Remember a successful conversion until real encoder submission or release. @param frame Planned input PTS. @param context Actual conversion metadata. */
+    void converted(std::int64_t frame, frame_context context) {
+      if (!context.trace || frame < 0) {
+        return;
+      }
+      if (converted_ && (converted_->frame != frame || converted_->trace.lock() != context.trace)) {
+        abandon_converted(1);
+      }
+      context.generation = generation_;
+      context.known = true;
+      auto owner = context.trace;
+      context.trace.reset();
+      converted_ = entry {frame, std::move(context), false, owner};
     }
 
     /** @brief Remember an input before submitting it. @param frame Input PTS. @param context Original source metadata. */
     void submit(std::int64_t frame, frame_context context) {
       if (!context.trace || frame < 0) {
         return;
+      }
+      if (converted_) {
+        if (converted_->frame == frame && converted_->trace.lock() == context.trace) {
+          converted_.reset();
+        } else {
+          abandon_converted(1);
+        }
       }
       trace_ = context.trace;
       context.generation = generation_;

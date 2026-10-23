@@ -18,7 +18,7 @@ import tempfile
 
 SCHEMA = "rhremote.host-frame/v1"
 STAGES = {"capture_ready", "convert_begin", "convert_end", "encode_begin",
-          "encode_end", "encode_output", "metadata_evicted", "metadata_missing",
+          "encode_end", "encode_output", "input_abandoned", "metadata_evicted", "metadata_missing",
           "send_begin", "send_end", "send_error"}
 INTEGER_FIELDS = {"at_us": 0, "frame": -1, "generation": 0, "source": 0,
                   "source_present_us": None, "capture_ready_us": 0, "packet": 0,
@@ -26,6 +26,7 @@ INTEGER_FIELDS = {"at_us": 0, "frame": -1, "generation": 0, "source": 0,
                   "send_us": 0, "rtp_timestamp": 0, "result": None}
 BOOLEAN_FIELDS = ("source_time_known", "rtp_known", "wire_duplicate", "fresh", "metadata_known")
 FRAME_COLUMNS = ("generation", "frame", "source", "fresh", "metadata_known",
+                 "outcome", "abandon_reason", "abandoned_us",
                  "encode_begin_us", "encode_end_us", "encode_result", "encode_call_ms",
                  "conversion_calls", "conversion_errors", "packet_count", "sent_packets",
                  "send_errors", "first_output_us", "last_send_return_us")
@@ -130,6 +131,8 @@ def analyze(rows, parse_issues=None):
         if name.startswith("send_") or name == "encode_output":
             if row["packet"] < 1:
                 issues["missing_packet_identity"] += 1
+        elif row["packet"]:
+            issues["unexpected_packet_identity"] += 1
         events.append(row)
     if footer is None:
         issues["missing_footer"] += 1
@@ -169,7 +172,7 @@ def analyze(rows, parse_issues=None):
         key = row["generation"], row["frame"]
         frame = frames.setdefault(key, {"generation": key[0], "frame": key[1], "rows": collections.defaultdict(list)})
         frame["rows"][name].append(row)
-        if row["packet"]:
+        if row["packet"] and (name.startswith("send_") or name == "encode_output"):
             packet = packets.setdefault(row["packet"], {"rows": {}, "key": key})
             if packet["key"] != key:
                 issues["packet_reused_across_frames"] += 1
@@ -186,10 +189,21 @@ def analyze(rows, parse_issues=None):
                   "packet_count": len(groups["encode_output"]), "sent_packets": len(groups["send_end"]),
                   "send_errors": len(groups["send_error"])}
         begins, ends = groups["encode_begin"], groups["encode_end"]
-        if len(begins) != 1 or len(ends) != 1:
+        abandoned = groups["input_abandoned"]
+        abandonment = abandoned[0] if abandoned else None
+        if abandonment:
+            encoded_stages = ("encode_begin", "encode_end", "encode_output", "send_begin", "send_end", "send_error")
+            if (len(abandoned) != 1 or any(groups[n] for n in encoded_stages) or
+                    abandonment["result"] not in (1, 2) or abandonment["packet"] or not abandonment["metadata_known"]):
+                issues["invalid_abandoned_input"] += 1
+            output.update(outcome="abandoned_before_submit", abandoned_us=abandonment["at_us"],
+                          abandon_reason={1: "superseded_conversion", 2: "encoder_released_before_submit"}.get(abandonment["result"], "unknown"))
+        else:
+            output["outcome"] = "submitted" if begins else "unresolved"
+        if (begins or ends or not abandoned) and (len(begins) != 1 or len(ends) != 1):
             issues["missing_or_duplicate_encode_boundary"] += 1
         begin, end = (begins[0] if begins else None), (ends[0] if ends else None)
-        context = begin or (groups["encode_output"][0] if groups["encode_output"] else None)
+        context = begin or abandonment or (groups["encode_output"][0] if groups["encode_output"] else None)
         if context:
             output.update({key: context[key] for key in ("source", "fresh", "metadata_known")})
         if begin:
@@ -208,6 +222,7 @@ def analyze(rows, parse_issues=None):
             output["encode_call_ms"] = duration(metrics, issues, "encode_call_ms", begin["at_us"], end["at_us"])
             span(spans, "encode_call", begin, end)
         pending = collections.defaultdict(list)
+        successful_conversions = []
         for conversion in sorted(groups["convert_begin"] + groups["convert_end"], key=lambda r: r["at_us"]):
             identity = conversion["source"], conversion["fresh"]
             if conversion["event"] == "convert_begin":
@@ -222,9 +237,16 @@ def analyze(rows, parse_issues=None):
                 if conversion["result"]:
                     output["conversion_errors"] += 1
                     issues["convert_error"] += 1
+                else:
+                    successful_conversions.append(conversion)
             else:
                 issues["convert_end_without_begin"] += 1
         issues["convert_begin_without_end"] += sum(len(p) for p in pending.values())
+        if abandonment:
+            identity_fields = ("source", "fresh", "metadata_known", "source_time_known", "source_present_us", "capture_ready_us")
+            if not any(c["at_us"] <= abandonment["at_us"] and all(c[k] == abandonment[k] for k in identity_fields)
+                       for c in successful_conversions):
+                issues["abandoned_without_matching_conversion"] += 1
         if begin and begin["fresh"] and not any(r["source"] == begin["source"] and r["fresh"]
                                                  for r in groups["convert_begin"]):
             issues["fresh_input_without_conversion"] += 1
@@ -291,10 +313,12 @@ def analyze(rows, parse_issues=None):
     issues = {name: count for name, count in sorted(issues.items()) if count}
     summary = {"schema": "rhremote.host-frame.analysis/v1", "trace_id": header["trace_id"],
                "client_id": header["client_id"], "complete": not issues, "issues": issues,
-               "event_count": len(events), "stage_counts": dict(counts), "frame_count": len(frames),
+               "event_count": len(events), "stage_counts": dict(counts),
+               "work_item_count": len(frames), "frame_count": sum(bool(f["rows"]["encode_begin"]) for f in frames.values()),
+               "abandoned_input_count": sum(bool(f["rows"]["input_abandoned"]) for f in frames.values()),
                "packet_count": len(packets), "captures_delivered": len(captures),
-               "fresh_submissions": sum(bool(f.get("fresh")) for f in frame_table),
-               "repeat_or_priming_submissions": sum(f.get("fresh") is False for f in frame_table),
+               "fresh_submissions": sum(bool(f.get("fresh")) and f["outcome"] == "submitted" for f in frame_table),
+               "repeat_or_priming_submissions": sum(f.get("fresh") is False and f["outcome"] == "submitted" for f in frame_table),
                "wire_duplicate_packets": sum(p.get("wire_duplicate") is True for p in packet_table),
                "metrics_ms": {k: distribution(v) for k, v in sorted(metrics.items())}, "cadence": cadence,
                "footer": footer, "measurement": {"clock": "host_steady", "clocks_synchronized": False,
@@ -302,10 +326,11 @@ def analyze(rows, parse_issues=None):
                "network_latency_measured": False, "unique_content_fps_measured": False,
                "capture": "Source timestamp is platform desktop presentation, not application drawing or scanout.",
                "encoding": "Output uses its actual PTS; multiple packets with one PTS do not create extra frames.",
+               "abandoned": "Only an explicit terminal event resolves an unsubmitted conversion. File position or a footer never implies abandonment. frame_count counts submitted inputs; work_item_count includes converted candidates.",
                "repeats": "Source-to-send and capture-to-send distributions include repeated inputs, retaining the original source time.",
                "cadence": "Output/send cadence counts packets and timestamps, not distinct pictures or received/displayed frames.",
                "send": "Bytes/datagrams include UDP payload and FEC; no NIC completion or receipt is measured."}}
-    lanes = {"capture": 1, "convert": 2, "encode": 3, "metadata": 4, "send": 5, "encode_queue": 6}
+    lanes = {"capture": 1, "convert": 2, "encode": 3, "metadata": 4, "send": 5, "encode_queue": 6, "input": 7}
     timeline = {"traceEvents": [{"name": "process_name", "ph": "M", "pid": 1, "tid": 0,
                                   "args": {"name": "RHRemote host " + header["trace_id"]}}],
                 "displayTimeUnit": "ms", "metadata": {**summary["measurement"], "trace_id": header["trace_id"]}}

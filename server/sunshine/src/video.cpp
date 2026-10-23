@@ -1838,6 +1838,9 @@ namespace video {
       auto row = rhremote::frame_row(context, rhremote::frame_stage::convert_end, frame);
       row.result = result;
       context.trace->emit(row);
+      if (result == 0) {
+        session.rh_frames.converted(frame, context);
+      }
     }
     return result;
   }

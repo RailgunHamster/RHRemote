@@ -128,6 +128,10 @@ def attach_host_frames(summary,frames,run,paths,keep_raw=False):
         reports.append(report)
     summary["host_frame_traces"]=reports
 
+def host_frame_warnings(reports):
+    return ["Host trace "+report["trace_id"]+" is incomplete: "+json.dumps(report["issues"],sort_keys=True)+". Client and host raw retained."
+            for report in reports if not report["complete"]]
+
 def read_client_file(path):
     """A closed native trace cannot make a crashed UI trace complete."""
     health={"name":path.name,"exists":path.exists(),"footer_count":0,"events_after_footer":0,
@@ -235,6 +239,7 @@ def main():
         if "input_files" in previous["summary"]:
             summary["input_files"]=previous["summary"]["input_files"]
             summary["warnings"]+=input_file_warnings(summary["input_files"])
+        summary["warnings"]+=host_frame_warnings(summary.get("host_frame_traces",[]))
         (root/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
         (root/"timeline.json").write_text(json.dumps(chrome(events),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
         (root/"report.html").write_text(report_html(summary,frames,events),encoding="utf-8")
@@ -254,6 +259,7 @@ def main():
         summary["host_spans"]=[{"name":e["event"],"ms":round(e["dur_us"]/1000,3)} for e in host if e.get("dur_us")]
     events.sort(key=lambda e:e["ts_us"])
     if a.host_frame_trace:attach_host_frames(summary,frames,root,a.host_frame_trace,a.keep_raw)
+    summary["warnings"]+=host_frame_warnings(summary.get("host_frame_traces",[]))
     (root/"summary.json").write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
     (root/"timeline.json").write_text(json.dumps(chrome(events),ensure_ascii=False,separators=(",",":")),encoding="utf-8")
     columns=["frame","bytes","host_processing_us","drop_reason",*PAIRS]

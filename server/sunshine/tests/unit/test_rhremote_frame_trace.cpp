@@ -398,6 +398,7 @@ namespace {
     buffer.await_writer();
     rhremote::frame_tracker tracker;
     tracker.submit(1, {trace, {1, 1, 1, true}, 0, true, true});
+    tracker.converted(2, {trace, {2, 2, 2, true}, 0, true, true});
     std::weak_ptr<rhremote::frame_trace> weak = trace;
     trace->close();
     buffer.release();
@@ -405,6 +406,65 @@ namespace {
     trace.reset();
     require(weak.expired());
     require(!tracker.lookup(1).trace);
+  }
+
+  /** @brief Encoder release explicitly resolves a successful conversion that was never submitted. */
+  void converted_release() {
+    std::stringbuf buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "converted-release", "client");
+    {
+      rhremote::frame_tracker tracker;
+      tracker.converted(-1, {trace, {}, 0, false, true});
+      tracker.converted(1, {});
+      tracker.converted(17, {trace, {71, 100, 200, true}, 0, true, true});
+    }
+    trace->close();
+    require(trace->wait_closed(5s));
+    const auto text = buffer.str();
+    require(text.find("\"event\":\"input_abandoned\"") != std::string::npos);
+    require(text.find("\"frame\":17") != std::string::npos);
+    require(text.find("\"source\":71") != std::string::npos);
+    require(text.find("\"result\":2") != std::string::npos);
+    require(trace->lost_events() == 0);
+  }
+
+  /** @brief Priming conversion can be replaced for one PTS; submission clears it while a new PTS resolves the old candidate. */
+  void converted_submission_and_supersession() {
+    std::stringbuf buffer;
+    std::stringbuf other_buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "converted-submit", "client");
+    auto other = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&other_buffer), "converted-other", "client-other");
+    {
+      rhremote::frame_tracker tracker;
+      tracker.converted(1, {trace, {}, 0, false, true});
+      tracker.converted(1, {trace, {81, 10, 20, true}, 0, true, true});
+      tracker.submit(1, {trace, {81, 10, 20, true}, 0, true, true});
+      require(tracker.lookup(1).source.id == 81);
+      tracker.converted(2, {trace, {82, 20, 30, true}, 0, true, true});
+      tracker.converted(3, {trace, {83, 30, 40, true}, 0, true, true});
+      tracker.submit(4, {trace, {84, 40, 50, true}, 0, true, true});
+      require(tracker.lookup(4).source.id == 84);
+      tracker.converted(5, {trace, {85, 50, 60, true}, 0, true, true});
+      tracker.converted(5, {other, {86, 60, 70, true}, 0, true, true});
+      tracker.submit(5, {other, {86, 60, 70, true}, 0, true, true});
+      require(tracker.lookup(5).source.id == 86 && tracker.lookup(5).trace == other);
+    }
+    trace->close();
+    other->close();
+    require(trace->wait_closed(5s));
+    require(other->wait_closed(5s));
+    const auto text = buffer.str();
+    require(text.find("\"frame\":1,") == std::string::npos);
+    require(text.find("\"frame\":2,") != std::string::npos);
+    require(text.find("\"frame\":3,") != std::string::npos);
+    require(text.find("\"result\":2") == std::string::npos);
+    unsigned abandoned = 0;
+    std::istringstream input(text);
+    for (std::string line; std::getline(input, line);) {
+      abandoned += line.find("\"event\":\"input_abandoned\"") != std::string::npos;
+    }
+    require(abandoned == 3 && trace->lost_events() == 0);
+    require(other_buffer.str().find("\"event\":\"input_abandoned\"") == std::string::npos);
   }
 
   /** @brief Encoded packet metadata, unlike encoder caches, keeps its session trace alive. */
@@ -452,6 +512,8 @@ int main() {
   pts_reordering();
   pts_eviction();
   cache_lifetime();
+  converted_release();
+  converted_submission_and_supersession();
   packet_lifetime();
   generations_and_stages();
 }
@@ -506,6 +568,14 @@ TEST(RhRemoteFrameTrace, PtsEviction) {
 
 TEST(RhRemoteFrameTrace, CacheLifetime) {
   cache_lifetime();
+}
+
+TEST(RhRemoteFrameTrace, ConvertedRelease) {
+  converted_release();
+}
+
+TEST(RhRemoteFrameTrace, ConvertedSubmissionAndSupersession) {
+  converted_submission_and_supersession();
 }
 
 TEST(RhRemoteFrameTrace, PacketLifetime) {

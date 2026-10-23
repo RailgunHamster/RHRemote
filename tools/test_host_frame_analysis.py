@@ -57,7 +57,7 @@ class HostFrameAnalysisTest(unittest.TestCase):
         self.assertEqual(0, packets[0]["rtp_timestamp"])
         self.assertEqual(160, packets[0]["udp_payload_bytes"])
         self.assertEqual(.7, frames[0]["encode_call_ms"])
-        self.assertEqual(8 + 4 + 7, len(timeline["traceEvents"]))
+        self.assertEqual(8 + 4 + 8, len(timeline["traceEvents"]))
         self.assertTrue(all(type(e["pid"]) is int and type(e["tid"]) is int for e in timeline["traceEvents"]))
         self.assertFalse(result["measurement"]["network_latency_measured"])
         self.assertFalse(result["measurement"]["physical_scanout_measured"])
@@ -119,12 +119,38 @@ class HostFrameAnalysisTest(unittest.TestCase):
         self.assertEqual(1, result["repeat_or_priming_submissions"])
 
     def test_each_missing_boundary_is_incomplete(self):
-        for name in analysis.STAGES - {"metadata_missing", "metadata_evicted", "send_error"}:
+        for name in analysis.STAGES - {"metadata_missing", "metadata_evicted", "send_error", "input_abandoned"}:
             with self.subTest(name=name):
                 rows = [r for r in fixture() if r["event"] != name]
                 self.assertFalse(analysis.analyze(rows)[0]["complete"])
         rows = [r for r in fixture() if not r["event"].startswith("convert_")]
         self.assertIn("fresh_input_without_conversion", analysis.analyze(rows)[0]["issues"])
+
+    def test_explicit_unsubmitted_conversion_is_not_an_encoded_frame(self):
+        rows = fixture()[:-1]
+        context = dict(frame=2, source=11, capture_ready_us=5000, source_present_us=4500)
+        rows.extend([event("capture_ready", 5000, **dict(context, frame=-1, generation=0)),
+                     event("convert_begin", 5100, **context), event("convert_end", 6000, **context),
+                     event("input_abandoned", 6200, result=2, **context), footer()])
+        summary, frames, packets, _ = analysis.analyze(rows)
+        self.assertTrue(summary["complete"], summary["issues"])
+        self.assertEqual((1, 2, 1), (summary["frame_count"], summary["work_item_count"], summary["abandoned_input_count"]))
+        self.assertEqual(1, summary["fresh_submissions"])
+        self.assertEqual(1, len(packets))
+        self.assertEqual("encoder_released_before_submit", frames[1]["abandon_reason"])
+        self.assertNotIn("encode_call_ms", frames[1])
+        # A footer alone must never guess that the same unsubmitted conversion was cancelled.
+        without_terminal = [row for row in rows if row["event"] != "input_abandoned"]
+        self.assertIn("missing_or_duplicate_encode_boundary", analysis.analyze(without_terminal)[0]["issues"])
+        for bad in (dict(result=0), dict(result=99), dict(packet=4), dict(metadata_known=False), dict(source=99)):
+            invalid = copy.deepcopy(rows)
+            invalid[-2].update(bad)
+            self.assertFalse(analysis.analyze(invalid)[0]["complete"], bad)
+        invalid = copy.deepcopy(rows)
+        invalid.insert(-1, event("encode_begin", 6300, **context))
+        self.assertIn("invalid_abandoned_input", analysis.analyze(invalid)[0]["issues"])
+        missing_conversion = [row for row in rows if row["event"] not in ("convert_begin", "convert_end") or row["frame"] == 1]
+        self.assertIn("abandoned_without_matching_conversion", analysis.analyze(missing_conversion)[0]["issues"])
 
     def test_footers_loss_cap_failure_and_records_after_footer(self):
         for change in ({"lost_events": 9}, {"size_limit_reached": True}, {"write_failed": True},

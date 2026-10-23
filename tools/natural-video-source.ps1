@@ -3,6 +3,14 @@
 param([ValidateRange(30,180)][int]$Seconds=180)
 $ErrorActionPreference='Stop'
 $root=$PSScriptRoot
+$stop=Join-Path $root 'stop-motion'
+function Cancel-BeforePlayback {
+ if(-not(Test-Path -LiteralPath $stop)){return $false}
+ $result=@{kind='natural_video';phase='cancelled_before_playback';ended=$true;cancelled=$true;audio_enabled=$false;pid=$null}
+ [IO.File]::WriteAllText((Join-Path $root 'motion-status.json'),($result|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
+ return $true
+}
+if(Cancel-BeforePlayback){return}
 . (Join-Path $root 'displayconfig.ps1')
 $setup=Get-Content -LiteralPath (Join-Path $root 'setup-result.json') -Raw|ConvertFrom-Json
 $target=@([RhDisplayConfig]::Query()|Where-Object MonitorDevicePath -eq $setup.display.monitor.MonitorDevicePath)
@@ -12,6 +20,7 @@ $media=Get-Content -LiteralPath (Join-Path $mediaRoot 'source.json') -Raw|Conver
 $movie=Join-Path $mediaRoot 'bbb_sunflower_1080p_30fps_normal.mp4'
 if($media.movie-ne$movie-or(Get-FileHash -LiteralPath $movie -Algorithm SHA256).Hash-ne$media.movieSha256){throw 'Benchmark asset identity differs'}
 if($media.metadata.streams[0].width-ne1920-or$media.metadata.streams[0].height-ne1080-or$media.metadata.streams[0].avg_frame_rate-ne'30/1'){throw 'Expected a 1080p30 benchmark asset'}
+if(Cancel-BeforePlayback){return}
 $player='C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffplay.exe'
 if(-not(Test-Path -LiteralPath $player)){throw 'Existing FFplay is required'}
 Add-Type @'
@@ -31,8 +40,6 @@ public static class RhNaturalVideoWindow {
  }
 }
 '@
-$stop=Join-Path $root 'stop-motion'
-Remove-Item -LiteralPath $stop -ErrorAction SilentlyContinue
 $log=Join-Path $root 'natural-video-player.log'
 $status=Join-Path $root 'motion-status.json'
 $arguments='-hide_banner -loglevel info -stats -an -autoexit -noborder -window_title "RHRemote Natural Video - Blender Foundation" -left '+$target[0].PositionX+' -top '+$target[0].PositionY+' -x 1920 -y 1080 -ss 30 -t '+$Seconds+' -i "'+$movie+'"'
@@ -48,9 +55,10 @@ function Write-Status([bool]$Ended){
   $playMatches=[regex]::Matches($content,'(?m)([0-9]+\.[0-9]+)\s+(?:M-V|A-V):.*?fd=\s*(\d+)')
   if($playMatches.Count){$last=$playMatches[$playMatches.Count-1];$position=[double]::Parse($last.Groups[1].Value,[Globalization.CultureInfo]::InvariantCulture);$dropped=[int]$last.Groups[2].Value}
  }
- $r=[ordered]@{kind='natural_video';ended=$Ended;elapsed_s=$clock.Elapsed.TotalSeconds;width=1920;height=1080;x=$target[0].PositionX;y=$target[0].PositionY;source_file_fps=30;physical_source_paint_measured=$false;media_time_s=$position;player_dropped_frames=$dropped;audio_enabled=$false;pid=$(if($process){$process.Id});cpu_seconds=$(if($process){try{$process.TotalProcessorTime.TotalSeconds}catch{0}});error=$failure;attribution='(c) Blender Foundation / www.bigbuckbunny.org'}
+ $r=[ordered]@{kind='natural_video';phase=$(if($Ended){'ended'}else{'playing'});ended=$Ended;elapsed_s=$clock.Elapsed.TotalSeconds;width=1920;height=1080;x=$target[0].PositionX;y=$target[0].PositionY;source_file_fps=30;physical_source_paint_measured=$false;media_time_s=$position;player_dropped_frames=$dropped;audio_enabled=$false;pid=$(if($process){$process.Id});cpu_seconds=$(if($process){try{$process.TotalProcessorTime.TotalSeconds}catch{0}});error=$failure;attribution='(c) Blender Foundation / www.bigbuckbunny.org'}
  [IO.File]::WriteAllText($status,($r|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
 }
+if(Cancel-BeforePlayback){return}
 try{
  $process=[Diagnostics.Process]::Start($psi)
  $logStream=[IO.FileStream]::new($log,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite,1,[IO.FileOptions]::Asynchronous)

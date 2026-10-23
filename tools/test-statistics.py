@@ -9,6 +9,27 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def test_incomplete_host_keeps_healthy_client_raw_and_prevents_pruning_after_refresh(self):
+        from test_host_frame_analysis import fixture as host_fixture
+        with tempfile.TemporaryDirectory(prefix="rhremote-partial-host-") as directory:
+            root=Path(directory);run=root/"test-client-1";run.mkdir();host=root/"host-1";host.mkdir()
+            manifest={"schema":"rhremote.statistics/v1","platform":"windows","files":["native.jsonl"]}
+            (run/"manifest.json").write_text(json.dumps(manifest),encoding="utf-8")
+            client=[e("connect_action",1000),e("frame_assembled",1500,1),e("render_return",2000,1),e("trace_end",2100)]
+            client_file=run/"native.jsonl";client_file.write_text("\n".join(json.dumps(row) for row in client)+"\n",encoding="utf-8")
+            rows=host_fixture();rows[-1]["lost_events"]=1
+            host_file=host/"frames.jsonl";host_file.write_text("\n".join(json.dumps(row) for row in rows)+"\n",encoding="utf-8")
+            command=[sys.executable,str(Path(a.__file__)),str(run)]
+            subprocess.run(command+["--host-frame-trace",str(host_file)],check=True,capture_output=True)
+            first=json.loads((run/"summary.json").read_text(encoding="utf-8"))
+            self.assertFalse(first["host_frame_traces"][0]["complete"])
+            self.assertTrue(any("Host trace host-1 is incomplete" in warning for warning in first["warnings"]))
+            for arguments in ([],["--refresh-report"]):
+                if arguments:subprocess.run(command+arguments,check=True,capture_output=True)
+                refreshed=json.loads((run/"summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(first["warnings"],refreshed["warnings"])
+                self.assertTrue(client_file.exists());self.assertTrue(host_file.exists())
+                self.assertFalse((run/"analysis-complete.json").exists())
     def run_files(self,files,contents,refresh=False):
         with tempfile.TemporaryDirectory(prefix="rhremote-client-trace-") as directory:
             root=Path(directory);manifest={"schema":"rhremote.statistics/v1","platform":"windows","files":files}
