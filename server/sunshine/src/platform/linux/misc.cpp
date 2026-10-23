@@ -1245,10 +1245,11 @@ namespace platf {
 
   /**
    * @brief Report whether encoder backends should be probed again before streaming.
-   *
-   * @return Always `true` because Linux GPU changes are not tracked by this backend.
+   * @param allow_software_mode_reuse Windows-only permission; Linux keeps render-device change detection.
+   * @return Whether the resolved render device changed since the last call.
    */
-  bool needs_encoder_reenumeration() {
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse) {
+    (void) allow_software_mode_reuse;
     // Only re-probe if the GPU render device changed (hotplug, driver reload).
     // Full re-probing on every reconnect leaks ~20 MB due to FFmpeg CBS
     // allocations during HEVC/AV1 codec validation.

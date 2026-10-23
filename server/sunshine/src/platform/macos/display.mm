@@ -299,10 +299,11 @@ namespace platf {
 
   /**
    * @brief Report whether encoder backends should be probed again before streaming.
-   *
+   * @param allow_software_mode_reuse Windows-only permission; macOS keeps its existing policy.
    * @return Always `true` because macOS GPU changes are not tracked by this backend.
    */
-  bool needs_encoder_reenumeration() {
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse) {
+    (void) allow_software_mode_reuse;
     // We don't track GPU state, so we will always reenumerate. Fortunately, it is fast on macOS.
     return true;
   }

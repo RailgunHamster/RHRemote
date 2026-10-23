@@ -3238,8 +3238,8 @@ namespace video {
     auto encoder_list = encoders;
 
     // If we already have a good encoder, check to see if another probe is required
-    const bool topology_changed = platf::needs_encoder_reenumeration();
     const bool explicit_software = chosen_encoder && chosen_encoder->name == "software" && config::video.encoder == "software";
+    const bool topology_changed = platf::needs_encoder_reenumeration(explicit_software);
     if (chosen_encoder && (!(chosen_encoder->flags & ALWAYS_REPROBE) || explicit_software) && !topology_changed) {
       return 0;
     }

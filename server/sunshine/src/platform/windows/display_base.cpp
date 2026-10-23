@@ -41,6 +41,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 
 #include "display.h"
 #include "misc.h"
+#include "rhremote_encoder_environment.h"
 #include "src/config.h"
 #include "src/display_device.h"
 #include "src/logging.h"
@@ -399,6 +400,9 @@ namespace platf::dxgi {
       if (FAILED(status)) {
         BOOST_LOG(error) << "Failed to create D3D11 device for DD test [0x"sv << util::hex(status).to_string_view() << ']';
         return false;
+      }
+      if (config::video.encoder == "software") {
+        rhremote::win_probe::remember(adapter.get(), device.get());
       }
       return true;
     },
@@ -1115,33 +1119,58 @@ namespace platf {
   }
 
   /**
-   * @brief Check whether DXGI reports that adapter or driver enumeration is stale.
-   *
+   * @brief Check graphics changes, permitting only proven software mode-only reuse.
+   * @param allow_software_mode_reuse Whether an explicitly selected software encoder was already validated.
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */
-  bool needs_encoder_reenumeration() {
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse) {
+    rhremote::scope rh_scope("encoder_environment_check");
     // Serialize access to the static DXGI factory
     static std::mutex reenumeration_state_lock;
     auto lg = std::lock_guard(reenumeration_state_lock);
-
-    // Keep a reference to the DXGI factory, which will keep track of changes internally.
     static dxgi::factory1_t factory;
-    if (!factory || !factory->IsCurrent()) {
-      factory.reset();
-
-      auto status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
-      if (FAILED(status)) {
-        BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
-        factory.release();
-      }
-
-      // Always request reenumeration on the first streaming session just to ensure we
-      // can deal with any initialization races that may occur when the system is booting.
-      BOOST_LOG(info) << "Encoder reenumeration is required"sv;
-      return true;
-    } else {
-      // The DXGI factory from last time is still current, so no encoder changes have occurred.
+    static rhremote::encoder_probe_cache observations;
+    const bool current = factory && factory->IsCurrent();
+    if (current && !allow_software_mode_reuse) {
+      // Hardware selection and automatic fallback retain their existing policy.
       return false;
     }
+    dxgi::factory1_t fresh_factory;
+    const auto status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &fresh_factory);
+    std::optional<rhremote::encoder_environment> fresh;
+    auto health = rhremote::probe_device_health::unknown;
+    if (SUCCEEDED(status)) {
+      std::string reason;
+      fresh = rhremote::win_probe::snapshot(fresh_factory.get(), &reason);
+      if (!fresh) {
+        BOOST_LOG(debug) << "Encoder environment unavailable at "sv << reason;
+      }
+      // Verify stability without creating D3D devices or trusting an old output index.
+      if (fresh && (fresh != rhremote::win_probe::snapshot(fresh_factory.get()) || !fresh_factory->IsCurrent())) {
+        fresh.reset();
+      }
+      if (fresh) {
+        // Include software options which can affect the probed codec capabilities.
+        auto &identity = fresh->invariant;
+        for (const auto *value : {&config::video.encoder, &config::video.capture, &config::video.adapter_name, &config::video.output_name, &config::video.sw.sw_preset, &config::video.sw.sw_tune}) {
+          identity.push_back(value->size());
+          identity.insert(identity.end(), value->begin(), value->end());
+        }
+        for (int value : {config::video.qp, config::video.hevc_mode, config::video.av1_mode, config::video.min_threads, int(config::video.sw.svtav1_preset.has_value()), config::video.sw.svtav1_preset.value_or(0), int(config::sunshine.flags[config::flag::FORCE_VIDEO_HEADER_REPLACE])}) {
+          identity.push_back(static_cast<std::uint64_t>(value));
+        }
+        health = rhremote::win_probe::health(*fresh);
+      }
+    } else {
+      BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
+    }
+    const auto decision = observations.observe(current, allow_software_mode_reuse, std::move(fresh), health);
+    factory = std::move(fresh_factory);
+    if (decision == rhremote::encoder_probe_decision::mode_only) {
+      BOOST_LOG(info) << "Reusing software encoder capabilities after verified mode-only change"sv;
+    } else if (decision == rhremote::encoder_probe_decision::required) {
+      BOOST_LOG(info) << "Encoder reenumeration is required"sv;
+    }
+    return decision == rhremote::encoder_probe_decision::required;
   }
 }  // namespace platf

@@ -930,9 +930,10 @@ namespace platf {
 
   /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.
+   * @param allow_software_mode_reuse Whether an explicitly selected software encoder may reuse capabilities after a proven mode-only change.
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */
-  bool needs_encoder_reenumeration();
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse = false);
 
   /**
    * @brief Launch a configured preparation or application command.
