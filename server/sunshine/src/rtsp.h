@@ -71,6 +71,12 @@ namespace rtsp_stream {
   /** @brief Cancel only this authenticated pending request. @param credential Fresh per-request secret. @param owner Canonical paired TLS certificate. @return Cancellation or irreversible handoff outcome. */
   rhremote::launch_result launch_request_cancel(std::string_view credential, std::string_view owner);
 
+  /** @brief Permanently close request admission during server shutdown, before draining HTTP workers. */
+  void launch_requests_close();
+
+  /** @brief Revoke pending preparation without joining active stream threads under the authorization lock. @param owner Canonical certificate being disabled or removed. */
+  void launch_request_revoke(std::string_view owner);
+
   /**
    * @brief Clear state for the specified launch session.
    * @param launch_session_id The ID of the session to clear.

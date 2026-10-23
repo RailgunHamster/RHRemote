@@ -19,6 +19,7 @@
 
 // local includes
 #include "crypto.h"
+#include "rhremote_pending_launch.h"
 
 /**
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.
@@ -364,6 +365,12 @@ namespace nvhttp {
    * @brief Test-only accessors for paired-client authorization state.
    */
   namespace test_support {
+    /** @brief Exercise actual pending admission with a fixture TLS peer. @param args Query fixture. @param certificate Authenticated peer fixture, never a production query field. @param error Rejection tree. @return Real registry admission. */
+    rhremote::launch_admission admit_launch(const SimpleWeb::CaseInsensitiveMultimap &args, std::string_view certificate, boost::property_tree::ptree &error);
+
+    /** @brief Exercise the production pending-cancel protocol and authorization. @param args Query fixture. @param certificate Authenticated TLS peer fixture. @return Real protocol result. */
+    boost::property_tree::ptree pending_launch_cancel(const SimpleWeb::CaseInsensitiveMultimap &args, std::string_view certificate);
+
     /**
      * @brief Dispatch plain-HTTP capability discovery through the production handler.
      * @param response HTTP response object to populate.

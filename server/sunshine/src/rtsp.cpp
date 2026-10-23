@@ -671,14 +671,20 @@ namespace rtsp_stream {
       _session_slots->erase(session);
     }
 
-    /**
-     * @brief Inserts the provided session into the set of sessions.
-     * @param session The session to insert.
-     */
-    void insert(const std::shared_ptr<stream::session_t> &session) {
+    /** @brief Atomically claim and start before making a session visible to revoke/stop. @param config Negotiated configuration. @param launch Original pending session. @param address Remote peer address. @return RTSP result, 200 on success. */
+    int start_session(stream::config_t &config, launch_session_t &launch, const std::string &address) {
       auto lg = _session_slots.lock();
-      _session_slots->emplace(session);
+      if (!pending_launches.claim(launch)) {
+        return 409;
+      }
+      auto session = stream::session::alloc(config, launch);
+      if (stream::session::start(*session, address)) {
+        pending_launches.clear(launch.id);
+        return 500;
+      }
+      _session_slots->emplace(std::move(session));
       BOOST_LOG(info) << "New streaming session started [active sessions: "sv << _session_slots->size() << ']';
+      return 200;
     }
 
     /**
@@ -735,6 +741,14 @@ namespace rtsp_stream {
 
   rhremote::launch_result launch_request_cancel(std::string_view credential, std::string_view owner) {
     return server.pending_launches.cancel(credential, owner);
+  }
+
+  void launch_requests_close() {
+    server.pending_launches.reset(true);
+  }
+
+  void launch_request_revoke(std::string_view owner) {
+    server.pending_launches.revoke(owner);
   }
 
   void launch_session_clear(uint32_t launch_session_id) {
@@ -1298,18 +1312,14 @@ namespace rtsp_stream {
 
     // The socket may still hold an old shared_ptr after cancellation/expiry.
     // Atomically arbitrate against cancellation before allocating any stream.
-    if (!server->pending_launches.claim(session)) {
+    const auto started = server->start_session(config, session, sock.remote_endpoint().address().to_string());
+    if (started == 409) {
       respond(sock, session, &option, 409, "Conflict", req->sequenceNumber, {});
       return;
     }
-    auto stream_session = stream::session::alloc(config, session);
-    server->insert(stream_session);
-
-    if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
+    if (started != 200) {
       BOOST_LOG(error) << "Failed to start a streaming session"sv;
 
-      server->remove(stream_session);
-      server->session_clear(session.id);
       respond(sock, session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
       return;
     }

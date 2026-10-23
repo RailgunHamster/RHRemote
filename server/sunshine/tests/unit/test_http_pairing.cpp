@@ -534,6 +534,7 @@ TEST_F(PairingHttpHandlerTest, DiscoveryExplicitlyAdvertisesSignedCancellation) 
   const auto response = request("/serverinfo?uniqueid=probe"sv);
   EXPECT_NE(response.find("status_code=\"200\""), std::string::npos);
   EXPECT_NE(response.find("<RHPairingCancel>1</RHPairingCancel>"), std::string::npos);
+  EXPECT_NE(response.find("<RHLaunchCancel>1</RHLaunchCancel>"), std::string::npos);
 }
 
 TEST_F(PairingHttpHandlerTest, WebApprovalRequestRemainsPendingUntilCancelled) {

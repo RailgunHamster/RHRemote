@@ -15,6 +15,7 @@
 #include <utility>
 
 // lib includes
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/context_base.hpp>
 #include <boost/property_tree/json_parser.hpp>
@@ -35,6 +36,7 @@
 #include "process.h"
 #include "rhremote_frame_trace.h"
 #include "rhremote_initial_display.h"
+#include "rhremote_launch_http.h"
 #include "rtsp.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -89,8 +91,9 @@ namespace nvhttp {
       context.use_private_key_file(private_key_file, boost::asio::ssl::context::pem);
     }
 
-    std::function<int(SSL *)> verify;  ///< Callback that validates a client's TLS certificate after handshake.
+    std::function<std::optional<rhremote::launch_peer>(SSL *)> verify;  ///< Actual verified identity from this TLS socket.
     std::function<void(std::shared_ptr<Response>, std::shared_ptr<Request>)> on_verify_failed;  ///< Handler used to return the pairing challenge when client verification fails.
+    rhremote::verified_launch_requests<Request> verified_requests;  ///< Bounded weak identity bindings for actual accepted requests.
 
   protected:
     boost::asio::ssl::context context;  ///< TLS server context configured with Sunshine's certificate and protocol policy.
@@ -140,8 +143,15 @@ namespace nvhttp {
               return;
             }
             if (!ec) {
-              if (verify && !verify(session->connection->socket->native_handle())) {
+              auto peer = verify ? verify(session->connection->socket->native_handle()) : std::optional<rhremote::launch_peer> {};
+              if (verify && !peer) {
                 this->write(session, on_verify_failed);
+              } else if (peer && !verified_requests.bind(session->request, std::move(*peer))) {
+                std::function<void(std::shared_ptr<Response>, std::shared_ptr<Request>)> unavailable = [](auto response, auto) {
+                  response->write("<root status_code=\"503\" status_message=\"Too many authenticated requests\"/>");
+                  response->close_connection_after_response = true;
+                };
+                this->write(session, unavailable);
               } else {
                 this->read(session);
               }
@@ -205,10 +215,6 @@ namespace nvhttp {
 
   client_t client_root;  ///< In-memory representation of the paired-client database.
   std::atomic<uint32_t> session_id_counter;  ///< Monotonic counter used to allocate GameStream session IDs.
-
-  // Set by TLS verify callback, read by launch/resume handler (single-threaded HTTPS server)
-  std::string last_verified_client_cert;  ///< Last client certificate accepted by the TLS verify callback.  // NOSONAR(cpp:S5421): intentionally mutable global
-  std::string last_verified_client_name;  ///< Friendly name of last client certificate accepted by the TLS verify callback. // NOSONAR(cpp:S5421): intentionally mutable global
 
   /**
    * @brief Case-insensitive map used for HTTP headers and query parameters.
@@ -472,9 +478,10 @@ namespace nvhttp {
    *
    * @param host_audio Host audio.
    * @param args Arguments forwarded to the callable or parser.
+   * @param peer Actual paired TLS identity captured for this request.
    * @return Constructed launch session object.
    */
-  std::shared_ptr<rtsp_stream::launch_session_t> make_launch_session(bool host_audio, const args_t &args) {
+  std::shared_ptr<rtsp_stream::launch_session_t> make_launch_session(bool host_audio, const args_t &args, const rhremote::launch_peer &peer) {
     auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
 
     launch_session->id = ++session_id_counter;
@@ -520,8 +527,8 @@ namespace nvhttp {
       launch_session->rtsp_iv_counter = 0;
     }
     launch_session->rtsp_url_scheme = launch_session->rtsp_cipher ? "rtspenc://"s : "rtsp://"s;
-    launch_session->client_cert = last_verified_client_cert;
-    launch_session->client_name = last_verified_client_name;
+    launch_session->client_cert = peer.certificate;
+    launch_session->client_name = peer.name;
 
     // Generate the unique identifiers for this connection that we will send later during RTSP handshake
     unsigned char raw_payload[8];
@@ -962,7 +969,7 @@ namespace nvhttp {
     BOOST_LOG(debug) << " [--] "sv;
 
     for (auto &[name, val] : request->parse_query_string()) {
-      BOOST_LOG(debug) << name << " -- " << val;
+      BOOST_LOG(debug) << name << " -- " << (boost::iequals(name, "rhremoteLaunchToken") ? "[redacted]" : val);
     }
 
     BOOST_LOG(debug) << " [--] "sv;
@@ -1248,6 +1255,7 @@ namespace nvhttp {
 
     tree.put("root.appversion", VERSION);
     tree.put("root.RHPairingCancel", 1);
+    tree.put("root.RHLaunchCancel", 1);
     tree.put("root.GfeVersion", GFE_VERSION);
     tree.put("root.uniqueid", http::unique_id);
     tree.put("root.HttpsPort", net::map_port(PORT_HTTPS));
@@ -1344,24 +1352,75 @@ namespace nvhttp {
     }
   }
 
+  /** @brief Serialize a protocol result without including any request secrets. @param response Owned HTTPS response. @param tree Protocol result. */
+  void write_launch_result(const resp_https_t &response, const pt::ptree &tree) {
+    std::ostringstream data;
+    pt::write_xml(data, tree);
+    response->write(data.str());
+    response->close_connection_after_response = true;
+  }
+
+  /** @brief Make a launch protocol error. @param code Protocol status. @param message Non-sensitive reason. @return XML tree. */
+  pt::ptree launch_error(int code, std::string_view message) {
+    pt::ptree tree;
+    tree.put("root.<xmlattr>.status_code", code);
+    tree.put("root.<xmlattr>.status_message", message);
+    tree.put("root.resume", 0);
+    tree.put("root.gamesession", 0);
+    return tree;
+  }
+
+  /** @brief Recheck the snapshotted peer under the authorization mutex. @param peer Actual TLS peer. @note Caller must hold client_auth_mutex(). @return Whether that exact certificate is still enabled. */
+  bool launch_peer_authorized_locked(const rhremote::launch_peer &peer) {
+    auto cert = crypto::x509(peer.certificate);
+    return cert && !verify_client_certificate(cert.get());
+  }
+
+  /** @brief Stop cancelled preparations at real side-effect boundaries. @param ownership Original request handle. @param tree Rejection result. @return Whether preparation may continue. */
+  bool launch_checkpoint(const std::shared_ptr<rhremote::launch_ticket> &ownership, pt::ptree &tree) {
+    if (rtsp_stream::launch_request_preparing(ownership)) {
+      return true;
+    }
+    tree = launch_error(410, "Launch request was cancelled or expired");
+    return false;
+  }
+
+  /** @brief Publish only an unrevoked peer and still-owned preparation. @param session Prepared session. @param peer Actual TLS peer. @param tree Rejection result. @return Whether RTSP publication succeeded. */
+  bool publish_owned_launch(const std::shared_ptr<rtsp_stream::launch_session_t> &session, const rhremote::launch_peer &peer, pt::ptree &tree) {
+    std::lock_guard lock {client_auth_mutex()};
+    if (!launch_peer_authorized_locked(peer)) {
+      tree = launch_error(401, "Client authorization was revoked");
+      return false;
+    }
+    if (!rtsp_stream::launch_session_raise(session)) {
+      tree = launch_error(409, "Launch request no longer owns the pending slot");
+      return false;
+    }
+    return true;
+  }
+
   /**
    * @brief Launch the requested application for a GameStream session.
    *
    * @param host_audio Host audio.
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
+   * @param peer Actual TLS peer captured before deferring the request.
+   * @param ownership Original request handle, or empty for legacy clients.
    */
-  void launch(bool &host_audio, resp_https_t response, req_https_t request) {
+  void launch(bool &host_audio, resp_https_t response, req_https_t request, const rhremote::launch_peer &peer, const std::shared_ptr<rhremote::launch_ticket> &ownership) {
     print_req<SunshineHTTPS>(request);
     std::scoped_lock launch_lock {launch_mutex()};
 
     pt::ptree tree;
     bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
+      rtsp_stream::launch_request_finish(ownership);
       std::ostringstream data;
 
       if (tree.empty()) {
         BOOST_LOG(error) << EMPTY_PROPERTY_TREE_ERROR_MSG;
+        tree = launch_error(500, "Launch preparation failed");
       }
 
       pt::write_xml(data, tree);
@@ -1372,6 +1431,10 @@ namespace nvhttp {
         display_device::revert_configuration();
       }
     });
+
+    if (!launch_checkpoint(ownership, tree)) {
+      return;
+    }
 
     auto args = request->parse_query_string();
     if (
@@ -1399,9 +1462,13 @@ namespace nvhttp {
     }
 
     const bool requested_host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
-    auto launch_session = make_launch_session(requested_host_audio, args);
+    auto launch_session = make_launch_session(requested_host_audio, args, peer);
+    launch_session->ownership = ownership;
 
     if (!prepare_initial_display(args, *launch_session, tree)) {
+      return;
+    }
+    if (!launch_checkpoint(ownership, tree)) {
       return;
     }
     host_audio = requested_host_audio;
@@ -1414,6 +1481,9 @@ namespace nvhttp {
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
+      if (!launch_checkpoint(ownership, tree)) {
+        return;
+      }
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1440,6 +1510,9 @@ namespace nvhttp {
     }
 
     if (appid > 0) {
+      if (!launch_checkpoint(ownership, tree)) {
+        return;
+      }
       auto err = proc::proc.execute((int) appid, launch_session);
       if (err) {
         tree.put("root.<xmlattr>.status_code", err);
@@ -1467,10 +1540,7 @@ namespace nvhttp {
       tree.put("root.RHInitialDisplay", launch_session->initial_display);
     }
 
-    if (!rtsp_stream::launch_session_raise(launch_session)) {
-      tree.put("root.<xmlattr>.status_code", 409);
-      tree.put("root.<xmlattr>.status_message", "Launch request no longer owns the pending slot");
-      tree.put("root.gamesession", 0);
+    if (!publish_owned_launch(launch_session, peer, tree)) {
       return;
     }
 
@@ -1484,23 +1554,35 @@ namespace nvhttp {
    * @param host_audio Host audio.
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
+   * @param peer Actual TLS peer captured before deferring the request.
+   * @param ownership Original request handle, or empty for legacy clients.
    */
-  void resume(bool &host_audio, resp_https_t response, req_https_t request) {
+  void resume(bool &host_audio, resp_https_t response, req_https_t request, const rhremote::launch_peer &peer, const std::shared_ptr<rhremote::launch_ticket> &ownership) {
     print_req<SunshineHTTPS>(request);
     std::scoped_lock launch_lock {launch_mutex()};
 
     pt::ptree tree;
+    bool revert_display_configuration {false};
     auto g = util::fail_guard([&]() {
+      rtsp_stream::launch_request_finish(ownership);
       std::ostringstream data;
 
       if (tree.empty()) {
         BOOST_LOG(error) << EMPTY_PROPERTY_TREE_ERROR_MSG;
+        tree = launch_error(500, "Resume preparation failed");
       }
 
       pt::write_xml(data, tree);
       response->write(data.str());
       response->close_connection_after_response = true;
+      if (revert_display_configuration) {
+        display_device::revert_configuration();
+      }
     });
+
+    if (!launch_checkpoint(ownership, tree)) {
+      return;
+    }
 
     auto current_appid = proc::proc.running();
     if (current_appid == 0) {
@@ -1528,17 +1610,25 @@ namespace nvhttp {
     // no active sessions we could be interfering with.
     const bool no_active_sessions {rtsp_stream::session_count() == 0};
     const bool requested_host_audio = no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args) ? util::from_view(get_arg(args, "localAudioPlayMode")) : host_audio;
-    const auto launch_session = make_launch_session(requested_host_audio, args);
+    const auto launch_session = make_launch_session(requested_host_audio, args, peer);
+    launch_session->ownership = ownership;
 
     if (!prepare_initial_display(args, *launch_session, tree)) {
       return;
     }
+    if (!launch_checkpoint(ownership, tree)) {
+      return;
+    }
     if (no_active_sessions) {
+      revert_display_configuration = true;
       host_audio = requested_host_audio;
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
+      if (!launch_checkpoint(ownership, tree)) {
+        return;
+      }
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1581,10 +1671,8 @@ namespace nvhttp {
       tree.put("root.RHInitialDisplay", launch_session->initial_display);
     }
 
-    if (!rtsp_stream::launch_session_raise(launch_session)) {
-      tree.put("root.<xmlattr>.status_code", 409);
-      tree.put("root.<xmlattr>.status_message", "Resume request no longer owns the pending slot");
-      tree.put("root.resume", 0);
+    if (publish_owned_launch(launch_session, peer, tree)) {
+      revert_display_configuration = false;
     }
   }
 
@@ -1618,6 +1706,110 @@ namespace nvhttp {
 
     // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
     display_device::revert_configuration();
+  }
+
+  /** @brief Authenticate and admit one real launch/resume before it enters the worker queue. @param args Actual query. @param peer Verified TLS identity. @param error Rejection result. @return Admission, with an empty handle for a legacy request. */
+  rhremote::launch_admission admit_launch(const args_t &args, const rhremote::launch_peer &peer, pt::ptree &error) {
+    std::lock_guard lock {client_auth_mutex()};
+    if (!launch_peer_authorized_locked(peer)) {
+      error = launch_error(401, "Client authorization was revoked");
+      return {rhremote::launch_result::forbidden, {}};
+    }
+    const auto token = args.find("rhremoteLaunchToken");
+    if (token == args.end()) {
+      if (rtsp_stream::launch_request_preparing({})) {
+        return {rhremote::launch_result::accepted, {}};
+      }
+      error = launch_error(503, "Server is shutting down");
+      return {rhremote::launch_result::closed, {}};
+    }
+    if (args.count("rhremoteLaunchToken") != 1 || !rhremote::pending_launches<rtsp_stream::launch_session_t>::valid(token->second)) {
+      error = launch_error(400, "Invalid launch ownership credential");
+      return {rhremote::launch_result::invalid, {}};
+    }
+    auto admission = rtsp_stream::launch_request_begin(token->second, peer.certificate);
+    if (admission.result != rhremote::launch_result::accepted) {
+      const auto code = admission.result == rhremote::launch_result::forbidden ? 403 :
+                        admission.result == rhremote::launch_result::cancelled ? 410 :
+                        admission.result == rhremote::launch_result::duplicate ? 409 :
+                                                                                 503;
+      error = launch_error(code, "Launch ownership admission rejected");
+    }
+    return admission;
+  }
+
+  /** @brief Cancel one pending launch without touching active streams, applications or display configuration. @param args Actual HTTPS query. @param peer Actual paired TLS identity. @return Non-sensitive protocol result. */
+  pt::ptree pending_launch_cancel(const args_t &args, const rhremote::launch_peer &peer) {
+    std::lock_guard lock {client_auth_mutex()};
+    if (!launch_peer_authorized_locked(peer)) {
+      return launch_error(401, "Client authorization was revoked");
+    }
+    const auto token = args.find("rhremoteLaunchToken");
+    if (args.count("rhremoteLaunchToken") != 1) {
+      return launch_error(400, "One launch ownership credential is required");
+    }
+    const auto result = rtsp_stream::launch_request_cancel(token->second, peer.certificate);
+    std::string state;
+    switch (result) {
+      case rhremote::launch_result::cancelled:
+        state = "cancelled";
+        break;
+      case rhremote::launch_result::handed_off:
+        state = "handed_off";
+        break;
+      case rhremote::launch_result::finished:
+        state = "finished";
+        break;
+      case rhremote::launch_result::expired:
+        state = "expired";
+        break;
+      default:
+        return launch_error(result == rhremote::launch_result::forbidden ? 403 : result == rhremote::launch_result::invalid ? 400 :
+                                                                                                                              503,
+                            "Pending launch cancellation rejected");
+    }
+    pt::ptree tree;
+    tree.put("root.<xmlattr>.status_code", 200);
+    tree.put("root.cancel", 1);
+    tree.put("root.RHLaunchState", state);
+    return tree;
+  }
+
+  /** @brief Defer serialized legacy cancellation or launch preparation, keeping HTTPS free for request cancellation. @param server Server holding actual TLS bindings. @param worker Owned bounded worker. @param host_audio Shared launch setting, accessed only on the serial worker. @param response Owned response. @param request Actual accepted request. */
+  void defer_launch(https_server_t &server, rhremote::launch_worker &worker, bool &host_audio, resp_https_t response, req_https_t request) {
+    auto peer = server.verified_requests.peer(request);
+    if (!peer) {
+      write_launch_result(response, launch_error(401, "Authenticated TLS request identity is unavailable"));
+      return;
+    }
+    const bool global_cancel = request->path == "/cancel";
+    pt::ptree error;
+    auto admission = global_cancel ? rhremote::launch_admission {rhremote::launch_result::accepted, {}} : admit_launch(request->parse_query_string(), *peer, error);
+    if (admission.result != rhremote::launch_result::accepted) {
+      write_launch_result(response, error);
+      return;
+    }
+    const auto ownership = admission.ticket;
+    if (!worker.submit([&host_audio, response, request, peer = std::move(*peer), ownership, global_cancel] {
+          bool authorized;
+          {
+            std::lock_guard lock {client_auth_mutex()};
+            authorized = launch_peer_authorized_locked(peer);
+          }
+          if (!authorized) {
+            rtsp_stream::launch_request_finish(ownership);
+            write_launch_result(response, launch_error(401, "Client authorization was revoked"));
+          } else if (global_cancel) {
+            cancel(response, request);
+          } else if (request->path == "/resume") {
+            resume(host_audio, response, request, peer, ownership);
+          } else {
+            launch(host_audio, response, request, peer, ownership);
+          }
+        })) {
+      rtsp_stream::launch_request_finish(ownership);
+      write_launch_result(response, launch_error(503, "Launch preparation queue is full or closed"));
+    }
   }
 
   /**
@@ -1677,9 +1869,12 @@ namespace nvhttp {
 
     https_server_t https_server {config::nvhttp.cert, config::nvhttp.pkey};
     http_server_t http_server;
+    rhremote::launch_worker worker(2, [] {
+      BOOST_LOG(error) << "Deferred launch preparation raised an exception"sv;
+    });
 
     // Verify certificates after establishing connection
-    https_server.verify = [](SSL *ssl) {
+    https_server.verify = [](SSL *ssl) -> std::optional<rhremote::launch_peer> {
       crypto::x509_t x509 {
 #if OPENSSL_VERSION_MAJOR >= 3
         SSL_get1_peer_certificate(ssl)
@@ -1689,7 +1884,7 @@ namespace nvhttp {
       };
       if (!x509) {
         BOOST_LOG(info) << "unknown -- denied"sv;
-        return 0;
+        return {};
       }
 
       int verified = 0;
@@ -1707,7 +1902,7 @@ namespace nvhttp {
       if (err_str) {
         BOOST_LOG(warning) << "SSL Verification error :: "sv << err_str;
 
-        return verified;
+        return {};
       }
 
       // Check if this client is enabled
@@ -1715,14 +1910,11 @@ namespace nvhttp {
       auto [enabled, client_name] = get_client_status(pem);
       if (!enabled) {
         BOOST_LOG(info) << "Client is disabled -- denied"sv;
-        return verified;
+        return {};
       }
 
-      last_verified_client_cert = pem;
-      last_verified_client_name = client_name;
       verified = 1;
-
-      return verified;
+      return rhremote::launch_peer {std::move(pem), std::move(client_name)};
     };
 
     https_server.on_verify_failed = [](resp_https_t resp, req_https_t req) {
@@ -1747,13 +1939,20 @@ namespace nvhttp {
     };
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
-    https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
-      launch(host_audio, resp, req);
+    https_server.resource["^/launch$"]["GET"] = [&host_audio, &https_server, &worker](auto resp, auto req) {
+      defer_launch(https_server, worker, host_audio, resp, req);
     };
-    https_server.resource["^/resume$"]["GET"] = [&host_audio](auto resp, auto req) {
-      resume(host_audio, resp, req);
+    https_server.resource["^/resume$"]["GET"] = [&host_audio, &https_server, &worker](auto resp, auto req) {
+      defer_launch(https_server, worker, host_audio, resp, req);
     };
-    https_server.resource["^/cancel$"]["GET"] = cancel;
+    https_server.resource["^/cancel$"]["GET"] = [&host_audio, &https_server, &worker](auto resp, auto req) {
+      defer_launch(https_server, worker, host_audio, resp, req);
+    };
+    https_server.resource["^/rhremote/launch/cancel$"]["GET"] = [&https_server](auto resp, auto req) {
+      print_req<SunshineHTTPS>(req);
+      const auto peer = https_server.verified_requests.peer(req);
+      write_launch_result(resp, peer ? pending_launch_cancel(req->parse_query_string(), *peer) : launch_error(401, "Authenticated TLS request identity is unavailable"));
+    };
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::get_bind_address(address_family);
@@ -1791,6 +1990,8 @@ namespace nvhttp {
     // Wait for any event
     shutdown_event->view();
 
+    rtsp_stream::launch_requests_close();
+    worker.close();
     https_server.stop();
     http_server.stop();
 
@@ -1800,6 +2001,9 @@ namespace nvhttp {
 
   void erase_all_clients() {
     std::lock_guard lock {client_auth_mutex()};
+    for (const auto &client : client_root.named_devices) {
+      rtsp_stream::launch_request_revoke(client.cert);
+    }
     client_root = {};
     cert_chain.clear();
     save_state();
@@ -1810,6 +2014,7 @@ namespace nvhttp {
     bool removed = false;
     for (auto it = client_root.named_devices.begin(); it != client_root.named_devices.end();) {
       if ((*it).uuid == uuid) {
+        rtsp_stream::launch_request_revoke(it->cert);
         it = client_root.named_devices.erase(it);
         removed = true;
       } else {
@@ -1827,6 +2032,9 @@ namespace nvhttp {
     for (auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
         named_cert.enabled = enabled;
+        if (!enabled) {
+          rtsp_stream::launch_request_revoke(named_cert.cert);
+        }
         rebuild_client_cert_chain();
         save_state();
         return true;
@@ -1863,6 +2071,14 @@ namespace nvhttp {
 
 #ifdef SUNSHINE_TESTS
   namespace test_support {
+    rhremote::launch_admission admit_launch(const SimpleWeb::CaseInsensitiveMultimap &args, std::string_view certificate, pt::ptree &error) {
+      return nvhttp::admit_launch(args, {std::string(certificate), "fixture"}, error);
+    }
+
+    pt::ptree pending_launch_cancel(const SimpleWeb::CaseInsensitiveMultimap &args, std::string_view certificate) {
+      return nvhttp::pending_launch_cancel(args, {std::string(certificate), "fixture"});
+    }
+
     void serverinfo_http(
       std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response> response,
       std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request

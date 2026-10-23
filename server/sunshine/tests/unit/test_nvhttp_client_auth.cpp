@@ -15,6 +15,7 @@
 // local includes
 #include <src/config.h>
 #include <src/nvhttp.h>
+#include <src/rtsp.h>
 
 namespace fs = std::filesystem;
 
@@ -44,6 +45,8 @@ protected:
    * @brief Remove test state and restore the caller's configuration.
    */
   void TearDown() override {
+    rtsp_stream::launch_session_clear(900001);
+    rtsp_stream::launch_session_clear(900002);
     nvhttp::test_support::reset_client_state();
     std::error_code remove_error;
     fs::remove(state_file, remove_error);
@@ -161,4 +164,73 @@ TEST_F(ClientAuthorizationTest, ConcurrentStateChangesRemainConsistent) {
   EXPECT_TRUE(operations_succeeded);
   ASSERT_TRUE(nvhttp::set_client_enabled(uuid, false));
   EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+}
+
+TEST_F(ClientAuthorizationTest, PendingLaunchCancellationIsBoundToActualPeerAndRequest) {
+  const auto a = crypto::gen_creds("Pending Client A", 2048);
+  const auto b = crypto::gen_creds("Pending Client B", 2048);
+  ASSERT_FALSE(nvhttp::test_support::add_client("A", a.x509, true).empty());
+  ASSERT_FALSE(nvhttp::test_support::add_client("B", b.x509, true).empty());
+  const SimpleWeb::CaseInsensitiveMultimap args {{"rhremoteLaunchToken", crypto::rand_alphabet(64, "0123456789abcdef")}};
+  boost::property_tree::ptree error;
+  const auto admitted = nvhttp::test_support::admit_launch(args, a.x509, error);
+  ASSERT_EQ(admitted.result, rhremote::launch_result::accepted);
+  auto session = std::make_shared<rtsp_stream::launch_session_t>();
+  session->id = 900001;
+  session->client_cert = a.x509;
+  session->ownership = admitted.ticket;
+  ASSERT_TRUE(rtsp_stream::launch_session_raise(session));
+  const auto other = nvhttp::test_support::pending_launch_cancel(args, b.x509);
+  EXPECT_EQ(other.get<int>("root.<xmlattr>.status_code"), 403);
+  EXPECT_TRUE(rtsp_stream::launch_pending());
+  const auto cancelled = nvhttp::test_support::pending_launch_cancel(args, a.x509);
+  EXPECT_EQ(cancelled.get<int>("root.<xmlattr>.status_code"), 200);
+  EXPECT_EQ(cancelled.get<std::string>("root.RHLaunchState"), "cancelled");
+  EXPECT_FALSE(rtsp_stream::launch_pending());
+  EXPECT_FALSE(rtsp_stream::launch_session_raise(session));
+
+  const SimpleWeb::CaseInsensitiveMultimap next {{"rhremoteLaunchToken", crypto::rand_alphabet(64, "0123456789abcdef")}};
+  const auto replacement = nvhttp::test_support::admit_launch(next, a.x509, error);
+  ASSERT_EQ(replacement.result, rhremote::launch_result::accepted);
+  session = std::make_shared<rtsp_stream::launch_session_t>();
+  session->id = 900002;
+  session->client_cert = a.x509;
+  session->ownership = replacement.ticket;
+  ASSERT_TRUE(rtsp_stream::launch_session_raise(session));
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel(args, a.x509).get<int>("root.<xmlattr>.status_code"), 200);
+  EXPECT_TRUE(rtsp_stream::launch_pending());
+  rtsp_stream::launch_session_clear(session->id);
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel(next, a.x509).get<std::string>("root.RHLaunchState"), "finished");
+}
+
+TEST_F(ClientAuthorizationTest, PendingLaunchRejectsInvalidRevokedAndPreCancelledRequests) {
+  const auto a = crypto::gen_creds("Pending Client", 2048);
+  const auto uuid = nvhttp::test_support::add_client("A", a.x509, true);
+  ASSERT_FALSE(uuid.empty());
+  boost::property_tree::ptree error;
+  const auto legacy = nvhttp::test_support::admit_launch({}, a.x509, error);
+  EXPECT_EQ(legacy.result, rhremote::launch_result::accepted);
+  EXPECT_FALSE(legacy.ticket);
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel({}, a.x509).get<int>("root.<xmlattr>.status_code"), 400);
+  const SimpleWeb::CaseInsensitiveMultimap invalid {{"rhremoteLaunchToken", "invalid"}};
+  EXPECT_EQ(nvhttp::test_support::admit_launch(invalid, a.x509, error).result, rhremote::launch_result::invalid);
+  EXPECT_EQ(error.get<int>("root.<xmlattr>.status_code"), 400);
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel(invalid, a.x509).get<int>("root.<xmlattr>.status_code"), 400);
+  const SimpleWeb::CaseInsensitiveMultimap args {{"rhremoteLaunchToken", crypto::rand_alphabet(64, "0123456789abcdef")}};
+  auto duplicate = args;
+  duplicate.emplace("RHREMOTELAUNCHTOKEN", args.begin()->second);
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel(duplicate, a.x509).get<int>("root.<xmlattr>.status_code"), 400);
+  EXPECT_EQ(nvhttp::test_support::admit_launch(duplicate, a.x509, error).result, rhremote::launch_result::invalid);
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel(args, "untrusted certificate").get<int>("root.<xmlattr>.status_code"), 401);
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel(args, a.x509).get<std::string>("root.RHLaunchState"), "cancelled");
+  EXPECT_EQ(nvhttp::test_support::admit_launch(args, a.x509, error).result, rhremote::launch_result::cancelled);
+  EXPECT_EQ(error.get<int>("root.<xmlattr>.status_code"), 410);
+
+  const SimpleWeb::CaseInsensitiveMultimap next {{"rhremoteLaunchToken", crypto::rand_alphabet(64, "0123456789abcdef")}};
+  const auto preparation = nvhttp::test_support::admit_launch(next, a.x509, error);
+  ASSERT_EQ(preparation.result, rhremote::launch_result::accepted);
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, false));
+  EXPECT_FALSE(rtsp_stream::launch_request_preparing(preparation.ticket));
+  EXPECT_EQ(nvhttp::test_support::pending_launch_cancel(next, a.x509).get<int>("root.<xmlattr>.status_code"), 401);
+  EXPECT_EQ(nvhttp::test_support::admit_launch(next, a.x509, error).result, rhremote::launch_result::forbidden);
 }
