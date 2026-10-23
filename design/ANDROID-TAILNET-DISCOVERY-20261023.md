@@ -91,3 +91,26 @@ Gitee 预览发布的 latest 行为尚未验收，所以本次只在 GitHub 放�
 后续稳定版必须使用至少 205 的 Android versionCode，才能从此预览继续升级。
 
 已知无线调试端口不可达，尚未替用户安装，实际外网媒体和网络切换仍未验收。
+
+## 发现流程的 VPN 竞争修复
+
+继续检查固定的 Android 上游源码时确认，`populateExternalAddress` 在 VPN 活动时会为
+STUN 临时调用 `bindProcessToNetwork` 绑定底层网络，再恢复默认绑定。这不是线程局部
+行为：并发的 RHRemote 地址探测、HTTPS 或传输组件可能在该时段创建 socket。
+[Android 接口文档](https://developer.android.com/reference/android/net/ConnectivityManager#bindProcessToNetwork(android.net.Network))
+说明这种绑定会影响此后创建的 socket 及 DNS 查询，恢复默认绑定也不会替换已创建的
+socket。原锁只约束这段发现代码，不能约束其他网络组件。
+
+四个测试先在旧实现执行并全部失败：VPN 情况观察到两次进程绑定；已上报的主机地址
+被客户端 STUN 地址覆盖；普通网络及网络切换测试未触发预期检查。证据为
+`D:\RHRemoteTools\android-vpn-discovery-before-20261023.xml`。
+
+现在 VPN 期间不使用客户端 STUN 地址推断远程主机的公网地址，不修改进程绑定；
+非 VPN 的原 STUN 发现保留，并在保存结果前再次检查 VPN 状态，避免网络切换造成
+错误地址。已有主机地址不覆盖，手动公网地址、Tailscale 和独立 QUIC 选路保留。
+非 VPN STUN 的原生 UDP 接收上限为三秒，DNS 时间另计；这不等于完整发现请求上限，
+后续仍需统计和检查发现阶段的等待。
+
+修复后同四个测试全部通过，完整 49 项 JVM 测试零失败，APK / 测试 APK 构建成功。
+这是代码路径和竞争条件的回归证据，未证明此前 OPPO 的实际故障恰好由这条路径触发。
+本机浏览器测试结果及实际外网媒体仍待用户反馈。

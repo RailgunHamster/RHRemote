@@ -14,6 +14,9 @@
 - [x] 验证 Windows 通过 Tailscale 地址连接 winserver，断开和回退路径正常；Android 编译与自动化测试。
 - [ ] 外网实测：蜂窝网络 + Tailscale、直连失败时回退、网络切换后的恢复。家中局域网测试不能代替蜂窝验收。
 - [ ] OPPO 外网全离线回归：已修复 Android 列表轮询遗漏备用地址、自动学习遗漏主机 Tailscale 地址，以及冷启动空配对状态误走配对入口；严格证书确认不降级到 HTTP，45 项 JVM 测试和 APK 编译通过。最初 OPPO 节点离线，用户确认后已在线并有 disco/TSMP 回应；三台服务器 VPN Sunshine 均响应正确 UUID。待平板浏览器到 Sunshine 的测试结果、修复版安装及实际外网验收，详见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
+- [x] Android VPN 发现竞争修复：移除 STUN 期间整个应用的临时底层网络绑定；VPN 下跳过客户端公网地址推断，保留主机上报地址并检查查询期间的网络切换。新增四项旧代码失败/修复后通过的回归，完整 49 项 JVM 测试和双 APK 编译通过；不当作 OPPO 现场根因的实机证明。
+- [ ] Android 同步设备首次配对持久化：RhHome 导入的设备可能只有 UI 记录；成功分支直接访问原生 manager 的 getComputer(uuid)，可能为空，或只修改内存证书等待后续轮询保存。补立即持久化与重启、错误回滚测试，不能让主机已配对而客户端未保存证书。
+- [ ] Android 连接入口取消：当前选路 / JNI 隧道启动期间仅有 networkBusy，尚无完整的取消及清理占用语义；补同一按钮/API 的可取消状态，旧任务清理完成前禁止后续任务抢占隧道，验证迟到结果不会启动串流。
 - [x] 用户提供 SSH 别名 tc，已确认并复用其现有 DERP；独立临时测试端经公网完成双向实际转发，未改动现有 Tailscale / DERP 服务。
 - [ ] tc 中继能力：独立 TCP 下载约 5.965 Mbps，DERP 25 Mbps 缺失 4103 包与 queue_head 增量相等。后续固定 1024 分包的同一 1080p30 影片各约 151 秒，LAN / 内置直连 / HTTPS 中继在请求 5 Mbps 时分别有 0 / 2 / 53 次 >50 ms 渲染间隔；中继 4 Mbps 降到 1 次，再回 5 Mbps 升至 278 次。优先定位容量/排队，并补主机分段、更长时间及跨运营商验收，不认定某个队列为唯一根因或宣称支持 25 Mbps/4K。用户码率已恢复。见 design/NATURAL-VIDEO-20261023.md、RELAY-THROUGHPUT-20261023.md。
 - [x] 本机 / winserver / claw 的网络服务已部署；本机 UAC 安装成功，设备 UUID 保持不变，TCP / UDP 47995 同属统一服务，Tailscale 规则已核对。

@@ -51,6 +51,28 @@ Edit-Source 'app/src/main/AndroidManifest.xml' {param($s)
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.java' {param($s)
+    $start=$s.IndexOf('    private void populateExternalAddress(ComputerDetails details) {')
+    if($start -lt 0){throw 'Android discovery network anchor missing'}
+    $end=$s.IndexOf('    private MdnsDiscoveryListener createDiscoveryListener()', $start)
+    if($start -lt 0 -or $end -le $start){throw 'Android discovery network anchor missing'}
+    $replacement=@'
+    private void populateExternalAddress(ComputerDetails details) {
+        // Never rebind the whole process to discover a public address. Other
+        // requests may concurrently need the VPN, and their sockets retain the
+        // binding even after the STUN lookup restores the default network.
+        if (details.remoteAddress != null || NetHelper.isActiveNetworkVpn(this)) return;
+        String address = NvConnection.findExternalAddressForMdns("stun.moonlight-stream.org", 3478);
+        // A VPN may have become active during the lookup. In that case its
+        // public endpoint is not evidence of the discovered computer's address.
+        if (address != null && !NetHelper.isActiveNetworkVpn(this)) {
+            details.remoteAddress = new ComputerDetails.AddressTuple(address, details.guessExternalPort());
+        }
+    }
+
+'@
+    $s=$s.Remove($start,$end-$start).Insert($start,$replacement+"`n")
+    $s=$s.Replace('import java.util.concurrent.locks.Lock;','').Replace('import java.util.concurrent.locks.ReentrantLock;','')
+    $s=$s.Replace('    private final Lock defaultNetworkLock = new ReentrantLock();','')
     $s=Replace-Once $s '        startParallelPollThread(ipv6Info, uniqueAddresses);' @'
         startParallelPollThread(ipv6Info, uniqueAddresses);
         // Saved Tailscale/public addresses participate in the same identity-checked
