@@ -35,6 +35,9 @@ public final class RhHome implements RhActions.Target {
     private boolean profileSourcesExpanded;
     private final RhSync sync;private boolean syncBusy;
     private final RhUpdates updates;private boolean updatesBusy;
+    private boolean resumeInstall;
+    private final android.os.Handler updateUi=new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable updateTick=this::refreshUpdateUi;
     private boolean pairing;private String pairPin="";
     private static final java.util.concurrent.ExecutorService NETWORK=java.util.concurrent.Executors.newFixedThreadPool(2);
     private static final java.util.concurrent.ExecutorService CONNECT=java.util.concurrent.Executors.newSingleThreadExecutor(task->new Thread(task,"RHRemote admission"));
@@ -57,7 +60,7 @@ public final class RhHome implements RhActions.Target {
         bar.addView(button("设备",false,()->invoke("devices.open",RhActions.obj())));bar.addView(button("＋ 添加",false,()->invoke("device.add.open",RhActions.obj())));
         bar.addView(button("设置",false,()->invoke("app.settings.open",RhActions.obj())));root.addView(bar);
         empty=new RelativeLayout(a); // Compatibility with the upstream activity's discovery placeholder.
-        a.setContentView(root);RhActions.initialize(a,this);restoreSharedDevices();showDevices();
+        a.setContentView(root);RhActions.initialize(a,this);restoreSharedDevices();showDevices();root.post(this::resumed);
         final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(lastSyncAttempt,sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){lastSyncAttempt=System.currentTimeMillis();invoke("sync.run",RhActions.obj());}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updatesBusy&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
     }
     public RelativeLayout emptyView(){return empty;}
@@ -71,7 +74,10 @@ public final class RhHome implements RhActions.Target {
     public void update(ComputerDetails d){String signature=d.name+"|"+d.state+"|"+d.pairState+"|"+RhProfile.load(activity,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&!signature.equals(old))renderDevices(false);}
     public void message(String value){status.setText(value==null?"":value);}
     public boolean goBack(){if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(profileVisible){invoke("devices.open",RhActions.obj());return true;}return false;}
-    public void dispose(){if(admission!=null)admission.cancel();}
+    public void dispose(){if(admission!=null)admission.cancel();updateUi.removeCallbacks(updateTick);}
+    public void rebind(){activity.setContentView(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(draft!=null)showProfile(selected,draft);else showDevices();}
+    public void resumed(){if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();}
+    private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
     public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);}
     private void showAdmission(RhAdmission operation){
         pageId="connecting";profileVisible=true;content.removeAllViews();heading("连接","");
@@ -165,6 +171,7 @@ public final class RhHome implements RhActions.Target {
         if(syncBusy&&(id.startsWith("sync.")||id.equals("device.move")||id.equals("device.settings.open")||id.startsWith("settings.")||id.equals("appearance.toggle")||id.equals("device.add.submit")))throw new IllegalStateException("同步进行中，请稍后保存");
         if(pairing&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("appearance.toggle")))throw new IllegalStateException("请先取消当前配对");
         if(admission!=null&&id.equals("appearance.toggle"))throw new IllegalStateException("请先取消当前连接");
+        if(updatesBusy&&id.equals("appearance.toggle"))throw new IllegalStateException("更新操作正在进行，请稍后切换外观");
         if(draft!=null&&displayNameEditor!=null&&id.startsWith("settings."))draftDisplayName=displayNameEditor.getText().toString();
         if(draft!=null&&id.startsWith("settings.")&&!id.equals("settings.cancel")){org.json.JSONObject pending=draft.json();for(Map.Entry<String,EditText> entry:numberEditors.entrySet()){try{pending.put(entry.getKey(),Integer.parseInt(entry.getValue().getText().toString()));}catch(NumberFormatException e){throw new IllegalArgumentException("请输入有效的数字");}}draft=RhProfile.fromJson(selected.uuid,pending);}
         switch(id){
@@ -209,15 +216,39 @@ public final class RhHome implements RhActions.Target {
             case "sync.clear":sync.clear();showGlobal();break;
             case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"));break;
             case "updates.state":return updates.state();
-            case "updates.check":case "updates.download":if(updatesBusy)throw new IllegalStateException("更新操作正在进行");startUpdate(id);break;
-            case "updates.install":updates.install(activity);break;
+            case "updates.check":case "updates.download":case "updates.install":if(updatesBusy)throw new IllegalStateException("更新操作正在进行");startUpdate(id);break;
             default:throw new IllegalArgumentException("unsupported Android action: "+id);
         }return RhActions.obj("accepted",true);
     }
     private void showGlobal(){profileVisible=true;content.removeAllViews();heading("设置","");LinearLayout tabs=row();for(String tab:new String[]{"updates","sync","appearance","about"}){String title=tab.equals("appearance")?"外观":tab.equals("sync")?"配置同步":tab.equals("updates")?"更新":"关于";tabs.addView(button(title,settingsTab.equals(tab),()->invoke("app.settings.tab",RhActions.obj("tab",tab))));}android.widget.HorizontalScrollView tabScroll=new android.widget.HorizontalScrollView(activity);tabScroll.setHorizontalScrollBarEnabled(false);tabScroll.addView(tabs);content.addView(tabScroll);if(settingsTab.equals("sync")){showSync();return;}if(settingsTab.equals("updates")){showUpdates();return;}label(settingsTab.equals("about")?"RHRemote-Moonlight · Android 原生 View + Java":"主题");if(settingsTab.equals("about")){content.addView(button(RhStatistics.enabled()?"测试统计：开启":"测试统计：关闭",RhStatistics.enabled(),()->invoke("statistics.configure",RhActions.obj("enabled",!RhStatistics.enabled()))));label("测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。");label(RhStatistics.state().optString("latest"));}if(settingsTab.equals("appearance"))content.addView(button("切换深色 / 浅色",false,()->invoke("appearance.toggle",RhActions.obj())));}
-    private void showUpdates(){org.json.JSONObject state=updates.state();label("RHRemote-Moonlight "+state.optString("currentVersion"));label("GitHub / Gitee");if(!state.isNull("availableVersion"))label("可用版本 "+state.optString("availableVersion"));label(state.optString("status"));LinearLayout commands=row();commands.addView(button(updatesBusy?"处理中…":"检查更新",false,()->invoke("updates.check",RhActions.obj())));commands.addView(button("下载 APK",false,()->invoke("updates.download",RhActions.obj())));commands.addView(button("安装更新",true,()->invoke("updates.install",RhActions.obj())));content.addView(commands);label("下载后在系统安装界面手动确认。");}
+    private void showUpdates(){
+        org.json.JSONObject state=updates.state();label("RHRemote-Moonlight "+state.optString("currentVersion"));label("GitHub / Gitee");
+        boolean available=!state.isNull("availableVersion");if(available)label("可用版本 "+state.optString("availableVersion"));label(state.optString("status"));
+        if(updatesBusy){ProgressBar progress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);long total=state.optLong("totalBytes"),bytes=state.optLong("downloadedBytes");boolean downloading=state.optString("phase").equals("downloading")&&total>0;progress.setIndeterminate(!downloading);if(downloading)progress.setProgress((int)(bytes*100/total));content.addView(progress,new LinearLayout.LayoutParams(-1,dp(12)));}
+        LinearLayout commands=row();Button check=button(updatesBusy?"处理中…":"检查更新",false,()->invoke("updates.check",RhActions.obj()));check.setEnabled(!updatesBusy);commands.addView(check);
+        Button download=button("下载 APK",false,()->invoke("updates.download",RhActions.obj()));download.setEnabled(available&&!updatesBusy);commands.addView(download);
+        content.addView(commands);Button install=button(state.optBoolean("downloaded")?"安装更新":"下载并安装",true,()->invoke("updates.install",RhActions.obj()));install.setEnabled(available&&!updatesBusy);content.addView(install,new LinearLayout.LayoutParams(-1,dp(48)));
+        label("安装时在系统界面手动确认；需要安装权限时会先打开对应设置。");
+    }
     private void startUpdate(String id){startUpdate(id,false);}
-    private void startUpdate(String id,boolean automatic){updatesBusy=true;NETWORK.execute(()->{String error=null;try{if(id.equals("updates.check")){updates.check();if(automatic&&!updates.state().isNull("availableVersion"))updates.download();}else updates.download();}catch(Exception e){error=e instanceof java.io.IOException?e.getMessage():"更新操作失败";}final String failure=error;activity.runOnUiThread(()->{updatesBusy=false;if(failure!=null&&!automatic)message(failure);if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();if(failure==null&&!automatic&&id.equals("updates.download"))invoke("updates.install",RhActions.obj());});});}
+    private void startUpdate(String id,boolean automatic){
+        updatesBusy=true;updateUi.removeCallbacks(updateTick);refreshUpdateUi();
+        NETWORK.execute(()->{
+            String error=null;boolean installReady=false;
+            try{if(id.equals("updates.check")){updates.check();if(automatic&&!updates.state().isNull("availableVersion"))updates.download();}else if(id.equals("updates.install")){installReady=updates.prepareInstall();}else updates.download();}
+            catch(Exception e){error=e.getMessage()==null?"更新操作失败，请重试":e.getMessage();updates.failure(error);}
+            final String failure=error;final boolean launch=installReady;
+            activity.runOnUiThread(()->{
+                updatesBusy=false;updateUi.removeCallbacks(updateTick);if(activity.isDestroyed())return;
+                String problem=failure;
+                if(problem==null&&launch)try{updates.install(activity);}catch(Exception e){problem=e.getMessage()==null?"系统安装界面未能打开":e.getMessage();updates.failure(problem);}
+                if(problem!=null&&!automatic){message(problem);Toast.makeText(activity,problem,Toast.LENGTH_LONG).show();}
+                if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();
+                if(resumeInstall){resumeInstall=false;startUpdate("updates.install");}
+                else if(problem==null&&!automatic&&id.equals("updates.download"))invoke("updates.install",RhActions.obj());
+            });
+        });
+    }
     private EditText field(String title,String value,boolean password){label(title);EditText edit=new EditText(activity);edit.setTextColor(ink);edit.setTextSize(15);edit.setSingleLine(true);edit.setText(value);if(password)edit.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);content.addView(edit,new LinearLayout.LayoutParams(-1,dp(52)));return edit;}
     private void showSync(){org.json.JSONObject s=sync.state();EditText url=field("WebDAV 目录地址（HTTP / HTTPS）",s.optString("url"),false),user=field("用户名",s.optString("username"),false),password=field(s.optBoolean("hasPassword")?"密码（留空保留）":"密码","",true);CheckBox automatic=check("自动同步",s.optBoolean("automatic"),v->{});label("同步间隔");Spinner interval=new Spinner(activity);interval.setAdapter(new android.widget.ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,new String[]{"5 分钟","15 分钟","30 分钟","60 分钟"}));interval.setSelection(Math.max(0,Arrays.asList(5,15,30,60).indexOf(s.optInt("intervalMinutes",5))));content.addView(interval);label("同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置，其他端的配置可手动复制。配对密钥及本机凭据不参与同步。");LinearLayout commands=row();commands.addView(button("保存设置",false,()->invoke("sync.configure",RhActions.obj("url",url.getText().toString(),"username",user.getText().toString(),"password",password.getText().toString(),"automatic",automatic.isChecked(),"intervalMinutes",new int[]{5,15,30,60}[interval.getSelectedItemPosition()]))));commands.addView(button(syncBusy?"同步中…":"立即同步",true,()->invoke("sync.run",RhActions.obj())));commands.addView(button("移除设置",false,()->invoke("sync.clear",RhActions.obj())));content.addView(commands);org.json.JSONArray conflicts=s.optJSONArray("conflicts");if(conflicts!=null&&conflicts.length()>0){label("配置冲突："+conflicts.toString());LinearLayout choices=row();choices.addView(button("冲突项保留本机",false,()->invoke("sync.resolve",RhActions.obj("resolution","local"))));choices.addView(button("冲突项保留远端",false,()->invoke("sync.resolve",RhActions.obj("resolution","remote"))));content.addView(choices);}}
     private void startSync(String resolution)throws Exception{org.json.JSONObject captured=RhShared.capture(activity,new ArrayList<>(computers.values()));syncBusy=true;message("同步中…");NETWORK.execute(()->{try{org.json.JSONObject result=sync.run(captured,resolution);activity.runOnUiThread(()->{syncBusy=false;try{if(result.has("shared")){boolean before=RhShared.dark(activity);RhShared.apply(activity,result.getJSONObject("shared"));restoreSharedDevices();message("同步完成");if(before!=RhShared.dark(activity)){activity.recreate();return;}}else message("配置冲突，请选择保留哪一端的冲突项");if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("devices"))renderDevices(false);}catch(Exception e){message("应用同步配置失败");}});}catch(Exception e){activity.runOnUiThread(()->{syncBusy=false;message(e instanceof java.io.IOException?e.getMessage():"同步失败，请检查 WebDAV 设置");if(pageId.equals("global-settings"))showGlobal();});}});}

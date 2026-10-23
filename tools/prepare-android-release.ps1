@@ -2,6 +2,7 @@ param(
  [Parameter(Mandatory)][string]$WindowsBaselineDirectory,
  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='0.2.4',
  [ValidateRange(206,2100000000)][int]$VersionCode=206,
+ [string]$Notes='See RELEASE-NOTES.md for changes.',
  [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSignerSha256='2f6464fe50d23ef17e4fdab8c1dcc7b6ec4171b890158738653c51854031dadc'
 )
 $ErrorActionPreference='Stop'
@@ -37,7 +38,7 @@ Copy-Item -LiteralPath $apk -Destination (Join-Path $directory $fileName)
 Copy-Item -LiteralPath $notes -Destination (Join-Path $directory 'RELEASE-NOTES.md')
 foreach($name in @('releases.win.json','RELEASES')){Copy-Item -LiteralPath (Join-Path $WindowsBaselineDirectory $name) -Destination (Join-Path $directory $name)}
 $apkHash=(Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()
-$feed=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionCode=$VersionCode;packageName='com.rhremote.client';tag=('v'+$Version);fileName=$fileName;size=(Get-Item -LiteralPath $apk).Length;sha256=$apkHash;notes='Android Tailscale discovery, pairing persistence and update status fixes.'}}
+$feed=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionCode=$VersionCode;packageName='com.rhremote.client';tag=('v'+$Version);fileName=$fileName;size=(Get-Item -LiteralPath $apk).Length;sha256=$apkHash;notes=$Notes}}
 [IO.File]::WriteAllText((Join-Path $directory 'releases.android.json'),($feed|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $metadata=[ordered]@{channel='stable';version=$Version;versionCode=$VersionCode;packageName='com.rhremote.client';sourceCommit=$commit;upstreamAndroid='b48494cb96bff23d8886c4775cc4f39a1075495d';signerSha256=$digests[0];apkSha256=$apkHash;windowsVersion=$baseline.version;windowsFeedUnchanged=$true;oppoInstalled=$false;actualCellularVerified=$false}
 [IO.File]::WriteAllText((Join-Path $directory 'build.json'),($metadata|ConvertTo-Json -Depth 4),[Text.UTF8Encoding]::new($false))

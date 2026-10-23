@@ -185,6 +185,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
     $s=Replace-Once $s '    private void initializeViews() {' @'
     private void initializeViews() {
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if(rhHome!=null){rhHome.rebind();noPcFoundLayout=rhHome.emptyView();return;}
         rhHome = new com.limelight.rhremote.RhHome(this, new com.limelight.rhremote.RhHome.Actions() {
             public void connect(ComputerDetails d) {
                 if (d.pairState != PairState.PAIRED) doPair(d); else launchRhDesktop(d);
@@ -209,6 +210,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         if(!showHiddenGames) { launchRhDesktop(computer); return; }
 '@
     $s=Replace-Once $s '        super.onDestroy();' "        super.onDestroy();`n        if(rhHome!=null)rhHome.dispose();"
+    $s=Replace-Once $s '        super.onResume();' "        super.onResume();`n        if(rhHome!=null)rhHome.resumed();"
     $s=Replace-Once $s '    public static class ComputerObject {' @'
     @Override public void onBackPressed() {
         if(rhHome != null && rhHome.goBack()) return;
