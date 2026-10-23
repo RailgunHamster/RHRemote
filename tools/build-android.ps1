@@ -1,4 +1,6 @@
-param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[switch]$BuildTests,[string]$NdkDir="$env:LOCALAPPDATA\Android\Sdk\ndk\29.0.14206865")
+param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[switch]$BuildTests,[string]$NdkDir="$env:LOCALAPPDATA\Android\Sdk\ndk\29.0.14206865",
+ [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.3',
+ [ValidateRange(1,2100000000)][int]$VersionCode=203)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $toolchain=Join-Path $NdkDir 'toolchains/llvm/prebuilt/windows-x86_64/bin'
@@ -11,7 +13,7 @@ try{& cargo build --locked --release -p rhremote-transport --lib --target aarch6
 $jni=Join-Path $SourceDir 'app/src/main/jniLibs/arm64-v8a'
 New-Item -ItemType Directory -Force -Path $jni|Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'target/aarch64-linux-android/release/librhremote_transport.so') -Destination $jni -Force
-& (Join-Path $PSScriptRoot 'prepare-android.ps1') -SourceDir $SourceDir
+& (Join-Path $PSScriptRoot 'prepare-android.ps1') -SourceDir $SourceDir -Version $Version -VersionCode $VersionCode
 Push-Location $SourceDir
 try {
     $gradle='D:\RHRemoteTools\Gradle\gradle-9.7.1\bin\gradle.bat'
@@ -25,6 +27,7 @@ try {
     if($LASTEXITCODE -ne 0){throw 'Android build failed.'}
     $repo=Split-Path $PSScriptRoot -Parent;$out=Join-Path $repo 'dist/android'
     New-Item -ItemType Directory -Force -Path $out|Out-Null
-    Copy-Item -LiteralPath 'app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk' -Destination (Join-Path $out 'RHRemote-v0.2.3.apk') -Force
-    Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out 'RHRemote-v0.2.3.apk')|Select-Object Hash,Path
+    $apkName='RHRemote-v'+$Version+'.apk'
+    Copy-Item -LiteralPath 'app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk' -Destination (Join-Path $out $apkName) -Force
+    Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $apkName)|Select-Object Hash,Path
 }finally{Pop-Location}

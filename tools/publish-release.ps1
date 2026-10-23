@@ -2,20 +2,26 @@
 param(
  [ValidateSet('github','gitee')][string]$Provider,
  [string]$CandidateDirectory,[string]$Commit,[string]$BundlePath='',
- [switch]$MakePublic,[switch]$SourceOnly
+ [switch]$MakePublic,[switch]$SourceOnly,[switch]$Preview,[switch]$ValidateOnly
 )
 $ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
 if($Commit -notmatch '^[a-f0-9]{40}$'){throw 'Expected an exact release commit'}
 $candidate=[IO.Path]::GetFullPath($CandidateDirectory)
 $plan=Get-Content -LiteralPath (Join-Path $candidate 'publish-plan.json') -Raw|ConvertFrom-Json
-if($plan.version -notmatch '^\d+\.\d+\.\d+$' -or $plan.tag -ne ('v'+$plan.version)){throw 'Unexpected release identity'}
+$versionPattern=if($Preview){'^\d+\.\d+\.\d+-preview\.[1-9]\d*$'}else{'^\d+\.\d+\.\d+$'}
+if($plan.version -notmatch $versionPattern -or $plan.tag -ne ('v'+$plan.version)){throw 'Unexpected release identity'}
+if(([bool]$plan.preview) -ne [bool]$Preview){throw 'Preview requires both an explicit switch and a matching plan'}
+if($Preview -and $plan.commit -ne $Commit){throw 'Preview plan source commit differs from the audited source'}
+if($Preview -and ($Provider -ne 'github' -or $SourceOnly)){throw 'Preview publication currently supports GitHub release assets only'}
+if($Preview -and (@($plan.artifacts).Count -eq 0 -or @($plan.artifacts|Where-Object {$_.fileName -match '^releases\.' -or $_.fileName -eq 'RELEASES'}).Count -gt 0)){throw 'Preview must contain assets and cannot contain stable update feeds'}
 $tag=[string]$plan.tag;$tagRef='refs/tags/'+$tag;$releaseTitle='RHRemote '+$tag
 foreach($asset in $plan.artifacts){
  if($asset.fileName -notmatch '^[A-Za-z0-9._-]+$'){throw 'Invalid asset filename'}
  $file=Join-Path $candidate $asset.fileName
  if((Get-Item -LiteralPath $file).Length -ne $asset.size -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $asset.sha256){throw ('Asset changed: '+$asset.fileName)}
 }
+if($ValidateOnly){[pscustomobject]@{provider=$Provider;version=$plan.version;tag=$tag;prerelease=[bool]$Preview;makeLatest=(-not $Preview);artifacts=@($plan.artifacts).Count};return}
 $token=$null;$pointer=[IntPtr]::Zero;$headers=$null;$credentialOutput=$null
 try{
  if($Provider -eq 'github'){
@@ -102,7 +108,7 @@ try{
   }finally{if($multipart){$multipart.Dispose()}elseif($content){$content.Dispose()};$stream.Dispose()}
  }
  try{foreach($asset in $plan.artifacts){Upload $release $asset}
-  if($Provider -eq 'github'){$release=Api PATCH ('/releases/'+$release.id) @{draft=$false;prerelease=$false;make_latest='true';name=$releaseTitle;body=$notes}}
+  if($Provider -eq 'github'){$release=Api PATCH ('/releases/'+$release.id) @{draft=$false;prerelease=[bool]$Preview;make_latest=$(if($Preview){'false'}else{'true'});name=$releaseTitle;body=$notes}}
   else{
    $null=Api PATCH ('/releases/'+$release.id) @{tag_name=$tag;name=$releaseTitle;body=$notes;prerelease=$false}
    # Gitee supports download/latest without a separately named latest tag.
