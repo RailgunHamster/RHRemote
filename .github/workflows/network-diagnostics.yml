@@ -1,0 +1,25 @@
+name: RHRemote network diagnostic protocol
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/measure-ssh-throughput.py'
+      - 'tools/test-ssh-throughput.py'
+      - '.github/workflows/network-diagnostics.yml'
+  pull_request:
+    paths:
+      - 'tools/measure-ssh-throughput.py'
+      - 'tools/test-ssh-throughput.py'
+      - '.github/workflows/network-diagnostics.yml'
+permissions:
+  contents: read
+jobs:
+  synthetic-protocol:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Bounded synthetic protocol and payload integrity
+        run: python3 tools/test-ssh-throughput.py
