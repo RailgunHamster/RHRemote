@@ -45,6 +45,7 @@ jobs:
           git submodule update --init --depth 1 -- server/sunshine/third-party/build-deps server/sunshine/third-party/libdisplaydevice server/sunshine/third-party/libvirtualhid server/sunshine/third-party/lizardbyte-common server/sunshine/third-party/moonlight-common-c server/sunshine/third-party/nvapi server/sunshine/third-party/Simple-Web-Server server/sunshine/third-party/ViGEmClient
           git -C server/sunshine/third-party/moonlight-common-c submodule update --init --recursive --depth 1
           git -C server/sunshine/third-party/libvirtualhid submodule update --init --recursive --depth 1
+          git -C server/sunshine/third-party/lizardbyte-common submodule update --init --recursive --depth 1
       - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
         with:
           msystem: ucrt64
@@ -73,10 +74,20 @@ jobs:
         run: |
           g++ -std=c++23 -DRHREMOTE_DEVICE_PROBE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_device_probe.cpp -o test-rhremote-device-probe.exe
           ./test-rhremote-device-probe.exe
-          cmake -S server/sunshine -B .deps/server-build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=OFF -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
-          cmake --build .deps/server-build --target sunshine sunshinesvc dxgi-info audio-info web-ui --parallel 3
-          cmake --install .deps/server-build --prefix "$PWD/.deps/server-stage"
+          cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
+          cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine --parallel 3
+          cmake --install .deps/cmake-build-server --prefix "$PWD/.deps/server-stage"
           cp server/UPSTREAM.json server/sunshine/LICENSE .deps/server-stage/
+      - name: Test pairing sessions and client authorization
+        shell: msys2 {0}
+        working-directory: .deps/cmake-build-server/tests
+        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*' --gtest_output=xml:pairing-results.xml
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: RHRemote-Sunshine-pairing-tests
+          path: .deps/cmake-build-server/tests/pairing-results.xml
+          retention-days: 7
       - name: Assemble one-service server package
         shell: pwsh
         run: ./tools/assemble-server.ps1 -SunshineDirectory .deps/server-stage -OutputDirectory artifacts/server -EngineCommit $env:GITHUB_SHA

@@ -224,6 +224,18 @@ namespace nvhttp {
   bool cancel_pairing(std::string_view pairing_id);
 
   /**
+   * @brief Cancel only the incomplete session owned by a client signing key.
+   * @details The signature covers a domain separator, the session unique ID and
+   * the original PIN salt, so it cannot cancel another attempt or revoke pairing.
+   *
+   * @param unique_id Client-provided identifier of the incomplete session.
+   * @param salt Original 16-byte PIN salt encoded as hexadecimal text.
+   * @param signature SHA-256 signature encoded as hexadecimal text.
+   * @return `true` only if the matching session was authenticated and removed.
+   */
+  bool cancel_pairing_client(std::string_view unique_id, std::string_view salt, std::string_view signature);
+
+  /**
    * @brief removes the temporary pairing session
    * @param sess
    */

@@ -670,6 +670,38 @@ namespace nvhttp {
     return true;
   }
 
+  bool cancel_pairing_client(const std::string_view unique_id, const std::string_view salt, const std::string_view signature) {
+    const auto hex_text = [](const std::string_view value) {
+      return std::ranges::all_of(value, [](const char character) {
+        return (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F');
+      });
+    };
+    if (unique_id.empty() || unique_id.size() > 128 || !hex_text(unique_id) || salt.size() != 32 || !hex_text(salt) || signature.size() < 128 || signature.size() > 4096 || signature.size() % 2 != 0 || !hex_text(signature)) {
+      return false;
+    }
+
+    std::scoped_lock lock {map_id_sess_mutex()};
+    expire_pair_sessions_unlocked(std::chrono::steady_clock::now());
+    const auto sess_it = map_id_sess.find(std::string {unique_id});
+    if (sess_it == map_id_sess.end() || sess_it->second.async_insert_pin.salt != salt) {
+      return false;
+    }
+    const auto cert = crypto::x509(sess_it->second.client.cert);
+    const auto message = "RHREMOTE-PAIR-CANCEL-1\n"s + std::string {unique_id} + "\n" + std::string {salt};
+    const auto proof = util::from_hex_vec(std::string {signature}, true);
+    if (!cert || !crypto::verify256(cert, message, proof)) {
+      return false;
+    }
+
+    pt::ptree tree;
+    tree.put("root.paired", 0);
+    tree.put("root.<xmlattr>.status_code", 400);
+    tree.put("root.<xmlattr>.status_message", "Pairing request cancelled by client");
+    write_pairing_response(sess_it->second, tree);
+    map_id_sess.erase(sess_it);
+    return true;
+  }
+
   void remove_session(const pair_session_t &sess) {
     std::scoped_lock lock {map_id_sess_mutex()};
     map_id_sess.erase(sess.client.uniqueID);
@@ -1037,6 +1069,13 @@ namespace nvhttp {
     auto uniqID {get_arg(args, "uniqueid")};
 
     const auto phrase_it = args.find("phrase");
+    if (phrase_it != std::end(args) && phrase_it->second == "rhcancel"sv) {
+      const bool cancelled = cancel_pairing_client(uniqID, get_arg(args, "rhcancel_salt", ""), get_arg(args, "rhcancel_sig", ""));
+      tree.put("root.paired", 0);
+      tree.put("root.cancelled", cancelled ? 1 : 0);
+      tree.put("root.<xmlattr>.status_code", cancelled ? 200 : 403);
+      return;
+    }
     if (phrase_it != std::end(args) && phrase_it->second == "getservercert"sv) {
       if (start_pairing_session<T>(response, request, args, tree, uniqID)) {
         fg.disable();

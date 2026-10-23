@@ -391,6 +391,19 @@ namespace {
   }
 
   /**
+   * @brief Sign an independent client cancellation transcript for the test.
+   * @param unique_id Pairing attempt identifier.
+   * @param salt Original PIN salt, exactly as sent to the server.
+   * @param private_key PEM signing key belonging to the client.
+   * @return Hexadecimal SHA-256 signature over the protocol transcript.
+   */
+  std::string client_cancel_proof(const std::string_view unique_id, const std::string_view salt, const std::string_view private_key = PRIVATE_KEY) {
+    const auto message = std::format("RHREMOTE-PAIR-CANCEL-1\n{}\n{}", unique_id, salt);
+    const auto signature = crypto::sign256(crypto::pkey(private_key), message);
+    return util::hex_vec(signature, true);
+  }
+
+  /**
    * @brief Fixture that isolates tests using global pending-pairing storage.
    */
   class PairingSessionRegistryTest: public BaseTest {
@@ -542,6 +555,28 @@ TEST_F(PairingHttpHandlerTest, DuplicateAndCapacityErrorsReturnImmediately) {
     );
   }
   EXPECT_NE(request(server_certificate_target("overflow")).find("status_code=\"503\""), std::string::npos);
+}
+
+TEST_F(PairingHttpHandlerTest, SignedClientCancellationAllowsImmediateRetry) {
+  constexpr auto id = "0123456789abcdef0123456789abcdef"sv;
+  constexpr auto salt = "ff5dc6eda99339a8a0793e216c4257c4"sv;
+  const auto proof = client_cancel_proof(id, salt);
+  auto start = std::async(std::launch::async, [this, id]() {
+    return request(server_certificate_target(id));
+  });
+  ASSERT_FALSE(wait_for_pending_pairing().empty());
+  const auto cancellation = request(std::format("/pair?uniqueid={}&phrase=rhcancel&rhcancel_salt={}&rhcancel_sig={}", id, salt, proof));
+  EXPECT_NE(cancellation.find("status_code=\"200\""), std::string::npos);
+  EXPECT_NE(start.get().find("cancelled by client"), std::string::npos);
+  EXPECT_TRUE(get_pending_pairings().empty());
+
+  auto retry = std::async(std::launch::async, [this, id]() {
+    return request(server_certificate_target(id));
+  });
+  const auto retry_id = wait_for_pending_pairing();
+  ASSERT_FALSE(retry_id.empty());
+  EXPECT_TRUE(cancel_pairing(retry_id));
+  EXPECT_NE(retry.get().find("cancelled by operator"), std::string::npos);
 }
 
 TEST_F(PairingHttpHandlerTest, ConsolePinCompletesOrRejectsTheCertificatePhase) {
@@ -718,6 +753,71 @@ TEST_F(PairingSessionRegistryTest, RemoveSessionErasesItsUniqueId) {
 
   remove_session(session_key);
   EXPECT_TRUE(get_pending_pairings().empty());
+}
+
+TEST_F(PairingSessionRegistryTest, ClientCancellationRequiresExactKeySaltAndSession) {
+  auto session = pending_session("aabb", "Client", "192.0.2.10");
+  session.client.cert = PUBLIC_CERT;
+  const auto salt = session.async_insert_pin.salt;
+  const auto proof = client_cancel_proof("aabb", salt);
+  std::string approval;
+  ASSERT_EQ(insert_pair_session(std::move(session), approval), pair_session_insert_e::ADDED);
+  auto other = pending_session("ccdd", "Other", "192.0.2.20");
+  other.client.cert = PUBLIC_CERT;
+  std::string other_approval;
+  ASSERT_EQ(insert_pair_session(std::move(other), other_approval), pair_session_insert_e::ADDED);
+
+  EXPECT_FALSE(cancel_pairing_client("aabb", salt, ""));
+  EXPECT_FALSE(cancel_pairing_client("aabb", salt, std::string(512, 'g')));
+  EXPECT_FALSE(cancel_pairing_client("aabb", salt, std::string(4098, 'a')));
+  EXPECT_FALSE(cancel_pairing_client("aabb", "00", proof));
+  EXPECT_FALSE(cancel_pairing_client("aabb", std::string(32, '0'), proof));
+  EXPECT_FALSE(cancel_pairing_client("ccdd", salt, proof));
+  EXPECT_FALSE(cancel_pairing_client("eeff", salt, proof));
+  auto forged = proof;
+  forged.front() = forged.front() == '0' ? '1' : '0';
+  EXPECT_FALSE(cancel_pairing_client("aabb", salt, forged));
+  EXPECT_EQ(get_pending_pairings().size(), 2);
+  EXPECT_TRUE(cancel_pairing_client("aabb", salt, proof));
+  EXPECT_FALSE(cancel_pairing_client("aabb", salt, proof));
+  ASSERT_EQ(get_pending_pairings().size(), 1);
+  EXPECT_EQ(get_pending_pairings().front().id, other_approval);
+}
+
+TEST_F(PairingSessionRegistryTest, ClientCancellationHandlesPinApprovedAndMalformedCertificateSessions) {
+  for (const auto phase : {PAIR_PHASE::NONE, PAIR_PHASE::GETSERVERCERT, PAIR_PHASE::CLIENTCHALLENGE, PAIR_PHASE::SERVERCHALLENGERESP}) {
+    auto session = pending_session("aabb", "Client", "192.0.2.10");
+    session.client.cert = PUBLIC_CERT;
+    session.last_phase = phase;
+    const auto salt = session.async_insert_pin.salt;
+    std::string approval;
+    ASSERT_EQ(insert_pair_session(std::move(session), approval), pair_session_insert_e::ADDED);
+    EXPECT_TRUE(cancel_pairing_client("aabb", salt, client_cancel_proof("aabb", salt)));
+  }
+  auto invalid = pending_session("aabb", "Malformed", "192.0.2.10");
+  const auto salt = invalid.async_insert_pin.salt;
+  std::string approval;
+  ASSERT_EQ(insert_pair_session(std::move(invalid), approval), pair_session_insert_e::ADDED);
+  EXPECT_FALSE(cancel_pairing_client("aabb", salt, client_cancel_proof("aabb", salt)));
+  EXPECT_EQ(get_pending_pairings().size(), 1);
+}
+
+TEST_F(PairingSessionRegistryTest, OldClientProofCannotCancelANewerAttempt) {
+  const auto old_salt = "ff5dc6eda99339a8a0793e216c4257c4"sv;
+  const auto new_salt = "00112233445566778899aabbccddeeff"sv;
+  auto session = pending_session("aabb", "Client", "192.0.2.10");
+  session.client.cert = PUBLIC_CERT;
+  std::string approval;
+  ASSERT_EQ(insert_pair_session(std::move(session), approval), pair_session_insert_e::ADDED);
+  const auto old_proof = client_cancel_proof("aabb", old_salt);
+  ASSERT_TRUE(cancel_pairing_client("aabb", old_salt, old_proof));
+  auto newer = pending_session("aabb", "Client", "192.0.2.10");
+  newer.client.cert = PUBLIC_CERT;
+  newer.async_insert_pin.salt = new_salt;
+  ASSERT_EQ(insert_pair_session(std::move(newer), approval), pair_session_insert_e::ADDED);
+  EXPECT_FALSE(cancel_pairing_client("aabb", old_salt, old_proof));
+  EXPECT_FALSE(cancel_pairing_client("aabb", new_salt, old_proof));
+  EXPECT_TRUE(cancel_pairing_client("aabb", new_salt, client_cancel_proof("aabb", new_salt)));
 }
 
 TEST_F(PairingSessionRegistryTest, ConcurrentInsertionAndCancellationLeaveConsistentState) {
