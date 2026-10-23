@@ -26,7 +26,7 @@
 
 ## 服务端并发检查
 
-目前 rtsp.cpp 使用 launch_event 的 view/pop 和 raised_timer，HTTP 请求、RTSP
+修改前 rtsp.cpp 使用 launch_event 的 view/pop 和 raised_timer，HTTP 请求、RTSP
 事件循环及超时回调会从不同上下文访问。添加条件取消前需要审查并统一同步边界：
 
 - 比较归属和取出槽位必须是同一个原子操作，旧回调不能弹出新请求。
@@ -65,7 +65,7 @@ CI 40032402942 仍在构建；尚未部署这一阶段。
 同时调用会修改进程状态的 proc.running。按次取消不读取进程状态，始终直接处理。
 
 serverinfo 声明 `RHLaunchCancel=1`。新客户端在每次实际 launch/resume 发送
-64 位小写十六进制 `rhremoteLaunchToken`（256 位随机值），仅通过已配对 TLS，
+64 个小写十六进制字符 `rhremoteLaunchToken`（256 位随机值），仅通过已配对 TLS，
 随后以同一请求凭据调用 HTTPS `/rhremote/launch/cancel`。
 该参数在服务器普通查询日志中删去值。接口不注册到明文 HTTP，也不修改应用、
 活动串流或显示配置；取消未知的有效凭据会建立有上限的取消记录，阻止随后迟到的准备。
@@ -78,3 +78,5 @@ serverinfo 声明 `RHLaunchCancel=1`。新客户端在每次实际 launch/resume
 
 Windows / Android 请求生命周期尚未接入，实际 HTTPS 及立即重连回归尚未完成。
 不能把以上源码或单独的注册表回归视为整个问题已解决。
+
+最新服务端候选为 2ae02f8915cc75bb8fb2243c54902a138ae09beb，完整 CI 40034197133 正在运行；独立回归与 ThreadSanitizer 已通过。该候选尚未部署，客户端仍未发送启动归属凭据。
