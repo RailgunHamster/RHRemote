@@ -123,3 +123,18 @@ socket。原锁只约束这段发现代码，不能约束其他网络组件。
 签名仍与 0.2.3 / preview.1 一致，匿名下载四资产及预览通道、稳定入口共十项检查全部通过。
 记录为 `results/clients-v2/github-preview-downloads-v0.2.4-preview.2.json`。
 后续稳定版 Android versionCode 要至少 206；前文 205 是发布 preview.1 时的历史下限。
+
+## 用户确认版本与 Sunshine 可达
+
+用户已在 OPPO 浏览器打开 `http://100.73.139.109:47989/serverinfo` 并看到 XML，
+也确认同一 Tailscale 能访问家中 SMB 和其他服务。不能继续以基础 VPN 不通解释 RHRemote 离线；
+这个结果证明到 winserver Sunshine HTTP 的可达性，未验证视频 UDP。
+
+用户实际仍使用 0.2.3，未安装预览版。预览版没有写入正式 feed，因此原版“检查更新”得不到这些修复。
+更新页直接拼接 JSONObject.NULL，造成可用版本显示文字 `null`；现已改为仅在确有版本时显示，
+初始显示“尚未检查更新”，检查失败的结果保留在更新页。新增四项真实 feed 解析及页面回归，
+包括无更新、较高版本、镜像回退及双源失败。连同配对持久化，64 项 JVM 测试零失败，双 APK 构建成功。
+
+准备发布 Android 0.2.4 / code206 到两个正式更新源，签名与 0.2.3 一致。Windows 仍为 0.2.3，
+新发布携带原 Windows feed / RELEASES，Windows 包继续从原版本下载。
+这次发包只交付已完成的修复，不宣称 OPPO 外网媒体已经验收，不操作或安装到用户平板。

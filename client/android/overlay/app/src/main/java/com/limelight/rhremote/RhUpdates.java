@@ -14,7 +14,7 @@ import java.util.*;
 /** Public release metadata; publishing tokens are never bundled in the client. */
 public final class RhUpdates {
     private static final String GITEE="https://gitee.com/railgunhamster/RHRemote/releases/download/",GITHUB="https://github.com/RailgunHamster/RHRemote/releases/";
-    private final Context context;private final File directory;private volatile JSONObject available;private volatile String message="";private volatile boolean ready;
+    private final Context context;private final File directory;private volatile JSONObject available;private volatile String message="尚未检查更新";private volatile boolean ready;
     public RhUpdates(Context c){context=c.getApplicationContext();directory=new File(c.getFilesDir(),"updates");}
     private long currentCode()throws Exception{PackageInfo p=context.getPackageManager().getPackageInfo(context.getPackageName(),0);return Build.VERSION.SDK_INT>=28?p.getLongVersionCode():p.versionCode;}
     public JSONObject state(){return RhActions.obj("managed",true,"currentVersion",currentName(),"availableVersion",available==null?JSONObject.NULL:available.optString("version"),"pendingRestart",ready,"status",message);}
@@ -23,8 +23,9 @@ public final class RhUpdates {
     private static HttpURLConnection open(String url)throws IOException{if(!url.startsWith("https://"))throw new IOException("HTTPS required");HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(10000);c.setReadTimeout(20000);return c;}
     private static void name(String value)throws IOException{if(value.isEmpty()||value.equals(".")||value.equals("..")||!value.matches("[A-Za-z0-9._-]+"))throw new IOException("invalid update filename");}
     public void check()throws Exception{
+        message="正在检查更新";
         JSONObject manifest=null;for(String url:new String[]{GITEE+"latest/releases.android.json",GITHUB+"latest/download/releases.android.json"}){HttpURLConnection c=open(url);try{if(c.getResponseCode()!=200)continue;try(InputStream in=c.getInputStream()){JSONObject feed=new JSONObject(new String(read(in,2*1024*1024),StandardCharsets.UTF_8));if(feed.getInt("schemaVersion")!=1)continue;JSONObject candidate=feed.getJSONObject("android");name(candidate.getString("fileName"));name(candidate.getString("tag"));if(!candidate.getString("packageName").equals(context.getPackageName())||!candidate.getString("sha256").matches("(?i)[0-9a-f]{64}")||candidate.getLong("size")<1||candidate.getLong("size")>256L*1024*1024)continue;manifest=candidate;break;}}catch(Exception ignored){}finally{c.disconnect();}}
-        if(manifest==null)throw new IOException("GitHub 与 Gitee 暂无可用更新信息");available=manifest.getLong("versionCode")>currentCode()?manifest:null;ready=false;message=available==null?"已是最新版本":"发现新版本";
+        if(manifest==null){message="GitHub 与 Gitee 暂无可用更新信息";throw new IOException(message);}available=manifest.getLong("versionCode")>currentCode()?manifest:null;ready=false;message=available==null?"已是最新版本":"发现新版本";
     }
     private Signature[] signatures(PackageInfo p){return Build.VERSION.SDK_INT>=28?p.signingInfo.getApkContentsSigners():p.signatures;}
     private void verify(File apk,JSONObject expected)throws Exception{

@@ -13,6 +13,7 @@ $versionPattern=if($Preview){'^\d+\.\d+\.\d+-preview\.[1-9]\d*$'}else{'^\d+\.\d+
 if($plan.version -notmatch $versionPattern -or $plan.tag -ne ('v'+$plan.version)){throw 'Unexpected release identity'}
 if(([bool]$plan.preview) -ne [bool]$Preview){throw 'Preview requires both an explicit switch and a matching plan'}
 if($Preview -and $plan.commit -ne $Commit){throw 'Preview plan source commit differs from the audited source'}
+if($plan.commit -and $plan.commit -ne $Commit){throw 'Release plan source commit differs from the audited source'}
 if($Preview -and ($Provider -ne 'github' -or $SourceOnly)){throw 'Preview publication currently supports GitHub release assets only'}
 if($Preview -and (@($plan.artifacts).Count -eq 0 -or @($plan.artifacts|Where-Object {$_.fileName -match '^releases\.' -or $_.fileName -eq 'RELEASES'}).Count -gt 0)){throw 'Preview must contain assets and cannot contain stable update feeds'}
 $tag=[string]$plan.tag;$tagRef='refs/tags/'+$tag;$releaseTitle='RHRemote '+$tag

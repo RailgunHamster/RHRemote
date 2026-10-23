@@ -61,6 +61,10 @@ $ErrorActionPreference='Stop'
     def test_preview_cannot_be_promoted_by_omitting_switch(self):
         self.assert_rejected(self.run_preflight(preview=False), "Unexpected release identity")
 
+    def test_stable_source_commit_must_match_when_recorded(self):
+        self.plan.update(version="0.2.4", tag="v0.2.4", preview=False, commit="b" * 40)
+        self.assert_rejected(self.run_preflight(preview=False), "Release plan source commit differs")
+
     def test_switch_cannot_turn_unmarked_plan_into_preview(self):
         del self.plan["preview"]
         self.assert_rejected(self.run_preflight(), "Preview requires both")

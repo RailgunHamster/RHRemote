@@ -1,6 +1,6 @@
 param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',
- [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.3',
- [ValidateRange(1,2100000000)][int]$VersionCode=203)
+ [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.4',
+ [ValidateRange(1,2100000000)][int]$VersionCode=206)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $expected='b48494cb96bff23d8886c4775cc4f39a1075495d'
