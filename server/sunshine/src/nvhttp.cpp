@@ -1395,12 +1395,13 @@ namespace nvhttp {
       return;
     }
 
-    host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
-    auto launch_session = make_launch_session(host_audio, args);
+    const bool requested_host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
+    auto launch_session = make_launch_session(requested_host_audio, args);
 
     if (!prepare_initial_display(args, *launch_session, tree)) {
       return;
     }
+    host_audio = requested_host_audio;
 
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
@@ -1517,16 +1518,14 @@ namespace nvhttp {
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
     const bool no_active_sessions {rtsp_stream::session_count() == 0};
-    if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
-      host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
-    }
-    const auto launch_session = make_launch_session(host_audio, args);
+    const bool requested_host_audio = no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args) ? util::from_view(get_arg(args, "localAudioPlayMode")) : host_audio;
+    const auto launch_session = make_launch_session(requested_host_audio, args);
 
     if (!prepare_initial_display(args, *launch_session, tree)) {
       return;
     }
-
     if (no_active_sessions) {
+      host_audio = requested_host_audio;
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.

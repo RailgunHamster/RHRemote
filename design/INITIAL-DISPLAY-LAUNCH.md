@@ -12,6 +12,10 @@
 
 Windows 自动重连保留上次选择的稳定屏幕 ID，重新调用主机准备接口，不再复用旧 captureIndex 或 GDI 源名。显式目标的准备失败终止本次连接；自动模式首次连接仍允许没有主机辅助接口的旧 Sunshine。
 
+忙碌或非法目标的请求在写入共享 host_audio 之前拒绝，避免被拒绝的第二次启动改变已有请求的声音配置。
+
 统计新增 initial_display_launch，区分主机是否接受启动前选屏。分析器记录 initial_display_before_capture_accepted：缺少事件为未知，旧协议为 false，新协议匹配为 true；后续重试的 ACK 不得改变更早首帧的归属。所有首帧终点仍是 Windows CPU 渲染提交返回或 Android 回调到达，不能解释为物理屏幕扫描完成。
 
 验证范围：独立 C++ 模型以 UCRT64 GCC 及 -Wall -Wextra -Werror 通过，覆盖 GDI 边界、重复/丢失/重排源及忙碌准入；MSVC / Qt 测试覆盖编码、ACK 和重连身份；39 项 JVM 测试覆盖 ACK 后不发切屏键及非法源；11 项统计回归通过。Windows 原生程序和 Android APK / 测试 APK 均构建成功。还需真实新版服务端的物理/虚拟屏、分辨率变化、手动切屏与中继回归。OPPO 实机继续暂停。
+
+新 Windows 原生程序 B7BD6A7C214E8C81F610BA91B6CD493FDCA0DAAC14F7884A5FE4DE6B1CBE34C7 已连接现有 f517c155 服务端，2520×1680 虚拟屏分别经 LAN / HTTPS 中继收到视频。两段均记录 requested=true、beforeCapture=false，证明旧服务端回退仍工作；首个通用 render_return 为 3034.638 / 3641.328 ms，不能作为新版启动前选屏的优化数据。两段完整结束，原始统计分析后删除，配置、自动同步和显示布局恢复。证据 D:\RHRemoteTools\initial-display-legacy-compat-short-20261023.json。
