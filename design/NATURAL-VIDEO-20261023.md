@@ -49,4 +49,3 @@
 中继 A 的包间隔最大 79.506 ms，而解码 / 渲染调用最大分别 0.994 / 0.411 ms；A 复测对应 94.295 / 4.451 / 5.460 ms。B 对应 52.690 / 0.619 / 0.345 ms。渲染抖动优先出现在解码之前，尚需服务端逐帧捕获、编码和发送分段，以及发送源时间戳，进一步分离源窗口调度、主机处理和网络间隔变化。
 
 五段均正常结束，源播放器及临时任务清理完成，完整逐帧统计分析后删除原始文件。证据是 D:\RHRemoteTools\naturalvideo-f517-b7-packet1024-{lan,punch_direct,relay}-5-20261023.json、naturalvideo-f517-b7-packet1024-relay-4-20261023.json、naturalvideo-f517-b7-packet1024-repeat5-relay-5-20261023.json 及其 .phases.json。实际外部运营商、蜂窝、网络切换、音频和更长时间验收继续保持未完成；OPPO 实机仍暂停。
-
