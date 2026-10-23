@@ -37,8 +37,8 @@ public class RhAdmissionTest {
     }
     @Implements(value=RhNetwork.class,isInAndroidSdk=false)
     public static class Network {
-        @Implementation protected static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile p,JSONObject options,RhAdmission operation)throws Exception{operation.checkpoint();return source;}
-        @Implementation protected static ComputerDetails refreshConnectionDetails(Context c,ComputerDetails source,RhAdmission operation)throws Exception{operation.checkpoint();return source;}
+        @Implementation protected static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile p,JSONObject options,RhCancellation operation)throws Exception{operation.checkpoint();return source;}
+        @Implementation protected static ComputerDetails refreshConnectionDetails(Context c,ComputerDetails source,RhCancellation operation)throws Exception{operation.checkpoint();return source;}
     }
     Activity activity;RhAdmission operation;RhHome home;
     ArrayDeque<Runnable> queued=new ArrayDeque<>();

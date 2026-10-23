@@ -16,16 +16,20 @@ import java.io.IOException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
-/** Waits for native cleanup before resolving a new route and recreating Game. */
-public final class RhRecovery implements RhActions.Target {
+/** Owns cleanup, route resolution and the next Game until its controller attaches. */
+public final class RhRecovery extends RhCancellation implements RhActions.Target {
     static final String EXTRA="rhremote.recovery",PROFILE="rhremote.sessionProfile";
-    // A false callback reports a timeout. Only a later true callback proves that
-    // native and HTTP startup threads have both finished; the reservation stays held.
+    private static final String HANDOFF="rhremote.recoveryHandoff";
+    private static final AtomicLong IDS=new AtomicLong();
+    // A false callback is a timeout. Only a later true callback proves native/HTTP cleanup.
     public interface Stopper { void stop(Consumer<Boolean> completed); }
-    interface Resolver { ComputerDetails resolve(Intent intent,RhProfile profile,JSONArray failed)throws Exception; }
+    interface Resolver { ComputerDetails resolve(Intent intent,RhProfile profile,JSONArray failed,RhCancellation operation)throws Exception; }
+    private final long id=IDS.incrementAndGet();
     private final Activity activity;
+    private final String uuid;
     private final RhProfile profile;
     private final Stopper stopper;
     private final Resolver resolver;
@@ -33,12 +37,19 @@ public final class RhRecovery implements RhActions.Target {
     private final Handler main=new Handler(Looper.getMainLooper());
     private final RhRecoveryPolicy policy;
     private final JSONObject route;
-    private volatile boolean cancelled,retrying,fatal,handoff,cleanupPending,workerRunning,cancelCleanupDone;
+    private RhRecovery predecessor;
+    private RhAdmission initialAdmission;
+    private volatile boolean retrying,fatal,handoff,cleanupPending,workerRunning,cancelCleanupDone,completed,gameAdmitted,oldStopped;
+    private Stopper successorStopper;
+    private RhRecovery successor;
+    private boolean successorStopping;
+    private Intent claimedIntent;
     private String error="";
-    private final Runnable watchdog;
+    private final Runnable watchdog,handoffTimeout=()->failed("串流窗口未能接管连接");
 
     public RhRecovery(Activity activity,RhProfile profile,Stopper stopper){
-        this(activity,profile,stopper,(intent,p,failed)->{
+        this(activity,profile,stopper,(intent,p,failed,operation)->{
+            operation.checkpoint();
             ComputerDetails source=new ComputerDetails();
             source.uuid=intent.getStringExtra(Game.EXTRA_PC_UUID);source.name=intent.getStringExtra(Game.EXTRA_PC_NAME);
             source.httpsPort=intent.getIntExtra(Game.EXTRA_HTTPS_PORT,47984);
@@ -47,12 +58,24 @@ public final class RhRecovery implements RhActions.Target {
             byte[] cert=intent.getByteArrayExtra(Game.EXTRA_SERVER_CERT);
             if(cert==null)throw new IOException("缺少配对证书，请重新配对");
             source.serverCert=(X509Certificate)CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(cert));
-            RhTunnel.stop();
-            return RhNetwork.resolve(activity.getApplicationContext(),source,p,RhActions.obj("failedRoutes",failed));
+            RhTunnel.stop();operation.checkpoint();
+            return RhNetwork.resolve(activity.getApplicationContext(),source,p,RhActions.obj("failedRoutes",failed),operation);
         },task->new Thread(task,"RHRemote reconnect").start());
     }
     RhRecovery(Activity activity,RhProfile profile,Stopper stopper,Resolver resolver,Executor worker){
-        this.activity=activity;this.profile=profile;this.stopper=stopper;this.resolver=resolver;this.worker=worker;
+        this.activity=activity;this.uuid=activity.getIntent().getStringExtra(Game.EXTRA_PC_UUID);
+        this.profile=profile;this.stopper=stopper;this.resolver=resolver;this.worker=worker;
+        RhRecovery pending=RhActions.recovery();predecessor=pending!=null&&pending.matchesClaim(activity.getIntent())?pending:null;
+        RhAdmission entering=RhActions.admission();initialAdmission=entering!=null&&entering.matchesClaim(activity.getIntent())?entering:null;
+        // Initialization must finish before this stopper can access Game's connection fields.
+        if(predecessor!=null)main.post(()->{
+            RhRecovery previous=predecessor;if(previous==null)return;
+            if(!RhActions.ownsRecovery(previous)){predecessor=null;return;}
+            previous.successorReady(this);
+        });
+        if(initialAdmission!=null)main.post(()->{
+            RhAdmission enteringGame=initialAdmission;if(enteringGame!=null)enteringGame.gameReady(this);
+        });
         JSONObject saved=parse(activity.getIntent().getStringExtra(EXTRA));
         long origin=RhStatistics.originUs();if(origin<=0)origin=System.currentTimeMillis()*1000;
         policy=new RhRecoveryPolicy(saved,origin);route=RhNetwork.state();
@@ -61,6 +84,7 @@ public final class RhRecovery implements RhActions.Target {
         RhStatistics.event("native_attempt",-1,policy.state());
     }
     private static JSONObject parse(String json){try{return json==null?new JSONObject():new JSONObject(json);}catch(Exception e){return new JSONObject();}}
+    private void onMain(Runnable action){if(Looper.myLooper()==Looper.getMainLooper())action.run();else main.post(action);}
     public static RhProfile profile(Activity activity,RhProfile fallback){
         String value=activity.getIntent().getStringExtra(PROFILE);
         try{return value==null?fallback:RhProfile.fromJson(activity.getIntent().getStringExtra(Game.EXTRA_PC_UUID),parse(value));}
@@ -76,68 +100,119 @@ public final class RhRecovery implements RhActions.Target {
         return retry(eligible,"串流中断 ("+code+")");
     }
     private synchronized boolean retry(boolean eligible,String message){
-        if(cancelled)return retrying;
-        if(!eligible){fatal=true;cancelled=true;main.removeCallbacks(watchdog);if(retrying)main.post(()->failed(message));return false;}
+        if(completed||handoff||cancelled)return retrying;
+        if(!eligible){fatal=true;cancelRequests();main.removeCallbacks(watchdog);if(retrying)main.post(()->failed(message));return false;}
         if(retrying)return true;
         String remote=route.optString("remoteAddress",route.optString("selectedAddress"));
         long delay=policy.failure(SystemClock.elapsedRealtime(),System.currentTimeMillis()*1000,route.optString("route"),remote,true);
-        if(delay<0){cancelled=true;main.removeCallbacks(watchdog);return false;}
+        if(delay<0){cancelRequests();main.removeCallbacks(watchdog);return false;}
         retrying=true;cleanupPending=true;RhActions.beginRecovery(this);main.removeCallbacks(watchdog);
         RhStatistics.event("route_media_failed",-1,RhActions.obj("reason",message,"network",route,"recovery",policy.state()));
         main.post(()->{
-            if(activity.isFinishing())cancelled=true;
-            stopper.stop(cleaned->{
-                cleanupPending=!cleaned;
-                if(cancelled){RhStatistics.finish();release();return;}
-                if(!cleaned){failed("上一会话清理超时，已停止自动重连");return;}
-                workerRunning=true;
-                worker.execute(()->{
-                    try{
-                        if(delay>0)Thread.sleep(delay);
-                        if(cancelled)return;
-                        RhStatistics.finish();RhStatistics.beginAt(profile,policy.originUs);
-                        ComputerDetails resolved=resolver.resolve(new Intent(activity.getIntent()),profile,policy.excluded());
-                        if(cancelled)return;
-                        Intent next=new Intent(activity.getIntent());
-                        next.putExtra(Game.EXTRA_HOST,resolved.activeAddress.address);
-                        next.putExtra(Game.EXTRA_PORT,resolved.activeAddress.port);
-                        next.putExtra(EXTRA,policy.next().toString());next.putExtra(PROFILE,profile.json().toString());
-                        main.post(()->{
-                            if(cancelled||fatal||activity.isFinishing())return;
-                            handoff=true;RhActions.endRecovery(this);
-                            activity.startActivity(next);activity.finish();
-                        });
-                    }catch(Exception|LinkageError e){main.post(()->{if(!cancelled)failed(e.getMessage()==null?"自动重连失败":e.getMessage());});}
-                    finally{workerRunning=false;main.post(()->{if(cancelled)release();});}
-                });
-            });
+            if(activity.isFinishing())cancel();
+            stopOriginal(delay);
         });
         return true;
     }
-    private void failed(String message){
-        cancelled=true;error=message;main.removeCallbacks(watchdog);RhStatistics.finish();release();
-        if(!activity.isFinishing())new AlertDialog.Builder(activity).setTitle("连接失败").setMessage(message).setPositiveButton("确定",(dialog,which)->activity.finish()).setOnCancelListener(dialog->activity.finish()).show();
+    private void stopOriginal(long delay){
+        try{stopper.stop(cleaned->onMain(()->{
+            if(oldStopped||completed)return;
+            if(!cleaned){if(!cancelled)failed("上一会话清理超时，已停止自动重连");return;}
+            oldStopped=true;cleanupPending=false;
+            if(cancelled){RhStatistics.finish();release();return;}
+            resolveNext(delay);
+        }));}catch(RuntimeException|LinkageError e){failed("上一会话清理失败，请重新启动 RHRemote");}
     }
-    private void release(){
-        if(cleanupPending||workerRunning||!RhActions.ownsRecovery(this))return;
-        if(cancelled&&!cancelCleanupDone){
+    private void resolveNext(long delay){
+        workerRunning=true;
+        try{worker.execute(()->{
+            try{
+                checkpoint();
+                try(Watch interrupt=watch(Thread.currentThread()::interrupt)){
+                    if(delay>0)Thread.sleep(delay);checkpoint();
+                    RhStatistics.finish();RhStatistics.beginAt(profile,policy.originUs);
+                    ComputerDetails resolved=resolver.resolve(new Intent(activity.getIntent()),profile,policy.excluded(),this);
+                    checkpoint();
+                    Intent next=new Intent(activity.getIntent());
+                    next.putExtra(Game.EXTRA_HOST,resolved.activeAddress.address);
+                    next.putExtra(Game.EXTRA_PORT,resolved.activeAddress.port);
+                    next.putExtra(EXTRA,policy.next().toString());next.putExtra(PROFILE,profile.json().toString());next.putExtra(HANDOFF,id);
+                    main.post(()->launch(next));
+                }
+            }catch(Exception|LinkageError e){main.post(()->{if(!cancelled)failed(e.getMessage()==null?"自动重连失败":e.getMessage());});}
+            finally{workerRunning=false;main.post(()->{if(cancelled)release();});}
+        });}catch(RuntimeException rejected){workerRunning=false;failed("重连任务无法启动");}
+    }
+    private void launch(Intent next){
+        if(cancelled||fatal||activity.isFinishing()||activity.isDestroyed()){cancel();return;}
+        handoff=true;main.postDelayed(handoffTimeout,15_000);
+        RhStatistics.event("recovery_handoff",-1,RhActions.obj("attemptId",id));
+        try{activity.startActivity(next);activity.finish();}
+        catch(RuntimeException|LinkageError e){failed("串流窗口未能启动");}
+    }
+    private void failed(String message){
+        if(completed)return;
+        error=message;cancel();RhStatistics.finish();
+        if(!activity.isFinishing())new AlertDialog.Builder(activity).setTitle("连接失败").setMessage(message).setPositiveButton("确定",(dialog,which)->activity.finish()).setOnCancelListener(dialog->activity.finish()).show();
+        else android.widget.Toast.makeText(activity.getApplicationContext(),message,android.widget.Toast.LENGTH_LONG).show();
+    }
+    private synchronized void release(){
+        if(completed||cleanupPending||workerRunning||!RhActions.ownsRecovery(this)||!cancelled)return;
+        if(!cancelCleanupDone){
             workerRunning=true;
-            worker.execute(()->{
+            try{worker.execute(()->{
                 try{RhTunnel.stop();RhStatistics.finish();cancelCleanupDone=true;}
                 catch(Exception|LinkageError e){main.post(()->error="通道清理失败，请重新启动 RHRemote");}
                 finally{workerRunning=false;if(cancelCleanupDone)main.post(this::release);}
-            });
-        }else RhActions.endRecovery(this);
+            });}catch(RuntimeException rejected){workerRunning=false;error="通道清理任务无法启动";}
+        }else{completed=true;clearSuccessor();RhActions.endRecovery(this);}
     }
-    public void cancel(){cancelled=true;main.removeCallbacks(watchdog);release();}
+    public void cancel(){
+        if(completed)return;
+        cancelRequests();main.removeCallbacks(watchdog);main.removeCallbacks(handoffTimeout);
+        onMain(()->{stopSuccessor();release();});
+    }
+    private void successorReady(RhRecovery next){
+        if(completed){next.predecessor=null;return;}successor=next;successorStopper=next.stopper;if(cancelled)stopSuccessor();
+    }
+    private void clearSuccessor(){if(successor!=null)successor.predecessor=null;successor=null;successorStopper=null;}
+    private void stopSuccessor(){
+        if(!gameAdmitted||!cancelled||successorStopper==null||successorStopping||completed)return;
+        successorStopping=true;
+        try{successorStopper.stop(cleaned->onMain(()->{
+            if(completed||!cleanupPending)return;
+            if(!cleaned){error="新会话清理超时，等待清理完成";return;}
+            cleanupPending=false;release();
+        }));}catch(RuntimeException|LinkageError e){error="新会话清理失败，请重新启动 RHRemote";}
+    }
     public void background(){
-        if(handoff)return;
+        RhAdmission entering=initialAdmission;
+        if(entering!=null&&RhActions.ownsAdmission(entering)){entering.gameReady(this);entering.cancel();return;}
+        initialAdmission=null;
+        RhRecovery previous=predecessor;
+        if(previous!=null&&RhActions.ownsRecovery(previous)){previous.successorReady(this);previous.cancel();return;}
+        predecessor=null;
+        if(handoff||completed)return;
         cancel();
-        if(!retrying){
-            retrying=true;cleanupPending=true;RhActions.beginRecovery(this);
-            stopper.stop(cleaned->{cleanupPending=!cleaned;if(cleaned){RhStatistics.finish();release();}});
-        }
+        if(!retrying){retrying=true;cleanupPending=true;RhActions.beginRecovery(this);stopOriginal(0);}
     }
-    public JSONObject state(){return RhActions.obj("connected",false,"phase",!error.isEmpty()?"error":cancelled?"cancelling":"reconnecting","error",error,"recovery",policy.state());}
-    public JSONObject perform(String id,JSONObject args){if(!id.equals("stream.disconnect"))throw new IllegalStateException("正在重连，可取消当前连接");cancel();activity.finish();return RhActions.obj("cancelled",true);}
+    void clearAdmission(RhAdmission owner){if(initialAdmission==owner)initialAdmission=null;}
+    void stopBeforeAttach(Consumer<Boolean> completed){main.removeCallbacks(watchdog);stopper.stop(completed);}
+    private boolean canLaunch(){return handoff&&!gameAdmitted&&!cancelled&&!completed&&oldStopped;}
+    boolean canAttach(){return handoff&&gameAdmitted&&!cancelled&&!completed;}
+    private boolean matchesClaim(Intent intent){return gameAdmitted&&intent.getLongExtra(HANDOFF,0)==id&&uuid!=null&&uuid.equals(intent.getStringExtra(Game.EXTRA_PC_UUID));}
+    void attached(){
+        completed=true;cleanupPending=false;main.removeCallbacks(handoffTimeout);forgetRequests();
+        if(claimedIntent!=null)claimedIntent.removeExtra(HANDOFF);claimedIntent=null;clearSuccessor();
+        RhActions.endRecovery(this);RhStatistics.event("recovery_attached",-1,RhActions.obj("attemptId",id));
+    }
+    public static boolean allowGame(Intent intent){
+        RhRecovery pending=RhActions.recovery();long requested=intent.getLongExtra(HANDOFF,0);
+        if(requested==0)return pending==null;
+        if(pending==null||pending.id!=requested||!pending.canLaunch()||pending.uuid==null||!pending.uuid.equals(intent.getStringExtra(Game.EXTRA_PC_UUID)))return false;
+        pending.gameAdmitted=true;pending.cleanupPending=true;pending.claimedIntent=intent;return true;
+    }
+    public JSONObject state(){return RhActions.obj("connected",false,"phase",!error.isEmpty()?"error":cancelled?"cancelling":handoff?"starting":"reconnecting","attemptId",id,
+        "workerRunning",workerRunning,"cleanupPending",cleanupPending||workerRunning,"error",error,"recovery",policy.state());}
+    public JSONObject perform(String action,JSONObject args){if(!action.equals("stream.disconnect"))throw new IllegalStateException("正在重连，可取消当前连接");cancel();activity.finish();return RhActions.obj("cancelled",true);}
 }

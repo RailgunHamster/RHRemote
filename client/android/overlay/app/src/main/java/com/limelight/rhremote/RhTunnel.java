@@ -23,10 +23,10 @@ public final class RhTunnel {
     public static synchronized JSONObject start(Context context,String peer,String relay,boolean relayOnly)throws Exception {
         return start(context,peer,relay,relayOnly,null);
     }
-    public static synchronized JSONObject start(Context context,String peer,String relay,boolean relayOnly,RhAdmission operation)throws Exception {
+    public static synchronized JSONObject start(Context context,String peer,String relay,boolean relayOnly,RhCancellation operation)throws Exception {
         if(!loaded){System.loadLibrary("rhremote_transport");loaded=true;}
         final long attemptId=++nextAttempt;if(attemptId<=0)throw new IOException("Transport attempt counter exhausted");
-        try(RhAdmission.Watch cancellation=operation==null?null:operation.watch(()->cancelStartNative(attemptId))){
+        try(RhCancellation.Watch cancellation=operation==null?null:operation.watch(()->cancelStartNative(attemptId))){
         if(operation!=null)operation.checkpoint();
         JSONObject reply=new JSONObject(startNative(new File(context.getFilesDir(),"transport.key").getAbsolutePath(),peer,relay,relayOnly,attemptId));
         if(operation!=null)operation.checkpoint();

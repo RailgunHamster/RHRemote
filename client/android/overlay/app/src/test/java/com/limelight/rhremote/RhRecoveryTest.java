@@ -52,7 +52,7 @@ public class RhRecoveryTest {
         assertFalse("Recovery reservation leaked",RhActions.hasStream());
     }
     private RhRecovery make(java.util.concurrent.Executor executor){
-        return new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed)->{
+        return new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{
             resolutions++;assertEquals(1,failed.length());assertTrue(RhRecoveryPolicy.excluded(failed,"lan","192.168.0.104"));
             ComputerDetails d=new ComputerDetails();d.activeAddress=new ComputerDetails.AddressTuple("127.77.0.2",48989);return d;
         },executor);

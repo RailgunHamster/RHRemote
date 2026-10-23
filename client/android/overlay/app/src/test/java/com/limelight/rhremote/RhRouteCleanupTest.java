@@ -1,0 +1,72 @@
+package com.limelight.rhremote;
+
+import android.content.Context;
+import com.limelight.nvstream.http.ComputerDetails;
+import java.io.IOException;
+import org.json.*;
+import org.junit.*;
+import org.junit.runner.RunWith;
+import org.robolectric.*;
+import org.robolectric.annotation.*;
+import static org.junit.Assert.*;
+
+/** The actual resolver must reap a rejected proxy before moving to another route. */
+@RunWith(RobolectricTestRunner.class)
+@Config(sdk=28,shadows={RhRouteCleanupTest.Transport.class,RhRouteCleanupTest.Probes.class})
+public class RhRouteCleanupTest {
+    static class Token extends RhCancellation {void cancel(){cancelRequests();}}
+    @Implements(value=RhTunnel.class,isInAndroidSdk=false)
+    public static class Transport {
+        static int starts,stops;static boolean active,failStart,failStop,cancelStart;
+        @Implementation protected static synchronized JSONObject start(Context c,String peer,String relay,boolean only,RhCancellation operation)throws Exception{
+            starts++;active=true;if(cancelStart){((Token)operation).cancel();operation.checkpoint();}if(failStart)throw new IOException("partial startup failed");
+            return RhActions.obj("address","127.77.0.2","portOffset",1000,"path","relay");
+        }
+        @Implementation protected static synchronized void stop(){stops++;if(failStop)throw new IllegalStateException("cleanup failed");active=false;}
+    }
+    @Implements(value=RhNetwork.class,isInAndroidSdk=false)
+    public static class Probes {
+        static int lan,proxy;static boolean rejectProxy;
+        @Implementation protected static String check(String address,String uuid,int port,RhCancellation operation)throws Exception{
+            if(operation!=null)operation.checkpoint();
+            if(address.equals("127.77.0.2")){proxy++;assertTrue(Transport.active);if(rejectProxy)throw new IOException("uuid_mismatch");}
+            else{lan++;assertFalse("Previous rejected tunnel survived into a direct route",Transport.active);}
+            return address;
+        }
+    }
+    Context context;ComputerDetails device;RhProfile profile;
+    @Before public void setup()throws Exception{
+        Transport.starts=Transport.stops=Probes.lan=Probes.proxy=0;Transport.active=Transport.failStart=Transport.failStop=Transport.cancelStart=Probes.rejectProxy=false;
+        context=RuntimeEnvironment.getApplication();RhStatistics.initialize(context);RhStatistics.configure(false);
+        device=new ComputerDetails();device.uuid="host";device.name="PC";device.manualAddress=new ComputerDetails.AddressTuple("192.168.0.104",47989);
+        RhShared.capture(context,java.util.Collections.singletonList(device));
+        RhShared.saveAddresses(context,"host","rhr:"+String.join("",java.util.Collections.nCopies(64,"a")),new JSONArray().put("192.168.0.104"));
+        profile=RhProfile.fromJson("host",RhActions.obj("width",1920,"height",1080,"fps",30,"bitrateMbps",25,"codec","H.264","swapButtons",false,"trackpad",false,"statistics",false));
+    }
+    @After public void cleanup(){Transport.failStop=false;RhTunnel.stop();RhStatistics.finish();}
+    private ComputerDetails resolve(String...routes)throws Exception{profile.routeOrder.clear();java.util.Collections.addAll(profile.routeOrder,routes);return RhNetwork.resolve(context,device,profile,RhActions.obj());}
+    @Test public void punchThatBecameARelayIsStoppedBeforeLanFallback()throws Exception{
+        assertEquals("192.168.0.104",resolve("punch_direct","lan").activeAddress.address);
+        assertEquals(1,Transport.starts);assertEquals(1,Transport.stops);assertEquals(1,Probes.lan);assertEquals(0,Probes.proxy);assertFalse(Transport.active);
+    }
+    @Test public void failedProxyIdentityIsStoppedBeforeLanFallback()throws Exception{
+        Probes.rejectProxy=true;assertEquals("192.168.0.104",resolve("relay","lan").activeAddress.address);
+        assertEquals(1,Transport.stops);assertEquals(1,Probes.proxy);assertEquals(1,Probes.lan);assertFalse(Transport.active);
+    }
+    @Test public void explicitRelayCreatesAFreshProxyAndKeepsTheAcceptedOne()throws Exception{
+        assertEquals("127.77.0.2",resolve("punch_direct","relay").activeAddress.address);
+        assertEquals(2,Transport.starts);assertEquals(1,Transport.stops);assertTrue(Transport.active);assertEquals(1,Probes.proxy);
+    }
+    @Test public void partialStartupFailureIsReapedBeforeTheNextRoute()throws Exception{
+        Transport.failStart=true;assertEquals("192.168.0.104",resolve("relay","lan").activeAddress.address);assertEquals(1,Transport.stops);assertEquals(1,Probes.lan);
+    }
+    @Test public void failedCleanupStopsResolutionInsteadOfAssumingTheProxyIsGone()throws Exception{
+        Transport.failStop=true;try{resolve("punch_direct","lan");fail("Resolution continued after failed cleanup");}catch(IllegalStateException expected){assertEquals("cleanup failed",expected.getMessage());}
+        assertEquals(0,Probes.lan);assertTrue(Transport.active);
+    }
+    @Test public void cancellationDuringStartupCleansWithoutTryingAnotherPath()throws Exception{
+        profile.routeOrder.clear();java.util.Collections.addAll(profile.routeOrder,"punch_direct","lan");Transport.cancelStart=true;
+        try{RhNetwork.resolve(context,device,profile,RhActions.obj(),new Token());fail("Cancelled route was selected");}catch(IOException expected){assertTrue(expected.getMessage().contains("取消"));}
+        assertEquals(1,Transport.stops);assertEquals(0,Probes.lan);assertEquals(0,Probes.proxy);assertFalse(Transport.active);
+    }
+}

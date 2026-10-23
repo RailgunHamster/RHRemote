@@ -18,7 +18,7 @@
 - [x] Android 同步设备首次配对持久化：成功前立即写入 SQLite；保存失败保留旧证书，轮询及迟到发现不能恢复旧证书，代理地址不持久化。11 项实际 PcView / SQLite 回归通过，完整 60 项 JVM 测试零失败；未当作 OPPO 实机验收。见 design/ANDROID-PAIRING-PERSISTENCE-20261023.md。
 - [x] Android 初次连接入口取消：从选路、配对状态、应用列表到 Game 接管或真实清理完成保持占用；按钮 / stream.disconnect / pair.cancel 共用分派，Rust JNI 按次取消，HTTP 跟踪至正文关闭，配对等待签名取消任务结束。连接使用独立线程，旧结果不能启动新窗口。86 项 JVM / 11 项 Rust 测试及 ARM64 双 APK 构建通过；已随 0.2.5 正式发布，OPPO 实机待验收。见 design/ANDROID-CONNECTION-ADMISSION-20261024.md。
 - [x] Android 更新安装流程：用户确认尚未下载时点击安装，旧按钮只在页底报错。改为下载并安装、进度和页内失败提示，已下载记录持久化，安装权限返回后继续；旋转复用 Home 状态，后台下载不打开系统安装器。完整 102 项 JVM（新增 16 项安装回归）及双 APK 构建、9 项发布前置测试通过。0.2.5 / code207 已在 GitHub 和 Gitee 正式发布，两站各八资产及两个 latest feed 匿名校验通过；OPPO 安装及外网媒体仍待实机确认。见 design/ANDROID-UPDATE-INSTALL-20261024.md。
-- [ ] Android 回退与恢复的通道归属：媒体恢复仍在启动新 Game 前释放占用，需保持到新控制器接管，并接入按次 JNI / HTTP 取消；检查打洞形成了本路径不接受的中继连接后，转向其他路径之前是否清理临时通道。补迟到窗口、取消、路径失败及下一连接不能抢占的回归。
+- [x] Android 回退与恢复的通道归属：恢复占用保持到新控制器接管；初次 Game 已获准启动后的取消也等待其真实清理。统一按次 JNI / HTTP 取消，失败路径先关闭临时代理再回退，清理失败保留占用。新增 26 项交接、真实 HTTP、取消、UUID 与清理顺序回归，完整 128 项 JVM、ARM64 双 APK 及 9 项发布前置测试通过；0.2.6 / code208 准备发布。该项仅为代码及自动化验证，OPPO 外网、网络切换和长时间实际媒体验收仍保留未完成。见 design/ANDROID-RECOVERY-OWNERSHIP-20261024.md。
 - [x] 用户提供 SSH 别名 tc，已确认并复用其现有 DERP；独立临时测试端经公网完成双向实际转发，未改动现有 Tailscale / DERP 服务。
 - [ ] tc 中继能力：独立 TCP 下载约 5.965 Mbps，DERP 25 Mbps 缺失 4103 包与 queue_head 增量相等。后续固定 1024 分包的同一 1080p30 影片各约 151 秒，LAN / 内置直连 / HTTPS 中继在请求 5 Mbps 时分别有 0 / 2 / 53 次 >50 ms 渲染间隔；中继 4 Mbps 降到 1 次，再回 5 Mbps 升至 278 次。优先定位容量/排队，并补主机分段、更长时间及跨运营商验收，不认定某个队列为唯一根因或宣称支持 25 Mbps/4K。用户码率已恢复。见 design/NATURAL-VIDEO-20261023.md、RELAY-THROUGHPUT-20261023.md。
 - [x] 本机 / winserver / claw 的网络服务已部署；本机 UAC 安装成功，设备 UUID 保持不变，TCP / UDP 47995 同属统一服务，Tailscale 规则已核对。

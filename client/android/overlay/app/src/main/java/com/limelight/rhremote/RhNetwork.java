@@ -68,13 +68,13 @@ public final class RhNetwork {
     static ComputerDetails refreshConnectionDetails(Context context,ComputerDetails source)throws Exception {
         return refreshConnectionDetails(context,source,null);
     }
-    static ComputerDetails refreshConnectionDetails(Context context,ComputerDetails source,RhAdmission operation)throws Exception {
+    static ComputerDetails refreshConnectionDetails(Context context,ComputerDetails source,RhCancellation operation)throws Exception {
         checkpoint(operation);
         if(source.pairState!=null&&source.httpsPort!=0)return source;
         ComputerDetails.AddressTuple address=source.activeAddress;
         if(address==null)throw new IOException("未选择连接地址");
         NvHTTP http=new NvHTTP(address,source.httpsPort,"0123456789ABCDEF",source.serverCert,PlatformBinding.getCryptoProvider(context),true);
-        try(RhAdmission.Watch request=operation==null?null:operation.watch(http::cancelRhRequests)){
+        try(RhCancellation.Watch request=operation==null?null:operation.watch(http::cancelRhRequests)){
         checkpoint(operation);
         ComputerDetails fresh=http.getRhConnectionDetails();
         checkpoint(operation);
@@ -88,12 +88,12 @@ public final class RhNetwork {
     private static String check(String address,String uuid,int port)throws Exception {
         return check(address,uuid,port,null);
     }
-    private static void checkpoint(RhAdmission operation)throws IOException {if(operation!=null)operation.checkpoint();}
-    private static String check(String address,String uuid,int port,RhAdmission operation)throws Exception {
+    private static void checkpoint(RhCancellation operation)throws IOException {if(operation!=null)operation.checkpoint();}
+    private static String check(String address,String uuid,int port,RhCancellation operation)throws Exception {
         checkpoint(operation);
         String host=address.replace("[","").replace("]","");HttpURLConnection connection=(HttpURLConnection)new URI("http",null,host,port,"/serverinfo","uniqueid=0123456789ABCDEF",null).toURL().openConnection(Proxy.NO_PROXY);
         connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(1000);connection.setReadTimeout(1000);
-        try(RhAdmission.Watch request=operation==null?null:operation.watch(connection::disconnect)){
+        try(RhCancellation.Watch request=operation==null?null:operation.watch(connection::disconnect)){
             checkpoint(operation);
             try(InputStream in=connection.getInputStream()){
             checkpoint(operation);
@@ -110,7 +110,7 @@ public final class RhNetwork {
     public static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile profile,JSONObject options)throws Exception {
         return resolve(c,source,profile,options,null);
     }
-    public static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile profile,JSONObject options,RhAdmission operation)throws Exception {
+    public static ComputerDetails resolve(Context c,ComputerDetails source,RhProfile profile,JSONObject options,RhCancellation operation)throws Exception {
         checkpoint(operation);
         RhStatistics.event("network_resolve_begin",-1,RhActions.obj("routeOrder",new JSONArray(profile.routeOrder)));
         long began=System.nanoTime();JSONObject metadata=metadata(c,source);
@@ -123,13 +123,15 @@ public final class RhNetwork {
             if(route.equals("punch_direct")||route.equals("relay")) {
                 for(String address:candidates)if(kind(address).equals("transport")) {
                     if(RhRecoveryPolicy.excluded(failed,route,address))continue;
-                    long at=System.nanoTime();try {
+                    long at=System.nanoTime();boolean accepted=false;
+                    try {
                         JSONObject tunnel=RhTunnel.start(c,address.substring(4),profile.relayUrl,route.equals("relay"),operation);
                         if(route.equals("punch_direct")&&!tunnel.optString("path").equals("direct"))throw new IOException("打洞未形成直连，继续尝试后续路径");
                         offset=tunnel.getInt("portOffset");check(tunnel.getString("address"),source.uuid,47989+offset,operation);
                         selected=tunnel.getString("address");selectedRemote=address;chosenPath=tunnel.optString("path","unknown");chosenRoute=route;
-                        attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));break;
+                        attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));accepted=true;break;
                     }catch(Exception|LinkageError e){checkpoint(operation);attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
+                    finally{if(!accepted)RhTunnel.stop();}
                 }
                 if(selected!=null)break;continue;
             }

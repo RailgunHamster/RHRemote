@@ -17,7 +17,7 @@ public final class RhActions {
     public interface Target { JSONObject perform(String id,JSONObject args) throws Exception; JSONObject state() throws Exception; }
     private static final Handler MAIN=new Handler(Looper.getMainLooper());
     private static WeakReference<Target> home=new WeakReference<>(null),stream=new WeakReference<>(null);
-    private static volatile Target recovering;
+    private static volatile RhRecovery recovering;
     private static volatile RhAdmission admitting;
     private static JSONArray catalog;private static String token;private static boolean started;
     private static Context appContext;
@@ -35,18 +35,20 @@ public final class RhActions {
             new Thread(RhActions::serve,"RHRemote control").start();
         }catch(Exception e){throw new IllegalStateException("RHRemote control initialization failed",e);}
     }
-    public static void attachStream(Target target){
+    public static synchronized boolean attachStream(Target target){
         RhAdmission pending=admitting;
-        if(pending!=null&&!pending.canAttach())throw new IllegalStateException("Connection admission was cancelled");
-        stream=new WeakReference<>(target);if(pending!=null)pending.attached();
+        RhRecovery recovery=recovering;
+        if(pending!=null&&!pending.canAttach()||recovery!=null&&!recovery.canAttach())return false;
+        stream=new WeakReference<>(target);if(pending!=null)pending.attached();if(recovery!=null)recovery.attached();return true;
     }
     static synchronized void beginAdmission(RhAdmission target){if(hasStream())throw new IllegalStateException("请先断开当前连接");admitting=target;}
     static synchronized void endAdmission(RhAdmission target){if(admitting==target)admitting=null;}
     static boolean ownsAdmission(RhAdmission target){return target!=null&&admitting==target;}
     static RhAdmission admission(){return admitting;}
     public static void detachStream(Target target){if(stream.get()==target)stream.clear();}
-    static void beginRecovery(Target target){recovering=target;}
-    static void endRecovery(Target target){if(recovering==target)recovering=null;}
+    static synchronized void beginRecovery(RhRecovery target){if(admitting!=null||recovering!=null&&recovering!=target)throw new IllegalStateException("上一连接尚未清理");recovering=target;}
+    static synchronized void endRecovery(Target target){if(recovering==target)recovering=null;}
+    static RhRecovery recovery(){return recovering;}
     static boolean ownsRecovery(Target target){return recovering==target;}
     public static boolean hasStream(){return stream.get()!=null||recovering!=null||admitting!=null;}
     private static Target activeTarget(){return recovering!=null?recovering:admitting!=null?admitting:stream.get();}

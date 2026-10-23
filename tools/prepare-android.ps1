@@ -1,6 +1,6 @@
 param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',
- [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.5',
- [ValidateRange(1,2100000000)][int]$VersionCode=207)
+ [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.6',
+ [ValidateRange(1,2100000000)][int]$VersionCode=208)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $expected='b48494cb96bff23d8886c4775cc4f39a1075495d'
@@ -363,7 +363,7 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/http/PairingManager.java' 
 Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
     $s=Replace-Once $s '        super.onCreate(savedInstanceState);' @'
         super.onCreate(savedInstanceState);
-        if(!com.limelight.rhremote.RhAdmission.allowGame(getIntent())) { rhAdmissionRejected=true; finish(); return; }
+        if(!com.limelight.rhremote.RhRecovery.allowGame(getIntent())||!com.limelight.rhremote.RhAdmission.allowGame(getIntent())) { rhAdmissionRejected=true; finish(); return; }
 '@
     $s=Replace-Once $s '        super.onDestroy();' "        super.onDestroy();`n        if(rhAdmissionRejected)return;"
     $s=Replace-Once $s '        super.onStop();' "        super.onStop();`n        if(rhAdmissionRejected)return;"
@@ -383,6 +383,7 @@ Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
     $s=Replace-Once $s '        // Initialize touch contexts' @'
         rhTouch = new com.limelight.rhremote.RhTouchController(conn,streamView,rhProfile);
         rhControls = com.limelight.rhremote.RhStreamControls.install(this,rhTouch,prefConfig,rhProfile,conn.getRhDisplay());
+        if(rhControls==null){finish();return;}
         // Initialize touch contexts
 '@
     $s=Replace-Once $s '                if (virtualController != null &&' @'

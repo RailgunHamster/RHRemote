@@ -17,13 +17,13 @@ public final class RhStreamControls implements RhActions.Target {
     private boolean keyboard,disposed,connected;
     private boolean shortcutBusy;private JSONObject lastShortcut=RhActions.obj();
     private final RhDisplay display;private boolean displayBusy;private String displayError="";
-    public static RhStreamControls install(Game game,RhTouchController touch,PreferenceConfiguration preferences,RhProfile profile,RhDisplay display){return new RhStreamControls(game,touch,preferences,profile,display);}
+    public static RhStreamControls install(Game game,RhTouchController touch,PreferenceConfiguration preferences,RhProfile profile,RhDisplay display){RhStreamControls controls=new RhStreamControls(game,touch,preferences,profile,display);return controls.disposed?null:controls;}
     private RhStreamControls(Game game,RhTouchController touch,PreferenceConfiguration preferences,RhProfile profile,RhDisplay display){
         this.display=display;
         this.profile=profile;
         this.game=game;this.touch=touch;this.preferences=preferences;
         panel=new RhStreamPanel(game,game.findViewById(android.R.id.content),RhActions::click);
-        updatePanel();RhActions.initialize(game,null);RhActions.attachStream(this);
+        updatePanel();RhActions.initialize(game,null);if(!RhActions.attachStream(this))dispose();
     }
     public void dispose(){if(disposed)return;disposed=true;touch.cancel();panel.dispose();RhActions.detachStream(this);}
     public void markConnected(){connected=true;try{if(display!=null)display.applyInitial();}catch(Exception e){displayError=e.getMessage()==null?"屏幕切换失败":e.getMessage();}updatePanel();}
