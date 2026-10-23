@@ -33,6 +33,7 @@
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "process.h"
+#include "rhremote_frame_trace.h"
 #include "rhremote_initial_display.h"
 #include "rtsp.h"
 #include "system_tray.h"
@@ -477,6 +478,8 @@ namespace nvhttp {
     auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
 
     launch_session->id = ++session_id_counter;
+    launch_session->frame_trace_client = get_arg(args, "rhremoteTraceClient", "");
+    launch_session->frame_trace_requested = rhremote::frame_trace_requested(get_arg(args, "rhremoteFrameTrace", "0"), launch_session->frame_trace_client);
 
     auto rikey = util::from_hex_vec(get_arg(args, "rikey"), true);
     std::copy(rikey.cbegin(), rikey.cend(), std::back_inserter(launch_session->gcm_key));
@@ -1459,6 +1462,7 @@ namespace nvhttp {
     );
     tree.put("root.gamesession", 1);
 
+    tree.put("root.RHFrameTrace", launch_session->frame_trace_requested ? 1 : 0);
     if (!launch_session->initial_display.empty()) {
       tree.put("root.RHInitialDisplay", launch_session->initial_display);
     }
@@ -1567,6 +1571,7 @@ namespace nvhttp {
     );
     tree.put("root.resume", 1);
 
+    tree.put("root.RHFrameTrace", launch_session->frame_trace_requested ? 1 : 0);
     if (!launch_session->initial_display.empty()) {
       tree.put("root.RHInitialDisplay", launch_session->initial_display);
     }

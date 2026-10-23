@@ -45,6 +45,8 @@ namespace rtsp_stream {
     uint32_t rtsp_iv_counter;  ///< Counter value mixed into encrypted RTSP IVs.
     std::string client_cert;  ///< PEM certificate for the paired Moonlight client.
     std::string initial_display;  ///< Optional per-launch GDI source, resolved before first capture.
+    bool frame_trace_requested {};  ///< Paired client explicitly requested metadata-only frame tracing.
+    std::string frame_trace_client;  ///< Validated client statistics label, never used as a host path.
   };
 
   /**

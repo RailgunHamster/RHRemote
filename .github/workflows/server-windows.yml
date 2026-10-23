@@ -19,6 +19,17 @@ on:
 permissions:
   contents: read
 jobs:
+  frame-trace-portable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Exercise bounded recorder and PTS history without GPU dependencies
+        run: |
+          g++ -std=c++23 -pthread -DRHREMOTE_FRAME_TRACE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_frame_trace.cpp -o test-rhremote-frame-trace
+          ./test-rhremote-frame-trace
   windows:
     runs-on: windows-2022
     timeout-minutes: 60
@@ -78,6 +89,8 @@ jobs:
           ./test-rhremote-encoder-probe.exe
           g++ -std=c++23 -DRHREMOTE_INITIAL_DISPLAY_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_initial_display.cpp -o test-rhremote-initial-display.exe
           ./test-rhremote-initial-display.exe
+          g++ -std=c++23 -pthread -DRHREMOTE_FRAME_TRACE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_frame_trace.cpp -o test-rhremote-frame-trace.exe
+          ./test-rhremote-frame-trace.exe
           cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
           cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine --parallel 3
           cmake --install .deps/cmake-build-server --prefix "$PWD/.deps/server-stage"
@@ -85,7 +98,7 @@ jobs:
       - name: Test pairing sessions and client authorization
         shell: msys2 {0}
         working-directory: .deps/cmake-build-server/tests
-        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*' --gtest_output=xml:pairing-results.xml
+        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*' --gtest_output=xml:pairing-results.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

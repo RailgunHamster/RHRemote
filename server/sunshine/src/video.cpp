@@ -634,6 +634,7 @@ namespace video {
     config_t config;  ///< Stream or encoder configuration captured for the worker.
     int frame_nr;  ///< Next capture-frame number assigned to encoded packets.
     void *channel_data;  ///< Platform-specific channel data forwarded to packet senders.
+    rhremote::capture_stamp rh_source;  ///< Last converted source, retained for repeated encoder input.
   };
 
   /**
@@ -1698,6 +1699,9 @@ namespace video {
       bool artificial_reinit = false;
 
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        if (frame_captured && img) {
+          img->rh_capture = rhremote::stamp_capture(img->frame_timestamp);
+        }
         KITTY_WHILE_LOOP(auto capture_ctx = std::begin(capture_ctxs), capture_ctx != std::end(capture_ctxs), {
           if (!capture_ctx->images->running()) {
             capture_ctx = capture_ctxs.erase(capture_ctx);
@@ -1706,6 +1710,10 @@ namespace video {
           }
 
           if (frame_captured) {
+            if (auto trace = capture_ctx->config.frame_trace.lock()) {
+              rhremote::frame_context context {trace, img->rh_capture, 0, true, true};
+              trace->emit(rhremote::frame_row(context, rhremote::frame_stage::capture_ready, -1));
+            }
             capture_ctx->images->raise(img);
           }
 
@@ -1810,6 +1818,42 @@ namespace video {
   }
 
   /**
+   * @brief Convert/import an image while recording actual call boundaries.
+   * @param session Encoder receiving the image.
+   * @param image Captured or priming image.
+   * @param context Original source metadata.
+   * @param frame Next encoder input PTS.
+   * @return Original conversion result.
+   */
+  int convert_traced(encode_session_t &session, platf::img_t &image, const rhremote::frame_context &context, std::int64_t frame) {
+    if (context.trace) {
+      context.trace->emit(rhremote::frame_row(context, rhremote::frame_stage::convert_begin, frame));
+    }
+    const int result = session.convert(image);
+    if (context.trace) {
+      auto row = rhremote::frame_row(context, rhremote::frame_stage::convert_end, frame);
+      row.result = result;
+      context.trace->emit(row);
+    }
+    return result;
+  }
+
+  /**
+   * @brief Attach metadata using the packet's actual output PTS before queuing it.
+   * @param session Encoder retaining submission history.
+   * @param packet Encoded packet with its actual frame index.
+   */
+  void trace_encoded_packet(encode_session_t &session, packet_raw_t &packet) {
+    packet.rh_frame = session.rh_frames.lookup(packet.frame_index());
+    if (packet.rh_frame.trace) {
+      packet.rh_packet = packet.rh_frame.trace->next_packet();
+      auto row = rhremote::frame_row(packet.rh_frame, rhremote::frame_stage::encode_output, packet.frame_index(), packet.rh_packet);
+      row.bytes = packet.data_size();
+      packet.rh_frame.trace->emit(row);
+    }
+  }
+
+  /**
    * @brief Drain encoded packets from an FFmpeg encoder session.
    *
    * @param frame_nr Monotonic frame index assigned by the video pipeline.
@@ -1887,6 +1931,7 @@ namespace video {
 
       packet->replacements = &session.replacements;
       packet->channel_data = channel_data;
+      trace_encoded_packet(session, *packet);
       packets->raise(std::move(packet));
     }
 
@@ -1918,6 +1963,7 @@ namespace video {
     packet->channel_data = channel_data;
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
     packet->frame_timestamp = frame_timestamp;
+    trace_encoded_packet(session, *packet);
     packets->raise(std::move(packet));
 
     return 0;
@@ -1931,17 +1977,30 @@ namespace video {
    * @param packets Packets queued or emitted by the stream.
    * @param channel_data Channel data.
    * @param frame_timestamp Frame timestamp.
+   * @param context Original input metadata, independent of output order.
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
-  int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+  int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, const rhremote::frame_context &context = {}) {
     rhremote::scope rh_first_encode("first_encode", frame_nr == 1);
-    if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
-      return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
-    } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
-      return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
+    auto input = context;
+    input.generation = session.rh_frames.generation();
+    input.known = true;
+    session.rh_frames.submit(frame_nr, input);
+    if (input.trace) {
+      input.trace->emit(rhremote::frame_row(input, rhremote::frame_stage::encode_begin, frame_nr));
     }
-
-    return -1;
+    int result = -1;
+    if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
+      result = encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
+    } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
+      result = encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
+    }
+    if (input.trace) {
+      auto row = rhremote::frame_row(input, rhremote::frame_stage::encode_end, frame_nr);
+      row.result = result;
+      input.trace->emit(row);
+    }
+    return result;
   }
 
   /**
@@ -2437,6 +2496,8 @@ namespace video {
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
+    auto rh_trace = config.frame_trace.lock();
+    rhremote::capture_stamp rh_source;
 
     {
       // Load a dummy image into the AVFrame to ensure we have something to encode
@@ -2444,7 +2505,8 @@ namespace video {
       // allocation which can be freed immediately after convert(), so we do this
       // in a separate scope.
       auto dummy_img = disp->alloc_img();
-      if (!dummy_img || disp->dummy_img(dummy_img.get()) || session->convert(*dummy_img)) {
+      rhremote::frame_context initial {rh_trace, {}, session->rh_frames.generation(), false, true};
+      if (!dummy_img || disp->dummy_img(dummy_img.get()) || convert_traced(*session, *dummy_img, initial, frame_nr)) {
         return;
       }
     }
@@ -2468,12 +2530,16 @@ namespace video {
       }
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
+      rhremote::frame_context rh_frame {rh_trace, rh_source, session->rh_frames.generation(), false, true};
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
         if (auto img = images->pop(max_frametime)) {
           frame_timestamp = img->frame_timestamp;
-          if (session->convert(*img)) {
+          rh_source = img->rh_capture;
+          rh_frame.source = rh_source;
+          rh_frame.fresh = true;
+          if (convert_traced(*session, *img, rh_frame, frame_nr)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             return;
           }
@@ -2496,7 +2562,7 @@ namespace video {
         break;
       }
 
-      if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {
+      if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, rh_frame)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
       }
@@ -2659,7 +2725,9 @@ namespace video {
     }
 
     // Load the initial image to prepare for encoding
-    if (session->convert(img)) {
+    ctx.rh_source = img.rh_capture;
+    rhremote::frame_context initial {ctx.config.frame_trace.lock(), ctx.rh_source, session->rh_frames.generation(), false, true};
+    if (convert_traced(*session, img, initial, ctx.frame_nr)) {
       BOOST_LOG(error) << "Could not convert initial image"sv;
       return std::nullopt;
     }
@@ -2743,6 +2811,9 @@ namespace video {
     auto ec = platf::capture_e::ok;
     while (encode_session_ctx_queue.running()) {
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        if (frame_captured && img) {
+          img->rh_capture = rhremote::stamp_capture(img->frame_timestamp);
+        }
         while (encode_session_ctx_queue.peek()) {
           auto encode_session_ctx = encode_session_ctx_queue.pop();
           if (!encode_session_ctx) {
@@ -2783,7 +2854,17 @@ namespace video {
             ctx->idr_events->pop();
           }
 
-          if (frame_captured && pos->session->convert(*img)) {
+          rhremote::frame_context rh_frame {ctx->config.frame_trace.lock(), ctx->rh_source, pos->session->rh_frames.generation(), frame_captured, true};
+          if (frame_captured && img) {
+            ctx->rh_source = img->rh_capture;
+            rh_frame.source = ctx->rh_source;
+            if (rh_frame.trace) {
+              auto row = rhremote::frame_row(rh_frame, rhremote::frame_stage::capture_ready, -1);
+              row.generation = 0;
+              rh_frame.trace->emit(row);
+            }
+          }
+          if (frame_captured && convert_traced(*pos->session, *img, rh_frame, ctx->frame_nr)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             ctx->shutdown_event->raise(true);
 
@@ -2795,7 +2876,7 @@ namespace video {
             frame_timestamp = img->frame_timestamp;
           }
 
-          if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp)) {
+          if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp, rh_frame)) {
             BOOST_LOG(error) << "Could not encode video packet"sv;
             ctx->shutdown_event->raise(true);
 

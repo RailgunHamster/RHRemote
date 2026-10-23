@@ -12,6 +12,7 @@
 // local includes
 #include "input.h"
 #include "platform/common.h"
+#include "rhremote_frame_trace.h"
 #include "thread_safe.h"
 #include "video_colorspace.h"
 
@@ -41,6 +42,7 @@ namespace video {
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
     std::string initial_display;  ///< Optional per-launch source used only when the capture pipeline is first created.
+    std::weak_ptr<rhremote::frame_trace> frame_trace;  ///< Optional per-session recorder; cached configs cannot keep it alive.
   };
 
   namespace amf {
@@ -424,6 +426,7 @@ namespace video {
    * @brief Encoder session state shared by capture and encoding threads.
    */
   struct encode_session_t {
+    rhremote::frame_tracker rh_frames;  ///< Bounded PTS history for delayed/multi-packet encoder output.
     virtual ~encode_session_t() = default;
 
     /**
@@ -533,6 +536,8 @@ namespace video {
     void *channel_data = nullptr;  ///< Platform or protocol state carried with this packet.
     bool after_ref_frame_invalidation = false;  ///< Whether the frame follows reference-frame invalidation.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
+    rhremote::frame_context rh_frame;  ///< Original source and trace identity, matched using actual output PTS.
+    std::uint64_t rh_packet {};  ///< Unique encoded-packet identity inside this trace.
   };
 
   /**

@@ -22,6 +22,7 @@
 // local includes
 #include "src/config.h"
 #include "src/logging.h"
+#include "src/rhremote_frame_trace.h"
 #include "src/thread_safe.h"
 #include "src/utility.h"
 #include "src/video_colorspace.h"
@@ -538,6 +539,7 @@ namespace platf {
     std::int32_t row_pitch {};  ///< Bytes between consecutive image rows.
 
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
+    rhremote::capture_stamp rh_capture;  ///< Metadata assigned when a new source image is delivered, without image content.
 
     /**
      * @brief Destroy the image.

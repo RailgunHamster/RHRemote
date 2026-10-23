@@ -2,6 +2,7 @@
  * @file src/stream.cpp
  * @brief Definitions for the streaming protocols.
  */
+#include "rhremote_frame_trace.h"
 #include "rhremote_trace.h"
 
 // standard includes
@@ -488,6 +489,7 @@ namespace stream {
    * @brief Runtime state for one audio/video streaming session.
    */
   struct session_t {
+    std::shared_ptr<rhremote::frame_trace> frame_trace;  ///< Session-owned trace; packets retain it until their metadata is emitted.
     config_t config;  ///< Stream or encoder configuration captured for the worker.
 
     safe::mail_t mail;  ///< Mailbox used to distribute packets and lifecycle events.
@@ -1554,6 +1556,17 @@ namespace stream {
       frame_network_latency_logger.first_point_now();
 
       auto session = (session_t *) packet->channel_data;
+      auto rh_trace = packet->rh_frame.trace;
+      rhremote::frame_event rh_send;
+      if (rh_trace) {
+        auto begin = rhremote::frame_row(packet->rh_frame, rhremote::frame_stage::send_begin, packet->frame_index(), packet->rh_packet);
+        begin.bytes = packet->data_size();
+        rh_trace->emit(begin);
+        rh_send = begin;
+        rh_send.stage = rhremote::frame_stage::send_end;
+        rh_send.bytes = 0;
+        rh_send.wire_duplicate = !packet->frame_timestamp.has_value();
+      }
       auto lowseq = session->video.lowseq;
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};
@@ -1700,9 +1713,13 @@ namespace stream {
           }
 
           frame_fec_latency_logger.first_point_now();
+          const auto rh_fec_begin = rh_trace ? rhremote::frame_tick_us() : 0;
           // If video encryption is enabled, we allocate space for the encryption header before each shard
           auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
           frame_fec_latency_logger.second_point_now_and_log();
+          if (rh_trace) {
+            rh_send.fec_us += rhremote::frame_tick_us() - rh_fec_begin;
+          }
 
           auto peer_address = session->video.peer.address();
           auto batch_info = platf::batched_send_info_t {
@@ -1729,6 +1746,10 @@ namespace stream {
           }
           using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
           uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
+          if (rh_trace) {
+            rh_send.rtp_timestamp = timestamp;
+            rh_send.rtp_known = true;
+          }
 
           // set FEC info now that we know for sure what our percentage will be for this frame
           for (auto x = 0; x < shards.size(); ++x) {
@@ -1778,7 +1799,11 @@ namespace stream {
 
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
+                  const auto rh_wait_begin = rh_trace ? rhremote::frame_tick_us() : 0;
                   timer->sleep_for(due - now);
+                  if (rh_trace) {
+                    rh_send.pacing_us += rhremote::frame_tick_us() - rh_wait_begin;
+                  }
                 }
 
                 ratecontrol_group_packets_sent = 0;
@@ -1789,6 +1814,7 @@ namespace stream {
               batch_info.block_count = current_batch_size;
 
               frame_send_batch_latency_logger.first_point_now();
+              const auto rh_send_begin = rh_trace ? rhremote::frame_tick_us() : 0;
               // Use a batched send if it's supported on this platform
               if (!platf::send_batch(batch_info)) {
                 // Batched send is not available, so send each packet individually
@@ -1809,6 +1835,11 @@ namespace stream {
                 }
               }
               frame_send_batch_latency_logger.second_point_now_and_log();
+              if (rh_trace) {
+                rh_send.send_us += rhremote::frame_tick_us() - rh_send_begin;
+                rh_send.packets += current_batch_size;
+                rh_send.bytes += current_batch_size * (shards.blocksize + shards.prefixsize);
+              }
 
               ratecontrol_group_packets_sent += current_batch_size;
               ratecontrol_frame_packets_sent += current_batch_size;
@@ -1834,7 +1865,17 @@ namespace stream {
         });
 
         session->video.lowseq = lowseq;
+        if (rh_trace) {
+          rh_send.at_us = rhremote::frame_tick_us();
+          rh_trace->emit(rh_send);
+        }
       } catch (const std::exception &e) {
+        if (rh_trace) {
+          rh_send.stage = rhremote::frame_stage::send_error;
+          rh_send.result = -1;
+          rh_send.at_us = rhremote::frame_tick_us();
+          rh_trace->emit(rh_send);
+        }
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
       }
@@ -2326,6 +2367,21 @@ namespace stream {
       session->input_session_id = launch_session.client_cert.empty() ? launch_session.unique_id : launch_session.client_cert;
 
       session->config = config;
+      if (launch_session.frame_trace_requested) {
+        auto trace_root = std::filesystem::path(config::sunshine.config_file).parent_path();
+        if (trace_root.empty()) {
+          trace_root = platf::appdata();
+        }
+        session->frame_trace = rhremote::frame_trace::create(trace_root / "statistics", launch_session.frame_trace_client, [](std::string_view reason) {
+          BOOST_LOG(warning) << "RHREMOTE_FRAME_TRACE failure=" << reason;
+        });
+        session->config.monitor.frame_trace = session->frame_trace;
+        if (session->frame_trace) {
+          BOOST_LOG(info) << "RHREMOTE_FRAME_TRACE id=" << session->frame_trace->id() << " client=" << launch_session.frame_trace_client << " path=" << session->frame_trace->path().string();
+        } else {
+          BOOST_LOG(warning) << "RHREMOTE_FRAME_TRACE failure=create_failed";
+        }
+      }
 
       session->control.connect_data = launch_session.control_connect_data;
       session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);
