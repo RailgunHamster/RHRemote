@@ -552,7 +552,7 @@ namespace rtsp_stream {
 
       auto socket = std::move(next_socket);
 
-      auto launch_session {launch_event.view(0s)};
+      auto launch_session {pending_launches.pending()};
       if (launch_session) {
         // Associate the current RTSP session with this socket and start reading
         socket->session = launch_session;
@@ -590,26 +590,11 @@ namespace rtsp_stream {
      * @note If the client does not begin streaming within the ping_timeout,
      *       the session will be discarded.
      * @param launch_session Streaming session information.
+     * @return Whether this still-owned request acquired the pending slot.
      */
-    void session_raise(std::shared_ptr<launch_session_t> launch_session) {
-      // If a launch event is still pending, don't overwrite it.
-      if (launch_event.view(0s)) {
-        return;
-      }
-
-      // Raise the new launch session to prepare for the RTSP handshake
-      launch_event.raise(std::move(launch_session));
-
-      // Arm the timer to expire this launch session if the client times out
-      raised_timer.expires_after(config::stream.ping_timeout);
-      raised_timer.async_wait([this](const boost::system::error_code &ec) {
-        if (!ec) {
-          auto discarded = launch_event.pop(0s);
-          if (discarded) {
-            BOOST_LOG(debug) << "Event timeout: "sv << discarded->unique_id;
-          }
-        }
-      });
+    bool session_raise(std::shared_ptr<launch_session_t> launch_session) {
+      const auto ownership = launch_session->ownership;
+      return pending_launches.publish(std::move(launch_session), ownership, config::stream.ping_timeout);
     }
 
     /**
@@ -617,17 +602,7 @@ namespace rtsp_stream {
      * @param launch_session_id The ID of the session to clear.
      */
     void session_clear(uint32_t launch_session_id) {
-      // We currently only support a single pending RTSP session,
-      // so the ID should always match the one for that session.
-      auto launch_session = launch_event.view(0s);
-      if (launch_session) {
-        if (launch_session->id != launch_session_id) {
-          BOOST_LOG(error) << "Attempted to clear unexpected session: "sv << launch_session_id << " vs "sv << launch_session->id;
-        } else {
-          raised_timer.cancel();
-          launch_event.pop();
-        }
-      }
+      pending_launches.clear(launch_session_id);
     }
 
     /**
@@ -639,7 +614,7 @@ namespace rtsp_stream {
       return (int) _session_slots->size();
     }
 
-    safe::event_t<std::shared_ptr<launch_session_t>> launch_event;  ///< Launch event.
+    rhremote::pending_launches<launch_session_t> pending_launches;  ///< Atomic pending-slot ownership and bounded cancellation history.
 
     /**
      * @brief Clear launch sessions.
@@ -649,6 +624,9 @@ namespace rtsp_stream {
      * @examples_end
      */
     void clear(bool all = true) {
+      if (all) {
+        pending_launches.reset();
+      }
       auto lg = _session_slots.lock();
 
       for (auto i = _session_slots->begin(); i != _session_slots->end();) {
@@ -670,6 +648,7 @@ namespace rtsp_stream {
      * @param cert Certificate data or object used by the operation.
      */
     void clear_by_cert(std::string_view cert) {
+      pending_launches.revoke(cert);
       auto lg = _session_slots.lock();
       for (auto i = _session_slots->begin(); i != _session_slots->end();) {
         auto &slot = *(*i);
@@ -706,19 +685,17 @@ namespace rtsp_stream {
      * @brief Runs an iteration of the RTSP server loop
      */
     void iterate() {
-      // If we have a session, we will return to the server loop every
-      // 500ms to allow session cleanup to happen.
-      if (session_count() > 0) {
-        io_context.run_one_for(500ms);
-      } else {
-        io_context.run_one();
-      }
+      // Expiry and publication use one mutex. No HTTP thread touches an Asio
+      // timer, and an old callback can never remove a replacement request.
+      pending_launches.pending();
+      io_context.run_one_for(500ms);
     }
 
     /**
      * @brief Stop the RTSP server.
      */
     void stop() {
+      pending_launches.reset(true);
       acceptor.close();
       io_context.stop();
       clear();
@@ -731,7 +708,6 @@ namespace rtsp_stream {
 
     boost::asio::io_context io_context;
     tcp::acceptor acceptor {io_context};
-    boost::asio::steady_timer raised_timer {io_context};
 
     std::shared_ptr<socket_t> next_socket;
   };
@@ -741,8 +717,24 @@ namespace rtsp_stream {
   /**
    * @brief Queue a launch session until the RTSP client connects.
    */
-  void launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
-    server.session_raise(std::move(launch_session));
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session) {
+    return server.session_raise(std::move(launch_session));
+  }
+
+  rhremote::launch_admission launch_request_begin(std::string_view credential, std::string_view owner) {
+    return server.pending_launches.begin(credential, owner);
+  }
+
+  bool launch_request_preparing(const std::shared_ptr<rhremote::launch_ticket> &request) {
+    return server.pending_launches.preparing(request);
+  }
+
+  void launch_request_finish(const std::shared_ptr<rhremote::launch_ticket> &request) {
+    server.pending_launches.finish_preparing(request);
+  }
+
+  rhremote::launch_result launch_request_cancel(std::string_view credential, std::string_view owner) {
+    return server.pending_launches.cancel(credential, owner);
   }
 
   void launch_session_clear(uint32_t launch_session_id) {
@@ -757,7 +749,7 @@ namespace rtsp_stream {
   }
 
   bool launch_pending() {
-    return static_cast<bool>(server.launch_event.view(0s));
+    return static_cast<bool>(server.pending_launches.pending());
   }
 
   void terminate_sessions() {
@@ -1304,6 +1296,12 @@ namespace rtsp_stream {
       return;
     }
 
+    // The socket may still hold an old shared_ptr after cancellation/expiry.
+    // Atomically arbitrate against cancellation before allocating any stream.
+    if (!server->pending_launches.claim(session)) {
+      respond(sock, session, &option, 409, "Conflict", req->sequenceNumber, {});
+      return;
+    }
     auto stream_session = stream::session::alloc(config, session);
     server->insert(stream_session);
 
@@ -1311,6 +1309,7 @@ namespace rtsp_stream {
       BOOST_LOG(error) << "Failed to start a streaming session"sv;
 
       server->remove(stream_session);
+      server->session_clear(session.id);
       respond(sock, session, &option, 500, "Internal Server Error", req->sequenceNumber, {});
       return;
     }

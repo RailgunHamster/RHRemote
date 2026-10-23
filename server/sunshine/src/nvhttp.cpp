@@ -1467,7 +1467,12 @@ namespace nvhttp {
       tree.put("root.RHInitialDisplay", launch_session->initial_display);
     }
 
-    rtsp_stream::launch_session_raise(launch_session);
+    if (!rtsp_stream::launch_session_raise(launch_session)) {
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Launch request no longer owns the pending slot");
+      tree.put("root.gamesession", 0);
+      return;
+    }
 
     // Stream was started successfully, we will revert the config when the app or session terminates
     revert_display_configuration = false;
@@ -1576,7 +1581,11 @@ namespace nvhttp {
       tree.put("root.RHInitialDisplay", launch_session->initial_display);
     }
 
-    rtsp_stream::launch_session_raise(launch_session);
+    if (!rtsp_stream::launch_session_raise(launch_session)) {
+      tree.put("root.<xmlattr>.status_code", 409);
+      tree.put("root.<xmlattr>.status_message", "Resume request no longer owns the pending slot");
+      tree.put("root.resume", 0);
+    }
   }
 
   /**

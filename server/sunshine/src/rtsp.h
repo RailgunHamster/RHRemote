@@ -9,6 +9,7 @@
 
 // local includes
 #include "crypto.h"
+#include "rhremote_pending_launch.h"
 #include "thread_safe.h"
 
 namespace rtsp_stream {
@@ -47,14 +48,28 @@ namespace rtsp_stream {
     std::string initial_display;  ///< Optional per-launch GDI source, resolved before first capture.
     bool frame_trace_requested {};  ///< Paired client explicitly requested metadata-only frame tracing.
     std::string frame_trace_client;  ///< Validated client statistics label, never used as a host path.
+    std::shared_ptr<rhremote::launch_ticket> ownership;  ///< Authenticated request lifetime; empty for legacy clients.
   };
 
   /**
    * @brief Queue a launch session until the RTSP client connects.
    *
    * @param launch_session Session state prepared by the GameStream launch handler.
+   * @return Whether this still-owned request acquired the pending slot.
    */
-  void launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
+  bool launch_session_raise(std::shared_ptr<launch_session_t> launch_session);
+
+  /** @brief Admit authenticated HTTP preparation. @param credential Fresh per-request secret. @param owner Canonical paired TLS certificate. @return Admission and opaque preparation handle. */
+  rhremote::launch_admission launch_request_begin(std::string_view credential, std::string_view owner);
+
+  /** @brief Check admission before slow preparation or publication. @param request Original handle, empty for legacy. @return Whether preparation may continue. */
+  bool launch_request_preparing(const std::shared_ptr<rhremote::launch_ticket> &request);
+
+  /** @brief Finish preparation without removing a published or cancelled request. @param request Original handle. */
+  void launch_request_finish(const std::shared_ptr<rhremote::launch_ticket> &request);
+
+  /** @brief Cancel only this authenticated pending request. @param credential Fresh per-request secret. @param owner Canonical paired TLS certificate. @return Cancellation or irreversible handoff outcome. */
+  rhremote::launch_result launch_request_cancel(std::string_view credential, std::string_view owner);
 
   /**
    * @brief Clear state for the specified launch session.
