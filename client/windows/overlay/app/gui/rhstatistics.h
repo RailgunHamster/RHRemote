@@ -35,7 +35,9 @@ class RhStatistics {
     }
 public:
     static RhStatistics& get(){static RhStatistics s;return s;}
-    ~RhStatistics(){if(writer.joinable()){{std::lock_guard<std::mutex> lock(mutex);stopping=true;}wake.notify_one();writer.join();}}
+    ~RhStatistics(){finish();}
+    void finish(){enabled=false;if(writer.joinable()){{std::lock_guard<std::mutex> lock(mutex);stopping=true;}wake.notify_one();writer.join();}}
+    static void finishNow(){get().finish();}
     static bool active(){return get().enabled;}
     static qint64 now(){auto& s=get();return s.origin+s.clock.nsecsElapsed()/1000;}
     static void event(const QString& name,qint64 frame=-1,QJsonObject fields={},qint64 at=0,qint64 duration=0){

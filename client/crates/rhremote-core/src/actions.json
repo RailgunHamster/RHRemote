@@ -17,7 +17,7 @@
  {"id":"settings.sources.toggle","label":"展开其他客户端的配置","args":{"tab":"video / audio / input / network / advanced"}},
  {"id":"settings.save","label":"保存","args":{"displayName":"string, optional; empty clears alias"}},
  {"id":"settings.cancel","label":"取消设置 / 返回","args":{}},
- {"id":"device.connect","label":"连接","args":{"uuid":"string"}},
+ {"id":"device.connect","label":"连接","args":{"uuid":"string","testInitialFailure":"optional network / identity / decoder; Windows RHREMOTE_TEST_MODE only"}},
  {"id":"device.pair","label":"配对","args":{"uuid":"string","pin":"four digits, optional"}},
  {"id":"pair.cancel","label":"取消配对","args":{}},
  {"id":"appearance.toggle","label":"深色 / 浅色","args":{}},

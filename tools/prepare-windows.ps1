@@ -290,12 +290,19 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     # The RHRemote shell already owns progress/status; no fixed toast-reading delay.
     $s=Replace-Once $s '    SDL_Delay(1500);' '    if(qEnvironmentVariableIsEmpty("RHREMOTE_CONTROL_PORT"))SDL_Delay(1500);'
     $s=Replace-Once $s 'void Session::clStageFailed(int stage, int errorCode)' 'void Session::clStageFailed(int stage, int errorCode)'
-    $s=$s.Replace("void Session::clStageFailed(int stage, int errorCode)`r`n{","void Session::clStageFailed(int stage, int errorCode)`r`n{`r`n    RhRuntime::status(`"error`",QString(`"%1 (%2)`").arg(QString::fromLocal8Bit(LiGetStageName(stage))).arg(errorCode));")
-    $s=$s.Replace("void Session::clStageFailed(int stage, int errorCode)`n{","void Session::clStageFailed(int stage, int errorCode)`n{`n    RhRuntime::status(`"error`",QString(`"%1 (%2)`").arg(QString::fromLocal8Bit(LiGetStageName(stage))).arg(errorCode));")
+    $s=$s.Replace("void Session::clStageFailed(int stage, int errorCode)`r`n{","void Session::clStageFailed(int stage, int errorCode)`r`n{`r`n    RhRuntime::stageFailed(stage,errorCode);")
+    $s=$s.Replace("void Session::clStageFailed(int stage, int errorCode)`n{","void Session::clStageFailed(int stage, int errorCode)`n{`n    RhRuntime::stageFailed(stage,errorCode);")
     $s=$s.Replace('void Session::clConnectionTerminated(int errorCode)', 'void Session::clConnectionTerminated(int errorCode)')
     $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`r`n{","void Session::clConnectionTerminated(int errorCode)`r`n{`r`n    RhRuntime::terminated(errorCode);")
     $s=$s.Replace("void Session::clConnectionTerminated(int errorCode)`n{","void Session::clConnectionTerminated(int errorCode)`n{`n    RhRuntime::terminated(errorCode);")
     $s=$s.Replace('LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags)','(qEnvironmentVariableIsSet("RHREMOTE_CONTROL_PORT") ? 0 : LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags))')
+    $s=Replace-Once $s '    } catch (const QtNetworkReplyException& e) {
+        emit displayLaunchError(e.toQString());' @'
+    } catch (const QtNetworkReplyException& e) {
+        const auto code=e.getError();RhRuntime::get().routeRetryEligible=code==QNetworkReply::ConnectionRefusedError||code==QNetworkReply::RemoteHostClosedError||code==QNetworkReply::HostNotFoundError||code==QNetworkReply::TimeoutError||code==QNetworkReply::TemporaryNetworkFailureError;
+        RhRuntime::status("error",e.toQString());
+        emit displayLaunchError(e.toQString());
+'@
     $s=Replace-Once $s 'QString(m_Computer->name + " - Moonlight")' 'QString(m_Computer->name + " - RHRemote-Moonlight")'
     $s=Replace-Once $s 'bool Session::startConnectionAsync()' 'bool Session::startConnectionAsync()'
     $s=Replace-Once $s '    QString rtspSessionUrl;' @'
@@ -304,7 +311,7 @@ bool Session::populateDecoderProperties(SDL_Window* window)
         auto reply=m_RhDisplayPreparation.valid()
             ? m_RhDisplayPreparation.get()
             : QJsonObject{{"ok",false},{"error","Display preparation did not start"}};
-        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.firstFrame=false;r.localDisconnect=false;r.retryEligible=false;
+        {auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);r.initialDisplay=0;r.firstFrame=false;r.localDisconnect=false;r.retryEligible=false;r.routeRetryEligible=false;
             if(reply["ok"].toBool()){auto data=reply["result"].toObject();r.displays=data["displays"].toArray();r.selectedDisplay=data["selected"].toObject();int index=r.selectedDisplay["captureIndex"].toInt();r.initialDisplay=index==data["initialCaptureIndex"].toInt()?0:index;r.displayError.clear();}
             else{r.displayError=reply["error"].toString();}
         }
@@ -316,13 +323,20 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     { auto& runtime=RhRuntime::get();QMutexLocker lock(&runtime.mutex);
       runtime.hostAddress=m_Computer->activeAddress.address();runtime.hostCert=m_Computer->serverCert;
       runtime.profile={{"width",m_Preferences->width},{"height",m_Preferences->height},{"swapButtons",m_Preferences->swapMouseButtons}}; }
+    const auto rhFailure=qEnvironmentVariable("RHREMOTE_TEST_INITIAL_FAILURE");
+    if(qEnvironmentVariable("RHREMOTE_TEST_MODE")=="1"&&!rhFailure.isEmpty()){
+        RhRuntime::get().routeRetryEligible=rhFailure=="network";
+        const auto message=QString("测试注入：首帧前 %1 失败").arg(rhFailure);
+        RhStatistics::event("test_initial_failure",-1,{{"kind",rhFailure},{"synthetic",true}});
+        RhRuntime::status("error",message);emit displayLaunchError(message);return false;
+    }
     RhRuntime::stream(true);
     {int index;{auto& r=RhRuntime::get();QMutexLocker lock(&r.mutex);index=r.initialDisplay;}if(index>0)RhKeys::display(index);}
     emit connectionStarted();
 '@
     $s=$s.Replace('        execInternal();',"        execInternal();`n        RhRuntime::stream(false);")
     $s=Replace-Once $s '        case SDL_QUIT:' '        case SDL_QUIT:
-            if(!RhRuntime::get().retryEligible.load())RhRuntime::get().localDisconnect=true;'
+            if(!RhRuntime::get().retryEligible.load()&&!RhRuntime::get().routeRetryEligible.load())RhRuntime::get().localDisconnect=true;'
     $s=Replace-Once $s '    m_InputHandler->setWindow(m_Window);' @'
 #ifdef Q_OS_WIN32
     {SDL_SysWMinfo info{};SDL_VERSION(&info.version);if(SDL_GetWindowWMInfo(m_Window,&info)&&info.subsystem==SDL_SYSWM_WINDOWS)RhRuntime::get().streamWindow=quintptr(info.info.win.window);}

@@ -8,6 +8,49 @@ pub struct Policy {
     next: Option<u64>,
     healthy: Option<u64>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedRoute {
+    pub route: String,
+    pub address: String,
+}
+
+/// A media failure excludes only that route/address for the current burst.
+/// Certificate, decoder and explicit-close failures never admit a fallback.
+#[derive(Default)]
+pub struct Routes {
+    pub failed: Vec<FailedRoute>,
+    started: Option<u64>,
+    healthy_since: Option<u64>,
+}
+impl Routes {
+    pub fn healthy(&mut self, now: u64, rendered: bool) {
+        if rendered {
+            let since = *self.healthy_since.get_or_insert(now);
+            if now.saturating_sub(since) >= 10_000 {
+                self.failed.clear();
+                self.started = None;
+            }
+        } else {
+            self.healthy_since = None;
+        }
+    }
+    pub fn admit(&mut self, now: u64, failed: FailedRoute, eligible: bool) -> bool {
+        if !eligible || failed.route.is_empty() || failed.address.is_empty() {
+            return false;
+        }
+        let started = *self.started.get_or_insert(now);
+        if now.saturating_sub(started) >= 60_000
+            || self.failed.len() >= 8
+            || self.failed.contains(&failed)
+        {
+            return false;
+        }
+        self.failed.push(failed);
+        true
+    }
+}
 #[derive(Debug, PartialEq)]
 pub enum Decision {
     Idle,
@@ -16,6 +59,9 @@ pub enum Decision {
     Exhausted,
 }
 impl Policy {
+    pub fn armed(&self) -> bool {
+        self.armed
+    }
     pub fn observe(&mut self, now: u64, alive: bool, rendered: bool, eligible: bool) -> Decision {
         if alive && rendered {
             self.armed = true;
@@ -54,6 +100,37 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_fallback_is_bounded_and_does_not_retry_identity_failures() {
+        let mut routes = Routes::default();
+        let lan = FailedRoute {
+            route: "lan".into(),
+            address: "192.168.0.104".into(),
+        };
+        assert!(!routes.admit(0, lan.clone(), false));
+        assert!(routes.failed.is_empty());
+        assert!(routes.admit(100, lan.clone(), true));
+        assert!(!routes.admit(200, lan.clone(), true));
+        assert!(routes.admit(
+            300,
+            FailedRoute {
+                route: "relay".into(),
+                address: "rhr:host".into()
+            },
+            true
+        ));
+        assert!(!routes.admit(
+            60_100,
+            FailedRoute {
+                route: "public_direct".into(),
+                address: "example.test".into()
+            },
+            true
+        ));
+        routes.healthy(61_000, true);
+        routes.healthy(71_000, true);
+        assert!(routes.admit(72_000, lan, true));
+    }
     #[test]
     fn initial_failure_and_local_close_never_reconnect() {
         let mut p = Policy::default();

@@ -109,13 +109,13 @@ pub fn report_text(value: &Value) -> String {
         return "尚未诊断".into();
     }
     let address = value["selectedAddress"].as_str().unwrap_or("无可用地址");
-    let path = match (value["route"].as_str(),value["path"].as_str()) {
-        (Some("tailscale_direct"),Some("direct")) => "Tailscale 直连",
-        (Some("tailscale_relay"),Some("relay")) => "Tailscale 中继",
-        (Some("punch_direct"),Some("direct")) => "内置打洞直连",
-        (Some("relay"),Some("relay")) => "RHRemote 中继",
-        (Some("lan"),_) => "局域网",
-        (Some("public_direct"),_) => "公网直连",
+    let path = match (value["route"].as_str(), value["path"].as_str()) {
+        (Some("tailscale_direct"), Some("direct")) => "Tailscale 直连",
+        (Some("tailscale_relay"), Some("relay")) => "Tailscale 中继",
+        (Some("punch_direct"), Some("direct")) => "内置打洞直连",
+        (Some("relay"), Some("relay")) => "RHRemote 中继",
+        (Some("lan"), _) => "局域网",
+        (Some("public_direct"), _) => "公网直连",
         _ => "路径未确认",
     };
     let udp = match value["host"]["mediaUdp"].as_str() {
@@ -153,13 +153,42 @@ pub fn report_text(value: &Value) -> String {
     lines.join("\n")
 }
 impl Network {
-    pub fn release_transport(&self){
-        if let Some(client)=self.tunnel.lock().unwrap().as_mut(){client.stop();}
+    pub fn release_transport(&self) {
+        if let Some(client) = self.tunnel.lock().unwrap().as_mut() {
+            client.stop();
+        }
     }
-    pub fn native_environment(&self)->(u16,String){
-        let last=self.last.lock().unwrap();let offset=last["policy"]["portOffset"].as_u64().unwrap_or(0)as u16;
-        let id=last["policy"]["clientEndpointId"].as_str().filter(|s|!s.is_empty()).map(str::to_owned);drop(last);
-        let id=id.or_else(||{let data=std::env::var_os("RHREMOTE_DATA_DIR").map(std::path::PathBuf::from).unwrap_or_else(||std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote"));rhremote_transport::key(&data.join("transport.key")).ok().map(|k|k.public().to_string())}).unwrap_or_default();(offset,id)
+    pub fn try_release_transport(&self) {
+        if let Ok(mut slot) = self.tunnel.try_lock() {
+            if let Some(client) = slot.as_mut() {
+                client.stop();
+            }
+        }
+    }
+    pub fn native_environment(&self) -> (u16, String) {
+        let last = self.last.lock().unwrap();
+        let offset = last["policy"]["portOffset"].as_u64().unwrap_or(0) as u16;
+        let id = last["policy"]["clientEndpointId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned);
+        drop(last);
+        let id = id
+            .or_else(|| {
+                let data = std::env::var_os("RHREMOTE_DATA_DIR")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::path::PathBuf::from(
+                            std::env::var_os("LOCALAPPDATA").unwrap_or_default(),
+                        )
+                        .join("RHRemote")
+                    });
+                rhremote_transport::key(&data.join("transport.key"))
+                    .ok()
+                    .map(|k| k.public().to_string())
+            })
+            .unwrap_or_default();
+        (offset, id)
     }
     fn inventory(&self) -> Value {
         let mut cache = self.peers.lock().unwrap();
@@ -197,61 +226,196 @@ impl Network {
             })
             .collect()
     }
-    pub fn resolve(&self,device:&Device,profile:&Profile)->Result<(String,EffectivePolicy),String>{
-        let started=Instant::now();let mut candidates=network::addresses(&device.address,&device.addresses)?;
-        if !candidates.iter().any(|a|network::kind(a)=="tailscale")&&profile.route_order.iter().any(|r|r.starts_with("tailscale")) {
-            for address in self.discovered(device){if candidates.len()<network::MAX_ADDRESSES&&!candidates.contains(&address){candidates.push(address);}}
-        }
-        candidates.retain(|a|network::accepts(&profile.network_mode,a));
-        let mut attempts=Vec::new();let mut tailnet_paths=std::collections::HashMap::<String,String>::new();
+    pub fn resolve(
+        &self,
+        device: &Device,
+        profile: &Profile,
+    ) -> Result<(String, EffectivePolicy), String> {
+        self.resolve_excluding(
+            device,
+            profile,
+            &[],
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    }
+    pub fn resolve_excluding(
+        &self,
+        device: &Device,
+        profile: &Profile,
+        failed: &[crate::recovery::FailedRoute],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(String, EffectivePolicy), String> {
+        let started = Instant::now();
+        let mut candidates = network::addresses(&device.address, &device.addresses)?;
+        candidates.retain(|a| network::accepts(&profile.network_mode, a));
+        let mut attempts = Vec::new();
+        let mut tailnet_paths = std::collections::HashMap::<String, String>::new();
+        let mut tailnet_loaded = false;
         for route in &profile.route_order {
-            if matches!(route.as_str(),"punch_direct"|"relay") {
-                for address in candidates.iter().filter(|a|network::transport_id(a).is_some()) {
-                    let attempt=Instant::now();let id=network::transport_id(address).unwrap();
-                    let result=(||->Result<_,String>{
-                        let mut slot=self.tunnel.lock().unwrap();if slot.is_none(){*slot=Some(rhremote_transport::Client::new().map_err(|e|e.to_string())?);}
-                        let data=std::env::var_os("RHREMOTE_DATA_DIR").map(std::path::PathBuf::from).unwrap_or_else(||std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote"));
-                        let info=slot.as_mut().unwrap().start(&data.join("transport.key"),rhremote_transport::Address{endpoint_id:id.into(),relay_url:profile.relay_url.clone()},route=="relay").map_err(|e|e.to_string())?;
-                        if route=="punch_direct"&&info.path!="direct"{return Err("打洞未形成直连，保留后续中继回退".into());}
-                        probe_at(&info.address,&device.uuid,47989+info.port_offset).map_err(str::to_owned)?;
-                        let mut policy=network::policy(profile,address);policy.network="transport".into();policy.packet_size=1024;policy.port_offset=info.port_offset;policy.client_endpoint_id=info.endpoint_id.clone();
-                        Ok((info,policy))
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("连接已取消".into());
+            }
+            // A reachable LAN route must not wait for the Tailscale CLI.
+            if route.starts_with("tailscale") && !tailnet_loaded {
+                tailnet_loaded = true;
+                if !candidates.iter().any(|a| network::kind(a) == "tailscale") {
+                    for address in self.discovered(device) {
+                        if candidates.len() < network::MAX_ADDRESSES
+                            && !candidates.contains(&address)
+                            && network::accepts(&profile.network_mode, &address)
+                        {
+                            candidates.push(address);
+                        }
+                    }
+                }
+            }
+            if matches!(route.as_str(), "punch_direct" | "relay") {
+                for address in candidates
+                    .iter()
+                    .filter(|a| network::transport_id(a).is_some())
+                {
+                    if failed
+                        .iter()
+                        .any(|f| f.route == *route && f.address == *address)
+                    {
+                        continue;
+                    }
+                    let attempt = Instant::now();
+                    let id = network::transport_id(address).unwrap();
+                    let result = (|| -> Result<_, String> {
+                        let mut slot = self.tunnel.lock().unwrap();
+                        if slot.is_none() {
+                            *slot =
+                                Some(rhremote_transport::Client::new().map_err(|e| e.to_string())?);
+                        }
+                        let data = std::env::var_os("RHREMOTE_DATA_DIR")
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_else(|| {
+                                std::path::PathBuf::from(
+                                    std::env::var_os("LOCALAPPDATA").unwrap_or_default(),
+                                )
+                                .join("RHRemote")
+                            });
+                        let info = slot
+                            .as_mut()
+                            .unwrap()
+                            .start_cancelable(
+                                &data.join("transport.key"),
+                                rhremote_transport::Address {
+                                    endpoint_id: id.into(),
+                                    relay_url: profile.relay_url.clone(),
+                                },
+                                route == "relay",
+                                cancel,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        if route == "punch_direct" && info.path != "direct" {
+                            return Err("打洞未形成直连，保留后续中继回退".into());
+                        }
+                        probe_at(&info.address, &device.uuid, 47989 + info.port_offset)
+                            .map_err(str::to_owned)?;
+                        let mut policy = network::policy(profile, address);
+                        policy.network = "transport".into();
+                        policy.packet_size = 1024;
+                        policy.port_offset = info.port_offset;
+                        policy.client_endpoint_id = info.endpoint_id.clone();
+                        Ok((info, policy))
                     })();
                     attempts.push(json!({"address":address,"route":route,"ok":result.is_ok(),"elapsedMs":attempt.elapsed().as_millis() as u64,"error":result.as_ref().err()}));
-                    if let Ok((info,policy))=result{
-                        *self.last.lock().unwrap()=json!({"uuid":device.uuid,"selectedAddress":info.address,"remoteAddress":address,"route":route,"path":info.path,"rttMs":info.rtt_ms,"policy":policy,"routeOrder":profile.route_order,"attempts":attempts,"elapsedMs":started.elapsed().as_millis() as u64,"mediaUdp":"not_tested"});
-                        return Ok((info.address,policy));
+                    if let Ok((info, policy)) = result {
+                        *self.last.lock().unwrap() = json!({"uuid":device.uuid,"selectedAddress":info.address,"remoteAddress":address,"route":route,"path":info.path,"rttMs":info.rtt_ms,"policy":policy,"routeOrder":profile.route_order,"attempts":attempts,"elapsedMs":started.elapsed().as_millis() as u64,"mediaUdp":"not_tested"});
+                        return Ok((info.address, policy));
                     }
                 }
                 continue;
             }
-            let mut group=Vec::new();
-            for address in candidates.iter().filter(|a|network::transport_id(a).is_none()) {
-                let kind=network::kind(address);
-                if kind=="tailscale"&&matches!(route.as_str(),"tailscale_direct"|"tailscale_relay") {
-                    let path=tailnet_paths.entry(address.clone()).or_insert_with(||{
-                        let output=cli(&["ping","--c","1","--timeout","1s","--until-direct=false",address]).unwrap_or_default();
-                        if output.contains(" via DERP(")||output.contains(" via peer-relay"){"relay"}else if output.contains("pong from ")&&output.contains(" via "){"direct"}else{"unknown"}.into()
+            let mut group = Vec::new();
+            for address in candidates
+                .iter()
+                .filter(|a| network::transport_id(a).is_none())
+            {
+                if failed
+                    .iter()
+                    .any(|f| f.route == *route && f.address == *address)
+                {
+                    continue;
+                }
+                let kind = network::kind(address);
+                if kind == "tailscale"
+                    && matches!(route.as_str(), "tailscale_direct" | "tailscale_relay")
+                {
+                    let path = tailnet_paths.entry(address.clone()).or_insert_with(|| {
+                        let output = cli(&[
+                            "ping",
+                            "--c",
+                            "1",
+                            "--timeout",
+                            "1s",
+                            "--until-direct=false",
+                            address,
+                        ])
+                        .unwrap_or_default();
+                        if output.contains(" via DERP(") || output.contains(" via peer-relay") {
+                            "relay"
+                        } else if output.contains("pong from ") && output.contains(" via ") {
+                            "direct"
+                        } else {
+                            "unknown"
+                        }
+                        .into()
                     });
-                    if route=="tailscale_direct"&&path=="direct"||route=="tailscale_relay"&&path!="direct"{group.push(address.clone());}
-                }else if network::address_route(address)==route{group.push(address.clone());}
+                    if route == "tailscale_direct" && path == "direct"
+                        || route == "tailscale_relay" && path != "direct"
+                    {
+                        group.push(address.clone());
+                    }
+                } else if network::address_route(address) == route {
+                    group.push(address.clone());
+                }
             }
-            if group.is_empty(){continue;}
-            let(tx,rx)=mpsc::channel();
-            for address in group{let(tx,uuid)= (tx.clone(),device.uuid.clone());std::thread::spawn(move||{let at=Instant::now();let result=probe(&address,&uuid);let _=tx.send((address,at.elapsed().as_millis() as u64,result));});}drop(tx);
-            let deadline=Instant::now()+Duration::from_millis(1250);let mut best=None;let mut grace=deadline;
-            while let Some(wait)=deadline.min(grace).checked_duration_since(Instant::now()) {
-                let Ok((address,ms,result))=rx.recv_timeout(wait)else{break};
+            if group.is_empty() {
+                continue;
+            }
+            let (tx, rx) = mpsc::channel();
+            for address in group {
+                let (tx, uuid) = (tx.clone(), device.uuid.clone());
+                std::thread::spawn(move || {
+                    let at = Instant::now();
+                    let result = probe(&address, &uuid);
+                    let _ = tx.send((address, at.elapsed().as_millis() as u64, result));
+                });
+            }
+            drop(tx);
+            let deadline = Instant::now() + Duration::from_millis(1250);
+            let mut best = None;
+            let mut grace = deadline;
+            while let Some(wait) = deadline.min(grace).checked_duration_since(Instant::now()) {
+                if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("连接已取消".into());
+                }
+                let (address, ms, result) =
+                    match rx.recv_timeout(wait.min(Duration::from_millis(50))) {
+                        Ok(result) => result,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
                 attempts.push(json!({"address":address,"route":route,"elapsedMs":ms,"ok":result.is_ok(),"error":result.err()}));
-                if result.is_ok()&&best.as_ref().is_none_or(|(_,old)|ms<*old){best=Some((address,ms));grace=Instant::now()+Duration::from_millis(50);}
+                if result.is_ok() && best.as_ref().is_none_or(|(_, old)| ms < *old) {
+                    best = Some((address, ms));
+                    grace = Instant::now() + Duration::from_millis(50);
+                }
             }
-            if let Some((address,ms))=best {
-                let policy=network::policy(profile,&address);let path=tailnet_paths.get(&address).map(String::as_str).unwrap_or("direct");
-                *self.last.lock().unwrap()=json!({"uuid":device.uuid,"selectedAddress":address,"route":route,"path":path,"preflightMs":ms,"policy":policy,"routeOrder":profile.route_order,"attempts":attempts,"elapsedMs":started.elapsed().as_millis() as u64,"mediaUdp":"not_tested"});
-                return Ok((address,policy));
+            if let Some((address, ms)) = best {
+                let policy = network::policy(profile, &address);
+                let path = tailnet_paths
+                    .get(&address)
+                    .map(String::as_str)
+                    .unwrap_or("direct");
+                *self.last.lock().unwrap() = json!({"uuid":device.uuid,"selectedAddress":address,"route":route,"path":path,"preflightMs":ms,"policy":policy,"routeOrder":profile.route_order,"attempts":attempts,"elapsedMs":started.elapsed().as_millis() as u64,"mediaUdp":"not_tested"});
+                return Ok((address, policy));
             }
         }
-        *self.last.lock().unwrap()=json!({"uuid":device.uuid,"attempts":attempts,"routeOrder":profile.route_order,"path":"unknown","elapsedMs":started.elapsed().as_millis() as u64,"mediaUdp":"not_tested"});
+        *self.last.lock().unwrap() = json!({"uuid":device.uuid,"attempts":attempts,"routeOrder":profile.route_order,"path":"unknown","elapsedMs":started.elapsed().as_millis() as u64,"mediaUdp":"not_tested"});
         Err("已启用的连接路径均不可达或 UUID 不符；请打开连接设置 → 网络 → 诊断".into())
     }
     pub fn diagnose(&self, device: &Device, profile: &Profile) -> Value {
@@ -261,8 +425,8 @@ impl Network {
             let mut ports = Vec::new();
             for port in [47984u16, 47989, 47995, 48010] {
                 let start = Instant::now();
-                let offset=result["policy"]["portOffset"].as_u64().unwrap_or(0)as u16;
-                let ok = (address.trim_matches(['[', ']']), port+offset)
+                let offset = result["policy"]["portOffset"].as_u64().unwrap_or(0) as u16;
+                let ok = (address.trim_matches(['[', ']']), port + offset)
                     .to_socket_addrs()
                     .ok()
                     .into_iter()
@@ -283,13 +447,14 @@ impl Network {
                     "--until-direct=false",
                     &address,
                 ]) {
-                    let path = if output.contains(" via DERP(") || output.contains(" via peer-relay") {
-                        "relay"
-                    } else if output.contains(" via ") && output.contains("pong from ") {
-                        "direct"
-                    } else {
-                        "unknown"
-                    };
+                    let path =
+                        if output.contains(" via DERP(") || output.contains(" via peer-relay") {
+                            "relay"
+                        } else if output.contains(" via ") && output.contains("pong from ") {
+                            "direct"
+                        } else {
+                            "unknown"
+                        };
                     result["path"] = json!(path);
                     result["pathEvidence"] =
                         json!("tailscale ping; time of diagnosis only, may change");

@@ -220,7 +220,10 @@ async fn forward_tcp(
             // Pipeline the native request with its port header. The host still
             // authorizes before connecting to Sunshine; consume its status before
             // exposing any response. Waiting here avoids an extra RTT per socket.
-            ensure!(receive.read_u8().await? == 0,"Remote transport rejected TCP channel");
+            ensure!(
+                receive.read_u8().await? == 0,
+                "Remote transport rejected TCP channel"
+            );
             tokio::io::copy(&mut receive, &mut writer).await?;
             writer.shutdown().await?;
             Ok::<_, anyhow::Error>(())
@@ -268,6 +271,24 @@ impl Client {
         remote: Address,
         relay_only: bool,
     ) -> Result<ProxyInfo> {
+        self.start_cancelable(
+            key_file,
+            remote,
+            relay_only,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    }
+    pub fn start_cancelable(
+        &mut self,
+        key_file: &Path,
+        remote: Address,
+        relay_only: bool,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<ProxyInfo> {
+        ensure!(
+            !cancel.load(std::sync::atomic::Ordering::SeqCst),
+            "Connection cancelled"
+        );
         remote.validate()?;
         let reusable = self.current.as_ref().is_some_and(|(_, p, a, r)| {
             a.endpoint_id == remote.endpoint_id
@@ -280,7 +301,10 @@ impl Client {
             let secret = key(key_file)?;
             let (endpoint, proxy) = self.runtime.block_on(async {
                 let endpoint = endpoint(secret, &remote.relay_url, relay_only).await?;
-                let proxy = Proxy::start(&endpoint, &remote, DEFAULT_OFFSET).await?;
+                let proxy = tokio::select!{
+                    proxy=Proxy::start(&endpoint,&remote,DEFAULT_OFFSET)=>proxy?,
+                    _=async{while !cancel.load(std::sync::atomic::Ordering::SeqCst){tokio::time::sleep(Duration::from_millis(20)).await;}}=>{endpoint.close().await;bail!("Connection cancelled");}
+                };
                 if !relay_only {
                     let until = Instant::now() + Duration::from_millis(1200);
                     while !proxy
@@ -290,6 +314,7 @@ impl Client {
                         .any(|p| p.is_selected() && p.is_ip())
                         && Instant::now() < until
                     {
+                        ensure!(!cancel.load(std::sync::atomic::Ordering::SeqCst),"Connection cancelled");
                         tokio::time::sleep(Duration::from_millis(30)).await;
                     }
                 }
@@ -343,7 +368,7 @@ impl Drop for Proxy {
 }
 impl Proxy {
     pub async fn start(endpoint: &Endpoint, remote: &Address, offset: u16) -> Result<Self> {
-        let (offset,tcp,udp)=bind_proxy_ports(offset).await?;
+        let (offset, tcp, udp) = bind_proxy_ports(offset).await?;
         let connection = connect(endpoint, remote).await?;
         let local = Ipv4Addr::new(127, 77, 0, 2);
         let mut jobs = JoinSet::new();
@@ -388,23 +413,38 @@ impl Proxy {
         })
     }
 }
-type BoundPorts=(u16,Vec<(u16,TcpListener)>,HashMap<u16,Arc<UdpSocket>>);
-async fn bind_proxy_ports(preferred:u16)->Result<BoundPorts>{
-    ensure!(preferred>0 && preferred<=u16::MAX-48010,"Invalid port offset");
+type BoundPorts = (u16, Vec<(u16, TcpListener)>, HashMap<u16, Arc<UdpSocket>>);
+async fn bind_proxy_ports(preferred: u16) -> Result<BoundPorts> {
+    ensure!(
+        preferred > 0 && preferred <= u16::MAX - 48010,
+        "Invalid port offset"
+    );
     // Hyper-V may reserve an entire TCP range, even on loopback. Try complete
     // application-local port sets; never change the system's reserved ranges.
-    let mut offsets=vec![preferred];
-    offsets.extend((1000..=15000).step_by(1000).filter(|o|*o!=preferred));
-    let mut last=None;
+    let mut offsets = vec![preferred];
+    offsets.extend((1000..=15000).step_by(1000).filter(|o| *o != preferred));
+    let mut last = None;
     for offset in offsets {
-        let bound:Result<BoundPorts>=async {
-            let local=Ipv4Addr::new(127,77,0,2);
-            let mut tcp=Vec::new();let mut udp=HashMap::new();
-            for &port in TCP_PORTS{tcp.push((port,TcpListener::bind((local,port+offset)).await?));}
-            for &port in UDP_PORTS{udp.insert(port,Arc::new(UdpSocket::bind((local,port+offset)).await?));}
-            Ok((offset,tcp,udp))
-        }.await;
-        match bound{Ok(ports)=>return Ok(ports),Err(error)=>last=Some(error)}
+        let bound: Result<BoundPorts> = async {
+            let local = Ipv4Addr::new(127, 77, 0, 2);
+            let mut tcp = Vec::new();
+            let mut udp = HashMap::new();
+            for &port in TCP_PORTS {
+                tcp.push((port, TcpListener::bind((local, port + offset)).await?));
+            }
+            for &port in UDP_PORTS {
+                udp.insert(
+                    port,
+                    Arc::new(UdpSocket::bind((local, port + offset)).await?),
+                );
+            }
+            Ok((offset, tcp, udp))
+        }
+        .await;
+        match bound {
+            Ok(ports) => return Ok(ports),
+            Err(error) => last = Some(error),
+        }
     }
     Err(last.unwrap()).context("No complete local transport port set is available")
 }
@@ -489,40 +529,68 @@ async fn serve_connection(
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn tcp_request_does_not_wait_for_the_channel_acknowledgement(){
-        let build=||Endpoint::builder(presets::Minimal).alpns(vec![ALPN.to_vec()]).relay_mode(RelayMode::Disabled).bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST,0))).unwrap();
-        let server=build().bind().await.unwrap();let client=build().bind().await.unwrap();
-        let remote=EndpointAddr::new(server.id()).with_ip_addr(server.bound_sockets()[0]);
-        let receiver=tokio::spawn(async move{
-            let connection=server.accept().await.unwrap().await.unwrap();
-            let(mut send,mut receive)=connection.accept_bi().await.unwrap();
-            assert_eq!(receive.read_u16().await.unwrap(),47989);
+    async fn tcp_request_does_not_wait_for_the_channel_acknowledgement() {
+        let build = || {
+            Endpoint::builder(presets::Minimal)
+                .alpns(vec![ALPN.to_vec()])
+                .relay_mode(RelayMode::Disabled)
+                .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .unwrap()
+        };
+        let server = build().bind().await.unwrap();
+        let client = build().bind().await.unwrap();
+        let remote = EndpointAddr::new(server.id()).with_ip_addr(server.bound_sockets()[0]);
+        let receiver = tokio::spawn(async move {
+            let connection = server.accept().await.unwrap().await.unwrap();
+            let (mut send, mut receive) = connection.accept_bi().await.unwrap();
+            assert_eq!(receive.read_u16().await.unwrap(), 47989);
             // Deliberately require the request before returning the channel ACK.
             // The old sequential handshake deadlocks on this condition.
-            let mut payload=[0;5];receive.read_exact(&mut payload).await.unwrap();assert_eq!(&payload,b"hello");
-            send.write_all(b"\0reply").await.unwrap();send.finish().unwrap();
-            send.stopped().await.unwrap();server.close().await;
+            let mut payload = [0; 5];
+            receive.read_exact(&mut payload).await.unwrap();
+            assert_eq!(&payload, b"hello");
+            send.write_all(b"\0reply").await.unwrap();
+            send.finish().unwrap();
+            send.stopped().await.unwrap();
+            server.close().await;
         });
-        let connection=client.connect(remote,ALPN).await.unwrap();
-        let listener=TcpListener::bind((Ipv4Addr::LOCALHOST,0)).await.unwrap();
-        let mut native=tokio::net::TcpStream::connect(listener.local_addr().unwrap()).await.unwrap();
-        let(socket,_)=listener.accept().await.unwrap();
-        let forward=tokio::spawn(forward_tcp(connection,socket,47989));
-        native.write_all(b"hello").await.unwrap();native.shutdown().await.unwrap();
-        let mut response=Vec::new();
-        tokio::time::timeout(Duration::from_secs(3),native.read_to_end(&mut response)).await.unwrap().unwrap();
-        assert_eq!(response,b"reply");forward.await.unwrap().unwrap();receiver.await.unwrap();client.close().await;
+        let connection = client.connect(remote, ALPN).await.unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let mut native = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (socket, _) = listener.accept().await.unwrap();
+        let forward = tokio::spawn(forward_tcp(connection, socket, 47989));
+        native.write_all(b"hello").await.unwrap();
+        native.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), native.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response, b"reply");
+        forward.await.unwrap().unwrap();
+        receiver.await.unwrap();
+        client.close().await;
     }
     #[tokio::test]
-    async fn local_port_conflicts_select_another_complete_set(){
-        let occupied=TcpListener::bind((Ipv4Addr::new(127,77,0,2),TCP_PORTS[0]+500)).await.unwrap();
-        let (offset,tcp,udp)=bind_proxy_ports(500).await.unwrap();
-        assert_ne!(offset,500);
-        assert_eq!(tcp.len(),TCP_PORTS.len());
-        assert_eq!(udp.len(),UDP_PORTS.len());
-        for (port,listener)in tcp{assert_eq!(listener.local_addr().unwrap().port(),port+offset);}
+    async fn local_port_conflicts_select_another_complete_set() {
+        let occupied = TcpListener::bind((Ipv4Addr::new(127, 77, 0, 2), TCP_PORTS[0] + 500))
+            .await
+            .unwrap();
+        let (offset, tcp, udp) = bind_proxy_ports(500).await.unwrap();
+        assert_ne!(offset, 500);
+        assert_eq!(tcp.len(), TCP_PORTS.len());
+        assert_eq!(udp.len(), UDP_PORTS.len());
+        for (port, listener) in tcp {
+            assert_eq!(listener.local_addr().unwrap().port(), port + offset);
+        }
         drop(occupied);
-        assert!(TcpListener::bind((Ipv4Addr::new(127,77,0,2),TCP_PORTS[0]+500)).await.is_ok());
+        assert!(
+            TcpListener::bind((Ipv4Addr::new(127, 77, 0, 2), TCP_PORTS[0] + 500))
+                .await
+                .is_ok()
+        );
     }
     #[test]
     fn management_and_unpaired_media_are_denied() {
