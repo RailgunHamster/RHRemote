@@ -16,8 +16,8 @@
 - [ ] OPPO 外网全离线回归：用户确认 Tailscale 下 SMB、其他服务和 Sunshine serverinfo XML 均可用，实际客户端为 0.2.3，未安装预览修复。Android 列表备用地址、主机 Tailscale 地址学习、冷启动配对、VPN 发现竞争和配对持久化已修复，更新页 null 显示已修正。64 项 JVM / 9 项发布前置测试通过；0.2.4 正式更新已在 GitHub / Gitee 发布，两站各十项匿名下载及 latest feed 校验通过。仍待用户升级后实际外网验收。详见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
 - [x] Android VPN 发现竞争修复：移除 STUN 期间整个应用的临时底层网络绑定；VPN 下跳过客户端公网地址推断，保留主机上报地址并检查查询期间的网络切换。新增四项旧代码失败/修复后通过的回归，完整 49 项 JVM 测试和双 APK 编译通过；不当作 OPPO 现场根因的实机证明。
 - [x] Android 同步设备首次配对持久化：成功前立即写入 SQLite；保存失败保留旧证书，轮询及迟到发现不能恢复旧证书，代理地址不持久化。11 项实际 PcView / SQLite 回归通过，完整 60 项 JVM 测试零失败；未当作 OPPO 实机验收。见 design/ANDROID-PAIRING-PERSISTENCE-20261023.md。
-- [x] Android 初次连接入口取消：从选路、配对状态、应用列表到 Game 接管或真实清理完成保持占用；按钮 / stream.disconnect / pair.cancel 共用分派，Rust JNI 按次取消，HTTP 跟踪至正文关闭，配对等待签名取消任务结束。连接使用独立线程，旧结果不能启动新窗口。86 项 JVM / 11 项 Rust 测试及 ARM64 双 APK 构建通过；0.2.5 开发包未发布，OPPO 实机待验收。见 design/ANDROID-CONNECTION-ADMISSION-20261024.md。
-- [x] Android 更新安装流程：用户确认尚未下载时点击安装，旧按钮只在页底报错。改为下载并安装、进度和页内失败提示，已下载记录持久化，安装权限返回后继续；旋转复用 Home 状态，后台下载不打开系统安装器。完整 102 项 JVM（新增 16 项安装回归）及双 APK 构建、9 项发布前置测试通过。0.2.5 正式包准备发布，OPPO 安装及外网媒体仍待实机确认。见 design/ANDROID-UPDATE-INSTALL-20261024.md。
+- [x] Android 初次连接入口取消：从选路、配对状态、应用列表到 Game 接管或真实清理完成保持占用；按钮 / stream.disconnect / pair.cancel 共用分派，Rust JNI 按次取消，HTTP 跟踪至正文关闭，配对等待签名取消任务结束。连接使用独立线程，旧结果不能启动新窗口。86 项 JVM / 11 项 Rust 测试及 ARM64 双 APK 构建通过；已随 0.2.5 正式发布，OPPO 实机待验收。见 design/ANDROID-CONNECTION-ADMISSION-20261024.md。
+- [x] Android 更新安装流程：用户确认尚未下载时点击安装，旧按钮只在页底报错。改为下载并安装、进度和页内失败提示，已下载记录持久化，安装权限返回后继续；旋转复用 Home 状态，后台下载不打开系统安装器。完整 102 项 JVM（新增 16 项安装回归）及双 APK 构建、9 项发布前置测试通过。0.2.5 / code207 已在 GitHub 和 Gitee 正式发布，两站各八资产及两个 latest feed 匿名校验通过；OPPO 安装及外网媒体仍待实机确认。见 design/ANDROID-UPDATE-INSTALL-20261024.md。
 - [ ] Android 回退与恢复的通道归属：媒体恢复仍在启动新 Game 前释放占用，需保持到新控制器接管，并接入按次 JNI / HTTP 取消；检查打洞形成了本路径不接受的中继连接后，转向其他路径之前是否清理临时通道。补迟到窗口、取消、路径失败及下一连接不能抢占的回归。
 - [x] 用户提供 SSH 别名 tc，已确认并复用其现有 DERP；独立临时测试端经公网完成双向实际转发，未改动现有 Tailscale / DERP 服务。
 - [ ] tc 中继能力：独立 TCP 下载约 5.965 Mbps，DERP 25 Mbps 缺失 4103 包与 queue_head 增量相等。后续固定 1024 分包的同一 1080p30 影片各约 151 秒，LAN / 内置直连 / HTTPS 中继在请求 5 Mbps 时分别有 0 / 2 / 53 次 >50 ms 渲染间隔；中继 4 Mbps 降到 1 次，再回 5 Mbps 升至 278 次。优先定位容量/排队，并补主机分段、更长时间及跨运营商验收，不认定某个队列为唯一根因或宣称支持 25 Mbps/4K。用户码率已恢复。见 design/NATURAL-VIDEO-20261023.md、RELAY-THROUGHPUT-20261023.md。
@@ -71,6 +71,8 @@
 - Android 外网修复预览版 0.2.4-preview.1 / preview.2 已在 GitHub 发布；最新 preview.2 含 VPN 发现修复，49 项 JVM / 8 项发布前置回归通过，匿名下载四个资产并核对哈希；签名与 0.2.3 一致。双站稳定 feed 未变，preview.2 code205，后续 Android 稳定版 versionCode 至少 206。安装到 OPPO 及外网实际验收仍待完成，不能把发布预览包当作 P0 完成。见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
 
 - Android 0.2.4 / code206 已正式发布到两个更新源，包含上述修复及配对即时保存、更新 null 修复；Windows 继续 0.2.3，原更新 feed 不变且旧版本包地址保留。两站各八资产和两个 latest feed 全部校验通过；64 项 JVM / 9 项发布前置测试通过。OPPO 尚未安装，新版外网媒体未验收，P0 保持未完成；后续 Android 更新 versionCode 必须大于 206。
+
+- Android 0.2.5 / code207 已正式发布到两个更新源，修复下载与安装衔接并包含初次连接取消；完整 102 项 JVM / 9 项发布前置测试通过，两站各十项匿名下载及 latest feed 校验通过。发布源码为 9fa6fd7aa1fd52dd13e630f4934a928637854a41，签名与旧版相同，Windows 仍为 0.2.3。OPPO 覆盖安装、实际安装器及外网媒体待确认，不因此勾选外网验收；后续 Android versionCode 必须大于 207。
 
 - 0.2.2 的 Windows 自动分包误传 `--packet-size 0`，底层 CLI 拒绝后等待错误窗口确认；已撤回 GitHub 稳定发布。
 - 修复为自动模式省略 CLI 参数，并显式恢复原生内部自动检测；非法参数通过动作状态返回并退出。修复后的自动与 Tailscale 模式均已收到首帧，CLI 拒绝参数也已验证不再等待弹窗。

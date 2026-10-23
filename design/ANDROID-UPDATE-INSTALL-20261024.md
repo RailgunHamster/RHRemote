@@ -35,3 +35,14 @@ ARM64 应用 APK、测试 APK 构建通过，9 项发布前置测试通过。
 构建日志：`D:\RHRemoteTools\build-android-update-install-tests-20261024.log`。
 
 OPPO 自动测试仍按用户要求暂停，不能将 JVM 结果当作其系统安装器或实际外网媒体已经验收。
+
+## 正式交付
+
+Android 0.2.5 / code207 已在 GitHub 与 Gitee 正式发布，发布源提交
+`9fa6fd7aa1fd52dd13e630f4934a928637854a41`，标签 `v0.2.5`。
+APK 为 26,402,435 字节，SHA-256 为
+`ad744c89b3783be8170a6365844f22e91e1600a1d91e6670a4405745c5464f0f`。
+签名与 0.2.3 / 0.2.4 相同，Windows 的 0.2.3 feed 与 RELEASES 原样保留。
+GitHub release 422090578、Gitee release 1234941；两站各八个资产及两个 latest feed
+均通过无凭据下载与哈希校验。记录保存在
+`D:\RHRemoteTools\android-stable-v025-verification-20261024.json`。
