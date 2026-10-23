@@ -1,0 +1,34 @@
+name: RHRemote relay 443 deployment tools
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/prepare-relay-443-plan.py'
+      - 'tools/test-relay-443-plan.py'
+      - 'tools/relay_nginx_cert.py'
+      - 'tools/deploy_relay_nginx443.py'
+      - 'tools/test-relay-nginx-*.py'
+      - '.github/workflows/relay-443-tools.yml'
+  pull_request:
+    paths:
+      - 'tools/prepare-relay-443-plan.py'
+      - 'tools/test-relay-443-plan.py'
+      - 'tools/relay_nginx_cert.py'
+      - 'tools/deploy_relay_nginx443.py'
+      - 'tools/test-relay-nginx-*.py'
+      - '.github/workflows/relay-443-tools.yml'
+permissions:
+  contents: read
+jobs:
+  python-regressions:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Candidate generation and certificate transactions
+        run: |
+          python3 tools/test-relay-443-plan.py
+          python3 tools/test-relay-nginx-cert.py
+          python3 tools/test-relay-nginx-install.py

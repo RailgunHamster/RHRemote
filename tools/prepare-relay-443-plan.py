@@ -13,6 +13,19 @@ ANCHOR = '        # Main Siyuan Proxy\n'
 OLD_CERT = ('        ssl_certificate      /etc/nginx/ssl/siyuan.crt;\n'
             '        ssl_certificate_key  /etc/nginx/ssl/siyuan.key;\n')
 CERT_INCLUDE = '        include /etc/nginx/ssl/rhremote-443/current.conf;\n'
+ECDSA_CIPHERS = ('ECDHE-ECDSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-AES128-GCM-SHA256')
+
+
+def compatible_ciphers(text):
+    matches = list(re.finditer(r'(?m)^([ \t]*)ssl_ciphers[ \t]+([^;\r\n]+);$', text))
+    if len(matches) != 1:
+        raise ValueError('Review the TLS cipher policy before installing an ECDSA certificate')
+    match = matches[0]
+    old = match.group(0)
+    existing = match.group(2).split(':')
+    missing = [cipher for cipher in ECDSA_CIPHERS if cipher not in existing]
+    new = match.group(1) + 'ssl_ciphers ' + ':'.join(missing + existing) + ';'
+    return text[:match.start()] + new + text[match.end():], old, new
 
 
 def routes(gateway):
@@ -57,10 +70,12 @@ def prepare(original, gateway, public_ip, cert_id):
     addition = routes(gateway)
     syntax_candidate = original.replace(ANCHOR, addition + ANCHOR)
     candidate = syntax_candidate.replace(OLD_CERT, CERT_INCLUDE)
+    candidate, old_ciphers, new_ciphers = compatible_ciphers(candidate)
     # Removing only our route block and TLS include must restore the exact snapshot.
-    if candidate.replace(addition, '').replace(CERT_INCLUDE, OLD_CERT) != original:
+    if candidate.replace(addition, '').replace(CERT_INCLUDE, OLD_CERT).replace(new_ciphers, old_ciphers) != original:
         raise ValueError('Unrelated configuration changed')
-    certificate = (f'ssl_certificate /etc/nginx/ssl/rhremote-443/{cert_id}/fullchain.pem;\n'
+    certificate = ('# RHRemote managed certificate include v1\n'
+                   f'ssl_certificate /etc/nginx/ssl/rhremote-443/{cert_id}/fullchain.pem;\n'
                    f'ssl_certificate_key /etc/nginx/ssl/rhremote-443/{cert_id}/private.key;\n')
     return {
         'routes-only.nginx.conf': syntax_candidate,
