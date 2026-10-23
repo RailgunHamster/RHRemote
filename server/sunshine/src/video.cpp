@@ -35,6 +35,7 @@ extern "C" {
 #include "nvenc/nvenc_encoder.h"
 #include "platform/common.h"
 #include "rhremote_initial_display.h"
+#include "rhremote_video_pacing.h"
 #include "sync.h"
 #include "video.h"
 
@@ -2495,7 +2496,7 @@ namespace video {
     });
 
     // set max frame time based on client-requested target framerate.
-    double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? config::video.minimum_fps_target : (config.framerate / 2);
+    double minimum_fps_target = rhremote::minimum_refresh_target(config::video.minimum_fps_target, config.framerate);
     std::chrono::duration<double, std::milli> max_frametime {1000.0 / minimum_fps_target};
     BOOST_LOG(info) << "Minimum FPS target set to ~"sv << minimum_fps_target << "fps ("sv << max_frametime.count() << "ms)"sv;
 

@@ -17,6 +17,10 @@ on:
       - 'tools/test-server-package.ps1'
       - 'tools/analyze-host-frames.py'
       - 'tools/test_host_frame_analysis.py'
+      - 'tools/analyze-statistics.py'
+      - 'tools/test-statistics.py'
+      - 'tools/analyze-media-window.py'
+      - 'tools/test_media_window_analysis.py'
       - '.github/workflows/server-windows.yml'
 permissions:
   contents: read
@@ -32,8 +36,13 @@ jobs:
         run: |
           g++ -std=c++23 -pthread -DRHREMOTE_FRAME_TRACE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_frame_trace.cpp -o test-rhremote-frame-trace
           ./test-rhremote-frame-trace
+          g++ -std=c++23 -DRHREMOTE_VIDEO_PACING_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_video_pacing.cpp -o test-rhremote-video-pacing
+          ./test-rhremote-video-pacing
       - name: Analyze incomplete, reordered and closed host traces
-        run: python -m unittest discover -s tools -p test_host_frame_analysis.py -v
+        run: |
+          python -m unittest discover -s tools -p test_host_frame_analysis.py -v
+          python -m unittest discover -s tools -p test_media_window_analysis.py -v
+          python tools/test-statistics.py
       - name: Check recorder publication and close under ThreadSanitizer
         env:
           TSAN_OPTIONS: halt_on_error=1
@@ -101,6 +110,8 @@ jobs:
           ./test-rhremote-initial-display.exe
           g++ -std=c++23 -pthread -DRHREMOTE_FRAME_TRACE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_frame_trace.cpp -o test-rhremote-frame-trace.exe
           ./test-rhremote-frame-trace.exe
+          g++ -std=c++23 -DRHREMOTE_VIDEO_PACING_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_video_pacing.cpp -o test-rhremote-video-pacing.exe
+          ./test-rhremote-video-pacing.exe
           cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
           cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine --parallel 3
           cmake --install .deps/cmake-build-server --prefix "$PWD/.deps/server-stage"
@@ -108,7 +119,7 @@ jobs:
       - name: Test pairing sessions and client authorization
         shell: msys2 {0}
         working-directory: .deps/cmake-build-server/tests
-        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*' --gtest_output=xml:pairing-results.xml
+        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*:*RhRemoteVideoPacing*' --gtest_output=xml:pairing-results.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
