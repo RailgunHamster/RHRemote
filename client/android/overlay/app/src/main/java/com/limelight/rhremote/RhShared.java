@@ -53,7 +53,7 @@ public final class RhShared {
         if(!prefs.edit().putInt("profileSchemaVersion",2).commit())throw new IOException("profile migration write failed");
     }
     public static synchronized JSONObject read(Context c) {
-        try { initialize(c);initializeOrder(c); return normalize(rawRead(c)); }
+        try { initialize(c);initializeOrder(c);initializeRelayDefaults(c); return normalize(rawRead(c)); }
         catch(Exception e) { throw new IllegalStateException("连接配置读取失败",e); }
     }
     private static void initializeOrder(Context c)throws Exception {
@@ -62,6 +62,19 @@ public final class RhShared {
         rows.sort(Comparator.comparing((JSONObject d)->!d.optString("name").equalsIgnoreCase("winserver")).thenComparing(d->d.optString("name").toLowerCase(Locale.ROOT)));
         JSONArray ordered=new JSONArray();for(JSONObject row:rows)ordered.put(row);shared.put("devices",ordered);write(file(c),shared);
         if(!prefs.edit().putBoolean("deviceOrderInitialized",true).commit())throw new IOException("device order migration write failed");
+    }
+    private static void initializeRelayDefaults(Context c)throws Exception {
+        SharedPreferences prefs=c.getSharedPreferences("rhremote.global",0);
+        if(prefs.getInt("relayDefaultsVersion",0)>=1)return;
+        JSONObject before=rawRead(c),shared=normalize(before);boolean changed=false;
+        JSONObject group=shared.getJSONObject("profiles").optJSONObject(clientId(c));
+        if(group!=null)for(Iterator<String> it=group.keys();it.hasNext();)changed|=RhProfile.upgradeDefaultRelay(group.getJSONObject(it.next()));
+        if(changed){
+            File backup=new File(c.getFilesDir(),"rhremote-shared.pre-https-relay.json");
+            if(!backup.exists())write(backup,before);
+            validate(shared);write(file(c),shared);
+        }
+        if(!prefs.edit().putInt("relayDefaultsVersion",1).commit())throw new IOException("relay migration write failed");
     }
     public static void write(File file,JSONObject value)throws IOException {
         AtomicFile atomic=new AtomicFile(file);FileOutputStream out=atomic.startWrite();

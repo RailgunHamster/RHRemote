@@ -69,6 +69,36 @@ fn merge_map<T: Clone + PartialEq>(
         .collect()
 }
 
+fn merge_profiles(
+    local: &BTreeMap<String, ClientProfile>,
+    remote: &BTreeMap<String, ClientProfile>,
+    base: Option<&BTreeMap<String, ClientProfile>>,
+    prefix: &str,
+    resolution: Resolution,
+    conflicts: &mut Vec<String>,
+) -> BTreeMap<String, ClientProfile> {
+    local.keys().chain(remote.keys()).collect::<BTreeSet<_>>().into_iter().filter_map(|key| {
+        let (left,right,old)=(local.get(key),remote.get(key),base.and_then(|b|b.get(key)));
+        // Only resolve an otherwise conflicting, URL-only official upgrade.
+        // A deliberate edit relative to the sync base keeps normal merge semantics.
+        if let (Some(l),Some(r))=(left,right) {
+            if l!=r && Some(l)!=old && Some(r)!=old &&
+                [l,r].iter().any(|p|p.relay_url.trim_end_matches('/')==crate::network::DEFAULT_RELAY.trim_end_matches('/')) {
+                let (mut a,mut b)=(l.clone(),r.clone());
+                crate::network::upgrade_default_relay(&mut a);
+                crate::network::upgrade_default_relay(&mut b);
+                for p in [&mut a, &mut b] {
+                    if p.relay_url.trim_end_matches('/') == crate::network::DEFAULT_RELAY.trim_end_matches('/') {
+                        p.relay_url = crate::network::DEFAULT_RELAY.into();
+                    }
+                }
+                if a==b {return Some((key.clone(),a));}
+            }
+        }
+        choose(left,right,old,format!("{prefix}.{key}"),resolution,conflicts).map(|v|(key.clone(),v))
+    }).collect()
+}
+
 /// Missing entries never implicitly delete hosts or another client's profiles.
 pub fn merge(
     local: &SharedConfig,
@@ -87,7 +117,7 @@ pub fn merge(
     {
         profiles.insert(
             client.clone(),
-            merge_map(
+            merge_profiles(
                 local.profiles.get(client).unwrap_or(&empty),
                 remote.profiles.get(client).unwrap_or(&empty),
                 base.and_then(|b| b.profiles.get(client)),
@@ -415,6 +445,13 @@ impl Saved {
             );
             self.profile_schema_version = 2;
         }
+        if self.relay_defaults_version < 1 {
+            for p in self.profiles.values_mut() { crate::network::upgrade_default_relay(p); }
+            if let Some(group)=self.client_profiles.get_mut(&self.client_id) {
+                for p in group.values_mut() { crate::network::upgrade_default_relay(p); }
+            }
+            self.relay_defaults_version=1;
+        }
         Ok(())
     }
     pub fn effective_profile(&self, uuid: &str) -> Profile {
@@ -619,6 +656,27 @@ mod tests {
         saved.apply_shared(&merged.merged);
         assert_eq!(saved.effective_profile("self").width, 1920);
         assert!(saved.effective_profile("self").swap_buttons);
+    }
+    #[test]
+    fn official_relay_upgrade_merges_but_custom_urls_and_real_changes_still_conflict() {
+        let secure = sample();
+        let mut old = secure.clone();
+        old.profiles.get_mut("pc").unwrap().get_mut("self").unwrap().relay_url =
+            crate::network::LEGACY_DEFAULT_RELAY.trim_end_matches('/').into();
+        for (left, right) in [(&secure, &old), (&old, &secure)] {
+            let result = merge(left, right, None, Resolution::Review);
+            assert!(result.conflicts.is_empty());
+            assert_eq!(result.merged.profiles["pc"]["self"].relay_url, crate::network::DEFAULT_RELAY);
+        }
+        let intentional = merge(&old, &secure, Some(&secure), Resolution::Review);
+        assert!(intentional.conflicts.is_empty());
+        assert_eq!(intentional.merged.profiles["pc"]["self"].relay_url, old.profiles["pc"]["self"].relay_url);
+        let mut changed = old.clone();
+        changed.profiles.get_mut("pc").unwrap().get_mut("self").unwrap().relay_url = "https://custom.example/".into();
+        assert_eq!(merge(&secure, &changed, None, Resolution::Review).conflicts, vec!["profiles.pc.self"]);
+        changed = old.clone();
+        changed.profiles.get_mut("pc").unwrap().get_mut("self").unwrap().fps = 60;
+        assert_eq!(merge(&secure, &changed, None, Resolution::Review).conflicts, vec!["profiles.pc.self"]);
     }
     #[test]
     fn device_order_merges_and_conflicts_without_losing_hosts() {

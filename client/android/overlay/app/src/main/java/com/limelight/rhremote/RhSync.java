@@ -48,7 +48,10 @@ public final class RhSync {
     }
     private static Map<String,JSONObject> devices(JSONObject config)throws JSONException{Map<String,JSONObject> map=new TreeMap<>();if(config!=null){JSONArray list=config.getJSONArray("devices");for(int i=0;i<list.length();i++){JSONObject d=list.getJSONObject(i);map.put(d.getString("uuid"),d);}}return map;}
     private static Object choose(Object left,Object right,Object base,String key,String resolution,JSONArray conflicts)throws JSONException{
-        if(left==null)return right;if(right==null)return left;String l=RhShared.canonical(left),r=RhShared.canonical(right),b=base==null?null:RhShared.canonical(base);if(l.equals(r))return left;if(l.equals(b))return right;if(r.equals(b))return left;if(resolution.equals("review"))conflicts.put(key);return resolution.equals("remote")?right:left;
+        if(left==null)return right;if(right==null)return left;String l=RhShared.canonical(left),r=RhShared.canonical(right),b=base==null?null:RhShared.canonical(base);if(l.equals(r))return left;if(l.equals(b))return right;if(r.equals(b))return left;
+        // Preserve edits relative to the base before treating a URL-only official upgrade as compatible.
+        if(key.startsWith("profiles.")&&left instanceof JSONObject&&right instanceof JSONObject){JSONObject upgraded=RhProfile.compatibleRelayUpgrade((JSONObject)left,(JSONObject)right);if(upgraded!=null)return upgraded;}
+        if(resolution.equals("review"))conflicts.put(key);return resolution.equals("remote")?right:left;
     }
     private static JSONObject mergeMap(JSONObject left,JSONObject right,JSONObject base,String prefix,String resolution,JSONArray conflicts)throws JSONException{
         JSONObject out=new JSONObject();Set<String> ids=new TreeSet<>();left.keys().forEachRemaining(ids::add);right.keys().forEachRemaining(ids::add);for(String id:ids)out.put(id,choose(left.opt(id),right.opt(id),base==null?null:base.opt(id),prefix+"."+id,resolution,conflicts));return out;

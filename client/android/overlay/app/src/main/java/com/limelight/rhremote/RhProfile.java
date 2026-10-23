@@ -14,7 +14,25 @@ public final class RhProfile {
     public static final String[] ROUTES={"lan","public_direct","punch_direct","tailscale_direct","relay","tailscale_relay"};
     public static final String[] ROUTE_LABELS={"局域网","公网直连","内置打洞直连","Tailscale 直连","自建中继","Tailscale 中继 / 未确认路径"};
     public java.util.ArrayList<String> routeOrder=new java.util.ArrayList<>(java.util.Arrays.asList(ROUTES));
-    public String relayUrl="http://101.43.203.147:33447/";
+    public static final String DEFAULT_RELAY="https://101.43.203.147:33449/";
+    public static final String LEGACY_DEFAULT_RELAY="http://101.43.203.147:33447/";
+    public String relayUrl=DEFAULT_RELAY;
+    static boolean upgradeDefaultRelay(JSONObject profile)throws JSONException {
+        String url=profile.optString("relayUrl");
+        if(url.equals(LEGACY_DEFAULT_RELAY)||url.equals(LEGACY_DEFAULT_RELAY.substring(0,LEGACY_DEFAULT_RELAY.length()-1))){profile.put("relayUrl",DEFAULT_RELAY);return true;}
+        return false;
+    }
+    static JSONObject compatibleRelayUpgrade(JSONObject left,JSONObject right)throws JSONException {
+        String secure=DEFAULT_RELAY.substring(0,DEFAULT_RELAY.length()-1);
+        String l=left.optString("relayUrl"),r=right.optString("relayUrl");
+        if(!l.equals(DEFAULT_RELAY)&&!l.equals(secure)&&!r.equals(DEFAULT_RELAY)&&!r.equals(secure))return null;
+        JSONObject a=new JSONObject(left.toString()),b=new JSONObject(right.toString());
+        for(JSONObject p:new JSONObject[]{a,b}){
+            upgradeDefaultRelay(p);
+            if(p.optString("relayUrl").equals(secure))p.put("relayUrl",DEFAULT_RELAY);
+        }
+        return RhShared.canonical(a).equals(RhShared.canonical(b))?a:null;
+    }
     public int remoteBitrateMbps=0;
     public int width=2520,height=1680,fps=30,bitrateMbps=25,volume=100,packetSize=1392;
     public boolean swapButtons,trackpad,statistics,hdr,audioEnabled,reverseScroll,onScreenController,fullRange;

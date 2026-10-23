@@ -47,7 +47,7 @@ OPPO 首个中继统计的 surface_render_callback 约 3066 ms，但该旧候选
 
 - OPPO 一次中继会话结束后，Sunshine 报会话清理超过 10 秒，看门狗随后重启引擎，干扰紧接着的 Windows 连接。Windows 物理屏和虚拟屏对照中未重现，不能归因为 OPPO 或 QUIC 某一个组件。另一次 Windows 连接曾初始 PING 超时，不能把两次现象当成同一个根因。
 - Android 新增媒体握手 / 首帧失败回退后的实际串流验证；代码、本地构建和 JVM 回归已完成，OPPO 按用户要求暂停，蜂窝切换场景仍未验收。
-- 对外 TLS 与受限网络兼容、跨网络直连、恢复及音频；目前中继外层为 HTTP，内部端到端 QUIC 加密。
+- 受限网络兼容、跨网络直连、恢复及音频。独立 HTTPS 中继已部署，Windows、winserver 和 claw 均有实际视频证据，详见 design/RELAY-TLS-DEPLOYMENT.md；HTTP 旧端口保留兼容，Android 真机 HTTPS 仍未验收。
 - 本机主机服务升级，以及 60 FPS / 4K、D3D 初始化波动优化。claw 的三个路径已完成下面记录的基础视频验证，动态负载和跨网络仍未验收。
 - 用户再次明确允许前，不操作 OPPO。
 

@@ -4,7 +4,14 @@ use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
 pub const MAX_ADDRESSES: usize = 8;
-pub const DEFAULT_RELAY: &str = "http://101.43.203.147:33447/";
+pub const DEFAULT_RELAY: &str = "https://101.43.203.147:33449/";
+pub const LEGACY_DEFAULT_RELAY: &str = "http://101.43.203.147:33447/";
+pub fn upgrade_default_relay(profile: &mut Profile) -> bool {
+    if profile.relay_url.trim_end_matches('/') == LEGACY_DEFAULT_RELAY.trim_end_matches('/') {
+        profile.relay_url=DEFAULT_RELAY.into();
+        true
+    } else { false }
+}
 pub const ROUTES: &[(&str,&str)] = &[("lan","局域网"),("public_direct","公网直连"),("punch_direct","内置打洞直连"),("tailscale_direct","Tailscale 直连"),("relay","自建中继"),("tailscale_relay","Tailscale 中继 / 未确认路径")];
 pub fn default_route_order()->Vec<String>{ROUTES.iter().map(|(id,_)|(*id).into()).collect()}
 pub fn validate_routes(order:&[String], relay:&str)->Result<(),String>{

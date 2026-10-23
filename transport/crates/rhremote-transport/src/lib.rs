@@ -24,7 +24,7 @@ use tokio::{
 };
 
 pub const ALPN: &[u8] = b"rhremote/tunnel/1";
-pub const DEFAULT_RELAY: &str = "http://101.43.203.147:33447/";
+pub const DEFAULT_RELAY: &str = "https://101.43.203.147:33449/";
 pub const TCP_PORTS: &[u16] = &[47984, 47989, 47995, 48010];
 pub const UDP_PORTS: &[u16] = &[47995, 47998, 47999, 48000, 48002, 48010];
 pub const DEFAULT_OFFSET: u16 = 1000;

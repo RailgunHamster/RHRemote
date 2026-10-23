@@ -36,4 +36,10 @@ winserver 和 claw 随后均更新了主机组件，SHA256 为 `4E01E7773A4DBA9C
 
 本机证书验证记录为 `D:\RHRemoteTools\relay-tls-certificate-20261023.json`，双向 TLS 视频记录为 `D:\RHRemoteTools\windows-both-tls-relay-validation-20261023.json`。主机安装器自带原部署备份，切换前的网络配置另存于其受保护备份目录。未更新本机 RailgunHamster 的主机服务，也未操作 OPPO 或发布新稳定安装包。
 
-尚需完成：客户端默认入口与旧配置迁移、Android 构建，以及跨网络验证。33449 仍可能被只允许 TCP 443 的网络阻止；本次部署不能代表这类受限网络已经兼容，后续需要单独处理标准 443 共存或可用的独立域名入口。
+客户端默认入口已改为 HTTPS。Windows 首次启动升级时，原 preferences.json 备份为 preferences.pre-https-relay.json；Android 对应备份为 rhremote-shared.pre-https-relay.json。本次迁移只更新当前客户端保存的旧官方 HTTP 地址（有无末尾斜线均可），保留自定义地址、连接顺序、画质、声音和其他客户端的配置。迁移版本仅在本地保存，不加入 WebDAV 格式；升级完成后，用户明确改回 HTTP 的设置不会在下次启动时再次被迁移。
+
+同步仍按原有三方比较判断实际修改。只有新旧官方地址不同、其余配置完全一致且原本会冲突的情况自动选择 HTTPS；自定义中继或并发画质修改继续要求处理冲突。Windows 核心、UI 和传输共 65 项测试通过，Android 的 APK、测试 APK 构建和 30 项 JVM 测试通过。构建未连接 OPPO，不能代替 Android 真机升级和串流验收。
+
+Windows 受管理客户端已运行该候选。本机真实 preferences.json 的备份与迁移前文件逐字节相同，迁移后与“只替换当前客户端旧官方地址并增加本地迁移标记”的预期完整对象相等，其余设置未变化。随后分别经 HTTPS 中继连接 winserver 和 claw，实际首帧为 3849.37 / 2830.61 ms，记录渲染帧 368 / 132，均有 trace_end 且声音关闭。测试后原配置和统计开关已恢复，迁移验证再次通过。此轮依然是家庭网络经公网中继，不代表蜂窝、仅 443 网络或固定动态帧率验收。记录为 D:\RHRemoteTools\default-https-migration-runtime-20261023.json 和 D:\RHRemoteTools\windows-default-https-both-tls-relay-validation-20261023.json。
+
+尚需完成跨网络验证。33449 仍可能被只允许 TCP 443 的网络阻止；本次部署不能代表这类受限网络已经兼容，后续需要单独处理标准 443 共存或可用的独立域名入口。

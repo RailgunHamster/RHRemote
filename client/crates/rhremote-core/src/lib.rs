@@ -160,6 +160,7 @@ pub struct Saved {
     pub clients: BTreeMap<String, sync_model::ClientInfo>,
     pub client_profiles: BTreeMap<String, BTreeMap<String, sync_model::ClientProfile>>,
     pub profile_schema_version: u32,
+    pub relay_defaults_version: u32,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,6 +239,10 @@ impl Controller {
             if !backup.exists() {
                 fs::copy(&storage, backup).map_err(|e| e.to_string())?;
             }
+        }
+        if storage.exists() && saved.relay_defaults_version < 1 {
+            let backup = storage.with_extension("pre-https-relay.json");
+            if !backup.exists() { fs::copy(&storage, backup).map_err(|e| e.to_string())?; }
         }
         saved.initialize_client(platform_name)?;
         if !saved.device_order_initialized {
@@ -977,6 +982,56 @@ mod tests {
         fn execute(&self, _: &str, _: &Value) -> Result<Value, String> {
             Err("no transport in unit tests".into())
         }
+    }
+    #[test]
+    fn official_relay_migration_is_backed_up_local_and_once_only() {
+        use sync_model::ClientProfile;
+        let root = std::env::temp_dir().join(format!("rhremote-relay-{}", random_token().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let file = root.join("preferences.json");
+        let old = Profile {
+            width: 2560, height: 1440, bitrate_mbps: 41, audio_enabled: true,
+            relay_url: network::LEGACY_DEFAULT_RELAY.trim_end_matches('/').into(),
+            route_order: vec!["relay".into(), "lan".into()], ..Profile::default()
+        };
+        let custom = Profile { relay_url: "http://custom.example:33447/".into(), ..old.clone() };
+        let mut saved = Saved {
+            client_id: "pc".into(), profile_schema_version: 2, device_order_initialized: true,
+            ..Saved::default()
+        };
+        saved.profiles.insert("host".into(), old.clone());
+        saved.profiles.insert("custom".into(), custom.clone());
+        saved.client_profiles.insert("pc".into(), BTreeMap::from([
+            ("host".into(), ClientProfile::from_profile(&old)),
+            ("custom".into(), ClientProfile::from_profile(&custom)),
+        ]));
+        saved.client_profiles.insert("pad".into(), BTreeMap::from([
+            ("host".into(), ClientProfile::from_profile(&old)),
+        ]));
+        let original = serde_json::to_vec_pretty(&saved).unwrap();
+        fs::write(&file, &original).unwrap();
+        let c = Controller::new("windows", file.clone(), Arc::new(Stub)).unwrap();
+        let mut upgraded = old.clone();
+        upgraded.relay_url = network::DEFAULT_RELAY.into();
+        assert_eq!(c.profile("host"), upgraded);
+        assert_eq!(c.profile("custom"), custom);
+        let persisted: Saved = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(persisted.client_profiles["pad"]["host"].relay_url, old.relay_url);
+        assert_eq!(persisted.relay_defaults_version, 1);
+        let backup = file.with_extension("pre-https-relay.json");
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        assert!(serde_json::to_value(c.export_shared()).unwrap().get("relayDefaultsVersion").is_none());
+        // After migration, an explicit HTTP choice is still a valid user setting.
+        let mut edited = persisted;
+        edited.client_profiles.get_mut("pc").unwrap().get_mut("host").unwrap().relay_url = old.relay_url.clone();
+        edited.profiles.get_mut("host").unwrap().relay_url = old.relay_url.clone();
+        fs::write(&file, serde_json::to_vec(&edited).unwrap()).unwrap();
+        let restarted = Controller::new("windows", file.clone(), Arc::new(Stub)).unwrap();
+        assert_eq!(restarted.profile("host").relay_url, old.relay_url);
+        assert_eq!(fs::read(&backup).unwrap(), original);
+        fs::remove_file(file).unwrap();
+        fs::remove_file(backup).unwrap();
+        fs::remove_dir(root).unwrap();
     }
     fn controller() -> Arc<Controller> {
         let file = std::env::temp_dir().join(format!(
