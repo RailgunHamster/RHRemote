@@ -1,3 +1,4 @@
+#include "rhremote_encoder_trace.h"
 #include "rhremote_trace.h"
 /**
  * @file src/video.cpp
@@ -2021,6 +2022,9 @@ namespace video {
 
   /**
    * @brief Create an AVCodec encode session.
+   * @details Nested diagnostic spans distinguish hardware context creation,
+   * device derivation, frame initialization, codec open and frame attachment.
+   * Each span covers the original API call, including failed attempts.
    *
    * @param disp Display being encoded.
    * @param encoder Selected encoder.
@@ -2167,7 +2171,9 @@ namespace video {
         ctx->pix_fmt = platform_formats->avcodec_dev_pix_fmt;
 
         // Create the base hwdevice context
-        auto buf_or_error = platform_formats->init_avcodec_hardware_input_buffer(encode_device.get());
+        auto buf_or_error = rhremote::trace_encoder_call("encoder_hardware_input", [&] {
+          return platform_formats->init_avcodec_hardware_input_buffer(encode_device.get());
+        });
         if (buf_or_error.has_right()) {
           return nullptr;
         }
@@ -2178,11 +2184,16 @@ namespace video {
           avcodec_buffer_t derived_context;
 
           // Allow the hwdevice to prepare for this type of context to be derived
-          if (encode_device->prepare_to_derive_context(platform_formats->avcodec_derived_dev_type)) {
+          const auto preparation_error = rhremote::trace_encoder_call("encoder_derive_prepare", [&] {
+            return encode_device->prepare_to_derive_context(platform_formats->avcodec_derived_dev_type);
+          });
+          if (preparation_error) {
             return nullptr;
           }
 
-          auto err = av_hwdevice_ctx_create_derived(&derived_context, platform_formats->avcodec_derived_dev_type, encoding_stream_context.get(), 0);
+          const auto err = rhremote::trace_encoder_call("encoder_hardware_derive", [&] {
+            return av_hwdevice_ctx_create_derived(&derived_context, platform_formats->avcodec_derived_dev_type, encoding_stream_context.get(), 0);
+          });
           if (err) {
             char err_str[AV_ERROR_MAX_STRING_SIZE] {0};
             BOOST_LOG(error) << "Failed to derive device context: "sv << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, err);
@@ -2207,7 +2218,10 @@ namespace video {
           // Allow the hwdevice to modify hwframe context parameters
           encode_device->init_hwframes(frame_ctx);
 
-          if (auto err = av_hwframe_ctx_init(frame_ref.get()); err < 0) {
+          const auto err = rhremote::trace_encoder_call("encoder_frames_init", [&] {
+            return av_hwframe_ctx_init(frame_ref.get());
+          });
+          if (err < 0) {
             return nullptr;
           }
 
@@ -2318,22 +2332,27 @@ namespace video {
       }
 
       // Allow the encoding device a final opportunity to set/unset or override any options
-      encode_device->init_codec_options(ctx.get(), &options);
+      rhremote::trace_encoder_call("encoder_codec_options", [&] {
+        encode_device->init_codec_options(ctx.get(), &options);
+      });
 
-      if (auto status = avcodec_open2(ctx.get(), codec, &options)) {
+      const auto open_status = rhremote::trace_encoder_call("encoder_codec_open", [&] {
+        return avcodec_open2(ctx.get(), codec, &options);
+      });
+      if (open_status) {
         char err_str[AV_ERROR_MAX_STRING_SIZE] {0};
 
         if (!video_format.fallback_options.empty() && retries == 0) {
           BOOST_LOG(info)
             << "Retrying with fallback configuration options for ["sv << video_format.name << "] after error: "sv
-            << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, status);
+            << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, open_status);
 
           continue;
         } else {
           BOOST_LOG(error)
             << "Could not open codec ["sv
             << video_format.name << "]: "sv
-            << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, status);
+            << av_make_error_string(err_str, AV_ERROR_MAX_STRING_SIZE, open_status);
 
           return nullptr;
         }
@@ -2391,7 +2410,10 @@ namespace video {
     if (!encode_device->data) {
       auto software_encode_device = std::make_unique<avcodec_software_encode_device_t>();
 
-      if (software_encode_device->init(width, height, frame.get(), sw_fmt, hardware)) {
+      const auto initialization_error = rhremote::trace_encoder_call("encoder_software_device_init", [&] {
+        return software_encode_device->init(width, height, frame.get(), sw_fmt, hardware);
+      });
+      if (initialization_error) {
         return nullptr;
       }
       software_encode_device->colorspace = colorspace;
@@ -2401,11 +2423,16 @@ namespace video {
       encode_device_final = std::move(encode_device);
     }
 
-    if (encode_device_final->set_frame(frame.release(), ctx->hw_frames_ctx)) {
+    const auto attachment_error = rhremote::trace_encoder_call("encoder_frame_attach", [&] {
+      return encode_device_final->set_frame(frame.release(), ctx->hw_frames_ctx);
+    });
+    if (attachment_error) {
       return nullptr;
     }
 
-    encode_device_final->apply_colorspace();
+    rhremote::trace_encoder_call("encoder_apply_colorspace", [&] {
+      encode_device_final->apply_colorspace();
+    });
 
     auto session = std::make_unique<avcodec_encode_session_t>(
       std::move(ctx),

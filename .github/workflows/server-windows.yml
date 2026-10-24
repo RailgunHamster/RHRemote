@@ -21,6 +21,8 @@ on:
       - 'tools/test-statistics.py'
       - 'tools/analyze-media-window.py'
       - 'tools/test_media_window_analysis.py'
+      - 'tools/host-encoder-window.ps1'
+      - 'tools/test-host-encoder-window.ps1'
       - '.github/workflows/server-windows.yml'
 permissions:
   contents: read
@@ -76,6 +78,9 @@ jobs:
           cargo +1.92.0 test -p rhremote-host --locked -j4
           if($LASTEXITCODE-ne0){throw 'Host service regressions failed'}
           ./tools/test-server-package.ps1
+          ./tools/test-host-encoder-window.ps1
+          powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tools/test-host-encoder-window.ps1
+          if($LASTEXITCODE-ne0){throw 'Windows PowerShell encoder config regressions failed'}
           ./tools/build-host.ps1 -Release
       - name: Fetch Windows source dependencies
         shell: bash
@@ -131,7 +136,7 @@ jobs:
       - name: Test pairing sessions and client authorization
         shell: msys2 {0}
         working-directory: .deps/cmake-build-server/tests
-        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*:*RhRemoteVideoPacing*:*RhRemotePendingLaunch*:*RhRemoteLaunchHttp*' --gtest_output=xml:pairing-results.xml
+        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteEncoderTrace*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*:*RhRemoteVideoPacing*:*RhRemotePendingLaunch*:*RhRemoteLaunchHttp*' --gtest_output=xml:pairing-results.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

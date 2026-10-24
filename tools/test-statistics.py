@@ -138,6 +138,39 @@ class StatisticsTest(unittest.TestCase):
             rows,_=a.import_host(path,0,10**18)
             self.assertEqual(len(rows),1);self.assertEqual(rows[0]["dur_us"],1400000)
             self.assertEqual(rows[0]["event"],"host_dda_device_init")
+    def test_nested_encoder_initialization_keeps_actual_substage_durations(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/"host.json"
+            records=[("begin",1,"encoder_create",1000,None),
+                     ("begin",2,"encoder_hardware_derive",2000,None),
+                     ("end",2,"encoder_hardware_derive",39_002_000,39_000_000),
+                     ("begin",3,"encoder_codec_open",39_003_000,None),
+                     ("end",3,"encoder_codec_open",39_008_000,5000),
+                     ("end",1,"encoder_create",39_456_192,39_455_192)]
+            lines=["[2026-10-22 00:00:00.000]: Info: RHREMOTE_PHASE "+
+                   f"{kind} id={identity} name={name} tick_us={tick}"+
+                   (f" elapsed_us={elapsed}" if elapsed is not None else "")
+                   for kind,identity,name,tick,elapsed in records]
+            path.write_text(json.dumps({"utcOffsetMinutes":0,"log":lines}),encoding="utf-8")
+            rows,_=a.import_host(path,0,10**18)
+            measured={row["event"]:row["dur_us"] for row in rows}
+            self.assertEqual(measured,{"host_encoder_hardware_derive":39_000_000,
+                                       "host_encoder_codec_open":5000,
+                                       "host_encoder_create":39_455_192})
+            self.assertTrue(all(row["fields"]["measurement"].startswith("server steady clock") for row in rows))
+
+    def test_repeated_codec_attempts_keep_their_own_scope_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/"host.json"
+            lines=[]
+            for identity,duration in [(21,35_000_000),(22,5000)]:
+                prefix="[2026-10-22 00:00:00.000]: Info: RHREMOTE_PHASE "
+                lines += [prefix+f"begin id={identity} name=encoder_codec_open tick_us=1000",
+                          prefix+f"end id={identity} name=encoder_codec_open tick_us={duration+1000} elapsed_us={duration}"]
+            path.write_text(json.dumps({"utcOffsetMinutes":0,"log":lines}),encoding="utf-8")
+            rows,_=a.import_host(path,0,10**18)
+            self.assertEqual([row["dur_us"] for row in rows],[35_000_000,5000])
+            self.assertEqual([row["fields"]["scopeId"] for row in rows],["21","22"])
     def test_connection_origin_excludes_idle_and_phases_sum_to_first_frame(self):
         start=1_000_000_000
         rows=[e("application_start",start-240_446_959),e("connect_action",start),e("connection_begin",start+3_167_606),e("connection_ready",start+3_354_511),e("packet_first",start+9_765_653,1),e("decode_output",start+9_815_586,1),e("render_return",start+9_817_465,1),e("trace_end",start+20_000_000)]
