@@ -8,10 +8,20 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace rhremote {
+  /**
+   * @brief Retain original real D3D devices for backends eligible for validated mode reuse.
+   * @param configured_encoder Explicit encoder requested by the host configuration.
+   * @return True for software or QSV; automatic selection and other hardware keep their existing ownership policy.
+   */
+  constexpr bool keeps_encoder_probe_health(std::string_view configured_encoder) {
+    return configured_encoder == "software" || configured_encoder == "quicksync";
+  }
+
   /** @brief Locally unique graphics adapter identity, including its high word. */
   using probe_adapter_id = std::pair<std::uint32_t, std::int32_t>;
 
@@ -76,6 +86,7 @@ namespace rhremote {
   class validated_encoder_probe_cache {
     std::optional<encoder_environment> validated;  ///< Environment of a completed successful capability probe.
     std::optional<encoder_environment> pending;  ///< Exact observation immediately before a required probe.
+    std::string_view completion_reason_ {"not_validated"};  ///< Fixed diagnostic identity; never includes configuration values.
 
     /** @brief Reject incomplete metadata. @param state Candidate observation. @return Whether identities, outputs and adapters are present. */
     static bool complete(const std::optional<encoder_environment> &state) {
@@ -111,7 +122,22 @@ namespace rhremote {
      * @return Whether a validated baseline was retained.
      */
     bool completed(bool successful, std::optional<encoder_environment> fresh, probe_device_health health) {
-      if (successful && complete(pending) && complete(fresh) && pending == fresh && health == probe_device_health::healthy) {
+      if (!successful) {
+        completion_reason_ = "probe_failed";
+      } else if (!complete(pending)) {
+        completion_reason_ = "before_metadata_incomplete";
+      } else if (!complete(fresh)) {
+        completion_reason_ = "after_metadata_incomplete";
+      } else if (pending != fresh) {
+        completion_reason_ = "environment_changed_during_probe";
+      } else if (health == probe_device_health::lost) {
+        completion_reason_ = "original_device_lost";
+      } else if (health != probe_device_health::healthy) {
+        completion_reason_ = "original_device_health_unknown";
+      } else {
+        completion_reason_ = "retained";
+      }
+      if (completion_reason_ == "retained") {
         validated = std::move(fresh);
       } else {
         validated.reset();
@@ -120,10 +146,16 @@ namespace rhremote {
       return validated.has_value();
     }
 
+    /** @brief Name the last completed validation decision without exposing identities. @return Fixed diagnostic reason. */
+    std::string_view completion_reason() const {
+      return completion_reason_;
+    }
+
     /** @brief Forget both previous capabilities and unvalidated observations. */
     void clear() {
       validated.reset();
       pending.reset();
+      completion_reason_ = "not_validated";
     }
   };
 

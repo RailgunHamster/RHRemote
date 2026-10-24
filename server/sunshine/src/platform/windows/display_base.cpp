@@ -401,7 +401,7 @@ namespace platf::dxgi {
         BOOST_LOG(error) << "Failed to create D3D11 device for DD test [0x"sv << util::hex(status).to_string_view() << ']';
         return false;
       }
-      if (config::video.encoder == "software") {
+      if (rhremote::keeps_encoder_probe_health(config::video.encoder)) {
         rhremote::win_probe::remember(adapter.get(), device.get());
       }
       return true;
@@ -1243,6 +1243,7 @@ namespace platf {
     auto fresh = fresh_encoder_environment(state.factory, true);
     const auto health = fresh ? rhremote::win_probe::health(*fresh) : rhremote::probe_device_health::unknown;
     const bool retained = state.quicksync.completed(true, std::move(fresh), health);
-    BOOST_LOG(info) << (retained ? "Completed QSV capability baseline retained"sv : "QSV capability baseline discarded: environment changed or device health unknown"sv);
+    BOOST_LOG(info) << (retained ? "Completed QSV capability baseline retained"sv : "QSV capability baseline discarded"sv)
+                    << "; reason="sv << state.quicksync.completion_reason();
   }
 }  // namespace platf

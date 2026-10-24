@@ -14,6 +14,10 @@ namespace {
   using namespace rhremote;
   using decision = encoder_probe_decision;
   using health = probe_device_health;
+  static_assert(keeps_encoder_probe_health("software"));
+  static_assert(keeps_encoder_probe_health("quicksync"));
+  static_assert(!keeps_encoder_probe_health(""));
+  static_assert(!keeps_encoder_probe_health("mediafoundation"));
 
   /** @brief Fail a standalone or GoogleTest run on the same invariant. @param value Required condition. */
   void require(bool value) {
@@ -141,8 +145,10 @@ namespace {
     require(cache.required(false, environment(), health::unknown));
     require(cache.required(true, environment(), health::healthy));
     require(!cache.completed(false, environment(), health::healthy));
+    require(cache.completion_reason() == "probe_failed");
     require(cache.required(true, environment(), health::healthy));
     require(cache.completed(true, environment(), health::healthy));
+    require(cache.completion_reason() == "retained");
     require(!cache.required(true, environment(), health::healthy));
     require(!cache.required(true, environment(1920, 1080), health::healthy));
     require(cache.required(false, environment(), health::healthy));
@@ -189,10 +195,12 @@ namespace {
         ++changed.active_adapters[0].first;
       }
       require(!cache.completed(true, changed, health::healthy));
+      require(cache.completion_reason() == "environment_changed_during_probe");
       require(cache.required(true, changed, health::healthy));
     }
     validated_encoder_probe_cache cache;
     require(!cache.completed(true, environment(), health::healthy));
+    require(cache.completion_reason() == "before_metadata_incomplete");
     require(cache.required(true, environment(), health::healthy));
   }
 
@@ -202,6 +210,7 @@ namespace {
       validated_encoder_probe_cache cache;
       cache.required(false, environment(), health::unknown);
       require(!cache.completed(true, environment(), state));
+      require(cache.completion_reason() == (state == health::lost ? "original_device_lost" : "original_device_health_unknown"));
       cache.required(false, environment(), health::unknown);
       require(cache.completed(true, environment(), health::healthy));
       require(cache.required(true, environment(), state));
@@ -223,13 +232,48 @@ namespace {
       }
       require(cache.required(true, invalid, health::healthy));
       require(!cache.completed(true, invalid, health::healthy));
+      require(cache.completion_reason() == "before_metadata_incomplete");
+      cache.required(false, environment(), health::unknown);
+      require(!cache.completed(true, invalid, health::healthy));
+      require(cache.completion_reason() == "after_metadata_incomplete");
       require(cache.required(true, environment(), health::healthy));
     }
     validated_encoder_probe_cache cache;
     cache.required(false, environment(), health::unknown);
     require(cache.completed(true, environment(), health::healthy));
     cache.clear();
+    require(cache.completion_reason() == "not_validated");
     require(cache.required(true, environment(), health::healthy));
+  }
+
+  /** @brief Actual creation-policy registration must provide the original device health needed by a completed QSV probe. */
+  void qsv_device_health_registration() {
+    for (auto backend : {"quicksync", "software"}) {
+      encoder_device_health<std::shared_ptr<int>> devices;
+      validated_encoder_probe_cache cache;
+      cache.required(false, environment(), health::unknown);
+      std::weak_ptr<int> original;
+      auto healthy = [](const auto &device) {
+        return *device > 0;
+      };
+      for (const auto &adapter : environment().active_adapters) {
+        auto created = std::make_shared<int>(1);
+        original = created;
+        // The same policy is called by the real D3D creation callback.
+        if (keeps_encoder_probe_health(backend)) {
+          devices.remember(adapter, created, healthy);
+        }
+      }
+      require(!original.expired());
+      require(devices.state(environment().active_adapters, healthy) == health::healthy);
+      require(cache.completed(true, environment(), devices.state(environment().active_adapters, healthy)));
+      require(!cache.required(true, environment(1920, 1080), devices.state(environment().active_adapters, healthy)));
+      *original.lock() = -1;
+      require(cache.required(true, environment(), devices.state(environment().active_adapters, healthy)));
+    }
+    for (auto backend : {"", "auto", "nvenc", "mediafoundation", "quicksync-unknown"}) {
+      require(!keeps_encoder_probe_health(backend));
+    }
   }
 }  // namespace
 
@@ -246,6 +290,7 @@ int main() {
   qsv_invariants_and_modes();
   qsv_rejects_probe_races();
   qsv_requires_complete_healthy_state();
+  qsv_device_health_registration();
   return EXIT_SUCCESS;
 }
 #else
@@ -297,5 +342,10 @@ TEST(RhRemoteEncoderProbe, QsvProbeRaces) {
 /** @brief Unknown or lost devices, incomplete snapshots and explicit clearing fail closed. */
 TEST(RhRemoteEncoderProbe, QsvCompleteHealthyState) {
   qsv_requires_complete_healthy_state();
+}
+
+/** @brief QSV and software creation retain health sentinels; other backends keep their original ownership policy. */
+TEST(RhRemoteEncoderProbe, QsvDeviceHealthRegistration) {
+  qsv_device_health_registration();
 }
 #endif
