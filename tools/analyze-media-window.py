@@ -109,6 +109,17 @@ def analyze(case, events, host_rows, parse_issues=None):
         source.update(reading_interval_s=source_seconds,
                       playback_clock_rate=(source_after["media_time_s"] - source_before["media_time_s"]) / source_seconds,
                       player_dropped_frames_delta=source_after["player_dropped_frames"] - source_before["player_dropped_frames"])
+    # File completeness is independent of whether the source was a valid load.
+    # Recompute this from the observations, never trust a caller's PASS/eligible flag.
+    source["comparison_eligible"] = None
+    if (source.get("reading_interval_s", 0) > 0 and type(source.get("file_fps")) in (int, float) and
+            source["file_fps"] > 0 and "player_dropped_frames_delta" in source):
+        dropped = source["player_dropped_frames_delta"]
+        fraction = dropped / (source["reading_interval_s"] * source["file_fps"])
+        source["player_dropped_fraction"] = fraction
+        source["comparison_eligible"] = (.98 <= source["playback_clock_rate"] <= 1.02 and
+                                         dropped >= 0 and fraction <= .01)
+    source["comparison_criteria"] = "Playback clock within2% of real time and player drops<=1%; neither proves unique pictures or physical paint"
     return {"schema": "rhremote.media-window/v1", "client_id": global_host["client_id"], "trace_id": global_host["trace_id"],
             "scope": {"client_start_us": lo, "client_end_us": hi, "seconds": seconds, "first_frame": first, "last_frame": last,
                       "selection": "Client assembly timestamps select ordinal boundaries; host submissions use that inclusive frame-number range in the same trace. Source captures for metrics are referenced inputs.",
@@ -127,6 +138,8 @@ def analyze(case, events, host_rows, parse_issues=None):
             "client_encoded_payload_mbps": sum(by_frame[n]["fields"].get("bytes", 0) for n in received) * 8 / seconds / 1e6,
             "source": source, "measurement": {"absolute_network_latency_measured": False, "physical_scanout_measured": False,
             "unique_picture_fps_measured": False, "send_endpoint": "send_call_return",
+            "receive_assembly_high_resolution_proven": False,
+            "receive_assembly_timing": "Legacy native packet_first/frame_assembled timestamps are millisecond-clock backprojections. Reassembly and pre-decoder queue metrics retain those estimates; they are not exact receipt or waiting spans. Direct decode/render call events and host capture work are separate measurements.",
             "byte_rates": "Both payload rates use the client interval and aligned ordinal range, not link throughput. UDP payload includes FEC and packetization; no IP/TCP/TLS/iroh wire overhead is counted.",
             "missing_frames": "An absent frame number alone does not locate loss or prove a particular network queue.",
             "scope": "A complete selected window does not make a whole trace complete; unselected startup/shutdown anomalies remain reported."}}
@@ -169,6 +182,7 @@ def main():
     host.atomic_write(destination, lambda stream: json.dump(result, stream, ensure_ascii=False, indent=2))
     print(json.dumps({"output": str(destination), "window_host_complete": result["window_host_complete"],
                       "whole_host_trace_complete": result["whole_host_trace_complete"],
+                      "source_comparison_eligible": result["source"]["comparison_eligible"],
                       "client_render": result["client_cadence"]["render_return"],
                       "host_send": result["host_sender_cadence"]["send_return"],
                       "host_udp_payload_mbps": result["host_udp_payload_mbps"]}, indent=2))

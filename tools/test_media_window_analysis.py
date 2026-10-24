@@ -37,6 +37,27 @@ def case_and_frames():
 
 
 class MediaWindowAnalysisTest(unittest.TestCase):
+    def test_source_health_is_recomputed_and_not_implied_by_complete_files_or_pass(self):
+        case, events, rows = case_and_frames()
+        case.update(result="PASS", sourcePerformanceValid=True,
+                    sourceBefore={"elapsed_s": 10., "media_time_s": 35., "player_dropped_frames": 5, "source_file_fps": 30},
+                    sourceAfter={"elapsed_s": 110., "media_time_s": 135., "player_dropped_frames": 65})
+        result = analysis.analyze(case, events, rows)
+        self.assertTrue(result["whole_host_trace_complete"])
+        self.assertFalse(result["source"]["comparison_eligible"])
+        self.assertEqual(.02, result["source"]["player_dropped_fraction"])
+        case["sourceAfter"]["player_dropped_frames"] = 5
+        self.assertTrue(analysis.analyze(case, events, rows)["source"]["comparison_eligible"])
+        case["sourceAfter"]["media_time_s"] = 115.
+        self.assertFalse(analysis.analyze(case, events, rows)["source"]["comparison_eligible"])
+
+    def test_missing_source_observations_and_legacy_native_clock_remain_unproven(self):
+        case, events, rows = case_and_frames()
+        result = analysis.analyze(case, events, rows)
+        self.assertIsNone(result["source"]["comparison_eligible"])
+        self.assertFalse(result["measurement"]["receive_assembly_high_resolution_proven"])
+        self.assertIn("millisecond-clock backprojections", result["measurement"]["receive_assembly_timing"])
+
     def test_clocks_can_move_independently_without_changing_stage_or_byte_metrics(self):
         case, events, rows = case_and_frames()
         expected = analysis.analyze(case, events, rows)
