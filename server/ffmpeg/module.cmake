@@ -50,7 +50,7 @@ if(BUILD_TESTS)
     target_include_directories(test_rhremote_mf_variant PRIVATE "${RHREMOTE_MF_GENERATED}"
         "${FFMPEG_PREPARED_BINARIES}/include" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}/libavcodec" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}")
     set_target_properties(test_rhremote_mf_variant PROPERTIES LINKER_LANGUAGE CXX)
-    target_link_libraries(test_rhremote_mf_variant PRIVATE ${FFMPEG_LIBRARIES})
+    target_link_libraries(test_rhremote_mf_variant PRIVATE ${FFMPEG_LIBRARIES} bcrypt)
 endif()
 install(FILES "${RHREMOTE_FFMPEG_MODULE_DIR}/UPSTREAM.json" "${RHREMOTE_FFMPEG_MODULE_DIR}/README.md"
     "${RHREMOTE_MF_GENERATED}/module-source.json" "${RHREMOTE_MF_GENERATED}/libavcodec.provenance.json"
