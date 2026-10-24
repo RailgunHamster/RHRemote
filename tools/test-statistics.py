@@ -191,6 +191,19 @@ class StatisticsTest(unittest.TestCase):
             spans=[e for e in rows if e.get("dur_us")]
             self.assertEqual([(e["event"],e["dur_us"]) for e in spans],[("host_encoder_create",20000),("host_encoder_probe",1000000)])
 
+    def test_gpu_priority_readback_preserves_unknown_and_actual_zero_in_timeline(self):
+        messages=["RHREMOTE_GPU_PRIORITY requested=5 set_status=0 query_status=-1073741790 actual=unknown",
+                  "RHREMOTE_GPU_PRIORITY requested=5 set_status=0 query_status=0 actual=0"]
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/"host.json"
+            path.write_text(json.dumps({"utcOffsetMinutes":0,"log":[
+                "[2026-10-22 00:00:00.000]: Info: "+message for message in messages
+            ]}),encoding="utf-8")
+            rows,_=a.import_host(path,0,10**18)
+            timeline=a.chrome(rows)["traceEvents"]
+            self.assertEqual([event["args"]["message"] for event in timeline],messages)
+            self.assertTrue(all(event["ph"]=="i" for event in timeline))
+
     def test_instrumented_host_scopes_use_monotonic_duration(self):
         with tempfile.TemporaryDirectory() as root:
             path=Path(root)/"host.json"

@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $log='C:\Program Files\Sunshine\config\sunshine.log'
 $lines=@(Get-Content -LiteralPath $log -Tail 1600 | Where-Object {
  $_ -match '(?i)(Info|Warning|Error|Debug):' -and
- $_ -match '(?i)RHREMOTE_PHASE|encoder|capture|display|desktop|session|client|audio|quicksync|qsv|creating|initializ|sunshine version|launch|configuration|stream|probe|duplicat|resolution|refresh|adapter|ready|performance|latency|access.lost|0x887a0026' -and
+ $_ -match '(?i)RHREMOTE_PHASE|RHREMOTE_GPU_PRIORITY|encoder|capture|display|desktop|session|client|audio|quicksync|qsv|creating|initializ|sunshine version|launch|configuration|stream|probe|duplicat|resolution|refresh|adapter|ready|performance|latency|access.lost|0x887a0026' -and
  $_ -notmatch '(?i)password|private.?key|certificate|token|credential|pin=|rikey|https?://'
 } | ForEach-Object { "$_" })
 $config=@{}

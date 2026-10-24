@@ -276,5 +276,99 @@ CPU 导出改为流式筛选，不产生超过 10 GB 的展开 CSV；已删除�
 
 本轮参数、显示、同步、媒体源、流、CPU/GPU 采集及其结束任务全部恢复／结束，
 最终配置及四份持久状态哈希与部署前一致，继续保持 software 默认。
-尚待取得发生等待的 Intel 缓冲区创建／资源类型、分页依赖 fence 及竞争来源，
+尚待取得发生等待的 Intel 缓冲区创建／资源类型及分页依赖 fence，
 再决定是应用资源使用、驱动路径还是硬件映射配置的可优化点；未声称已解释所有长尾或达到不可优化。
+
+## QSVsdk04 续查：分页线程本身在等什么
+
+继续离线读取同一份原始 CPU ETL，没有新增媒体采集或暂停业务。
+原生读取器先用 TDH 校验 StackWalk 的 EventTimeStamp、StackProcess、StackThread 字段及 64 位布局，
+提取 354139 条目标线程栈，读取完成且零属性错误。
+原始时间戳与既有 CSwitch 的同线程、同 CPU 时间交叉校验，采用 ±1.1 微秒内唯一匹配；
+将栈用于该次切回前结束的 off-CPU 区间，而不是把切回事件误当作阻塞开始。
+System PID 4 / TID 1416 的 132662 个完整区间均找到唯一栈，无缺失或歧义。
+映像、加载地址和精确公共 PDB 沿用上节的实际服务器身份，不用本机另一版本的系统二进制代替。
+
+同一 38.077 秒 GPU 记录覆盖区间内，该线程的分类如下。
+off-CPU 包含已经就绪、等待再次调度的时间，表中 ready 是其子集，不能再次相加；
+这些是共享线程整段的累计值，不全部归属于 RHRemote，也不能逐项加到某个编码帧上。
+
+| 栈分类 | 完整区间数 | off-CPU 累计 | 其中 ready 累计 |
+| --- | ---: | ---: | ---: |
+| WaitDmaBufferNotBusy | 82898 | 13396.811 ms | 1637.949 ms |
+| 等待所有分页引擎空闲 | 20584 | 4192.531 ms | 360.313 ms |
+| 调度器事件等待 | 2316 | 2354.745 ms | 49.401 ms |
+| 分页 fence 等待 | 2247 | 458.375 ms | 39.706 ms |
+| 其他／未解析 | 250 | 30.412 ms | 3.641 ms |
+
+已解析的典型路径为：
+
+```text
+CommitVirtualAddressRange → UpdatePageTable → FlushGpuVaTlb
+→ FlushPagingBufferInternal → VidSchSubmitPagingCommand
+→ VidMmAcquireDmaBuffer → WaitDmaBufferNotBusy
+→ VidSchWaitForCompletionEvent → VidSchWaitForEvents
+```
+
+同段还出现 PageInDeviceInternal、VIDMM_DEVICE::Resume 和 EvictResources 路径。
+这确认了显存管理／分页命令链中的缓冲区及完成等待；不能据此把等待命名为纯视频编码运算，
+也不能推断整张显卡 VRAM 已满或已定位某个 Intel 私有资源。
+[Microsoft 设备分页队列说明](https://learn.microsoft.com/en-us/windows-hardware/drivers/display/device-paging-queues)
+说明了页表更新、驻留请求及其 fence 的异步依赖，但文档本身不能代替该机器的等待证据。
+
+复核数据为 `encoder-etw-qsvsdk04-20261025\paging-worker-stack-timestamp-proof.json`、
+`paging-worker-wait-stack-analysis.json`、`paging-worker-off-stack-intervals.jsonl` 及 `paging-worker-public-symbols.txt`。
+原始栈读取器及分析脚本仍留在私有诊断目录，原始 ETL 与帧记录未改写。
+
+## 选中前排队与实际竞争进程
+
+对原来标为 PagingQueuePacket/Info 的事件进一步核对机器码：
+`VidMmWorkerThreadProc` 调用 `McTemplateK0ppx_EtwWriteTransfer`，后者加载符号 `EventPagingQueueSelect`；
+实际事件描述符字节 `44 01 00 11 00 00 b2 00 01 00 00 00 00 00 00 40` 的 ID 为 324。
+工作线程发出该事件后才进入 `ProcessDeferredCommand`。
+因此该点表示 VidMm 线程选中分页请求，不能冒充 GPU 开始执行。
+
+与 SDK Lock2 等待关联的 1317 个 op=208 包，提交到选中平均 20.688 ms、P99 90.393 ms、最大 112.539 ms；
+选中到完成平均 2.278 ms、P99 5.724 ms、最大 9.553 ms。
+平均包跨度 22.966 ms 中约 90.08% 位于选中之前。
+这个拆分包含各自设备队列的依赖及共享服务等待，尚不能把全部选中前时间称为可运行请求遭到抢占。
+同一精确二进制的 `ProcessDeferredCommand` 数值分派也将 op=208 导向 `LockInternal`，
+仍保留数值，不给它编造官方枚举名称。
+
+1317 次自己的提交至选中区间中，1316 次穿插了同一 System 线程选中的其他进程请求，
+每次平均 3.276 个，P99 为 7、最大 12。观察到的主要请求方如下。
+请求用 PagingQueue + Packet + Sequence + 已完成包时间识别，避免包地址／序号完成后重用产生假关联。
+
+| 进程身份 | 该共享线程选中的包数 | 穿插于自己等待区间的独立包数 |
+| --- | ---: | ---: |
+| ffmpeg.exe PID 45336 | 4561 | 2291 |
+| ffmpeg.exe PID 47640 | 2064 | 1145 |
+| testhost.exe PID 40576 | 1327 | 862 |
+
+两个 ffmpeg 的创建时间由同次采集的前后只读快照确认早于事件；
+短命 testhost 的身份由同一原始 CPU ETL 的 Process Start、PID、父 PID 和映像名称核实，未读取业务命令行。
+这证明同一个分页服务线程处理了跨进程请求，不证明暂停某个进程就能消除全部卡顿。
+仍需确认自己的请求何时满足依赖，以及实际缓冲区创建／映射方式；本轮没有停止这些进程。
+
+证据为 `encoder-gpu-qsvsdk04-20261025\paging-competition-v2.json`、
+`encoder-etw-qsvsdk04-20261025\paging-actor-40576-process-identity.jsonl`，以及同目录的
+`vidmm-worker-thread-machine-code.txt`、`process-deferred-command-machine-code.txt`、
+`paging-info-emitter-machine-code.txt`、`paging-queue-select-descriptor.txt`。
+
+## 诊断代码修正与下一次实测边界
+
+原先的“Using realtime GPU priority”在设置 API 返回前记录，无法证明设置成功。
+现在保留原来的请求值和策略，另外记录 setter 原始 NTSTATUS、getter 原始 NTSTATUS 和实际读回值；
+查询失败／接口不存在时为 unknown／unavailable，不能用初始化的零值冒充最低优先级。
+调用分别记为 `gpu_process_priority_set`、`gpu_process_priority_query` 阶段，
+`RHREMOTE_GPU_PRIORITY` 日志通过服务端收集器保留到 statistics 时间线。
+[Microsoft 读回接口](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmthk/nf-d3dkmthk-d3dkmtgetprocessschedulingpriorityclass)
+确认了此查询的参数及返回类型；一次外部只读进程查询被拒绝访问，没有通过提升权限绕过。
+
+本机完整引擎重编及 116 项引擎回归、31 项 statistics 回归通过，新增六项覆盖失败／缺失／有效零值和成功读回。
+覆盖率缓存清理的组合命令被自动审批拒绝，未执行删除；测试改为独立覆盖率输出目录后成功，未出现 gcov 错误。
+这项修改改善诊断可信度，不宣称提高了帧率；当前实际服务仍为 b9a3fbb5、software 默认配置。
+
+准备的轻量 H.264 → HEVC → H.264 对照因本机物理副屏不再是活动显示器，在启动前校验即终止。
+没有切换到主屏／虚拟屏，也没有启动该轮编码窗口、源播放器或媒体会话。
+独立低频观察器已结束。待物理副屏恢复后使用新的记录名重做，不能把未执行的试验记为通过。

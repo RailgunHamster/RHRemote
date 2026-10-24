@@ -1,5 +1,6 @@
-#include "src/rhremote_trace.h"
 #include "src/rhremote_device_probe.h"
+#include "src/rhremote_gpu_priority.h"
+#include "src/rhremote_trace.h"
 /**
  * @file src/platform/windows/display_base.cpp
  * @brief Definitions for the Windows display base code.
@@ -680,9 +681,25 @@ namespace platf::dxgi {
             }
           }
           BOOST_LOG(info) << "Active GPU has HAGS " << (hags_enabled ? "enabled" : "disabled");
-          BOOST_LOG(info) << "Using " << (priority == D3DKMT_SCHEDULINGPRIORITYCLASS_HIGH ? "high" : "realtime") << " GPU priority";
-          if (FAILED(d3dkmt_set_process_priority(GetCurrentProcess(), priority))) {
-            BOOST_LOG(warning) << "Failed to adjust GPU priority. Please run application as administrator for optimal performance.";
+          auto d3dkmt_get_process_priority = (PD3DKMTGetProcessSchedulingPriorityClass) GetProcAddress(gdi32, "D3DKMTGetProcessSchedulingPriorityClass");
+          const auto observed = rhremote::observe_gpu_priority(
+            static_cast<int>(priority),
+            [&](int requested) {
+              rhremote::scope phase("gpu_process_priority_set");
+              return d3dkmt_set_process_priority(GetCurrentProcess(), static_cast<D3DKMT_SCHEDULINGPRIORITYCLASS>(requested));
+            },
+            [&](int &current) {
+              rhremote::scope phase("gpu_process_priority_query");
+              D3DKMT_SCHEDULINGPRIORITYCLASS actual {};
+              const auto query_status = d3dkmt_get_process_priority(GetCurrentProcess(), &actual);
+              current = static_cast<int>(actual);
+              return query_status;
+            },
+            d3dkmt_get_process_priority != nullptr
+          );
+          BOOST_LOG(info) << "RHREMOTE_GPU_PRIORITY " << rhremote::gpu_priority_log_fields(observed);
+          if (!observed.set_succeeded()) {
+            BOOST_LOG(warning) << "Failed to adjust GPU priority (NTSTATUS " << observed.set_status << "). Please run application as administrator for optimal performance.";
           }
         } else {
           BOOST_LOG(error) << "Couldn't load D3DKMTSetProcessSchedulingPriorityClass function from gdi32.dll to adjust GPU priority";

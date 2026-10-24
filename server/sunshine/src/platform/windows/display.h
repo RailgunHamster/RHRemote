@@ -397,6 +397,10 @@ namespace platf::dxgi {
      */
     typedef NTSTATUS(WINAPI *PD3DKMTSetProcessSchedulingPriorityClass)(HANDLE, D3DKMT_SCHEDULINGPRIORITYCLASS);
     /**
+     * @brief Function pointer for reading the actual D3DKMT process scheduling priority.
+     */
+    typedef NTSTATUS(WINAPI *PD3DKMTGetProcessSchedulingPriorityClass)(HANDLE, D3DKMT_SCHEDULINGPRIORITYCLASS *);
+    /**
      * @brief Function pointer for opening a D3DKMT adapter by LUID.
      */
     typedef NTSTATUS(WINAPI *PD3DKMTOpenAdapterFromLuid)(D3DKMT_OPENADAPTERFROMLUID *);
