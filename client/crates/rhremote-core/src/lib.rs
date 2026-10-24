@@ -210,6 +210,18 @@ pub struct State {
     #[serde(skip)]
     installing_update: bool,
 }
+
+/// Preserve configured endpoints when discovery temporarily selects another route.
+fn connection_device(state: &State, uuid: &str) -> Result<Device, String> {
+    let mut device = state.devices.iter().find(|d| d.uuid == uuid)
+        .ok_or("unknown device")?.clone();
+    if let Some(saved) = state.saved.devices.iter().find(|d| d.uuid == uuid) {
+        let configured: Vec<String> = std::iter::once(&saved.address)
+            .chain(saved.addresses.iter()).cloned().collect();
+        device.addresses = network::merge_extra(&device.address, &configured, &device.addresses);
+    }
+    Ok(device)
+}
 #[derive(Clone, Copy, Debug)]
 pub struct ActionTiming {
     pub requested_at_us: u128,
@@ -533,8 +545,7 @@ impl Controller {
             }
             "device.network.diagnose" => {
                 let uuid=args["uuid"].as_str().ok_or("uuid required")?;
-                let mut device=s.devices.iter().find(|d|d.uuid==uuid).ok_or("unknown device")?.clone();
-                if let Some(saved)=s.saved.devices.iter().find(|d|d.uuid==uuid){device.addresses=saved.addresses.clone();}
+                let mut device=connection_device(&s,uuid)?;
                 if let Some(primary)=args.get("address").and_then(Value::as_str){device.address=primary.into();}
                 if let Some(extra)=args.get("addresses"){device.addresses=serde_json::from_value(extra.clone()).map_err(|_|"addresses requires an array")?;}
                 network::addresses(&device.address,&device.addresses)?;
@@ -753,12 +764,7 @@ impl Controller {
                         return Err("disconnect the current session first".into());
                     }
                     let uuid = args["uuid"].as_str().ok_or("uuid required")?.to_owned();
-                    let d = s
-                        .devices
-                        .iter()
-                        .find(|d| d.uuid == uuid)
-                        .ok_or("unknown device")?
-                        .clone();
+                    let d = connection_device(&s, &uuid)?;
                     if d.is_self {
                         return Err("this is the local device; its configuration remains available for editing and sync".into());
                     }
@@ -768,9 +774,6 @@ impl Controller {
                     }
                     s.selected = uuid.clone();
                     args["device"] = serde_json::to_value(&d).unwrap();
-                    if let Some(saved) = s.saved.devices.iter().find(|h| h.uuid == uuid) {
-                        args["device"]["addresses"] = json!(saved.addresses);
-                    }
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
                     if id == "device.connect" {
@@ -1115,6 +1118,58 @@ mod tests {
             },
         ]);
         c
+    }
+    #[test]
+    fn discovery_address_change_keeps_saved_primary_for_connect_pair_and_diagnose() {
+        struct Capture(Mutex<Vec<Value>>);
+        impl Platform for Capture {
+            fn execute(&self, action: &str, args: &Value) -> Result<Value, String> {
+                if !matches!(action,"device.connect"|"device.pair"|"device.network.diagnose") {
+                    return Err("unused test action".into());
+                }
+                self.0.lock().unwrap().push(args["device"].clone());
+                Ok(json!({"accepted":true}))
+            }
+        }
+        for action in ["device.connect","device.pair","device.network.diagnose"] {
+            let capture=Arc::new(Capture(Mutex::new(Vec::new())));
+            let file=std::env::temp_dir().join(format!("rhremote-endpoints-{}.json",random_token().unwrap()));
+            let c=Controller::new("test",file.clone(),capture.clone()).unwrap();
+            let devices=serde_json::from_value(controller().state()["devices"].clone()).unwrap();
+            c.replace_devices(devices);
+            {
+                let mut s=c.state.lock().unwrap();
+                s.saved.devices=sync_model::from_state(&s).devices;
+                s.saved.devices[0].address="192.168.10.20".into();
+                s.saved.devices[0].addresses=vec!["100.73.139.109".into()];
+                s.devices[0].address="100.73.139.109".into();
+                s.devices[0].addresses=vec!["100.73.139.109".into(),"host.example".into()];
+            }
+            let before=c.state()["saved"].clone();
+            assert_eq!(c.dispatch(action,json!({"uuid":"a","pin":"1234"}))["ok"],true,"{action}");
+            let requests=capture.0.lock().unwrap();
+            assert_eq!(requests.len(),1);
+            assert_eq!(requests[0]["address"],"100.73.139.109");
+            assert_eq!(requests[0]["addresses"],json!(["192.168.10.20","host.example"]));
+            assert_eq!(c.state()["saved"],before,"Route resolution must not rewrite sync preferences");
+            fs::remove_file(file).unwrap();
+        }
+    }
+    #[test]
+    fn saved_primary_has_priority_when_endpoint_capacity_is_full() {
+        let c=controller();
+        let mut s=c.state.lock().unwrap();
+        s.saved.devices=sync_model::from_state(&s).devices;
+        s.saved.devices[0].address="192.168.10.20".into();
+        s.saved.devices[0].addresses=(1..8).map(|i|format!("host{i}.example")).collect();
+        s.devices[0].address="100.73.139.109".into();
+        s.devices[0].addresses=vec!["observed.example".into()];
+        let device=connection_device(&s,"a").unwrap();
+        let all=network::addresses(&device.address,&device.addresses).unwrap();
+        assert_eq!(all.len(),network::MAX_ADDRESSES);
+        assert_eq!(all[1],"192.168.10.20");
+        assert!(!all.contains(&"host7.example".into()));
+        assert!(connection_device(&s,"missing").is_err());
     }
     #[test]
     fn stream_picker_requires_active_controls_and_closes_with_stream() {
