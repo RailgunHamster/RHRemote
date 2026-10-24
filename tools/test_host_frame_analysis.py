@@ -161,7 +161,7 @@ class HostFrameAnalysisTest(unittest.TestCase):
         self.assertEqual(0, packets[0]["rtp_timestamp"])
         self.assertEqual(160, packets[0]["udp_payload_bytes"])
         self.assertEqual(.7, frames[0]["encode_call_ms"])
-        self.assertEqual(8 + 4 + 8, len(timeline["traceEvents"]))
+        self.assertEqual(9 + 4 + 8, len(timeline["traceEvents"]))
         self.assertTrue(all(type(e["pid"]) is int and type(e["tid"]) is int for e in timeline["traceEvents"]))
         self.assertFalse(result["measurement"]["network_latency_measured"])
         self.assertFalse(result["measurement"]["physical_scanout_measured"])
@@ -223,7 +223,7 @@ class HostFrameAnalysisTest(unittest.TestCase):
         self.assertEqual(1, result["repeat_or_priming_submissions"])
 
     def test_each_missing_boundary_is_incomplete(self):
-        for name in analysis.STAGES - {"metadata_missing", "metadata_evicted", "send_error", "input_abandoned"}:
+        for name in analysis.STAGES - {"metadata_missing", "metadata_evicted", "send_error", "input_abandoned", "submission_abandoned"}:
             with self.subTest(name=name):
                 rows = [r for r in fixture() if r["event"] != name]
                 self.assertFalse(analysis.analyze(rows)[0]["complete"])
@@ -255,6 +255,91 @@ class HostFrameAnalysisTest(unittest.TestCase):
         self.assertIn("invalid_abandoned_input", analysis.analyze(invalid)[0]["issues"])
         missing_conversion = [row for row in rows if row["event"] not in ("convert_begin", "convert_end") or row["frame"] == 1]
         self.assertIn("abandoned_without_matching_conversion", analysis.analyze(missing_conversion)[0]["issues"])
+
+    def submitted_tail(self, fresh=True):
+        rows = fixture()[:-1]
+        context = dict(frame=2, source=11, fresh=fresh, capture_ready_us=5000, source_present_us=4500)
+        rows.extend([event("capture_ready", 5000, **dict(context, frame=-1, generation=0)),
+                     event("convert_begin", 5100, **context), event("convert_end", 5500, **context),
+                     event("encode_begin", 5600, **context), event("encode_end", 6000, **context),
+                     event("submission_abandoned", 6200, result=2, **context), footer()])
+        return rows
+
+    def test_explicit_submitted_release_preserves_input_counts_and_encode_work(self):
+        for fresh in (True, False):
+            summary, frames, packets, timeline = analysis.analyze(self.submitted_tail(fresh))
+            self.assertTrue(summary["complete"], summary["issues"])
+            self.assertEqual((2, 2, 0, 1), (summary["frame_count"], summary["work_item_count"],
+                                             summary["abandoned_input_count"], summary["abandoned_submission_count"]))
+            self.assertEqual((2 if fresh else 1, 0 if fresh else 1),
+                             (summary["fresh_submissions"], summary["repeat_or_priming_submissions"]))
+            self.assertEqual(1, len(packets))
+            self.assertEqual("abandoned_after_submit", frames[1]["outcome"])
+            self.assertEqual("encoder_released_without_stream_output", frames[1]["abandon_reason"])
+            self.assertEqual(.4, frames[1]["encode_call_ms"])
+            self.assertEqual(0, frames[1]["packet_count"])
+            events = [e for e in timeline["traceEvents"] if e["name"] == "submission_abandoned"]
+            self.assertEqual(1, len(events))
+            self.assertEqual(8, events[0]["tid"])
+
+    def test_submitted_tail_without_an_actual_terminal_stays_incomplete(self):
+        rows = [r for r in self.submitted_tail() if r["event"] != "submission_abandoned"]
+        summary, frames, _, _ = analysis.analyze(rows)
+        self.assertFalse(summary["complete"])
+        self.assertEqual(1, summary["issues"]["submission_without_output"])
+        self.assertEqual(0, summary["abandoned_submission_count"])
+        self.assertEqual("submitted", frames[1]["outcome"])
+
+    def test_submitted_terminal_rejects_corruption_and_contradictory_output(self):
+        for change in ({"result": 0}, {"result": 1}, {"packet": 9}, {"source": 99},
+                       {"fresh": False}, {"metadata_known": False}, {"source_time_known": False},
+                       {"source_present_us": 4400}, {"capture_ready_us": 4999}, {"at_us": 5999}):
+            rows = self.submitted_tail()
+            rows[-2].update(change)
+            with self.subTest(change=change):
+                result = analysis.analyze(rows)[0]
+                self.assertFalse(result["complete"])
+                self.assertIn("invalid_abandoned_submission", result["issues"])
+                self.assertIn("submission_without_output", result["issues"])
+        rows = self.submitted_tail()
+        rows.insert(-1, dict(rows[-2], at_us=6201))
+        self.assertIn("invalid_abandoned_submission", analysis.analyze(rows)[0]["issues"])
+        for stage in ("encode_output", "send_begin", "send_end", "send_error", "input_abandoned"):
+            rows = self.submitted_tail()
+            rows.insert(-2, dict(rows[-2], event=stage, at_us=6100, packet=2 if stage != "input_abandoned" else 0))
+            self.assertIn("invalid_abandoned_submission", analysis.analyze(rows)[0]["issues"])
+
+    def test_submitted_terminal_cannot_hide_errors_missing_boundaries_or_eviction(self):
+        for missing in ("encode_begin", "encode_end"):
+            rows = [r for r in self.submitted_tail() if r["event"] != missing or r.get("frame") != 2]
+            summary = analysis.analyze(rows)[0]
+            self.assertFalse(summary["complete"])
+            self.assertIn("invalid_abandoned_submission", summary["issues"])
+            self.assertIn("missing_or_duplicate_encode_boundary", summary["issues"])
+        rows = self.submitted_tail()
+        rows[-3]["result"] = -5
+        self.assertIn("encode_error", analysis.analyze(rows)[0]["issues"])
+        rows = self.submitted_tail()
+        rows.insert(-2, dict(rows[-2], event="metadata_evicted", at_us=6100, result=1))
+        self.assertIn("metadata_evicted", analysis.analyze(rows)[0]["issues"])
+        rows = self.submitted_tail()
+        rows[-3]["source"] = 99
+        self.assertIn("invalid_abandoned_submission", analysis.analyze(rows)[0]["issues"])
+
+    def test_submitted_release_export_preserves_terminal_before_raw_cleanup(self):
+        import csv
+        with tempfile.TemporaryDirectory() as temporary:
+            raw = Path(temporary) / "host-1" / "frames.jsonl"
+            raw.parent.mkdir()
+            raw.write_text("\n".join(json.dumps(r) for r in self.submitted_tail()) + "\n", encoding="utf-8")
+            summary, output = analysis.export(raw)
+            self.assertTrue(summary["complete"], summary["issues"])
+            self.assertTrue(summary["raw_deleted"])
+            with (output / "frames.csv").open(newline="", encoding="utf-8") as stream:
+                frames = list(csv.DictReader(stream))
+            self.assertEqual("abandoned_after_submit", frames[1]["outcome"])
+            self.assertEqual("encoder_released_without_stream_output", frames[1]["abandon_reason"])
+            self.assertEqual("6200", frames[1]["abandoned_us"])
 
     def test_footers_loss_cap_failure_and_records_after_footer(self):
         for change in ({"lost_events": 9}, {"size_limit_reached": True}, {"write_failed": True},

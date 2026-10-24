@@ -20,7 +20,7 @@ SCHEMA = "rhremote.host-frame/v1"
 CAPTURE_WORK_SCHEMA = "rhremote.capture-work/v1"
 CAPTURE_STEPS = ("acquire", "prepare", "image_pool", "map", "image_setup", "cpu_copy", "unmap", "cursor")
 STAGES = {"capture_ready", "convert_begin", "convert_end", "encode_begin",
-          "encode_end", "encode_output", "input_abandoned", "metadata_evicted", "metadata_missing",
+          "encode_end", "encode_output", "input_abandoned", "submission_abandoned", "metadata_evicted", "metadata_missing",
           "send_begin", "send_end", "send_error"}
 INTEGER_FIELDS = {"at_us": 0, "frame": -1, "generation": 0, "source": 0,
                   "source_present_us": None, "capture_ready_us": 0, "packet": 0,
@@ -278,6 +278,9 @@ def analyze(rows, parse_issues=None):
                   "send_errors": len(groups["send_error"])}
         begins, ends = groups["encode_begin"], groups["encode_end"]
         abandoned = groups["input_abandoned"]
+        submitted_abandoned = groups["submission_abandoned"]
+        submitted_terminal = submitted_abandoned[0] if submitted_abandoned else None
+        valid_submitted_terminal = False
         abandonment = abandoned[0] if abandoned else None
         if abandonment:
             encoded_stages = ("encode_begin", "encode_end", "encode_output", "send_begin", "send_end", "send_error")
@@ -291,6 +294,19 @@ def analyze(rows, parse_issues=None):
         if (begins or ends or not abandoned) and (len(begins) != 1 or len(ends) != 1):
             issues["missing_or_duplicate_encode_boundary"] += 1
         begin, end = (begins[0] if begins else None), (ends[0] if ends else None)
+        if submitted_terminal:
+            identity_fields = ("source", "fresh", "metadata_known", "source_time_known", "source_present_us", "capture_ready_us")
+            valid_submitted_terminal = (
+                len(submitted_abandoned) == 1 and len(begins) == len(ends) == 1 and
+                not abandoned and not any(groups[n] for n in ("encode_output", "send_begin", "send_end", "send_error")) and
+                submitted_terminal["result"] == 2 and not submitted_terminal["packet"] and
+                submitted_terminal["metadata_known"] and submitted_terminal["at_us"] >= end["at_us"] and
+                all(submitted_terminal[k] == begin[k] == end[k] for k in identity_fields))
+            if not valid_submitted_terminal:
+                issues["invalid_abandoned_submission"] += 1
+            else:
+                output.update(outcome="abandoned_after_submit", abandoned_us=submitted_terminal["at_us"],
+                              abandon_reason="encoder_released_without_stream_output")
         context = begin or abandonment or (groups["encode_output"][0] if groups["encode_output"] else None)
         if context:
             output.update({key: context[key] for key in ("source", "fresh", "metadata_known")})
@@ -304,7 +320,7 @@ def analyze(rows, parse_issues=None):
             output.update(encode_end_us=end["at_us"], encode_result=end["result"])
             if end["result"]:
                 issues["encode_error"] += 1
-            elif not groups["encode_output"]:
+            elif not groups["encode_output"] and not valid_submitted_terminal:
                 issues["submission_without_output"] += 1
         if begin and end:
             output["encode_call_ms"] = duration(metrics, issues, "encode_call_ms", begin["at_us"], end["at_us"])
@@ -404,11 +420,12 @@ def analyze(rows, parse_issues=None):
                "event_count": len(events), "stage_counts": dict(counts),
                "work_item_count": len(frames), "frame_count": sum(bool(f["rows"]["encode_begin"]) for f in frames.values()),
                "abandoned_input_count": sum(bool(f["rows"]["input_abandoned"]) for f in frames.values()),
+               "abandoned_submission_count": sum(f["outcome"] == "abandoned_after_submit" for f in frame_table),
                "packet_count": len(packets), "captures_delivered": len(captures),
                "capture_work": {"schema": header.get("capture_work_schema"), "samples": dict(capture_work_counts),
                                 "unknown_is_zero": False},
-               "fresh_submissions": sum(bool(f.get("fresh")) and f["outcome"] == "submitted" for f in frame_table),
-               "repeat_or_priming_submissions": sum(f.get("fresh") is False and f["outcome"] == "submitted" for f in frame_table),
+               "fresh_submissions": sum(bool(f.get("fresh")) and f["outcome"] in ("submitted", "abandoned_after_submit") for f in frame_table),
+               "repeat_or_priming_submissions": sum(f.get("fresh") is False and f["outcome"] in ("submitted", "abandoned_after_submit") for f in frame_table),
                "wire_duplicate_packets": sum(p.get("wire_duplicate") is True for p in packet_table),
                "metrics_ms": {k: distribution(v) for k, v in sorted(metrics.items())}, "cadence": cadence,
                "footer": footer, "measurement": {"clock": "host_steady", "clocks_synchronized": False,
@@ -417,11 +434,11 @@ def analyze(rows, parse_issues=None):
                "capture": "Source timestamp is platform desktop presentation, not application drawing or scanout.",
                "capture_work": "Opt-in CPU call spans for delivered DXGI RAM images only. Prepare ends at copy API return, not GPU completion. Unsupported/unexecuted work stays unknown. Timeouts and failed snapshots have no delivered image profile.",
                "encoding": "Output uses its actual PTS; multiple packets with one PTS do not create extra frames.",
-               "abandoned": "Only an explicit terminal event resolves an unsubmitted conversion. File position or a footer never implies abandonment. frame_count counts submitted inputs; work_item_count includes converted candidates.",
+               "abandoned": "Only an explicit terminal event resolves an unsubmitted conversion or a submitted input without stream output at encoder release. This does not prove no internal encoding occurred. File position or a footer never implies abandonment. frame_count counts all submitted inputs; work_item_count includes converted candidates.",
                "repeats": "Source-to-send and capture-to-send distributions include repeated inputs, retaining the original source time.",
                "cadence": "Output/send cadence counts packets and timestamps, not distinct pictures or received/displayed frames.",
                "send": "Bytes/datagrams include UDP payload and FEC; no NIC completion or receipt is measured."}}
-    lanes = {"capture": 1, "convert": 2, "encode": 3, "metadata": 4, "send": 5, "encode_queue": 6, "input": 7}
+    lanes = {"capture": 1, "convert": 2, "encode": 3, "metadata": 4, "send": 5, "encode_queue": 6, "input": 7, "submission": 8}
     timeline = {"traceEvents": [{"name": "process_name", "ph": "M", "pid": 1, "tid": 0,
                                   "args": {"name": "RHRemote host " + header["trace_id"]}}],
                 "displayTimeUnit": "ms", "metadata": {**summary["measurement"], "trace_id": header["trace_id"]}}

@@ -72,6 +72,7 @@ namespace rhremote {
     encode_end,  ///< The encoder call returned, which is distinct from packet output.
     encode_output,  ///< A packet with an actual output PTS was produced.
     input_abandoned,  ///< A converted candidate was superseded or its encoder released before submission.
+    submission_abandoned,  ///< The encoder released a submitted input without delivering a stream packet.
     metadata_evicted,  ///< A pending PTS mapping was evicted before output.
     metadata_missing,  ///< Output could not be matched to its original submission.
     send_begin,  ///< The sender dequeued an encoded packet.
@@ -96,6 +97,8 @@ namespace rhremote {
         return "encode_output";
       case frame_stage::input_abandoned:
         return "input_abandoned";
+      case frame_stage::submission_abandoned:
+        return "submission_abandoned";
       case frame_stage::metadata_evicted:
         return "metadata_evicted";
       case frame_stage::metadata_missing:
@@ -489,9 +492,18 @@ namespace rhremote {
       generation_ = ++serial;
     }
 
-    /** @brief Finish the conversion candidate before discarding this encoder's metadata. */
+    /** @brief Record actual encoder release for unsubmitted conversion and submitted inputs without delivered output. */
     ~frame_tracker() {
       abandon_converted(2);
+      for (const auto &slot : entries_) {
+        if (slot.frame >= 0 && !slot.output_seen) {
+          if (auto owner = slot.trace.lock()) {
+            auto row = frame_row(slot.context, frame_stage::submission_abandoned, slot.frame);
+            row.result = 2;
+            owner->emit(row);
+          }
+        }
+      }
     }
 
     /** @brief Encoder histories have one lifetime owner and cannot be copied. */

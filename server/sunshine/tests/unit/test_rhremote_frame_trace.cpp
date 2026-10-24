@@ -535,6 +535,93 @@ namespace {
     require(other_buffer.str().find("\"event\":\"input_abandoned\"") == std::string::npos);
   }
 
+  /** @brief Real tracker release emits the eight pending input identities and keeps trace destinations separate. */
+  void submitted_release() {
+    gated_buffer buffer, other_buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "submitted-release", "client");
+    auto other = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&other_buffer), "submitted-other", "other");
+    buffer.await_writer();
+    other_buffer.await_writer();
+    std::uint64_t generation;
+    {
+      rhremote::frame_tracker tracker;
+      generation = tracker.generation();
+      tracker.submit(-1, {trace, {}, 0, false, true});
+      tracker.submit(15, {});
+      for (int frame = 1; frame <= 9; ++frame) {
+        tracker.submit(frame, {trace, {static_cast<std::uint64_t>(100 + frame), frame * 10, frame * 20, true}, 0, frame % 2 == 0, true});
+      }
+      require(tracker.lookup(1).source.id == 101);
+      tracker.submit(10, {other, {110, 100, 200, true}, 0, true, true});
+    }
+    trace->close();
+    other->close();
+    buffer.release();
+    other_buffer.release();
+    require(trace->wait_closed(5s) && other->wait_closed(5s));
+    unsigned abandoned = 0;
+    std::istringstream input(buffer.str());
+    for (std::string line; std::getline(input, line);) {
+      if (line.find("\"event\":\"submission_abandoned\"") == std::string::npos) {
+        continue;
+      }
+      ++abandoned;
+      const auto marker = line.find("\"frame\":");
+      require(marker != std::string::npos);
+      const auto frame = std::stoul(line.substr(marker + 8));
+      require(frame >= 2 && frame <= 9);
+      require(line.find("\"source\":" + std::to_string(100 + frame) + ",") != std::string::npos);
+      require(line.find("\"generation\":" + std::to_string(generation) + ",") != std::string::npos);
+      require(line.find("\"result\":2") != std::string::npos);
+      require(line.find("\"metadata_known\":true") != std::string::npos);
+    }
+    require(abandoned == 8 && trace->lost_events() == 0 && other->lost_events() == 0);
+    require(other_buffer.str().find("\"event\":\"submission_abandoned\"") != std::string::npos);
+    require(other_buffer.str().find("\"source\":110,") != std::string::npos);
+    require(buffer.str().find("input_abandoned") == std::string::npos);
+  }
+
+  /** @brief Release cannot resolve evicted history or retain/reopen a closed trace through its weak cache. */
+  void submitted_release_lifetime() {
+    gated_buffer buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "submitted-evicted", "client");
+    buffer.await_writer();
+    {
+      rhremote::frame_tracker tracker;
+      tracker.submit(1, {trace, {1, 1, 1, true}, 0, true, true});
+      tracker.submit(257, {trace, {257, 257, 257, true}, 0, true, true});
+    }
+    trace->close();
+    buffer.release();
+    require(trace->wait_closed(5s) && trace->lost_events() == 0);
+    unsigned abandoned = 0, evicted = 0;
+    std::istringstream input(buffer.str());
+    for (std::string line; std::getline(input, line);) {
+      if (line.find("submission_abandoned") != std::string::npos) {
+        ++abandoned;
+        require(line.find("\"frame\":257,") != std::string::npos);
+      }
+      evicted += line.find("metadata_evicted") != std::string::npos;
+    }
+    require(abandoned == 1 && evicted == 1);
+    std::stringbuf closed_buffer;
+    auto closed = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&closed_buffer), "submitted-closed", "client");
+    auto tracker = std::make_unique<rhremote::frame_tracker>();
+    tracker->submit(1, {closed, {1, 1, 1, true}, 0, true, true});
+    closed->close();
+    require(closed->wait_closed(5s));
+    const auto original = closed_buffer.str();
+    tracker.reset();
+    require(closed_buffer.str() == original && closed->lost_events() == 0);
+    tracker = std::make_unique<rhremote::frame_tracker>();
+    tracker->submit(2, {closed, {2, 2, 2, true}, 0, true, true});
+    std::weak_ptr<rhremote::frame_trace> weak = closed;
+    closed.reset();
+    require(weak.expired());
+    tracker.reset();
+    require(closed_buffer.str() == original);
+  }
+
   /** @brief Encoded packet metadata, unlike encoder caches, keeps its session trace alive. */
   void packet_lifetime() {
     gated_buffer buffer;
@@ -584,6 +671,8 @@ int main() {
   cache_lifetime();
   converted_release();
   converted_submission_and_supersession();
+  submitted_release();
+  submitted_release_lifetime();
   packet_lifetime();
   generations_and_stages();
 }
@@ -658,6 +747,14 @@ TEST(RhRemoteFrameTrace, ConvertedSubmissionAndSupersession) {
 
 TEST(RhRemoteFrameTrace, PacketLifetime) {
   packet_lifetime();
+}
+
+TEST(RhRemoteFrameTrace, SubmittedRelease) {
+  submitted_release();
+}
+
+TEST(RhRemoteFrameTrace, SubmittedReleaseLifetime) {
+  submitted_release_lifetime();
 }
 
 TEST(RhRemoteFrameTrace, GenerationsAndStages) {
