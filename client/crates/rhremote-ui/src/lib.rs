@@ -23,6 +23,7 @@ mod platform;
 mod recovery;
 mod statistics;
 mod updates;
+mod ui_rendering;
 slint::include_modules!();
 
 fn args_for(id: &str, arg: &str, state: &Value) -> Value {
@@ -131,6 +132,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     slint::BackendSelector::new()
         .backend_name("winit".into())
+        .renderer_name(ui_rendering::renderer().into())
         .with_winit_window_attributes_hook(|attributes| {
             if attributes.title == "RHRemote-Moonlight · 串流控制" {
                 attributes.with_active(false)
@@ -140,6 +142,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let ui = MainWindow::new()?;
+    controller.ui_rendering(ui_rendering::metadata());
+    native.statistics.lock().unwrap().mark("ui_backend_selected");
     let toolbar = StreamToolbar::new()?;
     let picker = StreamPicker::new()?;
     let shortcuts = rhremote_core::shortcuts();

@@ -49,3 +49,46 @@ Windows 的 `ui.jsonl` 原来没有 `trace_end`；每条 UI 元数据打开文�
 - `D:\RHRemoteTools\test-client-file-completeness-20261024.log`
 - `D:\RHRemoteTools\host-frame-connection-legacy-lan-ui-footer-20261024.json`
 - `D:\RHRemoteTools\host-frame-legacy-ui-footer-analysis-20261024.log`
+
+## 主界面改用软件绘制（短期验证通过）
+
+Slint 1.18.1 本地源码确认，原配置选择 FemtoVG/WGL，软件后端则使用 softbuffer 的
+Windows GDI 呈现。现默认构建只启用 renderer-software，普通依赖树没有 FemtoVG/glutin；
+显式 ui-opengl 功能仅保留用于对照构建。主窗口、悬浮栏与菜单使用同一软件后端，
+视频仍在独立原生进程中运行，未改变硬件解码参数。状态接口的 uiRendering 显示选择结果。
+这移除了已知崩溃栈中的主界面 WGL 路径，不能据此认定显卡驱动根因或长期稳定性已证明。
+
+软件后端不能依赖原来的逐像素窗口透明呈现。Windows 悬浮栏用与可见按钮一致的
+圆角窗口区域，顶部两侧不覆盖画面、也不接收点击；收起后只留下原坐标的小开关。
+区域基于实际客户区、偏移和 DPI，应用后从系统读回并检查命中点；尺寸不变时复用。
+GDI 区域在失败时由 Rust 释放，成功后交给系统。三个新增测试覆盖多种缩放、窄窗口、
+收起及客户区偏移。完整核心 31 / transport 11 / UI 61 项共 103 项通过。
+
+在同一本机、2950×1950 应用快照、6 轮相同四页切换中：
+
+| 指标 | 原 OpenGL UI | 软件绘制 UI |
+|---|---:|---:|
+| 请求至快照及 PNG 完成中位数 | 172.920 ms | 159.569 ms |
+| 同项 P95 | 230.046 ms | 174.433 ms |
+| 24 次快照及切页累计 CPU 用时 | 2.516 s | 1.828 s |
+| 测试后私有内存 | 379.228 MB | 32.621 MB |
+| 10 秒静置累计 CPU 用时 | 0.046875 s | 0.0625 s |
+
+此处是一次受控页面／快照工作负载，包含 UI 定时器、渲染、编码和脚本轮询；不是
+屏幕扫描输出时间，也不是持续内存上限。原进程和新进程的已有运行时间不同。
+两轮保存的用户配置完全一致；已查看设备页、设置页、控制栏和可滚动快捷键菜单，
+文字、配色、布局及操作保留。主 UI 进程在页面测试和媒体测试后均未加载原来的
+opengl32/nvoglv64/d3d11/dxgi 模块，原生视频进程仍载入其独立图形模块。
+
+局域网 12 轮、HTTPS 中继 40 轮的菜单及收起／展开验证通过：实际区域检查均成功，
+开关坐标变化不超过 1 个物理像素，期间原生分别记录 140 / 366 次 render_return。
+中继 40 轮 GDI 对象始终为 25，USER 对象循环后回到 24；暖机后私有内存约 39.6→40.0 MB。
+声音关闭、原设备参数、统计及同步设置恢复，原生各有一个完整 footer。
+这些短轮次不能替代动态 30 FPS、蜂窝网络或此前约 6 小时崩溃场景的长期验证。
+
+本机候选 UI SHA-256 为 C7D3B3952453101B80124F938C2AD569472E94F6775C528FE17242BB22C93254，
+原生保持 C2A90D11...E31E6。原 UI/符号回滚副本在
+`D:\RHRemoteTools\ui-before-software-renderer-20261024`。
+快照、资源和原始统计在 `ui-render-{opengl-baseline,software-candidate}-20261024`、
+`software-toolbar-{lan,relay}-first-20261024`，脚本为
+`tools/test-windows-ui-rendering.ps1`、`tools/test-windows-software-toolbar.ps1`。

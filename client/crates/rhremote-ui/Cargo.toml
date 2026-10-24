@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 build = "build.rs"
 
+[features]
+# Explicit diagnostic build for comparison with the former WGL UI path.
+ui-opengl = ["slint/renderer-femtovg"]
+
 [lib]
 name = "rhremote"
 crate-type = ["rlib"]
@@ -18,7 +22,7 @@ rhremote-core = { path = "../rhremote-core" }
 rhremote-transport = { path = "../../../transport/crates/rhremote-transport" }
 serde.workspace = true
 serde_json.workspace = true
-slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "unstable-winit-030", "renderer-femtovg", "accessibility"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "unstable-winit-030", "renderer-software", "accessibility"] }
 ureq = { version = "2.12", default-features = false, features = ["json", "tls", "native-certs"] }
 url = "2.5"
 base64 = "0.22"

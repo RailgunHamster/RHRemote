@@ -83,6 +83,7 @@ pub fn follow(toolbar: &crate::StreamToolbar, state: &Value) -> Value {
         toolbar
             .window()
             .set_position(slint::PhysicalPosition::new(x, y));
+        let mut shape=serde_json::Value::Null;
         toolbar.window().with_winit_window(|w| {
             if let Ok(handle) = w.window_handle() {
                 if let RawWindowHandle::Win32(handle) = handle.as_raw() {
@@ -110,11 +111,12 @@ pub fn follow(toolbar: &crate::StreamToolbar, state: &Value) -> Value {
                                 SWP_NOZORDER
                             },
                     );
+                    shape=crate::ui_rendering::toolbar_shape(hwnd,toolbar.window().scale_factor(),toolbar.get_expanded(),&state["toolbar"]["shape"]);
                 }
             }
         });
         let toggle_width = (72.0 * toolbar.window().scale_factor()) as i32;
-        return json!({"visible":true,"expanded":toolbar.get_expanded(),"x":x,"y":y,"width":width,"height":height,"toggle":{"x":x+(width-toggle_width)/2,"y":y,"width":toggle_width,"height":(28.0*toolbar.window().scale_factor()) as i32},"owner":format!("{}",owner.0 as usize)});
+        return json!({"visible":true,"expanded":toolbar.get_expanded(),"x":x,"y":y,"width":width,"height":height,"shape":shape,"toggle":{"x":x+(width-toggle_width)/2,"y":y,"width":toggle_width,"height":(28.0*toolbar.window().scale_factor()) as i32},"owner":format!("{}",owner.0 as usize)});
     }
     #[cfg(not(windows))]
     {

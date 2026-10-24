@@ -201,6 +201,7 @@ pub struct State {
     pub window_action: String,
     pub preview: Value,
     pub toolbar: Value,
+    pub ui_rendering: Value,
     pub settings_tab: String,
     pub sync: Value,
     pub sync_busy: bool,
@@ -291,6 +292,7 @@ impl Controller {
                 window_action: String::new(),
                 preview: Value::Null,
                 toolbar: Value::Null,
+                ui_rendering: Value::Null,
                 settings_tab: "updates".into(),
                 sync: platform
                     .execute("sync.state", &json!({}))
@@ -403,6 +405,11 @@ impl Controller {
             s.toolbar = value;
             s.revision += 1;
         }
+    }
+    pub fn ui_rendering(&self, value: Value) {
+        let mut s=self.state.lock().unwrap();
+        s.ui_rendering=value;
+        s.revision+=1;
     }
     pub fn pairing_complete(&self, attempt: u64, device: Device, error: String) {
         let mut s = self.state.lock().unwrap();
