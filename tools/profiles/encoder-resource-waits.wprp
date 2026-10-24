@@ -1,0 +1,53 @@
+<?xml version='1.0' encoding='utf-8'?>
+<WindowsPerformanceRecorder Version="1.0" Author="RHRemote">
+  <Profiles>
+    <EventCollector Id="RhResourceCollector" Name="RhResource bounded selected events">
+      <BufferSize Value="256" />
+      <Buffers Value="128" />
+    </EventCollector>
+    <EventProvider Id="RhResourceDxg" Name="802ec45a-1e99-4b83-9920-87c98277ba9d" Level="5" NonPagedMemory="true">
+      <Keywords>
+        <Keyword Value="0x2000C5" />
+      </Keywords>
+      <EventFilters FilterIn="true">
+        <EventId Value="27" />
+        <EventId Value="28" />
+        <EventId Value="29" />
+        <EventId Value="30" />
+        <EventId Value="31" />
+        <EventId Value="32" />
+        <EventId Value="33" />
+        <EventId Value="34" />
+        <EventId Value="35" />
+        <EventId Value="36" />
+        <EventId Value="37" />
+        <EventId Value="38" />
+        <EventId Value="50" />
+        <EventId Value="281" />
+        <EventId Value="282" />
+        <EventId Value="290" />
+        <EventId Value="291" />
+        <EventId Value="292" />
+        <EventId Value="293" />
+        <EventId Value="322" />
+        <EventId Value="323" />
+        <EventId Value="324" />
+        <EventId Value="325" />
+        <EventId Value="338" />
+        <EventId Value="339" />
+        <EventId Value="364" />
+        <EventId Value="365" />
+        <EventId Value="532" />
+      </EventFilters>
+    </EventProvider>
+    <Profile Id="RhResource.Verbose.File" Name="RhResource" Description="Selected DxgKrnl resource events; no audio or network payload" DetailLevel="Verbose" LoggingMode="File">
+      <Collectors>
+        <EventCollectorId Value="RhResourceCollector">
+          <EventProviders>
+            <EventProviderId Value="RhResourceDxg" />
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

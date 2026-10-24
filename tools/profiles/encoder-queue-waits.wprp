@@ -1,0 +1,35 @@
+<?xml version='1.0' encoding='utf-8'?>
+<WindowsPerformanceRecorder Version="1.0" Author="RHRemote">
+  <Profiles>
+    <EventCollector Id="RhQueueCollector" Name="RhQueue bounded selected events">
+      <BufferSize Value="256" />
+      <Buffers Value="128" />
+    </EventCollector>
+    <EventProvider Id="RhQueueDxg" Name="802ec45a-1e99-4b83-9920-87c98277ba9d" Level="5" NonPagedMemory="true">
+      <Keywords>
+        <Keyword Value="0x8001" />
+      </Keywords>
+      <EventFilters FilterIn="true">
+        <EventId Value="20" />
+        <EventId Value="175" />
+        <EventId Value="176" />
+        <EventId Value="177" />
+        <EventId Value="178" />
+        <EventId Value="179" />
+        <EventId Value="180" />
+        <EventId Value="238" />
+        <EventId Value="244" />
+        <EventId Value="245" />
+      </EventFilters>
+    </EventProvider>
+    <Profile Id="RhQueue.Verbose.File" Name="RhQueue" Description="Selected DxgKrnl queue events; no audio or network payload" DetailLevel="Verbose" LoggingMode="File">
+      <Collectors>
+        <EventCollectorId Value="RhQueueCollector">
+          <EventProviders>
+            <EventProviderId Value="RhQueueDxg" />
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

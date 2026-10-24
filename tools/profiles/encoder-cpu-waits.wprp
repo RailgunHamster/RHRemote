@@ -1,0 +1,21 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="RHRemote">
+  <Profiles>
+    <SystemCollector Id="RhEncoderSystem" Name="RHRemote Encoder CPU">
+      <BufferSize Value="256"/><Buffers Value="256"/>
+    </SystemCollector>
+    <SystemProvider Id="RhEncoderKernel">
+      <Keywords>
+        <Keyword Value="ProcessThread"/><Keyword Value="Loader"/><Keyword Value="CpuConfig"/>
+        <Keyword Value="CSwitch"/><Keyword Value="ReadyThread"/><Keyword Value="SampledProfile"/>
+        <Keyword Value="DiskIO"/><Keyword Value="DiskIOInit"/><Keyword Value="ThreadPriority"/><Keyword Value="DPC"/><Keyword Value="Interrupt"/>
+      </Keywords>
+      <Stacks><Stack Value="CSwitch"/><Stack Value="ReadyThread"/><Stack Value="SampledProfile"/></Stacks>
+    </SystemProvider>
+    <Profile Id="RhEncoder.Verbose.File" Name="RhEncoder" Description="CPU scheduling and disk I/O; no file names, audio or network payload" DetailLevel="Verbose" LoggingMode="File">
+      <Collectors>
+        <SystemCollectorId Value="RhEncoderSystem"><SystemProviderId Value="RhEncoderKernel"/></SystemCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

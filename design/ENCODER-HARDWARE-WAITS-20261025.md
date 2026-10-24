@@ -584,3 +584,78 @@ Resource 事件自身没有 SDK 工作线程的阻塞栈及队列 readiness；�
 本轮媒体、源和记录任务均停止，显示与用户参数恢复，software 配置哈希仍为前述原值。
 恢复记录为 `D:\RHRemoteTools\qsv-resource02-window-restore-20261025.json`，当时服务 PID 44176；
 下一次试验必须重新读取进程身份。
+
+## QSVjoint05：实际每帧、资源与 CPU 完成唤醒同次对应
+
+这次仍为当前 026439b8、Windows 主屏、现有物理 1080p 屏、30 FPS 请求、LAN 5 Mbps、静音，
+业务未暂停。改用 WPR 的事件 ID 过滤，在编码器初始化前保留资源生命周期，
+实际媒体稳定后再启动 CPU／码流队列的限时重叠记录。
+短测已实际验证指定事件存在、未选事件缺席，并非只检查了 XML；三份原样 profile 纳入 `tools/profiles/`。
+资源／队列／CPU ETL 分别为 54680964／51467546／250597040 字节，各自按 SHA256 验证传输，
+记录、媒体、源、显示布局、连接参数及 software 默认均恢复，所有独立停止／恢复任务移除。
+
+资源 ETL 独立读取 1191039 个事件，实际数字字段解码零错误；队列 ETL 读取 2887223 个事件，
+CPU ETL 读取 11767013 个事件，三份均为零事件／缓冲丢失、零选定事件元数据错误。
+资源记录 161.754 秒。CPU 原始 QPC 与 xperf 逐项匹配的 64 个上下文切换锚点全部一致，
+换算显示精度范围仅 0.9 微秒；没有用跨机 UTC 相减来算网络或 GPU 延迟。
+客户端／主机逐帧记录也完整、零丢失。源播放器时钟为实时的 1.000183，新增丢帧 22 个，
+约 0.998%，接近预设 1% 上限，仅用于此次联合定位。媒体窗口 71.536 秒输出 26.098 FPS，
+捕获回调 26.767 FPS；分析器负载、源丢帧和业务负载都存在，不能当作已稳定 30 FPS 或优化收益。
+
+本轮映像重新核对，没有沿用旧进程的函数地址。实际 sunshine.exe SHA256 仍为
+`143143FFFD194EDBF3D9C369337AECD8C4C39E406F8CD58FA088426A3DCA8B24`，
+机器码中的两个 MFXVideoCORE_SyncOperation 调用返回 RVA 现为 0x2b46a2／0x2b46f2，
+不同于旧 b9a3fbb5 的地址。实际栈唯一命中调用线程 34604。
+ntoskrnl、dxgkrnl、dxgmms2、Intel KMD 及四个相关用户模块的本轮开始／结束映像记录与所用 PE 身份核对。
+通用映像读取器另外有两条映像记录未解析，未把整个读取器宣称为成功；选定八个模块的成对身份均通过。
+用户 DLL 在 ETL 中为零的时间戳没有冒充与 PE 可重现构建时间戳相等。
+
+CPU 窗口内 1260 次实际 SyncOperation 平均 28.896 ms，其中 off-CPU 为 28.845 ms，
+ready 部分仅 0.015 ms，真正在线运行约 0.052 ms；off-CPU 占 99.821%。
+同窗口 EncodeFrameAsync 平均仅 0.058 ms。整段媒体窗口的 Sync 平均 26.965 ms／P99 116.509 ms，
+与较短 CPU 窗口的均值使用了不同的边界，不能混作同一组样本。
+
+直接从原始 ETL 取得调用线程的 5168 次 ReadyThread。其事件头进程／线程字段为 unknown，
+没有拿它们推测唤醒者；实际 StackProcess／StackThread 和栈负载可用。
+其中 5038 组是相同原始 QPC、CPU、负载 PID／TID 的一份纯内核栈加一份纯用户栈，另外 130 组为单栈。
+先前保守的 v1 将不同片段排除；v2 只按上述明确互补条件组合，所有原始片段保留，未任意选取一份。
+按实际栈查证，1260 次 Sync 的终端等待均由本进程 SDK 工作线程唤醒：50464 共 1208 次、32820 共 52 次。
+公共 PDB 及本轮 PE 身份将内核路径落实为
+`NtAlertThreadByThreadId → KeAlertThreadByThreadIdEx → KiExitDispatcher → KiProcessThreadWaitList → EtwTraceReadyThread`，
+用户片段含实际 libmfx64-gen 调用。不能把其他类型等待的全部 ReadyThread 都算作编码完成。
+
+进一步将这两个 SDK 线程的 464 段 dxgmms2 等待逐条交叉：459 段的原始栈负载与 xperf 展开完全相等，
+另外五段不一致被排除；456 段还唯一匹配同线程、接近的起止边界及实际分页包身份，三段未唯一匹配而排除。
+这些 456 次等待都有本次实际 DeviceAllocation 的本地／全局分配映射及对应全局元数据。
+没有将旧 QSVsdk04 或 resource02 的指针借过来使用。实际涉及以下三类私有缓冲：
+
+| 分配大小 | 声明宽度 × 高度 | 数值 Format |
+| --- | --- | ---: |
+| 4 KiB | 448 × 1 | 0 |
+| 20 KiB | 20480 × 1 | 0 |
+| 512 KiB | 522240 × 1 | 0 |
+
+这说明该长尾不要求一个巨大的 4K 输入纹理才会出现；这些字段仍不能证明它们在私有编码器中的用途。
+公共符号再次确认 SDK 线程的内核阻塞路径是
+`VidMmLock → VIDMM_GLOBAL::Lock2 → LockCommon → QueueDeferredCommand → WaitForFence(s)`，
+上层仍为本轮实际 Intel DXVA 扩展／D3D11 Lock2 回调。
+
+第 428 帧提供了完整的慢例：SyncOperation 为 250.524 ms，调用线程 off-CPU 250.461 ms，
+ready 仅 0.011 ms。其完成工作线程为 50464，帧等待范围内四次已验证资源阻塞共 237.392 ms，
+涉及上述三类资源，其中一个 4 KiB 缓冲单次阻塞 146.190 ms。
+这四个分页请求提交到被选中合计 224.496 ms，选中到完成约 12.806 ms；
+后者仍不是 GPU 指令执行时间。第 494 帧的 Sync 为 246.469 ms，匹配资源阻塞为 237.073 ms。
+这把两个慢帧的大部分等待落实到了具体资源和阶段。
+
+全部 CPU 窗口中，已匹配资源等待只覆盖部分帧，不能说每帧全部时间都由这三类阻塞造成；
+其余排队／硬件工作及分页请求在被选中之前的依赖仍继续定位。
+帧与工作线程／资源的关联使用实际完成唤醒和时间范围，不冒充 GPU 硬件帧编号。
+本轮核对还确认源码已请求 low_power=1、low_delay_brc=1 和 VCM，不能再建议把本已开启的开关打开。
+下一步先利用现有 FFmpeg 在 GetVideoParam 后输出的 VDENC／码率控制参数，限时读回实际生效值，
+再设计能区分原因的编码策略对照，不凭这些请求值认定驱动实际采用了同样设置。
+
+主要证据为 `D:\RHRemoteTools\qsv-joint05-collected-20261025.json`、
+`encoder-etw-qsvjoint05-20261025\sdk-resource-wait-linked-proof-v2.json`、
+`encoder-waking-proof-v2.json`、`selected-image-identity-proof.json`，
+以及 `encoder-filtered-resource-qsvjoint05-20261025\resource-link-proof.json`。
+原始 ETL、实际机器码、逐帧关联及保守版本保存在私有诊断目录；公开仓库只保存 profile 和分析说明。
