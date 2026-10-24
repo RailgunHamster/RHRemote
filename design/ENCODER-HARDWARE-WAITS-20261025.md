@@ -395,6 +395,54 @@ Intel 的公开 [VPL GPU Runtime](https://github.com/intel/vpl-gpu-rt) 说明该
 下一次需要在连接／编码器资源创建之前启动采集，并核对资源及 context 生命周期元数据是否实际收到，
 不能继续使用缺少创建记录的指针去推断资源类型。
 
+## QSVsdk04 续查：谁把分页线程唤醒
+
+对同一原始 CPU ETL 做两遍只读分析。第一遍按实际 Thread provider / opcode 50，
+通过 TDH 读取 TThreadId=1416 的 132617 条 ReadyThread；第二遍按原始 QPC 时间戳和 CPU 精确匹配 StackWalk，
+没有从进程名字推测唤醒者。共取得 132453 个唯一唤醒栈，164 个有不同栈的歧义点被排除，未任选其一。
+两遍均读取 12553069 个事件，属性／布局错误为零；与 xperf 的全部 132617 个 ReadyThread
+按同 CPU、目标线程及 ±1.1 微秒的整数显示精度交叉校验成功。
+初次直接 round 的派生分析在半微秒边界漏掉 6692 个 CSV 关联，修正量化处理后完整匹配；
+原始时间戳和两遍读取结果未变，旧的保守分析仍保留，最终使用 v2。
+
+结合上节的等待栈，最常见的分页 DMA 缓冲忙等待唤醒栈出现 64751 次，路径为：
+
+```text
+ntoskrnl!KiExecuteAllDpcs
+→ dxgkrnl!DpiFdoDpcForIsr
+→ igdkmdnd64.sys RVA 0x3a35d / 0x65096e
+→ dxgkrnl!DxgNotifyDpcCB
+→ dxgmms2!VidSchDdiNotifyDpc
+→ VidSchiProcessDpcDmaPacket → VidSchiProcessDpcCompletedPacket
+→ ntoskrnl!KeSetEvent → KiExitDispatcher
+→ KiProcessThreadWaitList → EtwTraceReadyThread
+```
+
+图中为调用方向，原始栈保留反向展开地址。等待所有分页引擎空闲和分页 fence 的最常见唤醒栈分别出现 16328 / 1777 次，
+还包含 `VidSchiProcessCompletedQueuePacketInternal → VidSchiCompleteSignalSyncObject
+→ VidSchiUnwaitMonitoredFences → UnblockCpuWaiter`。
+这些是各类最常见的完整栈数量，不等同于整类全部事件数；同栈多个函数的计数不能相加。
+
+机器码另确认 dxgmms2 的这两个信号分支实际调用导入的 KeSetEvent：RVA 0xb069 和 0x37221，
+调用后各有五字节 NOP；未推断该补丁槽或运行时返回地址调整的私有机制。
+ntoskrnl 的实际 RVA 0x22fb9f 为 KeSetEvent+0x11f、0x2d12b9 为 EtwTraceReadyThread+0x129。
+精确复制文件与 ETL 的加载范围、checksum、PE 时间戳均核对一致，
+ntoskrnl SHA256 为 `866BC13D7872CC9F7F1807D1D6BFAC63ED9B761651C653258EC972EED493BD95`，
+公共 PDB GUID `F9533515F98A1E8105A1491384F2EFC1`、age 1；
+Intel KMD SHA256 为 `B4FC87250B89BE2DFD5F6480888073E247F688F2FDCA5B72E280932A3BA5508D`，
+版本 32.0.101.8864。Microsoft 符号源没有该 Intel 私有 PDB，只保留实际 RVA、展开函数范围及间接调用机器码，
+没有编造 Intel 函数名称。首次离线查询使用 nt 模块别名未列出模块；改用实际 ntoskrnl 模块名后核对成功。
+
+该结果将“分页线程阻塞后被显卡完成处理唤醒”落实到实际调用链。
+仍不能据此确认哪个物理引擎、哪个精确 fence、GPU 指令耗时或 Intel 私有资源类型。
+DPC 可以借用当前进程／线程上下文，列表中的 qemu、python、java 等名字不是这些进程导致完成事件的证据。
+本轮所有分析使用既有记录，没有新增 ETW 会话、媒体、音频、业务暂停或权限提升。
+
+证据位于 `D:\RHRemoteTools\encoder-etw-qsvsdk04-20261025\paging-worker-waking-stacks.jsonl`、
+`paging-worker-waking-stack-proof-v2.json`、`paging-worker-waking-stack-resolved.json` 和
+`paging-waking-dpc-module-identity.json`；二进制身份与机器码另保存在同一私有诊断根目录。
+原始 ETL、二进制、PDB 和包含进程信息的记录不纳入公开仓库。
+
 ## 诊断代码修正与下一次实测边界
 
 原先的“Using realtime GPU priority”在设置 API 返回前记录，无法证明设置成功。
