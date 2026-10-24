@@ -22,6 +22,9 @@ Edit-Source 'app/build.gradle' {
     $s=$s.Replace('applicationId "com.limelight"','applicationId "com.rhremote.client"').Replace('applicationId "com.limelight.root"','applicationId "com.rhremote.client.root"')
     $s=$s.Replace('applicationIdSuffix ".debug"','').Replace('applicationIdSuffix ".unofficial"','')
     $s=$s.Replace('versionName "12.2"',('versionName "'+$Version+'"')).Replace('versionCode = 315',('versionCode = '+$VersionCode))
+    # Keep the installed signing identity while disabling Debug in the shipped variant.
+    # Stable candidate preparation verifies the expected certificate fingerprint.
+    $s=Replace-Once $s '        release {' "        release {`n            signingConfig signingConfigs.debug"
     $s=$s.Replace('"Moonlight (Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight (Root Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight"','"RHRemote-Moonlight"').Replace('"Moonlight (Root)"','"RHRemote-Moonlight"')
     # Build only the actual OPPO architecture; don't spend time building unused ABIs.
     $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters 'arm64-v8a' }")
@@ -40,6 +43,9 @@ Edit-Source 'app/build.gradle' {
 '@)
     $s=$s.Replace("dependencies {","dependencies {`n    implementation 'androidx.core:core:1.16.0'`n    testImplementation 'junit:junit:4.13.2'`n    testImplementation 'org.robolectric:robolectric:4.17'`n    androidTestImplementation 'androidx.test:runner:1.6.2'`n    androidTestImplementation 'androidx.test.ext:junit:1.2.1'")
     return $s
+}
+Edit-Source 'app/proguard-rules.pro' {param($s)
+    return $s+"`n# Stable JNI bridge and product action interfaces.`n-keep class com.limelight.rhremote.** { *; }`n"
 }
 Edit-Source 'app/src/main/AndroidManifest.xml' {param($s)
     $s=$s.Replace('<uses-permission android:name="android.permission.INTERNET" />','<uses-permission android:name="android.permission.INTERNET" />

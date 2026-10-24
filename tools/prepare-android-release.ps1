@@ -22,9 +22,11 @@ $winFeed=Get-Content -LiteralPath (Join-Path $WindowsBaselineDirectory 'releases
 if($winFeed.Assets.Count -ne 1 -or $winFeed.Assets[0].Version -ne $baseline.version){throw 'Windows baseline feed identity differs'}
 $apk=Join-Path $repo ('dist/android/RHRemote-v'+$Version+'.apk')
 $buildTools=Join-Path $env:LOCALAPPDATA 'Android/Sdk/build-tools/37.0.0'
-$badging=(& (Join-Path $buildTools 'aapt.exe') dump badging $apk)|Select-Object -First 1
+$badgingLines=@(& (Join-Path $buildTools 'aapt.exe') dump badging $apk)
+$badging=$badgingLines|Select-Object -First 1
 $pattern="name='com.rhremote.client'.*versionCode='"+$VersionCode+"'.*versionName='"+[regex]::Escape($Version)+"'"
 if($LASTEXITCODE -ne 0 -or $badging -notmatch $pattern){throw 'APK identity differs from the requested release'}
+if($badgingLines-contains'application-debuggable'){throw 'A stable release cannot contain a debuggable APK'}
 $signers=@(& (Join-Path $buildTools 'apksigner.bat') verify --print-certs $apk)
 if($LASTEXITCODE -ne 0){throw 'APK signature verification failed'}
 $digests=@($signers|ForEach-Object {if($_ -match 'certificate SHA-256 digest: ([0-9a-fA-F]{64})'){$matches[1].ToLowerInvariant()}}|Sort-Object -Unique)

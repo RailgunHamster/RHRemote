@@ -20,9 +20,11 @@ $package=Get-Item -LiteralPath (Join-Path $WindowsDirectory $packageName)
 if($package.Length-ne$feed.Assets[0].Size-or(Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash-ine$feed.Assets[0].SHA256){throw 'Windows package checksum mismatch'}
 $apk=Get-Item -LiteralPath (Join-Path $repo "dist/android/RHRemote-v$Version.apk")
 $buildTools=Join-Path $env:LOCALAPPDATA 'Android/Sdk/build-tools/37.0.0'
-$badging=(& (Join-Path $buildTools 'aapt.exe') dump badging $apk.FullName)|Select-Object -First 1
+$badgingLines=@(& (Join-Path $buildTools 'aapt.exe') dump badging $apk.FullName)
+$badging=$badgingLines|Select-Object -First 1
 $pattern="name='com.rhremote.client'.*versionCode='"+$AndroidVersionCode+"'.*versionName='"+[regex]::Escape($Version)+"'"
 if($LASTEXITCODE-ne0-or$badging-notmatch$pattern){throw 'APK package/version metadata differs from candidate'}
+if($badgingLines-contains'application-debuggable'){throw 'A stable release cannot contain a debuggable APK'}
 $signers=@(& (Join-Path $buildTools 'apksigner.bat') verify --print-certs $apk.FullName)
 if($LASTEXITCODE-ne0){throw 'APK signature verification failed'}
 $digests=@($signers|ForEach-Object{if($_-match'certificate SHA-256 digest: ([0-9a-fA-F]{64})'){$matches[1].ToLowerInvariant()}}|Sort-Object -Unique)
@@ -37,7 +39,7 @@ Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $out $apkName)
 $apkHash=(Get-FileHash -LiteralPath $apk.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 $android=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionCode=$AndroidVersionCode;packageName='com.rhremote.client';tag="v$Version";fileName=$apkName;size=$apk.Length;sha256=$apkHash;notes='See RELEASE-NOTES.md for changes.'}}
 [IO.File]::WriteAllText((Join-Path $out 'releases.android.json'),($android|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
-$metadata=[ordered]@{channel='stable';sourceCommit=$commit;windowsVersion=$Version;windowsUiRenderer='software';androidVersion=$Version;androidVersionCode=$AndroidVersionCode;androidPackage='com.rhremote.client';androidSignerSha256=$digests[0];androidApkSha256=$apkHash;oppoInstalled=$false;actualCellularVerified=$false}
+$metadata=[ordered]@{channel='stable';sourceCommit=$commit;windowsVersion=$Version;windowsBuildType='release';windowsUiRenderer='software';androidVersion=$Version;androidBuildType='release';androidDebuggable=$false;androidVersionCode=$AndroidVersionCode;androidPackage='com.rhremote.client';androidSignerSha256=$digests[0];androidApkSha256=$apkHash;oppoInstalled=$false;actualCellularVerified=$false}
 [IO.File]::WriteAllText((Join-Path $out 'build.json'),($metadata|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $source=Join-Path $out "RHRemote-$Version-source.zip"
 & git -C $repo archive --format=zip --output=$source $commit

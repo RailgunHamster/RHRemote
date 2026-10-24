@@ -1,6 +1,6 @@
 # RHRemote 0.2.7
 
-Windows 和 Android 客户端均更新到 0.2.7，Android versionCode 为 209，签名与旧版一致。
+Windows 和 Android 客户端均更新到 0.2.7，Android versionCode 为 209，签名与旧版一致。两端使用 Release 构建，Android APK 不启用 debuggable。
 
 - Windows 支持按设备设置多地址和连接路径顺序，使用局域网、Tailscale、内置直连或独立 HTTPS 中继；媒体失败按配置回退，保留配对证书校验。
 - Windows 连接取消、后台启动交接和关闭窗口会等待本次原生进程实际清理；UI 意外退出时，独立通道进程保留中继直到原生清理结束。

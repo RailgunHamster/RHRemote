@@ -1,6 +1,7 @@
 param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[switch]$BuildTests,[string]$NdkDir="$env:LOCALAPPDATA\Android\Sdk\ndk\29.0.14206865",
  [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.7',
- [ValidateRange(1,2100000000)][int]$VersionCode=209)
+ [ValidateRange(1,2100000000)][int]$VersionCode=209,
+ [ValidateSet('debug','release')][string]$BuildType='release')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $cargoTarget=if($env:CARGO_TARGET_DIR){[IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)}else{Join-Path $repo 'target'}
@@ -23,12 +24,13 @@ try {
     $proxy=[Net.WebRequest]::GetSystemWebProxy().GetProxy([uri]'https://repo.maven.apache.org/maven2/')
     $proxyArgs=@()
     if($proxy.Host -ne 'repo.maven.apache.org'){$proxyArgs=@("-Dhttps.proxyHost=$($proxy.Host)","-Dhttps.proxyPort=$($proxy.Port)","-Dhttp.proxyHost=$($proxy.Host)","-Dhttp.proxyPort=$($proxy.Port)",'-Dhttp.nonProxyHosts=localhost')}
-    $tasks=@(':app:assembleNonRootDebug');if($BuildTests){$tasks+=@(':app:assembleNonRootDebugAndroidTest',':app:testNonRootDebugUnitTest')}
+    $variant=if($BuildType-eq'release'){'Release'}else{'Debug'}
+    $tasks=@(':app:assembleNonRoot'+$variant);if($BuildTests){$tasks+=@(':app:assembleNonRootDebugAndroidTest',(':app:testNonRoot'+$variant+'UnitTest'))}
     & $gradle --no-daemon --console=plain @proxyArgs @tasks
     if($LASTEXITCODE -ne 0){throw 'Android build failed.'}
     $repo=Split-Path $PSScriptRoot -Parent;$out=Join-Path $repo 'dist/android'
     New-Item -ItemType Directory -Force -Path $out|Out-Null
-    $apkName='RHRemote-v'+$Version+'.apk'
-    Copy-Item -LiteralPath 'app/build/outputs/apk/nonRoot/debug/app-nonRoot-debug.apk' -Destination (Join-Path $out $apkName) -Force
+    $apkName='RHRemote-v'+$Version+$(if($BuildType-eq'debug'){'-debug'})+'.apk'
+    Copy-Item -LiteralPath ('app/build/outputs/apk/nonRoot/'+$BuildType+'/app-nonRoot-'+$BuildType+'.apk') -Destination (Join-Path $out $apkName) -Force
     Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $apkName)|Select-Object Hash,Path
 }finally{Pop-Location}
