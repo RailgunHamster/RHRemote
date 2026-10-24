@@ -420,7 +420,11 @@ impl Network {
             }
         }
         *self.last.lock().unwrap() = json!({"uuid":device.uuid,"attempts":attempts,"routeOrder":profile.route_order,"path":"unknown","elapsedMs":started.elapsed().as_millis() as u64,"mediaUdp":"not_tested"});
-        Err("已启用的连接路径均不可达或 UUID 不符；请打开连接设置 → 网络 → 诊断".into())
+        Err(if failed.is_empty() {
+            "已启用的连接路径均不可达或 UUID 不符；请打开连接设置 → 网络 → 诊断"
+        } else {
+            "本轮媒体连接失败，已无可用的备用线路；请查看网络诊断"
+        }.into())
     }
     pub fn diagnose(&self, device: &Device, profile: &Profile) -> Value {
         let _ = self.resolve(device, profile);
@@ -473,6 +477,19 @@ impl Network {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exhausted_media_routes_are_not_reported_as_an_identity_failure() {
+        let device=Device{uuid:"host".into(),name:"fixture".into(),display_name:String::new(),
+            address:"192.168.10.20".into(),addresses:vec![],online:true,paired:true,is_self:false};
+        let profile=Profile{route_order:vec!["lan".into()],..Default::default()};
+        let network=Network::default();
+        let error=network.resolve_excluding(&device,&profile,
+            &[crate::recovery::FailedRoute{route:"lan".into(),address:device.address.clone()}],
+            &std::sync::atomic::AtomicBool::new(false)).unwrap_err();
+        assert!(error.contains("媒体连接失败"));
+        assert!(!error.contains("UUID"));
+        assert_eq!(network.last.lock().unwrap()["attempts"],json!([]));
+    }
     #[test]
     fn refuses_another_sunshine_identity_and_reports_no_media_claim() {
         // Invalid host is rejected before networking, including URL injection.

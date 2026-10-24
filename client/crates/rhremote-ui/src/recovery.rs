@@ -24,6 +24,43 @@ pub struct Routes {
     started: Option<u64>,
     healthy_since: Option<u64>,
 }
+
+/// Separate launch preparation from waiting for media after the protocol is ready.
+/// A ready milestone grants one media budget, within an absolute 30-second cap.
+#[derive(Default)]
+pub struct FirstFrameWait {
+    protocol_ready_ms: Option<u64>,
+    disconnect_ms: Option<u64>,
+}
+#[derive(Debug, PartialEq)]
+pub enum FirstFrameDecision {
+    Wait,
+    Disconnect,
+    ForceExit,
+}
+impl FirstFrameWait {
+    pub fn observe(&mut self, elapsed_ms: u64, protocol_ready: bool) -> FirstFrameDecision {
+        if let Some(sent) = self.disconnect_ms {
+            return if elapsed_ms.saturating_sub(sent) >= 2_000 {
+                FirstFrameDecision::ForceExit
+            } else {
+                FirstFrameDecision::Wait
+            };
+        }
+        if protocol_ready {
+            self.protocol_ready_ms.get_or_insert(elapsed_ms);
+        }
+        let deadline = self.protocol_ready_ms
+            .map(|ready| ready.saturating_add(15_000).min(30_000))
+            .unwrap_or(15_000);
+        if elapsed_ms >= deadline {
+            self.disconnect_ms = Some(elapsed_ms);
+            FirstFrameDecision::Disconnect
+        } else {
+            FirstFrameDecision::Wait
+        }
+    }
+}
 impl Routes {
     pub fn healthy(&mut self, now: u64, rendered: bool) {
         if rendered {
@@ -100,6 +137,30 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn slow_launch_does_not_consume_the_entire_post_protocol_frame_budget() {
+        let mut wait = FirstFrameWait::default();
+        assert_eq!(wait.observe(14_000, false), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(14_500, true), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(15_500, true), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(29_499, true), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(29_500, true), FirstFrameDecision::Disconnect);
+        assert_eq!(wait.observe(31_499, true), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(31_500, true), FirstFrameDecision::ForceExit);
+    }
+    #[test]
+    fn repeated_progress_cannot_extend_the_absolute_deadline_or_revive_a_timeout() {
+        let mut wait = FirstFrameWait::default();
+        assert_eq!(wait.observe(16_000, true), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(29_999, true), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(30_000, true), FirstFrameDecision::Disconnect);
+        assert_eq!(wait.observe(30_001, true), FirstFrameDecision::Wait);
+        assert_eq!(wait.observe(32_000, true), FirstFrameDecision::ForceExit);
+        let mut hung = FirstFrameWait::default();
+        assert_eq!(hung.observe(15_000, false), FirstFrameDecision::Disconnect);
+        assert_eq!(hung.observe(15_001, true), FirstFrameDecision::Wait);
+        assert_eq!(hung.observe(17_000, true), FirstFrameDecision::ForceExit);
+    }
     #[test]
     fn media_fallback_is_bounded_and_does_not_retry_identity_failures() {
         let mut routes = Routes::default();

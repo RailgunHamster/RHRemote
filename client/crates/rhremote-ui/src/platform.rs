@@ -28,6 +28,7 @@ struct Recovery {
     current: Value,
     native_started: Option<Instant>,
     timeout_requested: bool,
+    first_frame_wait: crate::recovery::FirstFrameWait,
     attempt: u32,
 }
 impl Recovery {
@@ -41,6 +42,7 @@ impl Recovery {
             current: Value::Null,
             native_started: None,
             timeout_requested: false,
+            first_frame_wait: Default::default(),
             attempt: 0,
         }
     }
@@ -100,6 +102,40 @@ mod packet_argument_tests {
 #[cfg(all(test, windows))]
 mod recovery_transport_tests {
     use super::*;
+    fn protocol_budget_fixture(owned_status: bool) {
+        let root=std::env::temp_dir().join(format!("rhremote-protocol-budget-{}",rhremote_core::random_token().unwrap()));
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port=server.server_addr().to_ip().unwrap().port();
+        let child=Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command","Start-Sleep -Seconds 30"])
+            .creation_flags(0x08000000).spawn().unwrap();
+        let id=child.id();
+        let worker=std::thread::spawn(move || {
+            let request=server.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+            let state=json!({"phase":"connected","streaming":true,"firstFrame":false,"processId":if owned_status{id}else{id+1}});
+            request.respond(tiny_http::Response::from_string(state.to_string())).unwrap();
+            if !owned_status {
+                let request=server.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
+                assert_eq!(request.url(),"/v1/disconnect");
+                request.respond(tiny_http::Response::from_string("{}")).unwrap();
+            }
+        });
+        let mut platform=NativePlatform::new(PathBuf::from("unused-clock-fixture.exe"),"fixture-token".into(),root.clone()).unwrap();
+        platform.port=port;
+        *platform.child.lock().unwrap()=Some(child);
+        let mut recovery=Recovery::new(json!({}));
+        recovery.native_started=Some(Instant::now()-Duration::from_secs(16));
+        *platform.recovery.lock().unwrap()=Some(recovery);
+        let state=platform.state().unwrap();
+        worker.join().unwrap();
+        assert_eq!(platform.recovery.lock().unwrap().as_ref().unwrap().timeout_requested,!owned_status);
+        if owned_status {assert_eq!(state["phase"],"connected");}
+        stop_fixture(&platform);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn an_owned_protocol_ready_process_gets_a_separate_frame_budget() {protocol_budget_fixture(true);}
+    #[test]
+    fn another_process_cannot_extend_the_first_frame_budget() {protocol_budget_fixture(false);}
     // These older recovery fixtures use sleeping shells, not a native API.
     // Explicitly finish only those fixtures; real graceful teardown is tested
     // with an authenticated control server in native_cleanup's process tests.
@@ -938,6 +974,7 @@ impl NativePlatform {
                         *slot = Some(outcome.child.take());
                         r.native_started = Some(Instant::now());
                         r.timeout_requested = false;
+                        r.first_frame_wait = Default::default();
                         value = json!({"streaming":false,"firstFrame":false,"phase":if r.policy.armed(){"reconnecting"}else{"connecting"},"error":""});
                     }
                     Err(error) => {
@@ -998,18 +1035,22 @@ impl NativePlatform {
                 && alive
                 && !rendered
                 && !released
-                && r.native_started
-                    .is_some_and(|t| t.elapsed() >= Duration::from_secs(15))
+                && r.native_started.is_some()
                 && matches!(
                     value["phase"].as_str(),
                     Some("connecting" | "starting" | "connected" | "reconnecting")
                 )
             {
-                if !r.timeout_requested {
+                let elapsed = r.native_started.unwrap().elapsed().as_millis().min(u64::MAX as u128) as u64;
+                // Ignore a previous child's status file or an unrelated API process.
+                let protocol_ready = value["phase"] == "connected" && value["streaming"] == true
+                    && value["processId"].as_u64() == slot.as_ref().map(|child| u64::from(child.id()));
+                let decision = r.first_frame_wait.observe(elapsed, protocol_ready);
+                if decision == crate::recovery::FirstFrameDecision::Disconnect {
                     r.timeout_requested = true;
                     let _ = self.statistics.lock().unwrap().event(
                         "route_first_frame_timeout",
-                        json!({"attempt":r.attempt,"network":r.current}),
+                        json!({"attempt":r.attempt,"network":r.current,"nativeElapsedMs":elapsed,"protocolReadyObserved":protocol_ready}),
                     );
                     // Bounded native request; cancellation never waits on WAN I/O.
                     let _ = self
@@ -1019,9 +1060,7 @@ impl NativePlatform {
                         .timeout(Duration::from_millis(500))
                         .send_json(json!({}));
                 }
-                if r.native_started
-                    .is_some_and(|t| t.elapsed() >= Duration::from_secs(17))
-                {
+                if decision == crate::recovery::FirstFrameDecision::ForceExit {
                     if let Some(mut child) = slot.take() {
                         let _ = child.kill();
                         let _ = child.wait();
@@ -1045,7 +1084,8 @@ impl NativePlatform {
                         .into(),
                 };
                 if r.routes.admit(rhremote_core::now_ms(), failed, true) {
-                    let _=self.statistics.lock().unwrap().event("route_media_failed",json!({"attempt":r.attempt,"network":r.current,"error":value["error"],"terminationCode":value["terminationCode"]}));
+                    let detail=if r.timeout_requested {json!("等待首帧超时")} else {value["error"].clone()};
+                    let _=self.statistics.lock().unwrap().event("route_media_failed",json!({"attempt":r.attempt,"network":r.current,"error":detail,"terminationCode":value["terminationCode"]}));
                     self.retire_child(&mut slot, true);
                     self.queue_launch(r);
                     value = json!({"streaming":false,"firstFrame":false,"phase":"reconnecting","error":""});
