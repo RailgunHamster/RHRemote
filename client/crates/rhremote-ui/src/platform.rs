@@ -45,17 +45,21 @@ impl Recovery {
         }
     }
 }
-struct OwnedChild(Option<Child>);
+struct OwnedChild {
+    child: Option<Child>,
+    cleanup: crate::native_cleanup::Queue,
+    context: crate::native_cleanup::Context,
+    network: Arc<crate::network::Network>,
+}
 impl OwnedChild {
     fn take(mut self) -> Child {
-        self.0.take().unwrap()
+        self.child.take().unwrap()
     }
 }
 impl Drop for OwnedChild {
     fn drop(&mut self) {
-        if let Some(mut child) = self.0.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(child) = self.child.take() {
+            self.cleanup.enqueue(child, self.context.clone(), self.network.clone());
         }
     }
 }
@@ -72,6 +76,7 @@ struct LaunchContext {
     port: u16,
     network: Arc<crate::network::Network>,
     statistics: Arc<Mutex<crate::statistics::Statistics>>,
+    cleanup: crate::native_cleanup::Queue,
 }
 
 // The CLI rejects zero; it is an internal preference value for auto detection.
@@ -95,6 +100,16 @@ mod packet_argument_tests {
 #[cfg(all(test, windows))]
 mod recovery_transport_tests {
     use super::*;
+    // These older recovery fixtures use sleeping shells, not a native API.
+    // Explicitly finish only those fixtures; real graceful teardown is tested
+    // with an authenticated control server in native_cleanup's process tests.
+    fn stop_fixture(p: &NativePlatform) {
+        if let Some(child) = p.child.lock().unwrap().as_mut() { let _=child.kill();let _=child.wait(); }
+        for (child,_,_) in p.retiring.lock().unwrap().iter_mut() {let _=child.kill();let _=child.wait();}
+        p.stop_owned().unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while p.cleanup.pending() {p.cleanup.reap();assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));}
+    }
     #[test]
     fn ui_trace_waits_for_a_pending_launch_to_return_before_finishing() {
         let root = std::env::temp_dir().join(format!(
@@ -140,7 +155,7 @@ mod recovery_transport_tests {
             .creation_flags(0x08000000).spawn().unwrap();
         p.retiring.lock().unwrap().push((child, Instant::now(), true));
         assert_eq!(p.state().unwrap()["tracing"]["recording"], true);
-        p.stop_owned().unwrap();
+        stop_fixture(&p);
         assert_eq!(p.state().unwrap()["tracing"]["recording"], false);
         fs::remove_dir_all(root).unwrap();
     }
@@ -170,7 +185,7 @@ mod recovery_transport_tests {
         *p.recovery.lock().unwrap() = Some(r);
         barrier.wait();
         let started = Instant::now();
-        p.stop_owned().unwrap();
+        stop_fixture(&p);
         assert!(started.elapsed() < Duration::from_millis(500));
         let until = Instant::now() + Duration::from_secs(2);
         while !p.reap_launches() && Instant::now() < until {
@@ -201,9 +216,13 @@ mod recovery_transport_tests {
             .unwrap();
         unsafe {
             let process = OpenProcess(PROCESS_SYNCHRONIZE, false, child.id()).unwrap();
-            drop(OwnedChild(Some(child)));
-            assert_eq!(WaitForSingleObject(process, 1000), WAIT_OBJECT_0);
+            let cleanup=crate::native_cleanup::Queue::default();
+            let status=std::env::temp_dir().join(format!("discarded-{}.json",rhremote_core::random_token().unwrap()));
+            drop(OwnedChild {child:Some(child),cleanup:cleanup.clone(),context:crate::native_cleanup::Context {port:9,token:"unused-fixture".into(),status:status.clone(),limit:Duration::from_millis(100)},network:Arc::new(crate::network::Network::default())});
+            assert_eq!(WaitForSingleObject(process, 3000), WAIT_OBJECT_0);
+            let until=Instant::now()+Duration::from_secs(3);while cleanup.pending(){cleanup.reap();assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));}
             let _ = CloseHandle(process);
+            let _ = fs::remove_file(status);
         }
     }
     #[test]
@@ -279,7 +298,7 @@ mod recovery_transport_tests {
         p.retiring.lock().unwrap()[0].0.wait().unwrap();
         assert_eq!(fs::read_to_string(&marker).unwrap(), "done");
         assert_eq!(p.state().unwrap()["nativeCleanupPending"], false);
-        p.stop_owned().unwrap();
+        stop_fixture(&p);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -323,7 +342,7 @@ mod recovery_transport_tests {
         assert_eq!(state["error"], "");
         assert!(p.retiring.lock().unwrap().is_empty());
         assert!(p.recovery.lock().unwrap().is_some());
-        p.stop_owned().unwrap();
+        stop_fixture(&p);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -388,7 +407,7 @@ mod recovery_transport_tests {
             p.recovery.lock().unwrap().as_ref().unwrap().policy.attempts,
             1
         );
-        p.stop_owned().unwrap();
+        stop_fixture(&p);
         assert!(p.retiring.lock().unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
@@ -402,7 +421,7 @@ mod recovery_transport_tests {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
         let worker = std::thread::spawn(move || {
-            for request in server.incoming_requests().take(3) {
+            for request in server.incoming_requests().take(2) {
                 request.respond(tiny_http::Response::from_string(r#"{"ok":true,"streaming":true,"firstFrame":true,"phase":"connected","retryEligible":true}"#)).unwrap();
             }
         });
@@ -443,6 +462,41 @@ mod recovery_transport_tests {
         assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn disconnect_during_startup_is_async_and_keeps_admission_until_native_cleanup() {
+        let mut fixture=crate::native_cleanup::tests::Fixture::new("cancelled");
+        fixture.start_server(fixture.pid,false);
+        let mut p=NativePlatform::new(PathBuf::from("unused-fixture-engine.exe"),"fixture-token".into(),fixture.root.join("platform")).unwrap();
+        p.port=fixture.port;p.session_status=fixture.status.clone();
+        *p.child.lock().unwrap()=Some(fixture.take_child());
+        *p.recovery.lock().unwrap()=Some(Recovery::new(json!({})));
+        let began=Instant::now();let result=p.execute("stream.disconnect",&json!({})).unwrap();
+        assert!(began.elapsed()<Duration::from_millis(500));assert_eq!(result["cleanupPending"],true);
+        fixture.wait_disconnect();
+        let pending=p.state().unwrap();assert_eq!(pending["phase"],"cancelling");assert_eq!(pending["nativeCleanupPending"],true);assert_eq!(pending["error"],"");
+        assert!(p.execute("device.connect",&json!({})).unwrap_err().contains("上一连接正在结束"));
+        fixture.release();let until=Instant::now()+Duration::from_secs(5);
+        loop{let state=p.state().unwrap();if state["nativeCleanupPending"]==false{assert_eq!(state["phase"],"disconnected");assert_eq!(state["error"],"");break;}assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));}
+        assert!(p.recovery.lock().unwrap().is_none());assert!(p.cleanup.failure().is_none());
+    }
+
+    #[test]
+    fn cancellation_does_not_wait_for_another_worker_holding_admission_locks() {
+        let root=std::env::temp_dir().join(format!("rhremote-stop-lock-{}",rhremote_core::random_token().unwrap()));
+        let p=NativePlatform::new(PathBuf::from("unused-fixture-engine.exe"),"fixture-token".into(),root.clone()).unwrap();
+        let guard=p.recovery.lock().unwrap();
+        let began=Instant::now();
+        assert_eq!(p.stop_owned().unwrap()["cleanupPending"],true);
+        assert!(began.elapsed()<Duration::from_millis(500));
+        assert_eq!(p.stop_owned().unwrap()["cleanupPending"],true);
+        assert!(p.cleanup.pending());
+        drop(guard);
+        let until=Instant::now()+Duration::from_secs(3);
+        while p.state().unwrap()["nativeCleanupPending"]==true {assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));}
+        assert!(!p.stop_requested.load(Ordering::SeqCst));
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 pub struct NativePlatform {
@@ -450,11 +504,11 @@ pub struct NativePlatform {
     native_data: PathBuf,
     session_status: PathBuf,
     pub devices: Mutex<Vec<Device>>,
-    child: Mutex<Option<Child>>,
-    retiring: Mutex<Vec<(Child, Instant, bool)>>,
+    child: Arc<Mutex<Option<Child>>>,
+    retiring: Arc<Mutex<Vec<(Child, Instant, bool)>>>,
     state_agent: ureq::Agent,
-    pairing: Mutex<Option<PendingPair>>,
-    recovery: Mutex<Option<Recovery>>,
+    pairing: Arc<Mutex<Option<PendingPair>>>,
+    recovery: Arc<Mutex<Option<Recovery>>>,
     token: String,
     port: u16,
     pub sync: Mutex<crate::config_sync::ConfigSync>,
@@ -462,7 +516,11 @@ pub struct NativePlatform {
     network: Arc<crate::network::Network>,
     updates: Mutex<crate::updates::Updates>,
     pub statistics: Arc<Mutex<crate::statistics::Statistics>>,
-    retired_launches: Mutex<Vec<std::thread::JoinHandle<Result<LaunchOutcome, String>>>>,
+    retired_launches: Arc<Mutex<Vec<std::thread::JoinHandle<Result<LaunchOutcome, String>>>>>,
+    cleanup: crate::native_cleanup::Queue,
+    stop_requested: AtomicBool,
+    stop_submission: Mutex<()>,
+    closing: AtomicBool,
 }
 impl NativePlatform {
     pub fn new(engine: PathBuf, token: String, data: PathBuf) -> Result<Self, String> {
@@ -525,8 +583,8 @@ impl NativePlatform {
             native_data,
             session_status: data.join("session-status.json"),
             devices: Mutex::new(devices),
-            child: Mutex::new(None),
-            retiring: Mutex::new(Vec::new()),
+            child: Arc::new(Mutex::new(None)),
+            retiring: Arc::new(Mutex::new(Vec::new())),
             state_agent: ureq::AgentBuilder::new()
                 .try_proxy_from_env(false)
                 .redirects(0)
@@ -535,8 +593,8 @@ impl NativePlatform {
                 .timeout_write(Duration::from_millis(400))
                 .timeout(Duration::from_millis(500))
                 .build(),
-            pairing: Mutex::new(None),
-            recovery: Mutex::new(None),
+            pairing: Arc::new(Mutex::new(None)),
+            recovery: Arc::new(Mutex::new(None)),
             token,
             port: std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
                 .and_then(|s| s.local_addr())
@@ -547,7 +605,11 @@ impl NativePlatform {
             network: Arc::new(crate::network::Network::default()),
             updates: Mutex::new(crate::updates::Updates::new()),
             statistics: Arc::new(Mutex::new(statistics)),
-            retired_launches: Mutex::new(Vec::new()),
+            retired_launches: Arc::new(Mutex::new(Vec::new())),
+            cleanup: Default::default(),
+            stop_requested: AtomicBool::new(false),
+            stop_submission: Mutex::new(()),
+            closing: AtomicBool::new(false),
         })
     }
     fn launcher(&self) -> LaunchContext {
@@ -559,12 +621,16 @@ impl NativePlatform {
             port: self.port,
             network: self.network.clone(),
             statistics: self.statistics.clone(),
+            cleanup: self.cleanup.clone(),
         }
     }
     fn command(&self) -> Command {
         self.launcher().command()
     }
     fn probe(&self, device: &Device) -> Device {
+        if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending() || !self.retired_launches.lock().unwrap().is_empty() {
+            return device.clone();
+        }
         // Probing another host must not replace a live or pending stream's tunnel.
         if self
             .recovery
@@ -720,7 +786,7 @@ impl NativePlatform {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(Value::Null);
-        operation.cancellation.finish(outcome["phase"] != "paired");
+        self.finish_pairing(operation.cancellation, outcome["phase"] != "paired");
         let mut device = self.probe(&device);
         if outcome["phase"] == "paired" {
             device.paired = true;
@@ -813,7 +879,6 @@ impl NativePlatform {
             let outcome = context.spawn_stream(&args, &cancel);
             if cancel.load(Ordering::SeqCst) {
                 drop(outcome);
-                context.network.release_transport();
                 Err("连接已取消".into())
             } else {
                 outcome
@@ -834,6 +899,9 @@ impl NativePlatform {
     }
     pub fn state(&self) -> Result<Value, String> {
         self.reap_launches();
+        for report in self.cleanup.reap() {
+            let _ = self.statistics.lock().unwrap().event("native_cleanup_end", json!({"kind":report.kind,"pid":report.pid,"forced":report.forced,"confirmed":report.confirmed,"error":report.error}));
+        }
         let http_state: Option<Value> = self
             .state_agent
             .get(&format!("http://127.0.0.1:{}/v1/state", self.port))
@@ -853,6 +921,9 @@ impl NativePlatform {
         let mut recovery = self.recovery.lock().unwrap();
         let mut slot = self.child.lock().unwrap();
         let mut terminal = false;
+        if self.stop_requested.load(Ordering::SeqCst) {
+            if let Some(mut r)=recovery.take(){r.cancel.store(true,Ordering::SeqCst);if let Some(job)=r.pending.take(){self.retired_launches.lock().unwrap().push(job);}}
+        }
         if let Some(r) = recovery.as_mut() {
             if r.pending.as_ref().is_some_and(|j| j.is_finished()) {
                 let result = r
@@ -1057,6 +1128,12 @@ impl NativePlatform {
             value["streaming"] = json!(false);
             value["streamWindow"] = json!("0");
         }
+        // Keep the submission and completion decisions atomic. Otherwise an
+        // idle poll could clear stop_requested before the coordinator is queued.
+        let stop_submission = self.stop_submission.lock().unwrap();
+        let cleanup_pending = self.cleanup.pending()
+            || !self.retired_launches.lock().unwrap().is_empty()
+            || self.retiring.lock().unwrap().iter().any(|(_,_,released)|!released);
         if !alive
             && value["phase"] != "reconnecting"
             && recovery.as_ref().is_none_or(|r| r.pending.is_none())
@@ -1075,18 +1152,30 @@ impl NativePlatform {
             && recovery.as_ref().is_none_or(|r| r.pending.is_none())
             && self.retiring.lock().unwrap().is_empty()
             && self.retired_launches.lock().unwrap().is_empty()
+            && !cleanup_pending
         {
             let _ = self.statistics.lock().unwrap().finish();
+            if self.stop_requested.swap(false, Ordering::SeqCst) {
+                self.network.try_release_transport();
+                value["phase"] = json!("disconnected");
+                value["streaming"] = json!(false);
+                value["error"] = json!("");
+            }
         }
+        drop(stop_submission);
         drop(slot);
         drop(recovery);
-        value["nativeCleanupPending"] = json!(
-            self.retiring
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(_, _, transport_released)| !transport_released)
-        );
+        value["nativeCleanupPending"] = json!(cleanup_pending);
+        if self.stop_requested.load(Ordering::SeqCst) && cleanup_pending {
+            value["phase"] = json!("cancelling");
+            value["streaming"] = json!(false);
+            value["firstFrame"] = json!(false);
+            value["error"] = json!("");
+        } else if let Some(error) = self.cleanup.failure() {
+            value["phase"] = json!("error");
+            value["error"] = json!(error);
+            value["routeFatal"] = json!(true);
+        }
         value["tracing"] = self.statistics.lock().unwrap().state();
         value["network"] = self.network.last.lock().unwrap().clone();
         if value["streaming"] == true && value["firstFrame"] == true {
@@ -1094,33 +1183,32 @@ impl NativePlatform {
         }
         Ok(value)
     }
-    fn cancel_recovery(&self) {
-        if let Some(mut r) = self.recovery.lock().unwrap().take() {
-            r.cancel.store(true, Ordering::SeqCst);
-            if let Some(job) = r.pending.take() {
-                self.retired_launches.lock().unwrap().push(job);
-            }
-        }
-    }
     fn stop_owned(&self) -> Result<Value, String> {
-        self.cancel_recovery();
-        let pairing=self.pairing.lock().unwrap().take();
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
+        let _submission = self.stop_submission.lock().unwrap();
+        if self.stop_requested.swap(true, Ordering::SeqCst) && (self.cleanup.pending() || self.cleanup.failure().is_none()) {
+            return Ok(json!({"cancelled":true,"cleanupPending":true}));
         }
-        if let Some(pairing)=pairing {pairing.cancellation.finish(true);}
-        for (mut child, _, _) in self.retiring.lock().unwrap().drain(..) {
-            let _ = child.kill();
-            let _ = child.wait();
+        let (recovery,retired,pairing,child,retiring,cleanup,context,network)=(self.recovery.clone(),self.retired_launches.clone(),self.pairing.clone(),self.child.clone(),self.retiring.clone(),self.cleanup.clone(),self.cleanup_context(),self.network.clone());
+        if !self.cleanup.coordinate(self.network.clone(),move||{
+            if let Some(mut r)=recovery.lock().unwrap().take(){r.cancel.store(true,Ordering::SeqCst);if let Some(job)=r.pending.take(){retired.lock().unwrap().push(job);}}
+            let pairing=pairing.lock().unwrap().take();
+            if let Some(mut process)=child.lock().unwrap().take(){
+                if pairing.is_some(){let _=process.kill();let _=process.wait();}
+                else{cleanup.enqueue(process,context.clone(),network.clone());}
+            }
+            if let Some(pairing)=pairing {if let Some(job)=pairing.cancellation.finish(true){cleanup.track_pairing(job,network.clone());}}
+            for (process,_,_) in retiring.lock().unwrap().drain(..){cleanup.enqueue(process,context.clone(),network.clone());}
+        }) {
+            self.stop_requested.store(false,Ordering::SeqCst);
+            return Err("无法启动清理协调任务".into());
         }
-        self.network.try_release_transport();
-        fs::write(
-            &self.session_status,
-            b"{\"streaming\":false,\"phase\":\"disconnected\",\"error\":\"\"}",
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(json!({"cancelled":true}))
+        Ok(json!({"cancelled":true,"cleanupPending":true}))
+    }
+    fn finish_pairing(&self, cancellation: crate::pairing::Cancellation, cancelled: bool) {
+        if let Some(job)=cancellation.finish(cancelled){self.cleanup.track_pairing(job,self.network.clone());}
+    }
+    fn cleanup_context(&self) -> crate::native_cleanup::Context {
+        crate::native_cleanup::Context {port:self.port,token:self.token.clone(),status:self.session_status.clone(),limit:Duration::from_secs(15)}
     }
     fn control(&self, path: &str, args: &Value) -> Result<Value, String> {
         let response = ureq::post(&format!("http://127.0.0.1:{}/v1/{path}", self.port))
@@ -1160,9 +1248,15 @@ impl Platform for NativePlatform {
             None
         };
         match action {
-            "engine.close" => self.stop_owned(),
+            "engine.close" => {
+                self.closing.store(true,Ordering::SeqCst);
+                let result=self.stop_owned();
+                if result.is_err(){self.closing.store(false,Ordering::SeqCst);}
+                result
+            },
             "network.state" => Ok(self.network.last.lock().unwrap().clone()),
             "device.network.diagnose" => {
+                if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending(){return Err("上一连接正在结束，请稍后重试".into());}
                 if self.recovery.lock().unwrap().as_ref().is_some_and(|r|r.pending.is_some()) || self.child.lock().unwrap().as_mut().is_some_and(|c|c.try_wait().ok().flatten().is_none()){
                     return Err("请先断开当前连接，再运行网络诊断".into());
                 }
@@ -1177,6 +1271,7 @@ impl Platform for NativePlatform {
             }
             "statistics.state" => Ok(self.statistics.lock().unwrap().state()),
             "statistics.configure" => {
+                if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending(){return Err("disconnect before changing test mode".into());}
                 if self.recovery.lock().unwrap().as_ref().is_some_and(|r|r.pending.is_some()){return Err("disconnect before changing test mode".into());}
                 let mut child = self.child.lock().unwrap();
                 if child
@@ -1271,13 +1366,15 @@ impl Platform for NativePlatform {
                     }
                 }
                 if recovery.as_ref().is_some_and(|r|r.pending.is_some()){return Err("连接已在进行".into());}
-                if !self.reap_launches(){return Err("上一连接正在结束，请稍后重试".into());}
+                if self.closing.load(Ordering::SeqCst) || !self.reap_launches() || self.cleanup.pending() || self.stop_requested.load(Ordering::SeqCst){return Err("上一连接正在结束，请稍后重试".into());}
                 if self.retiring.lock().unwrap().iter().any(|(_,_,released)|!released){return Err("上一会话正在退出，请稍后重试".into());}
+                self.cleanup.clear_failure();
                 let mut launch_args=args.clone();launch_args["connectOriginUs"]=json!(self.statistics.lock().unwrap().request_origin() as u64);
                 let mut r=Recovery::new(launch_args);self.queue_launch(&mut r);*recovery=Some(r);
                 Ok(json!({"accepted":true}))
             }
             "device.pair" => {
+                if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending(){return Err("上一连接正在结束，请稍后重试".into());}
                 let pending_regression = crate::pairing::pending_regression(
                     args,
                     std::env::var("RHREMOTE_TEST_MODE").as_deref() == Ok("1"),
@@ -1329,16 +1426,11 @@ impl Platform for NativePlatform {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
-                if let Some(operation)=operation {operation.cancellation.finish(true);}
+                if let Some(operation)=operation {self.finish_pairing(operation.cancellation, true);}
                 Ok(json!({"cancelled":true,"pairId":pair_id}))
             }
             "stream.disconnect" => {
-                self.cancel_recovery();
-                if self.state()?["streaming"] == true {
-                    self.control("disconnect", &json!({}))
-                } else {
-                    self.stop_owned()
-                }
+                self.stop_owned()
             }
             "input.gesture" => self.control("input", args),
             "stream.test.interrupt" => self.control("test-interrupt", &json!({})),
@@ -1580,7 +1672,7 @@ impl LaunchContext {
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(LaunchOutcome {
-            child: OwnedChild(Some(child)),
+            child: OwnedChild {child:Some(child),cleanup:self.cleanup.clone(),context:crate::native_cleanup::Context {port:self.port,token:self.token.clone(),status:self.session_status.clone(),limit:Duration::from_secs(15)},network:self.network.clone()},
             network,
         })
     }

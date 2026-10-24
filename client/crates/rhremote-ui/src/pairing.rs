@@ -156,16 +156,18 @@ impl Cancellation {
             }
         }
     }
-    pub fn finish(self, cancelled: bool) {
+    pub fn finish(self, cancelled: bool) -> Option<std::thread::JoinHandle<bool>> {
         let began = std::time::Instant::now();
         let proof = if cancelled { self.read_proof() } else { None };
         // This exact generated file is owned by the completed native child.
         let _ = fs::remove_file(&self.path);
         if let Some(proof) = proof {
-            std::thread::spawn(move || {
+            Some(std::thread::spawn(move || {
                 let result = Self::send(self.endpoint, proof);
+                let confirmed = result == CleanupOutcome::Cancelled;
                 Self::report(self.report, &self.id, result, began.elapsed());
-            });
+                confirmed
+            }))
         } else if cancelled {
             Self::report(
                 self.report,
@@ -173,6 +175,9 @@ impl Cancellation {
                 CleanupOutcome::NoProof,
                 began.elapsed(),
             );
+            None
+        } else {
+            None
         }
     }
 }

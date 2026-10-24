@@ -178,6 +178,7 @@ pub struct State {
     pub status: String,
     pub streaming: bool,
     pub connecting: bool,
+    pub closing: bool,
     #[serde(skip)]
     connect_in_flight: bool,
     #[serde(skip)]
@@ -270,6 +271,7 @@ impl Controller {
                 status: String::new(),
                 streaming: false,
                 connecting: false,
+                closing: false,
                 connect_in_flight: false,
                 stream_epoch: 0,
                 audio_enabled: false,
@@ -362,15 +364,17 @@ impl Controller {
         }
         s.connecting = matches!(
             statistics["phase"].as_str(),
-            Some("connecting" | "starting" | "reconnecting")
-        );
+            Some("connecting" | "starting" | "reconnecting" | "cancelling")
+        ) || statistics["nativeCleanupPending"] == true;
         if streaming && statistics["firstFrame"] == false {
             s.connecting = true;
         }
         if let Some(error) = statistics["error"].as_str().filter(|e| !e.is_empty()) {
             s.status = error.into();
         } else if s.connecting {
-            s.status = if statistics["phase"] == "reconnecting" {
+            s.status = if statistics["phase"] == "cancelling" {
+                "正在断开…"
+            } else if statistics["phase"] == "reconnecting" {
                 "连接中断，正在自动恢复…"
             } else if streaming {
                 "等待主机首帧…"
@@ -382,6 +386,14 @@ impl Controller {
             s.status = String::new();
         }
         if let Some(network)=statistics.get("network"){s.network=network.clone();}
+        if s.closing && statistics["nativeCleanupPending"] != false {
+            s.connecting = true;
+            s.status = "正在断开…".into();
+        }
+        if s.closing && !streaming && !s.connecting && statistics["nativeCleanupPending"] == false {
+            s.closing = false;
+            s.window_action = "window.close".into();
+        }
         s.statistics = statistics;
         s.revision += 1;
     }
@@ -685,17 +697,23 @@ impl Controller {
             | "view.snapshot"
             | "view.toolbar.snapshot"
             | "view.picker.snapshot" => {
-                if id == "window.close" && s.streaming {
-                    drop(s);
-                    self.platform.execute("stream.disconnect", &json!({}))?;
-                    s = self.state.lock().unwrap();
-                }
                 if id == "window.close" {
+                    s.stream_epoch += 1;
                     drop(s);
-                    self.platform.execute("engine.close", &json!({}))?;
+                    let result = self.platform.execute("engine.close", &json!({}));
                     s = self.state.lock().unwrap();
+                    let result=match result {Ok(value)=>value,Err(error)=>{s.closing=false;return Err(error)}};
+                    if result["cleanupPending"] == true {
+                        s.closing = true;
+                        s.connecting = true;
+                        s.window_action.clear();
+                        s.status = "正在断开…".into();
+                    } else {
+                        s.window_action = id.into();
+                    }
+                } else {
+                    s.window_action = id.into();
                 }
-                s.window_action = id.into();
             }
             _ => {
                 if id == "stream.shortcut"
@@ -978,6 +996,33 @@ mod tests {
         assert_eq!(serde_json::to_value(profile).unwrap()["gamepadEnabled"], true);
     }
     struct Stub;
+    struct CloseTransport { fail: bool }
+    impl Platform for CloseTransport {
+        fn execute(&self, id:&str, _: &Value)->Result<Value,String> {
+            if id!="engine.close"{return Err("fixture action unsupported".into());}
+            if self.fail {Err("cleanup unavailable".into())} else {Ok(json!({"cancelled":true,"cleanupPending":true}))}
+        }
+    }
+    #[test]
+    fn close_window_waits_for_cleanup_and_rejects_stale_or_missing_poll_evidence() {
+        let file=std::env::temp_dir().join(format!("rhremote-close-{}.json",random_token().unwrap()));
+        let c=Controller::new("test",file.clone(),Arc::new(CloseTransport {fail:false})).unwrap();
+        c.stream_state(false,json!({"phase":"connecting","nativeCleanupPending":false}));let old=c.stream_epoch();
+        assert_eq!(c.dispatch("window.close",json!({}))["ok"],true);
+        assert_eq!(c.state()["closing"],true);assert!(c.take_window_action().is_empty());
+        c.stream_state_for(old,false,json!({"phase":"disconnected","nativeCleanupPending":false}));assert!(c.take_window_action().is_empty());
+        c.stream_state(false,Value::Null);assert!(c.take_window_action().is_empty());
+        c.stream_state(false,json!({"phase":"cancelling","nativeCleanupPending":true}));assert_eq!(c.state()["connecting"],true);assert!(c.take_window_action().is_empty());
+        c.stream_state(false,json!({"phase":"disconnected","nativeCleanupPending":false}));assert_eq!(c.state()["closing"],false);assert_eq!(c.take_window_action(),"window.close");
+        let _=fs::remove_file(file);
+    }
+    #[test]
+    fn failed_close_keeps_window_open() {
+        let file=std::env::temp_dir().join(format!("rhremote-close-failure-{}.json",random_token().unwrap()));
+        let c=Controller::new("test",file.clone(),Arc::new(CloseTransport {fail:true})).unwrap();
+        assert_eq!(c.dispatch("window.close",json!({}))["ok"],false);assert_eq!(c.state()["closing"],false);assert!(c.take_window_action().is_empty());
+        let _=fs::remove_file(file);
+    }
     impl Platform for Stub {
         fn execute(&self, _: &str, _: &Value) -> Result<Value, String> {
             Err("no transport in unit tests".into())

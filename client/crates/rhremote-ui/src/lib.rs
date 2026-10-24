@@ -5,6 +5,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
 mod devices;
 mod network;
+mod native_cleanup;
 mod overlay;
 mod pairing;
 mod platform;

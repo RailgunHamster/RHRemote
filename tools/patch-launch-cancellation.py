@@ -39,7 +39,7 @@ def patch(root):
             NvHTTP::verifyResponseStatus(reply);
             return RhLaunchAttempt::reply(NvHTTP::getXmlString(reply,"RHLaunchState"));
         });
-    RhRuntime::installLaunch(rhLaunch);
+    if(!RhRuntime::installLaunch(rhLaunch)){rhLaunch->cancel();throw GfeHttpResponseException(410,"Launch admission closed");}
     if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load()){
         rhLaunch->cancel();throw GfeHttpResponseException(410,"Launch cancelled");
     }'''
@@ -83,7 +83,9 @@ def patch(root):
     path = root / "app/streaming/session.cpp"
     text = path.read_text(encoding="utf-8")
     text = replace(text, '        LiStopConnection();',
-                   '        LiStopConnection();\n        RhRuntime::drainLaunch();')
+                   '        LiStopConnection();\n        RhRuntime::get().protocolStarted=false;\n        RhRuntime::drainLaunch();')
+    text = replace(text, '    RhStatistics::event("connection_begin");',
+                   '    RhRuntime::get().protocolStarted=true;\n    RhStatistics::event("connection_begin");')
     text = replace(text, 'DispatchDeferredCleanup:\n',
                    'DispatchDeferredCleanup:\n    RhRuntime::cancelLaunch();\n')
     text = replace(text, 'r.firstFrame=false;r.localDisconnect=false;r.retryEligible=false;r.routeRetryEligible=false;',

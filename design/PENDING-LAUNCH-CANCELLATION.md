@@ -156,15 +156,49 @@ claw 首轮边界观测失败的原报告保留：实际已收到 458 次渲染�
 `light-owner-cancel-fixed-claw-first-20261024.json`、
 `claw-first-pending-boundary-adjudication-20261024.json`。
 
+## Windows UI 的取消与窗口关闭
+
+Rust UI 已将连接中的断开、丢弃的后台启动结果和窗口关闭接入同一后台清理队列。
+任务持有实际 Child 和 Network，验证带鉴权控制接口的 processId 后请求原生断开，
+控制端口未启动时重试。接收请求不等于完成：需等待实际进程退出，并核对同 PID 的
+transport_closed、transportReleased 和按次清理状态。未确认、进程错误或超时保留错误；
+超时仅结束本次持有的 Child，不把退出码或旧状态文件当作服务端清理成功。
+
+清理期间禁止新连接、探测换通道及自动恢复；取消不等待可能持锁的网络或配对工作。
+配对的签名取消任务也加入队列。窗口关闭等待明确 nativeCleanupPending=false，
+旧轮次、缺失或空状态不能触发提前退出。原生控制端在 Session 尚未建立时接受取消，
+取消标记不会被稍后 beginSession 清除，launch 登记关闭后不能再提交新请求。
+
+2026-10-24 核心 31 项 / UI 库 50 项通过。新增测试包含真实子进程与鉴权 HTTP，
+覆盖延迟控制端口、其他 PID、旧状态、未确认清理、通道保留、配对后台确认、
+清理期间拒绝重连、另一个工作线程持锁时取消，以及窗口关闭的旧轮次与空状态。
+原生生命周期回归及完整 MSVC/Qt 客户端构建通过。服务端源码未在此轮修改。
+
+普通 Windows UI 安装候选后，通过产品动作接口取消，后验均确认动作落在原始
+http_launch / http_resume 内，未开始 connection_begin；两端保留配对 TLS 校验，
+每次实际清理返回 cancelled，UI 报告 confirmed=true、forced=false，原生和 UI
+各有一个完整结束记录。重试没有等待旧的 11 秒诊断间隔，且均记录实际 render_return。
+
+| 场景 | 动作接口返回 | 原生正常退出 | 重试 API 确认收到首帧 |
+|---|---:|---:|---:|
+| 局域网，断开按钮 | 14.539 ms | 181.813 ms | 1961.317 ms |
+| 独立 HTTPS 中继，断开按钮 | 17.185 ms | 302.999 ms | 3621.152 ms |
+| 独立 HTTPS 中继，关闭窗口 | 17.568 ms | 353.743 ms | 3901.732 ms |
+
+窗口场景中 UI 在约 1055 ms 退出，观察期间没有先于原生退出；重开后第一次连接成功。
+表中重试时间来自动作到 API 观察，附有实际渲染记录，不能解释为物理扫描输出延迟或
+稳定首帧上限。这三轮使用 winserver、静音、1080p30 / H.264 / 5 Mbps，原设备参数、
+统计开关与自动同步均恢复。结果在 D:\RHRemoteTools\ui-graceful-cancel-{lan-disconnect,
+relay-disconnect,relay-window}-first-20261024.json，必要原始统计保留。
+
+安装的 UI SHA-256 为 AA3C650B26D2DC87A7149F90A347A89FEE2B2B1E3EF2101B980EC5377418D2B6，
+原生为 C2A90D1130E5840721062023350962012328A50A3DEB3E9227949428E18E31E6。
+回滚副本在 D:\RHRemoteTools\client-before-graceful-cancel-20261024。
+
 ## 尚需修复和验收
 
-源检查发现 Windows Rust UI 的 stream.disconnect 在非 streaming 状态仍走 stop_owned，
-会强制结束子进程；取消后的后台 LaunchOutcome 和窗口关闭也存在 OwnedChild::drop／
-stop_owned 的强制结束路径。这会绕过已实现的原生清理。下一步应先请求控制接口，
-在后台保持连接占用与 transport，等待真实清理，不阻塞 UI；必须覆盖尚未收到原生控制
-端口、后台启动刚交接、API 取消、窗口关闭、失败清理，不能只修连接成功后的按钮。
-
 此外 Network 当前在 UI 进程内持有 QUIC Client。上表保留普通 UI，只终止轻量归属进程；
-不能据此推广到中继下真正的 UI 崩溃。需验证并解决 UI 退出后取消通道的存活，再做
+不能据此推广到中继下真正的 UI 崩溃。正常窗口关闭现已等待清理，但仍需解决 UI
+意外退出后取消通道的存活，再做
 HTTPS 中继的完整退出／立即重试。Android 当前只验收了 JVM 实际 TLS，未验收 OPPO。
 正式更新仍为 Android 0.2.6、Windows 0.2.3，0.2.7 APK 暂未发布。
