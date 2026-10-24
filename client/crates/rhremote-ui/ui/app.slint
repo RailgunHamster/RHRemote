@@ -144,6 +144,7 @@ export component MainWindow inherits Window {
     background:Palette.page;default-font-family:"Microsoft YaHei UI";default-font-size:14px;
     in property <[DeviceRow]> devices;
     in property <string> page:"devices";
+    in property <string> app-version;
     in property <string> selected-name;
     in property <string> client-name;
     in property <string> selected-uuid;
@@ -213,7 +214,7 @@ export component MainWindow inherits Window {
             Rectangle {height:60px;background:Palette.surface;
                 HorizontalLayout {padding-left:24px;padding-right:24px;spacing:14px;
                     Text{text:"RHRemote-Moonlight";font-weight:600;color:Palette.ink;vertical-alignment:center;}
-                    Text{text:"v0.2.3";font-size:11px;color:Palette.muted;vertical-alignment:center;}
+                    Text{text:"v"+root.app-version;font-size:11px;color:Palette.muted;vertical-alignment:center;}
                     Rectangle {horizontal-stretch:1;}
                     ActionButton{text:root.dark ? "浅色" : "深色";action-id:"appearance.toggle";}
                     ActionButton{text:"设置";action-id:"app.settings.open";}
@@ -358,7 +359,7 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.settings-tab=="updates": VerticalLayout{spacing:14px;
-                            Text{text:"RHRemote-Moonlight 0.2.3";color:Palette.ink;font-size:18px;}
+                            Text{text:"RHRemote-Moonlight "+root.app-version;color:Palette.ink;font-size:18px;}
                             Text{text:root.updates-managed ? "自动检查更新 · GitHub / Gitee" : "开发预览版。安装 Velopack 版本后启用自动更新。";color:Palette.muted;wrap:word-wrap;}
                             Text{text:root.updates-available ? "可用版本："+root.update-version : "";color:Palette.ink;}
                             HorizontalLayout{spacing:10px;

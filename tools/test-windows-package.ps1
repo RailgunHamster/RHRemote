@@ -1,6 +1,9 @@
-param([Parameter(Mandatory)][string]$Directory,[switch]$CheckOnlineUpdates)
+param([Parameter(Mandatory)][string]$Directory,[switch]$CheckOnlineUpdates,[string]$OutputFile='')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
+$feed=Get-Content -LiteralPath (Join-Path $Directory 'releases.win.json') -Raw|ConvertFrom-Json
+if($feed.Assets.Count-ne1){throw 'Expected a single full Windows release'}
+$expectedVersion=[string]$feed.Assets[0].Version
 $zip=Join-Path $Directory 'RHRemote-win-Portable.zip'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive=[IO.Compression.ZipFile]::OpenRead($zip)
@@ -17,9 +20,11 @@ try{
  $process=Start-Process -FilePath (Join-Path $application 'RHRemote.exe') -WorkingDirectory $application -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $root 'stderr.log') -RedirectStandardOutput (Join-Path $root 'stdout.log')
  $deadline=(Get-Date).AddSeconds(20);do{Start-Sleep -Milliseconds 250;try{$state=State}catch{$state=$null}}while(-not $state -and (Get-Date)-lt $deadline)
  if(-not $state -or -not $state.updates.managed){throw 'Packaged app did not detect its Velopack manifest'}
+ if($state.updates.currentVersion-ne$expectedVersion-or$state.updates.installedVersion-ne$expectedVersion){throw 'Compiled and installed Windows versions differ from the update feed'}
+ if($state.uiRendering.renderer-ne'software'){throw 'Default Windows package is not using the software control UI'}
  $null=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Port 48755 -Action 'device.add.submit' -Arguments @{address='192.168.0.104'}
  $state=State;$device=@($state.devices|Where-Object name -eq 'winserver');if($device.Count -ne 1 -or -not $device[0].online -or $device[0].paired){throw 'Packaged native adapter did not probe a fresh unpaired winserver'}
- $result=[ordered]@{result='PASS';private_configuration_excluded=$true;velopack_managed=$state.updates.managed;fresh_host_probe=$true;directory=$root}
+ $result=[ordered]@{result='PASS';private_configuration_excluded=$true;velopack_managed=$state.updates.managed;compiled_version=$state.updates.currentVersion;installed_version=$state.updates.installedVersion;ui_renderer=$state.uiRendering.renderer;fresh_host_probe=$true;directory=$root;uiSha256=(Get-FileHash -LiteralPath (Join-Path $application 'RHRemote.exe') -Algorithm SHA256).Hash;nativeSha256=(Get-FileHash -LiteralPath (Join-Path $application 'engine/RHRemote.exe') -Algorithm SHA256).Hash}
  if($CheckOnlineUpdates){
   $deadline=(Get-Date).AddSeconds(60);do{$state=State;if(-not $state.updatesBusy){break};Start-Sleep -Milliseconds 300}while((Get-Date)-lt $deadline)
   if($state.updatesBusy){throw 'Automatic update check did not finish'}
@@ -28,7 +33,9 @@ try{
   if($state.updatesBusy -or $state.updates.status -ne '已是最新版本'){throw ('Live update check failed: '+$state.updates.status)}
   $result.anonymous_online_update_check=$state.updates.status
  }
- [IO.File]::WriteAllText((Join-Path $repo 'results/clients-v2/windows-package-smoke.json'),($result|ConvertTo-Json));$result|ConvertTo-Json
+ $resultPath=if($OutputFile){[IO.Path]::GetFullPath($OutputFile)}else{Join-Path $repo 'results/clients-v2/windows-package-smoke.json'}
+ $parent=Split-Path $resultPath -Parent;if(-not(Test-Path -LiteralPath $parent)){New-Item -ItemType Directory -Path $parent -Force|Out-Null}
+ [IO.File]::WriteAllText($resultPath,($result|ConvertTo-Json));$result|ConvertTo-Json
 }finally{
  try{$null=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Port 48755 -Action 'window.close'}catch{}
  if($process -and -not $process.WaitForExit(10000)){Stop-Process -Id $process.Id -Force}

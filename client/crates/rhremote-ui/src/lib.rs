@@ -142,6 +142,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let ui = MainWindow::new()?;
+    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     controller.ui_rendering(ui_rendering::metadata());
     native.statistics.lock().unwrap().mark("ui_backend_selected");
     let toolbar = StreamToolbar::new()?;

@@ -157,7 +157,7 @@ impl Updates {
         }
     }
     pub fn state(&self) -> Value {
-        json!({"managed":self.manager.is_some(),"currentVersion":env!("CARGO_PKG_VERSION"),"availableVersion":self.available.as_ref().map(|u|u.TargetFullRelease.Version.clone()),"notes":self.available.as_ref().map(|u|u.TargetFullRelease.NotesMarkdown.clone()).unwrap_or_default(),"pendingRestart":self.manager.as_ref().is_some_and(|m|m.get_update_pending_restart().is_some()),"status":self.status})
+        json!({"managed":self.manager.is_some(),"currentVersion":env!("CARGO_PKG_VERSION"),"installedVersion":self.manager.as_ref().map(|m|m.get_current_version_as_string()),"availableVersion":self.available.as_ref().map(|u|u.TargetFullRelease.Version.clone()),"notes":self.available.as_ref().map(|u|u.TargetFullRelease.NotesMarkdown.clone()).unwrap_or_default(),"pendingRestart":self.manager.as_ref().is_some_and(|m|m.get_update_pending_restart().is_some()),"status":self.status})
     }
     pub fn execute(&mut self, id: &str) -> Result<Value, String> {
         if id == "updates.state" {

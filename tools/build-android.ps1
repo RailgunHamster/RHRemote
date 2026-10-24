@@ -3,6 +3,7 @@ param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[swit
  [ValidateRange(1,2100000000)][int]$VersionCode=209)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
+$cargoTarget=if($env:CARGO_TARGET_DIR){[IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)}else{Join-Path $repo 'target'}
 $toolchain=Join-Path $NdkDir 'toolchains/llvm/prebuilt/windows-x86_64/bin'
 $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=Join-Path $toolchain 'aarch64-linux-android26-clang.cmd'
 $env:CC_aarch64_linux_android=$env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
@@ -12,7 +13,7 @@ Push-Location $repo
 try{& cargo build --locked --release -p rhremote-transport --lib --target aarch64-linux-android -j4;if($LASTEXITCODE-ne0){throw 'Rust Android transport build failed'}}finally{Pop-Location}
 $jni=Join-Path $SourceDir 'app/src/main/jniLibs/arm64-v8a'
 New-Item -ItemType Directory -Force -Path $jni|Out-Null
-Copy-Item -LiteralPath (Join-Path $repo 'target/aarch64-linux-android/release/librhremote_transport.so') -Destination $jni -Force
+Copy-Item -LiteralPath (Join-Path $cargoTarget 'aarch64-linux-android/release/librhremote_transport.so') -Destination $jni -Force
 & (Join-Path $PSScriptRoot 'prepare-android.ps1') -SourceDir $SourceDir -Version $Version -VersionCode $VersionCode
 Push-Location $SourceDir
 try {

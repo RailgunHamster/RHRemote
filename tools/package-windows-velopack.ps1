@@ -1,6 +1,9 @@
-param([string]$Version='0.2.3',[switch]$ReleaseBuild,[string]$OutputDirectory='')
+param([string]$Version='0.2.7',[switch]$ReleaseBuild,[string]$OutputDirectory='')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
+$uiCargo=Get-Content -LiteralPath (Join-Path $repo 'client/crates/rhremote-ui/Cargo.toml') -Raw
+if($uiCargo-notmatch ('(?m)^version\s*=\s*"'+[regex]::Escape($Version)+'"\s*$')){throw 'Windows package version differs from the UI crate version'}
+$cargoTarget=if($env:CARGO_TARGET_DIR){[IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)}else{Join-Path $repo 'target'}
 $stage=Join-Path $repo ('dist/velopack-stage-'+[guid]::NewGuid().ToString('N'))
 $out=if($OutputDirectory){[IO.Path]::GetFullPath($OutputDirectory)}else{Join-Path $repo ('dist/velopack-releases-'+$Version)}
 if(-not $out.StartsWith((Join-Path $repo 'dist')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Package output must remain under the workspace dist directory'}
@@ -11,7 +14,7 @@ try{
  if($ReleaseBuild){& cargo build -p rhremote-ui --release --locked -j 4;if($LASTEXITCODE -ne 0){throw 'Release build failed'}}
  $configuration=if($ReleaseBuild){'release'}else{'debug'}
  New-Item -ItemType Directory -Force -Path (Join-Path $stage 'engine')|Out-Null
- Copy-Item -LiteralPath (Join-Path $repo "target/$configuration/RHRemote.exe") -Destination (Join-Path $stage 'RHRemote.exe')
+ Copy-Item -LiteralPath (Join-Path $cargoTarget "$configuration/RHRemote.exe") -Destination (Join-Path $stage 'RHRemote.exe')
  Copy-Item -LiteralPath (Join-Path $repo 'client/LICENSE') -Destination (Join-Path $stage 'LICENSE')
  # Explicit runtime allowlist. Pairing INIs, caches, logs and local snapshots are never packaged.
  $native=Join-Path $repo 'dist/windows'
