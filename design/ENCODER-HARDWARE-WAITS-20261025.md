@@ -350,10 +350,50 @@ CommitVirtualAddressRange → UpdatePageTable → FlushGpuVaTlb
 这证明同一个分页服务线程处理了跨进程请求，不证明暂停某个进程就能消除全部卡顿。
 仍需确认自己的请求何时满足依赖，以及实际缓冲区创建／映射方式；本轮没有停止这些进程。
 
+再用同一原始事件的实际 Info／Stop PID、TID、包身份及时间核对 9556 个完整处理区间，
+均在 PID 4 / TID 1416，且相邻选中到完成的区间没有重叠。
+自己的选中前平均 20.688 ms 中，6.360 ms 与其他进程的完整处理区间重合（30.74%），
+0.022 ms 与自己的上一包重合，其余 14.307 ms 位于完整包处理区间之外。
+后者继续交叉该线程的调度栈：平均 5.762 ms 是分页 DMA 缓冲区忙等待，
+2.050 ms 是等待所有分页引擎空闲，0.270 ms 是其他事件／fence 等待，0.010 ms 未解析，
+剩余 6.215 ms 不在完整 off-CPU 区间内，不独立宣称为已证明的 CPU 运算时间。
+这里的 off-CPU 仍含 ready 子集；自己的请求区间可能互相重叠，所有汇总都是按请求求交后累计，
+不是独占的整条时间线，也不是移除其他进程后可直接节省的时间。
+这进一步限制了“全是后台转码引起”的结论，并给出了包外分页等待的位置。
+
+`paging-service-overlap-20261025.json` 与 `paging-unscoped-gap-attribution-20261025.json`
+保留了独立包区间的核对、逐类累计、长尾示例、输入哈希及分析边界。
+该轮 SDK 请求共涉及 24 个本地 Alloc 指针；没有它们的创建／类型映射，
+不能仅凭数量把它们叫作某种输入纹理、码流缓冲或稳定的资源身份。
+
 证据为 `encoder-gpu-qsvsdk04-20261025\paging-competition-v2.json`、
 `encoder-etw-qsvsdk04-20261025\paging-actor-40576-process-identity.jsonl`，以及同目录的
 `vidmm-worker-thread-machine-code.txt`、`process-deferred-command-machine-code.txt`、
 `paging-info-emitter-machine-code.txt`、`paging-queue-select-descriptor.txt`。
+
+## SDK 到 Lock2 的实际 D3D11 接口
+
+继续用服务器实际 d3d11.dll 校对用户态调用链，SHA256 为
+`842825A67E1466BEAC7CB93F1A7E63052CC8121C6321548F851E9180D30289C0`。
+同次 CPU ETL 的开始／结束映像记录均为 PID 34000、基址 0x7ffec8f70000、
+SizeOfImage 0x25d000、checksum 0x27131e，与复制文件一致。
+该映像的 ETL 时间戳为零，未谎称与 PE 的可重现构建哈希时间戳相等。
+RSDS 与下载的公共 PDB GUID `A1BE8FF5CA5330B18C65B9B00A20A73C`、age 1 匹配。
+
+记录中的 RVA 0x2249d / 0x2262b 分别为 `CContext::DecoderExtension+0x3d`、
+`CDecodeContext::DecodeExtension+0x12b`，调用处机器码进入 Intel 驱动回调。
+Intel 驱动再回调 RVA 0x15929 的 `NDXGI::CDevice::Lock2CB+0x49`，
+经 RVA 0x158a1 的 `CallAndLogImpl<D3DKMT_LOCK2>+0x11` 调用先前确认的 NtGdiDdDDILock2。
+这把实际接口落实到 SDK 扩展调用内部，不能把它简单替换成 Sunshine 自己的 D3D11 Map 调用。
+接口名带 Decoder 不等于本轮正在解码；未捕获私有扩展功能号／GUID，仍不猜测具体资源用途。
+Intel 的公开 [VPL GPU Runtime](https://github.com/intel/vpl-gpu-rt) 说明该开源实现使用 Linux／VAAPI，
+因此不拿其中另一套平台源码冒充此 Windows DLL 的精确实现。
+
+证据为 `D:\RHRemoteTools\d3d11-qsv-lock-caller-identity-20261025.json` 和
+`d3d11-qsv-lock-caller-machine-code02-20261025.txt`。
+第一次使用不明确模块表达式的反汇编没有解析成功，未计为证据；第二次使用验证后的数值地址成功。
+下一次需要在连接／编码器资源创建之前启动采集，并核对资源及 context 生命周期元数据是否实际收到，
+不能继续使用缺少创建记录的指针去推断资源类型。
 
 ## 诊断代码修正与下一次实测边界
 
