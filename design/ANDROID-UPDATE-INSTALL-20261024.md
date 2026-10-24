@@ -46,3 +46,15 @@ APK 为 26,402,435 字节，SHA-256 为
 GitHub release 422090578、Gitee release 1234941；两站各八个资产及两个 latest feed
 均通过无凭据下载与哈希校验。记录保存在
 `D:\RHRemoteTools\android-stable-v025-verification-20261024.json`。
+
+## 0.2.7 后续正式交付
+
+Windows / Android 0.2.7 已正式发布到 GitHub 和 Gitee；Android versionCode 为 209，
+包含本节安装流程修复及后续连接取消、恢复通道归属修复。此次 Android 使用 Release 构建，
+APK 未启用 debuggable，签名仍与 0.2.3 一致。Release 的 143 项 JVM 测试通过；
+R8 压缩后的四个 Rust JNI 方法签名与 APK 中原生库的导出逐一核对通过。
+
+两站各 11 个发布资产及两个 latest feed 均通过匿名下载校验；发布源提交、哈希及实际
+Windows 更新结果见 `design/RELEASE-VERIFICATION-v0.2.7.md`。
+Windows 的实际更新成功不代表 OPPO 的系统安装界面已验收，OPPO 仍按用户要求暂停。
+旧 0.2.3 的按钮逻辑只有覆盖安装新 APK 后才会改变，不能用已发布修复解释旧版当前行为。

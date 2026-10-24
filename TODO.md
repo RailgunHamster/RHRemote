@@ -73,6 +73,8 @@
 
 ## 发布回归补充
 
+- Windows / Android 0.2.7 已在 GitHub 和 Gitee 正式发布，源提交与标签为 dc501fea776078d70caef9c485060239a4dd3844。两站各 11 个资产和两个 latest feed 匿名下载校验通过；Windows 103 项 Rust、Android Release 143 项 JVM、15 项发布前置回归通过。Android code209，Release / 非 debuggable、签名与旧版一致，压缩后的 Rust JNI 方法及原生导出已核对。本机 Windows 经真实 Velopack 更新到 0.2.7，Saved 状态、原生配对及传输身份保持；隔离旧版更新约 2.38 秒、本机约 4.59 秒，此为已下载后的安装重启耗时，不是视频首帧。OPPO 未操作，外网及系统安装器验收继续保留未完成。详见 design/RELEASE-VERIFICATION-v0.2.7.md。
+
 - Android 外网修复预览版 0.2.4-preview.1 / preview.2 已在 GitHub 发布；最新 preview.2 含 VPN 发现修复，49 项 JVM / 8 项发布前置回归通过，匿名下载四个资产并核对哈希；签名与 0.2.3 一致。双站稳定 feed 未变，preview.2 code205，后续 Android 稳定版 versionCode 至少 206。安装到 OPPO 及外网实际验收仍待完成，不能把发布预览包当作 P0 完成。见 design/ANDROID-TAILNET-DISCOVERY-20261023.md。
 
 - Android 0.2.4 / code206 已正式发布到两个更新源，包含上述修复及配对即时保存、更新 null 修复；Windows 继续 0.2.3，原更新 feed 不变且旧版本包地址保留。两站各八资产和两个 latest feed 全部校验通过；64 项 JVM / 9 项发布前置测试通过。OPPO 尚未安装，新版外网媒体未验收，P0 保持未完成；后续 Android 更新 versionCode 必须大于 206。
