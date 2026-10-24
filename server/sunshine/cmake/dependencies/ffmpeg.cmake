@@ -173,3 +173,6 @@ else()
 endif()
 
 set(FFMPEG_INCLUDE_DIRS "${FFMPEG_PREPARED_BINARIES}/include")
+
+# RHRemote: keep the pinned dependency correction outside the upstream subtree.
+include("${CMAKE_SOURCE_DIR}/../ffmpeg/module.cmake")

@@ -134,13 +134,28 @@ QSV 上下文派生及软件捕获断档仍需继续优化。
 证据为私有 `intel-mf03-frameclock-window-20261024.json`、
 `host-frame-intel-mf03-frameclock-summary-20261024.json` 及 `winserver-after-mf-natural03-20261024.json`。
 
-还发现一条待验证的设置线索：固定 FFmpeg 源码的 mfenc.c 用 VT_UI4 设置
-CODECAPI_AVLowLatencyMode，并未检查该 SetValue 的结果。
+固定 FFmpeg 源码的 mfenc.c 用 VT_UI4 设置 CODECAPI_AVLowLatencyMode，
+并未检查该 SetValue 的结果。
 [微软的属性说明](https://learn.microsoft.com/en-us/windows/win32/medfound/codecapi-avlowlatencymode)
 规定编码器使用 VT_BOOL，H.264 解码器才是所列的 VT_UI4 特例。
-这不证明 Intel MFT 实际拒绝或忽略了设置，更不能据此认定 334 ms 的根因。
-下一步可在隔离的自有 MFT 实例查询支持情况、比较两种类型的 HRESULT 与读回值，
-再决定是否需要维护固定 FFmpeg 依赖的源码补丁；不得直接改二进制或假设改类型就有效。
+随后隔离探测在 winserver 的 B580 上创建自有 D3D11 设备和两个独立 Intel H.264 MFT。
+每种类型使用新 transform，异步解锁、设备管理器及输出类型设置都成功。两个实例均为：
+
+| 设置方式 | SetValue | 设置后 GetValue | 设置输出类型后 GetValue |
+|---|---|---|---|
+| VT_UI4(1) | S_OK | VT_BOOL false | VT_BOOL false |
+| VT_BOOL(VARIANT_TRUE) | S_OK | VT_BOOL true | VT_BOOL true |
+
+这证明实际编码器忽略了旧参数类型；尚未证明它就是约 334 ms 缓冲的全部根因。
+探测约 9.285 秒完成，输入样本为零，不捕获桌面或声音、不修改服务。
+证据 `D:\RHRemoteTools\mf-latency-property-probe-20261024.json`，探测程序 SHA-256
+`3fa804f082f7d35472a21361e7ef557f9031040eaa333da1583b74ee500d6075`。
+
+`server/ffmpeg/` 现在维护对应源码修正：锁定完整源码归档、源文件、原配置、静态库和原 MF
+成员哈希，用原 ABI 配置重新编译 mfenc.c；只在构建目录的库副本替换编译器产物。
+库的其他 213 个成员须按原顺序逐项保持字节相同，包括合法的重复 basename。
+九项输入／归档保护回归已通过，完整 MSYS2/UCRT64 构建、真实函数 CodecAPI 参数回归、
+新包部署及实际动态媒体前后对照仍待执行。旧 mf03 原始证据保持不变。
 
 随后独立 GPU 输入对照确认：固定 16 帧 hwupload 池在纹理创建处报 80070057，
 尚未进入编码器；改为与 Sunshine 相同的动态池方式后，D3D11 输入的一帧编码约

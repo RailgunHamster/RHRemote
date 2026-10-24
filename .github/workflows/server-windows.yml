@@ -5,6 +5,7 @@ on:
     paths:
       - 'server/sunshine/**'
       - 'server/UPSTREAM.json'
+      - 'server/ffmpeg/**'
       - 'server/crates/**'
       - 'server/host/**'
       - '.gitmodules'
@@ -48,6 +49,7 @@ jobs:
           ./test-rhremote-launch-http
       - name: Analyze incomplete, reordered and closed host traces
         run: |
+          python -m unittest discover -s server/ffmpeg -p test_prepare_mf.py -v
           python -m unittest discover -s tools -p test_host_frame_analysis.py -v
           python -m unittest discover -s tools -p test_media_window_analysis.py -v
           python tools/test-statistics.py
@@ -134,7 +136,8 @@ jobs:
           g++ -std=c++23 -pthread -DRHREMOTE_LAUNCH_HTTP_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_launch_http.cpp -o test-rhremote-launch-http.exe
           ./test-rhremote-launch-http.exe
           cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
-          cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine --parallel 3
+          cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine test_rhremote_mf_variant --parallel 3
+          ./.deps/cmake-build-server/test_rhremote_mf_variant.exe
           cmake --install .deps/cmake-build-server --prefix "$PWD/.deps/server-stage"
           cp server/UPSTREAM.json server/sunshine/LICENSE .deps/server-stage/
       - name: Test pairing sessions and client authorization

@@ -1,0 +1,17 @@
+{
+  "schema": "rhremote.ffmpeg-module/v1",
+  "repository": "https://github.com/FFmpeg/FFmpeg",
+  "revision": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+  "sourceUrl": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/38b88335f99e76ed89ff3c93f877fdefce736c13",
+  "sourceArchiveSha256": "2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6",
+  "buildDepsRevision": "a9a9277cdafe8a0ff9f197915fe43b383ed4f36b",
+  "buildDepsTag": "v2026.724.203728",
+  "prebuiltArchiveSha256": "b293d7f6bd3f032ea01c7e4451b7db540622f2d603e8b98d336513895842c506",
+  "sourceFileSha256": "3316376277521e352d91c90d12d64a5a527cd9f6c58d1ca9ad99f93909fe0b26",
+  "configSha256": "8ffb34d875fabf4528f4c68ef39f1970f03f7c26ab7ebf4e075b9317ae4fb3a8",
+  "avconfigSha256": "975611ad5eba15212d9e1d5fca9d4fdf0daec6d2269b2fcab8e29af8667164bc",
+  "libavcodecSha256": "e37841e1c25006785e83b0ca91b49eb9b449cc9850bda9d7099918eec1d2c5ae",
+  "mfencObjectSha256": "d0bdad28ec9bc341be39267cd7ea90c8c54793d7465d25c757536ed0c94918a4",
+  "modifiedSource": "libavcodec/mfenc.c",
+  "modifiedArchiveMember": "mfenc.o"
+}
