@@ -242,7 +242,7 @@ pub struct Proxy {
     pub connection: Connection,
     jobs: JoinSet<()>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyInfo {
     pub address: String,

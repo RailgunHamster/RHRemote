@@ -6,6 +6,17 @@ mod config_sync;
 mod devices;
 mod network;
 mod native_cleanup;
+#[cfg(windows)]
+mod transport_owner;
+#[cfg(windows)]
+mod transport_worker;
+
+pub fn run_transport_worker() -> Option<Result<(), String>> {
+    #[cfg(windows)]
+    { transport_worker::run_from_args() }
+    #[cfg(not(windows))]
+    { None }
+}
 mod overlay;
 mod pairing;
 mod platform;

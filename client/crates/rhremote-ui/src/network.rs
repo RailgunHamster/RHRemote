@@ -5,6 +5,10 @@ use rhremote_core::{
 };
 use serde_json::{Value, json};
 #[cfg(windows)]
+use crate::transport_worker::Client as TransportClient;
+#[cfg(not(windows))]
+use rhremote_transport::Client as TransportClient;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::{
     net::{TcpStream, ToSocketAddrs},
@@ -17,7 +21,7 @@ use std::{
 pub struct Network {
     pub last: Mutex<Value>,
     peers: Mutex<Option<(Instant, Value)>>,
-    tunnel: Mutex<Option<rhremote_transport::Client>>,
+    tunnel: Mutex<Option<TransportClient>>,
 }
 fn tailscale() -> Option<std::path::PathBuf> {
     let path = std::path::PathBuf::from(
@@ -286,7 +290,7 @@ impl Network {
                         let mut slot = self.tunnel.lock().unwrap();
                         if slot.is_none() {
                             *slot =
-                                Some(rhremote_transport::Client::new().map_err(|e| e.to_string())?);
+                                Some(TransportClient::new().map_err(|e| e.to_string())?);
                         }
                         let data = std::env::var_os("RHREMOTE_DATA_DIR")
                             .map(std::path::PathBuf::from)

@@ -195,10 +195,48 @@ relay-disconnect,relay-window}-first-20261024.json，必要原始统计保留。
 原生为 C2A90D1130E5840721062023350962012328A50A3DEB3E9227949428E18E31E6。
 回滚副本在 D:\RHRemoteTools\client-before-graceful-cancel-20261024。
 
-## 尚需修复和验收
+## UI 意外退出时的中继通道
 
-此外 Network 当前在 UI 进程内持有 QUIC Client。上表保留普通 UI，只终止轻量归属进程；
-不能据此推广到中继下真正的 UI 崩溃。正常窗口关闭现已等待清理，但仍需解决 UI
-意外退出后取消通道的存活，再做
-HTTPS 中继的完整退出／立即重试。Android 当前只验收了 JVM 实际 TLS，未验收 OPPO。
+Windows Network 现通过当前 RHRemote.exe 的私有 worker 模式持有 QUIC Client。
+该模式在 GUI 和更新器之前分派，不创建窗口。配置与就绪状态只经过父子匿名管道，
+没有新建公共控制端口。worker 核对实际父 PID、原进程句柄、创建时间和可执行路径；
+管道关闭后保留通道，按父子关系、路径及创建时间选择原生子进程，持有它们的原始
+句柄直到退出，最多 20 秒。无法检查时保守保留至期限并返回失败，不终止原生子进程。
+同一 transport.key 的排他文件句柄防止新 UI 提前用相同身份替换仍在清理的连接。
+
+worker 正常退出和启动失败分开处理，启动失败不会被下一地址误当成活动会话清理失败。
+原生清理仍需既有配对 TLS 和按次凭据；独立进程没有新的服务器授权。
+本轮完整核心 31 / transport 11 / UI 58 项通过，包含真实子进程、期限到达不杀子进程、
+路径／父进程／创建时间边界、跨 worker 身份排他与取消，以及启动失败分类。
+
+首次实际强制 UI 退出未通过：engine/RHRemote.exe 的混合分隔符与系统路径比较不等，
+worker 漏掉原生子进程，取消请求因此超时。这是真实缺陷；已修复分隔符、路径前缀
+与大小写比较并补回归，原 FAIL、原始统计及有缺陷二进制保持在 RHRemoteTools，
+不把它改写为观测器问题或通过。
+
+修复候选 UI SHA-256 为 5C92245B78CC656446AD6C5B9EDBD05ED4CD4FF31D99749A3C4547C1E94359F2，
+原生仍为 C2A90D11...E31E6，已安装到本机普通客户端。四轮 winserver HTTPS 中继验证：
+
+| 场景 | 原生正常退出 | 清理状态 | 第一次重试确认首帧 |
+|---|---:|---|---:|
+| HTTP 内强制 UI 退出 | 353.889 ms | cancelled | 4222.613 ms |
+| 已有实际画面时强制 UI 退出 | 406.349 ms | finished | 3429.457 ms |
+| HTTP 内断开按钮 | 262.093 ms | cancelled | 4517.105 ms |
+| HTTP 内关闭窗口 | 365.576 ms | cancelled | 3660.235 ms |
+
+两个强制退出场景的独立 worker 均存活至原生结束，并以 0 退出，之后才重新连接；
+分别在约 500 / 535 ms 观察到 worker 已退出，该数字包含脚本读取日志时间。
+这两轮原 UI 的统计因强制终止缺少 footer，保留原状；不补写或声称崩溃 UI 统计完整。
+原生记录完整，并有实际 HTTPS 清理确认及重试 render_return。普通按钮和关闭窗口
+仍需完整 UI 清理报告。所有轮次静音，原设备参数、统计和同步配置恢复。
+
+实际脚本为 tools/test-windows-ui-cancellation.ps1，支持 http / streaming 阶段，
+结果位于 D:\RHRemoteTools\ui-worker-cancel-relay-{crash-second,crash-active,
+disconnect-worker,window-worker}-20261024.json；原始失败为 crash-first。
+进程强制退出只是故障注入，不能证明此前 Slint/NVIDIA 的长期呈现崩溃根因已经修复。
+
+## 尚需验收
+
+Android 当前只验收了 JVM 实际 TLS，未验收 OPPO；本机主机升级及真实外网网络变化
+仍未验收。四轮中继首帧不能作为稳定时延上限或蜂窝网络／持续帧率验收。
 正式更新仍为 Android 0.2.6、Windows 0.2.3，0.2.7 APK 暂未发布。
