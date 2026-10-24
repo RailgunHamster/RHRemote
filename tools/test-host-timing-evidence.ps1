@@ -36,12 +36,29 @@ try {
  foreach($secret in @('password','private_key','certificate','token','credential','pin=','rikey','https://','http://')){$lines+='Info: encoder '+$secret+' fixture-secret'}
  $lines+='Debug: unrelated fixture';$lines+='Info: RHREMOTE_GPU_PRIORITY requested=5 actual=5';$lines+='Info: RHREMOTE_PHASE stage=last duration_us=11'
  [IO.File]::WriteAllLines($wrapper,$lines)
- $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog $wrapper -WrapperOwned $true -Tail 12
- Assert ($r.lines.Count-eq2-and $r.tailLimit-eq12-and $r.lines[0]-match'GPU_PRIORITY'-and $r.lines[1]-match'stage=last') 'Tail bound and secret filtering must preserve only timing evidence'
+ $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog $wrapper -WrapperOwned $true -Tail 2
+ Assert ($r.lines.Count-eq2-and $r.tailLimit-eq2-and $r.lines[0]-match'GPU_PRIORITY'-and $r.lines[1]-match'stage=last') 'Evidence bound and secret filtering must preserve only recent timing evidence'
  foreach($line in $r.lines){Assert ($line-is[string]-and $line.PSObject.Properties.Name-notcontains'PSPath') 'Evidence must be plain strings without expanded file metadata'}
  $roundtrip=$r|ConvertTo-Json -Depth 4|ConvertFrom-Json
  Assert ($roundtrip.lines.Count-eq2-and $roundtrip.lines[0]-is[string]) 'JSON transport must retain string lines'
- 'PASS: retained log, ownership, fallback, missing evidence, bounded privacy filter, plain strings, JSON transport'
+ $noise=@('Info: Creating encoder [h264_qsv]')+@('Debug: unrelated D3D allocation')*9000+@('Info: RHREMOTE_PHASE stage=actual-open duration_us=123')
+ [IO.File]::WriteAllLines($wrapper,$noise)
+ $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog $wrapper -WrapperOwned $true -Tail 4
+ Assert ($r.lines.Count-eq2-and$r.lines[0]-match'Creating encoder'-and$r.lines[1]-match'actual-open') 'Unrelated verbose traffic must not evict the actual encoder anchor'
+ $previous=Join-Path $root 'sunshine-service.previous.log'
+ [IO.File]::WriteAllLines($previous,@('Info: RHREMOTE_PHASE stage=rotated-session duration_us=19','Info: encoder password fixture-secret'))
+ [IO.File]::WriteAllLines($wrapper,@('Info: RHREMOTE_PHASE stage=restored-service duration_us=23'))
+ $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog $wrapper -WrapperOwned $true
+ Assert ($r.previousWrapperIncluded-and$r.paths.Count-eq2-and$r.paths[0]-eq$previous-and$r.paths[1]-eq$wrapper-and$r.lines.Count-eq2-and$r.lines[0]-match'rotated-session'-and$r.lines[1]-match'restored-service') 'Restoration rotation must retain measured session before current lifetime, with secrets excluded'
+ $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog $wrapper -WrapperOwned $true -Tail 1
+ Assert ($r.lines.Count-eq1-and$r.lines[0]-match'restored-service') 'Multiple log sources must share one output bound'
+ $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog $wrapper
+ Assert (-not$r.previousWrapperIncluded-and$r.paths.Count-eq1-and$r.paths[0]-eq$legacy) 'An unowned previous log cannot be included'
+ $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog (Join-Path $root 'missing-current.log') -WrapperOwned $true
+ Assert ($r.retainedAcrossEngineRestarts-and$r.previousWrapperIncluded-and$r.path-eq$previous-and$r.lines.Count-eq1) 'A rotation gap must retain the owned previous log'
+ $r=Get-RHHostTimingEvidence -LegacyLog $legacy -WrapperLog $wrapper -PreviousWrapperLog $wrapper -WrapperOwned $true
+ Assert ($r.paths.Count-eq1-and$r.lines.Count-eq1) 'Identical explicit source paths must not duplicate evidence'
+ 'PASS: retained and rotated logs, ownership, fallback, missing evidence, shared bound, privacy filter, plain strings, JSON transport'
 } finally {
  # Only this freshly created fixture directory, never a caller-supplied path.
  $resolved=[IO.Path]::GetFullPath($root)

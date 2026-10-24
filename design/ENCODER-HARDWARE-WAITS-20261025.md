@@ -659,3 +659,80 @@ ready 仅 0.011 ms。其完成工作线程为 50464，帧等待范围内四次�
 `encoder-waking-proof-v2.json`、`selected-image-identity-proof.json`，
 以及 `encoder-filtered-resource-qsvjoint05-20261025\resource-link-proof.json`。
 原始 ETL、实际机器码、逐帧关联及保守版本保存在私有诊断目录；公开仓库只保存 profile 和分析说明。
+
+## QSV 实际参数与 joint05 慢帧的提交边界
+
+限时将现有引擎的 `min_log_level` 调为 0，读取固定版本 FFmpeg 的
+`MFXVideoENCODE_GetVideoParam → dump_video_param` 输出，避免把初始化前的请求日志当成实际参数。
+静音、主屏、现有物理 1080p 屏，没有启用动态源、WPR 或暂停业务。
+同一实际串流仅有一个 H.264 创建锚点和一个对应 FFmpeg context，实际读回为：
+
+| 参数 | 实际值 |
+| --- | --- |
+| TargetUsage / RateControlMethod | 4 / VCM |
+| VDENC / LowDelayBRC | ON / ON |
+| GopRefDist / NumRefFrame / MaxDecFrameBuffering | 1 / 1 / 1 |
+| BitrateLimit / MBBRC / ExtBRC | OFF / OFF / OFF |
+| TargetKbps / MaxKbps | 3427 / 3428 |
+| BufferSizeInKB / InitialDelayInKB | 857 / 428 |
+
+这只证明该次 H.264 串流的实际参数，不能反填为早先 joint05 或其他 codec 的实际读回。
+不能再把“打开 VDENC／LowDelayBRC”作为尚未执行的修复。
+更早的 HEVC／AV1 日志属于启动探测，没有与实际 H.264 串流混用。
+
+第一次采集因旧守卫只检查原始日志末尾而误报未创建硬件 H.264，测试结果仍保留 FAIL。
+恢复服务时日志超过 5 MB，被 supervisor 轮换到了 `sunshine-service.previous.log`；
+只读 current 文件也找不到刚才的会话。通过已恢复 lease 的进程身份、试验配置哈希、
+会话起止 UTC 和 previous 文件哈希，独立恢复参数证据，没有再次启动串流。
+原配置哈希仍为 `A82558ADB6C7F94A248BAE57DBA9FCBB402F8A55EDE84D494647732DDA9B4224`，
+六个配对、software 默认及原用户参数均保留，恢复任务已移除。
+
+修复 `tools/diagnose-host-startup.ps1`：仅对确认属于统一服务的日志按 previous → current 收集，
+先过滤再限制最多 8000 条证据，避免无关 D3D Debug 输出挤掉编码器和阶段锚点。
+非自有服务仍使用原引擎日志。PowerShell 7.6.6 / Windows PowerShell 5.1 均通过；
+旧 449eb3d 在“9000 条无关输出”和“恢复后日志轮换”两个反例中均漏证据，修复后均保留。
+真实服务只读回采也重新找到该次 H.264 创建锚点及四条 codec 阶段记录。
+
+完整客户端记录的首帧提交为 **4871.062 ms**，脚本轮询发现首帧为 5254 ms，API 接受为 8 ms，
+端点不同。客户端准备 1514.554 ms、协议握手 151.850 ms、握手完成至首包 3151.370 ms，
+首包至解码输出 10.496 ms、随后渲染提交 1.926 ms。
+服务端同一会话的本机阶段为输出探测设备创建 808.297 ms、帧池初始化 163.695 ms、
+codec open 357.038 ms、first_encode 391.980 ms。
+父子阶段不能相加；跨机 UTC 没有精确校准，不能强行拼成网络单向延迟。
+本次有详细日志、服务预热及静态桌面短段，不是稳定 FPS 或受控启动优化对照。
+
+joint05 队列严格解码共 2887110 条选定事件，零字段解码错误、零事件／缓冲丢失。
+第 428 帧前后各 10 ms 的 17702 条事件，与同次资源／CPU 证据对应。
+完成线程 50464 的 context 创建、结束及同 PID 提交均核实，NodeOrdinal 为 1。
+该 context 的序列 582 在本帧范围内形成以下边界：
+
+| 相对 Sync 开始的时间 | 实际事件 |
+| ---: | --- |
+| 238.4570 ms | 最后一次已匹配资源分页包完成 |
+| 238.7392 ms | 同一完成线程提交队列包 582 |
+| 238.8149 ms | 对应 DMA Start |
+| 250.3850 ms | 对应 DMA Stop |
+| 250.4025 ms | 对应 Queue Stop |
+| 250.5240 ms | SyncOperation 返回 |
+
+context、序列、queue packet、DMA submission/completion ID 均对应，未发生 preempt/timeout。
+提交到 DMA Start 仅 0.0757 ms，DMA 调度跨度 11.5701 ms。
+这将本例大头进一步落实到提交前的资源准备；DMA 调度跨度仍不是 GPU 指令时间，
+也没有冒充硬件内部帧编号。节点可能兼有编码／解码能力，不能把计数器标签解释成实际工作类型，见
+[Microsoft 节点类型规则](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dkmdt/ne-d3dkmdt-dxgk_engine_type)。
+
+同一帧的系统分页线程 1416 匹配到 635 段唯一的原始同 CPU／TID 切入栈。
+重新核对本轮 PE、checksum、size、SHA256，并以匹配的公共 PDB
+`6453F1270496E88F8EE627B38147192C1` 新解析全部 112 个实际 dxgmms2 地址。
+该帧中分页线程在 `WaitDmaBufferNotBusy` 栈上的 off-CPU 重合为 74.675 ms，
+在等待所有分页引擎的栈上为 25.664 ms。
+最长 4 KiB 请求提交到选中为 144.585 ms，其中上述两类 off-CPU 重合为 37.991 / 10.456 ms，
+ready 子集约 5.461 ms；其余约 95.899 ms 属于该线程运行或尚未解释的部分，
+不能全部称为等待硬件、CPU 不足或其他业务造成。请求资格／fence 依赖继续定位，
+未宣称唯一根因或已无法优化。
+
+新增私有证据：`qsv-paramreadback01-retained-actual-parameters02-20261025.json`、
+`qsv-paramreadback01-startup-analysis-20261025.json`、
+`encoder-filtered-queue-qsvjoint05-20261025/slowframe428-worker-queue-proof.json`、
+`encoder-etw-qsvjoint05-20261025/slowframe428-paging-worker-proof-v2.json`。
+保守 v1 与完整公共符号的 v2 均保留，最终采用 v2 分类；稳定 1080p30 仍未验收。
