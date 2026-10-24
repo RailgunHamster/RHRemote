@@ -36,6 +36,9 @@ def connection_measurement(events,platform):
         point=first(name)
         if point is None or point["ts_us"]<previous["ts_us"]:continue
         phases.append({"name":("连接准备及协议握手" if name=="connection_ready" and previous is origin else labels[name]),"from":previous["event"],"to":name,"start_us":previous["ts_us"],"end_us":point["ts_us"],"start_ms":round((previous["ts_us"]-start)/1000,3),"end_ms":round((point["ts_us"]-start)/1000,3),"duration_ms":round((point["ts_us"]-previous["ts_us"])/1000,3)})
+        if platform=="windows" and (name=="packet_first" or previous["event"]=="packet_first"):
+            phases[-1]["timing_quality"]="legacy_receive_estimate"
+            phases[-1]["name"]+="（估计）"
         previous=point
     return measurement,phases
 
@@ -93,6 +96,17 @@ def analyze(events,manifest):
     if by_name["connection_stage_failed"]:errors.append("Connection failed; partial trace retained.")
     summary={"schema":"rhremote.statistics.analysis/v1","platform":manifest.get("platform"),"profile":manifest.get("profile"),"event_count":len(events),"frame_count":len(frames),"recorder_lost_events":lost,"warnings":errors,"startup":startup,"startup_spans":sorted(spans,key=lambda s:s["start_us"]),"frame_metrics":distributions,"cadence":frame_gaps,"missing_frame_numbers":missing,"frame_drops":sum("frame_drop" in f["events"] for f in frames.values()),"interpretation":{"Windows":"render_return measures CPU render/present submission return, not physical screen scanout.","Android":"surface_render_callback is callback arrival. surface_rendered is the framework-reported timestamp and can precede submission (e.g. a requested Choreographer timestamp). Neither measures physical scanout.","host":"host_processing_ms is a protocol aggregate. Capture/encode sub-stages require host instrumentation.","network":"packet_first is available for assembled frames; missing frame IDs do not identify the loss location."}}
     summary["connection_measurement"],summary["connection_phases"]=connection_measurement(events,manifest.get("platform"))
+    if manifest.get("platform")=="windows":
+        # The maintained native producer still backprojects these two events
+        # from CML millisecond fields. This is measurement scope, not lost data:
+        # do not turn a complete file into a recorder warning or retain all raw
+        # files just because their receive clock is coarse. Update this contract
+        # together with the future actual receive/assembly producer, not alone.
+        summary["receive_assembly_timing"]={"high_resolution_proven":False,
+            "status":"legacy_windows_millisecond_backprojection",
+            "estimated_metrics":["reassembly_ms","decoder_queue_ms","client_pipeline_ms"],
+            "estimated_cadence":["packet_first"],
+            "note":"Windows 首包和组帧时间由毫秒字段回推；标为估计的收包、组帧及解码前排队数值不能直接当作真实线程等待。连接至首帧总耗时、直接解码／渲染调用和主机捕获跨度另行测量。"}
     preparation=by_name["host_display_prepared"]
     if preparation:summary["display_preparation"]=preparation[-1].get("fields",{})
     requests=by_name["host_frame_trace_request"]

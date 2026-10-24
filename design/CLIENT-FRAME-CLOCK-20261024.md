@@ -20,6 +20,16 @@ decode_submit、decode_submit_return、decode_output、render_submit、render_re
 窗口分析现在明确将 receive/assembly 高精度标为未证明，保留原始估计值并说明边界。
 没有改写旧 raw 时间，或把记录完整性与测量精度混在一起。
 
+主报告分析器和 HTML 页面也已补上相同边界：Windows 旧格式的两段首帧收包／组帧间隔
+显示“估计”，并说明逐帧 reassembly、decoder_queue、client_pipeline 的相关精度未证明。
+实际首帧总耗时继续取直接 connect_action → render_return，不改成估计，也不将 Android
+无依据地归入 Windows 的旧时钟路径。未制造 recorder warning，原始统计清理规则保持。
+
+20 项客户端分析回归及 11 项窗口分析通过。对已有有效源 LAN 报告保留 raw 后重新分析，
+首帧仍为 3169.647 ms；隔离无头 Chrome 实际加载该 HTML，核对估计标签及直接解码／渲染
+标签的区别，页面无脚本错误。证据为私有 `statistics-clock-limit-dom-20261024.html`。
+这些报告改动尚未作为新客户端正式发布；原生高精度生产事件仍未实现。
+
 ## 记录器本身的独立短测
 
 用当前真实 rhstatistics.h 和 Qt 6.7.2 / MSVC Release 编译独立测试程序，

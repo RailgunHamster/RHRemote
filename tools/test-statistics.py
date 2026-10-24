@@ -9,6 +9,29 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def test_legacy_receive_clock_is_qualified_without_changing_first_frame_or_completeness(self):
+        rows=[e("connect_action",0),e("connection_ready",500),e("packet_first",1000,1),
+              e("frame_assembled",2000,1),e("decode_submit",3000,1),e("decode_output",5000,1),
+              e("render_return",7000,1),e("trace_end",10000)]
+        summary,_=a.analyze(rows,{"platform":"windows"})
+        quality=summary["receive_assembly_timing"]
+        self.assertFalse(quality["high_resolution_proven"])
+        self.assertEqual(set(quality["estimated_metrics"]),{"reassembly_ms","decoder_queue_ms","client_pipeline_ms"})
+        self.assertNotIn("decode_ms",quality["estimated_metrics"])
+        self.assertEqual(summary["frame_metrics"]["reassembly_ms"]["mean"],1)
+        self.assertEqual(summary["frame_metrics"]["decode_ms"]["mean"],2)
+        self.assertEqual(summary["connection_measurement"]["total_ms"],7)
+        self.assertEqual(summary["warnings"],[])
+        estimated=[p for p in summary["connection_phases"] if p.get("timing_quality")=="legacy_receive_estimate"]
+        self.assertEqual([(p["from"],p["to"]) for p in estimated],[("connection_ready","packet_first"),("packet_first","decode_output")])
+        self.assertTrue(all(p["name"].endswith("（估计）") for p in estimated))
+        self.assertEqual(sum(p["duration_ms"] for p in summary["connection_phases"]),7)
+
+    def test_android_does_not_inherit_the_windows_backprojection_claim(self):
+        summary,_=a.analyze([e("connect_action",0),e("surface_render_callback",1000,1),e("trace_end",2000)],{"platform":"android"})
+        self.assertNotIn("receive_assembly_timing",summary)
+        self.assertEqual(summary["connection_measurement"]["total_ms"],1)
+
     def test_incomplete_host_keeps_healthy_client_raw_and_prevents_pruning_after_refresh(self):
         from test_host_frame_analysis import fixture as host_fixture
         with tempfile.TemporaryDirectory(prefix="rhremote-partial-host-") as directory:

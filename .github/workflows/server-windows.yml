@@ -40,6 +40,8 @@ jobs:
           ./test-rhremote-frame-trace
           g++ -std=c++23 -DRHREMOTE_VIDEO_PACING_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_video_pacing.cpp -o test-rhremote-video-pacing
           ./test-rhremote-video-pacing
+          g++ -std=c++23 -DRHREMOTE_INTEL_MF_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_intel_mf_probe.cpp -o test-rhremote-intel-mf-probe
+          ./test-rhremote-intel-mf-probe
           g++ -std=c++23 -pthread -DRHREMOTE_PENDING_LAUNCH_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_pending_launch.cpp -o test-rhremote-pending-launch
           ./test-rhremote-pending-launch
           g++ -std=c++23 -pthread -DRHREMOTE_LAUNCH_HTTP_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_launch_http.cpp -o test-rhremote-launch-http
@@ -119,6 +121,8 @@ jobs:
           ./test-rhremote-device-probe.exe
           g++ -std=c++23 -DRHREMOTE_ENCODER_PROBE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_encoder_probe.cpp -o test-rhremote-encoder-probe.exe
           ./test-rhremote-encoder-probe.exe
+          g++ -std=c++23 -DRHREMOTE_INTEL_MF_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_intel_mf_probe.cpp -o test-rhremote-intel-mf-probe.exe
+          ./test-rhremote-intel-mf-probe.exe
           g++ -std=c++23 -DRHREMOTE_INITIAL_DISPLAY_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_initial_display.cpp -o test-rhremote-initial-display.exe
           ./test-rhremote-initial-display.exe
           g++ -std=c++23 -pthread -DRHREMOTE_FRAME_TRACE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_frame_trace.cpp -o test-rhremote-frame-trace.exe
@@ -136,7 +140,7 @@ jobs:
       - name: Test pairing sessions and client authorization
         shell: msys2 {0}
         working-directory: .deps/cmake-build-server/tests
-        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteEncoderTrace*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*:*RhRemoteVideoPacing*:*RhRemotePendingLaunch*:*RhRemoteLaunchHttp*' --gtest_output=xml:pairing-results.xml
+        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteEncoderTrace*:*RhRemoteIntelMfProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*:*RhRemoteVideoPacing*:*RhRemotePendingLaunch*:*RhRemoteLaunchHttp*' --gtest_output=xml:pairing-results.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

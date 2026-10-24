@@ -10,7 +10,7 @@
 param(
     [ValidateSet('start','restore','status')][string]$Action='status',
     [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')][string]$RunId,
-    [ValidateSet('quicksync','software')][string]$Encoder='quicksync',
+    [ValidateSet('quicksync','mediafoundation','software')][string]$Encoder='quicksync',
     [ValidateRange(120,600)][int]$DurationSeconds=480,
     [ValidateRange(10,300)][int]$StartupWaitSeconds=25,
     [string]$ExpectedUuid,
@@ -29,7 +29,7 @@ function Assert-RHEncoderWindowBudget([int]$Duration,[int]$StartupWait) {
 }
 
 function New-RHEncoderBytes([byte[]]$Bytes,[string]$Value) {
-    if($Value -notin @('software','quicksync')) { throw 'Unsupported comparison encoder' }
+    if($Value -notin @('software','quicksync','mediafoundation')) { throw 'Unsupported comparison encoder' }
     if($Bytes.Length -ge 2 -and (($Bytes[0] -eq 255 -and $Bytes[1] -eq 254) -or ($Bytes[0] -eq 254 -and $Bytes[1] -eq 255))) { throw 'UTF-16 config is unsupported; original bytes retained' }
     # Latin-1 is a reversible byte mapping: non-ASCII comments and BOM are untouched.
     $encoding=[Text.Encoding]::GetEncoding(28591)
@@ -37,7 +37,7 @@ function New-RHEncoderBytes([byte[]]$Bytes,[string]$Value) {
     if($Bytes.Length -ge 3 -and $Bytes[0] -eq 239 -and $Bytes[1] -eq 187 -and $Bytes[2] -eq 191) { $offset=3 }
     $text=$encoding.GetString($Bytes,$offset,$Bytes.Length-$offset)
     $matches=[regex]::Matches($text,'(?m)^[ \t]*encoder[ \t]*=[ \t]*(?<value>[^#\r\n]*?)(?<suffix>[ \t]*(?:#[^\r\n]*)?)(?=\r?$)')
-    if($matches.Count -ne 1 -or $matches[0].Groups['value'].Value.Trim() -notin @('software','quicksync')) { throw 'Expected exactly one supported encoder line' }
+    if($matches.Count -ne 1 -or $matches[0].Groups['value'].Value.Trim() -notin @('software','quicksync','mediafoundation')) { throw 'Expected exactly one supported encoder line' }
     $group=$matches[0].Groups['value']
     $replacement=$text.Substring(0,$group.Index)+$Value+$text.Substring($group.Index+$group.Length)
     [byte[]]$prefix=if($offset) { $Bytes[0..2] } else { @() }

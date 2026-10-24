@@ -25,6 +25,7 @@ extern "C" {
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_dynamic_factory.h"
+#include "src/rhremote_intel_mf_probe.h"
 #include "src/video.h"
 #include "utf_utils.h"
 
@@ -2033,10 +2034,12 @@ namespace platf::dxgi {
   }
 
   /**
-   * @brief Check that a given codec is supported by the display device.
+   * @brief Check whether the display device may attempt a codec configuration.
+   * @details Explicit Intel MF H.264 SDR candidates still require successful
+   * encoder, first-IDR and bitstream validation before capabilities are advertised.
    * @param name The FFmpeg codec name (or similar for non-FFmpeg codecs).
    * @param config The codec configuration.
-   * @return `true` if supported, `false` otherwise.
+   * @return `true` when eligible for validation, `false` otherwise.
    */
   bool display_vram_t::is_codec_supported(std::string_view name, const ::video::config_t &config) {
     DXGI_ADAPTER_DESC adapter_desc;
@@ -2093,7 +2096,12 @@ namespace platf::dxgi {
         BOOST_LOG(warning) << "Detected AMD GPU but AMF failed to load"sv;
       }
     } else if (adapter_desc.VendorId == 0x8086) {  // Intel
-      // If it's not a QSV encoder, it's not compatible with an Intel GPU
+      // An explicit MF candidate must reach the real hardware/first-IDR tests.
+      // Keep automatic selection and QSV capabilities unchanged until validated.
+      if (rhremote::explicit_intel_mf_probe(adapter_desc.VendorId, name, ::config::video.encoder == "mediafoundation", config.videoFormat, config.dynamicRange, config.chromaSamplingType)) {
+        return true;
+      }
+      // All other Intel candidates still require the existing QSV path.
       if (!boost::algorithm::ends_with(name, "_qsv")) {
         return false;
       }

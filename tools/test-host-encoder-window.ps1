@@ -18,11 +18,16 @@ $cases=@(
     ([char]0xFEFF+"encoder = software`r`n# last line")
 )
 foreach($text in $cases) {
+  foreach($candidate in @('quicksync','mediafoundation')) {
     [byte[]]$before=$utf8.GetBytes($text)
-    [byte[]]$after=New-RHEncoderBytes $before 'quicksync'
-    Assert ($utf8.GetString($after) -ceq $text.Replace('software','quicksync')) 'Unrelated bytes changed'
+    [byte[]]$after=New-RHEncoderBytes $before $candidate
+    Assert ($utf8.GetString($after) -ceq $text.Replace('software',$candidate)) 'Unrelated bytes changed'
     Assert ((Get-RHBytesHash (New-RHEncoderBytes $after 'software')) -ceq (Get-RHBytesHash $before)) 'Round-trip is not byte exact'
+  }
 }
+$otherText="# keep software`nother=software`nencoder = software # software note`n"
+$expectedText="# keep software`nother=software`nencoder = mediafoundation # software note`n"
+Assert ($utf8.GetString((New-RHEncoderBytes $utf8.GetBytes($otherText) 'mediafoundation')) -ceq $expectedText) 'An unrelated matching value/comment changed'
 foreach($text in @('other=software',"encoder=software`nencoder=software",'encoder = unknown')) {
     $rejected=$false
     try { $null=New-RHEncoderBytes $utf8.GetBytes($text) 'quicksync' } catch { $rejected=$true }
@@ -63,4 +68,4 @@ try {
     if(Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     Remove-Item -LiteralPath $folder
 }
-'PASS: 8 recovery-budget checks, 5 byte-preserving round trips, 4 rejection cases, inherited/protected ACL replacement/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup
+'PASS: 8 recovery-budget checks, 10 byte-preserving round trips, unrelated-value preservation, 4 rejection cases, inherited/protected ACL replacement/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup

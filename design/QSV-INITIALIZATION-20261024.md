@@ -1,6 +1,6 @@
 # winserver Quick Sync 初始化对照
 
-2026-10-24，运行引擎仍为 `5d5149ce`，SHA-256 为
+2026-10-24，第一轮运行引擎为 `5d5149ce`，SHA-256 为
 `58ba527144ee849f96ba811ab1d4de02dd053394eab5900f72bc4f025d76c074`。
 目标是验证硬件捕获／编码是否能避开软件路径已测到的 572 ms Map 等待。
 本轮未进入串流或影片测量，不能据此评价硬件编码的持续帧率。
@@ -54,22 +54,69 @@ UUID 及 6 个配对保留。claw 未切换编码器；客户端没有启动媒�
 winserver 上另用 SYSTEM 主组的独立临时文件验证实际替换及恢复，未用生产配置作该测试夹具。
 实际验证了恢复任务预先注册与手动正常恢复，未将未触发的定时任务宣称为执行验收。
 
-## 下一步代码与验收
+## 嵌套调用实测
 
-现有 encoder_create 只包住完整 make_avcodec_encode_session，尚不能确定 39 秒在
-FFmpeg 打开编码器、QSV 上下文派生、帧池或附加帧中的哪一步。
+`80a3105` 的完整 CI 40062482426 成功，95 项引擎回归零失败，包含三项
+真实日志／引用／移动结果／异常闭合测试。147 个包内文件校验后部署至 winserver 和 claw，
+配置及 6 / 4 个配对保留。两台引擎 SHA-256 为
+`5988843cf283c5a000bb6caf88567fa55f4065f300ae5e64cf8d72ec138b6ff0`。
+
+winserver 第二轮完整探测为 **222705.417 ms**，七次 encoder_create 共 **191541.905 ms**。
+其中实际 `av_hwdevice_ctx_create_derived` 调用合计 **167946.963 ms**，占完整探测 **75.4%**。
+这里是 D3D11 到 QSV 的派生；帧池和附加帧不是这次的主要等待。
+
+| 编码器 | 创建总计 ms | 上下文派生 ms | avcodec_open2 ms |
+|---|---:|---:|---:|
+| h264_qsv | 23235.814 | 22593.724 | 609.879 |
+| hevc_qsv，第一次 | 41470.878 | 35202.291 | 6241.892 |
+| av1_qsv，第一次 | 22023.290 | 19843.355 | 2158.203 |
+| hevc_qsv，第二次 | 24640.341 | 18659.358 | 5972.006 |
+| hevc_qsv，第三次 | 23183.913 | 22161.025 | 998.100 |
+| hevc_qsv，第四次 | 19140.049 | 17724.747 | 1407.162 |
+| av1_qsv，第二次 | 37847.620 | 31762.463 | 6055.455 |
+
+硬件输入准备约 6–7 ms，帧池初始化约 0.2–23 ms，附加帧约 1–6 ms。
+识别到的阶段均闭合，但普通服务日志没有独立的丢事件计数，不能宣称完整日志系统无损。
+新增测量本身没有优化性能，不能把 39 秒到 23 秒的单次差异归因于改进。
+该对照未启动媒体，也不能解释每一次历史首帧等待都来自同一个调用。
+
+原始软件配置字节及保存的完整安全描述符恢复，四个持久文件、二进制和配对均保持，
+恢复任务已移除。结果见私有 `qsv-nested01-analysis-20261024.json`。
+
+## 独立 SDK 对照与显式 MF 候选
+
+winserver 既有 FFmpeg 8.1 的独立进程仅生成黑色视频，不捕获桌面、不使用音频，未改服务配置。
+同一 Intel D3D11 → QSV 派生、CPU NV12 输入的一帧编码分别约 14.746 / 18.037 秒成功；
+带时间的日志中，两次 MFX 标记之间约 12.642 秒。dispatcher 日志明确显示
+完整候选枚举及 low latency mode disabled，但无内部调用时间，不能把整段归给某一个 SDK 函数。
+另一个 GPU hwupload 试验因纹理池参数错误结束，没有成功编码，不能作为性能结果。
+
+独立 h264_mf、强制硬件的一帧编码约 7.269 秒成功，实际激活 Intel H.264 Encoder MFT；
+这是不同 FFmpeg 构建的 CPU 输入对照，不能代替本产品的 GPU 输入或持续串流验收。
+Sunshine 的实际 mediafoundation 受控试验在厂商预检直接拒绝 Intel，未创建 h264_mf，
+随后回退到慢 QSV；120 秒就绪等待结束后已恢复软件配置，未开始影片或客户端串流。
+最新恢复服务 PID 41132，配对 6 个、配置哈希不变、任务移除。
+
+本次源码只允许显式选择 mediafoundation 的 Intel H.264 SDR 4:2:0 候选继续实际编码、
+首 IDR 和码流校验；自动选择和其他格式规则保持。新增三项策略回归，完整 CI 和真实
+GPU 输入／媒体尚待验证。该 MF 路径的固定 GOP、丢包后的恢复同样需要实际测试。
+它是候选替代路径，不等于 QSV 的派生等待已经解决。
+
+## 测量实现与后续验收
+
+早期 encoder_create 只包住完整 make_avcodec_encode_session，不能细分等待。
 新增实际调用跨度：encoder_hardware_input、encoder_derive_prepare、
 encoder_hardware_derive、encoder_frames_init、encoder_codec_options、
 encoder_codec_open、encoder_software_device_init、encoder_frame_attach、
 encoder_apply_colorspace。不改动原操作参数、错误码、回退或资源归属。
 新 trace_encoder_call 保留引用、移动类型、void、错误码和异常，并在失败时正常闭合阶段。
-新增真实日志／调用行为回归和统计导入回归，完整 MSYS2/UCRT64 构建及实机嵌套跨度仍待验证。
+新增真实日志／调用行为回归和统计导入回归，完整 MSYS2/UCRT64 构建及上述嵌套跨度已验证。
 
 首轮新 CI 40062167046 在配置工具的权限描述符回归失败，尚未编译新 C++。
 本机及 winserver 的成功不能代替该环境；File.Replace 后再次应用保存的描述符，并扩展
 继承／受保护 DACL 夹具后已提交 80a3105。PowerShell 7、5.1 和 winserver SYSTEM 主组夹具
-均通过，CI 40062482426 继续完整构建。3 项新增 C++ 实际日志测试仍以该 CI 结果为准。
-18 项客户端统计导入／分析、24 项主机分析、11 项窗口分析通过。
+均通过，CI 40062482426 最终成功，三项新增 C++ 实际日志测试通过。
+客户端统计导入／分析随后扩展为 20 项，24 项主机分析、11 项窗口分析通过。
 
 受控采集工具随后增加独立的 StartupWaitSeconds（默认 25 秒，最高 300 秒），
 并要求总恢复窗口至少比该观测预算多 60 秒。原软件服务恢复仍使用 25 秒就绪预算。
@@ -77,7 +124,8 @@ encoder_apply_colorspace。不改动原操作参数、错误码、回退或资�
 这只为诊断保留完整慢调用的结束记录，没有改变客户端或正式服务的超时行为，
 也不将延长观测等待当作优化。
 
-后续应先用这些跨度定位初始化内部调用，再比较实际媒体的启动时间和动态捕获。
+后续应继续细分 QSV dispatcher 的同构建调用，或在通过完整构建后验证 MF 候选的实际媒体。
+避免仅将枚举成本从设备派生挪到编码器打开，也不能跳过必要的设备健康及能力检查。
 不能用固定超时、跳过所有能力验证或关闭其他业务，替代对这个等待的优化。
 
 私有原始证据仍供后续对照使用，未提交含环境日志的文件：
@@ -87,3 +135,6 @@ encoder_apply_colorspace。不改动原操作参数、错误码、回退或资�
 - `D:\RHRemoteTools\qsv-capture02-restored-20261024.json`
 - `D:\RHRemoteTools\winserver-after-qsv-window-20261024.json`
 - `D:\RHRemoteTools\qsv-window-remote-security-test-final-20261024.json`
+- `D:\RHRemoteTools\qsv-nested01-analysis-20261024.json`
+- `D:\RHRemoteTools\mf-natural01-analysis-20261024.json`
+- `D:\RHRemoteTools\winserver-after-mf-natural01-20261024.json`
