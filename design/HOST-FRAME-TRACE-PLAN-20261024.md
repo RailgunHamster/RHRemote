@@ -105,7 +105,8 @@ frame_count、fresh_submissions 和 repeat_or_priming_submissions 包含实际�
 packet_count 不增加。CSV 和时间轴都保留终点，另报 abandoned_submission_count。
 
 29 项主机分析、12 项窗口分析及 23 项客户端统计回归通过；新增两项真实写入器／析构回归
-须在完整 Windows gtest、Linux 独立编译及 ThreadSanitizer 中验证，实际新包关闭行为仍待采集。
+已随 f4de6f88 的 CI 40074633218 通过 Linux 独立编译及 ThreadSanitizer。
+完整 Windows 构建和 gtest 仍在运行，实际新包关闭行为仍待采集。
 使用新分析器只读复核旧 mf03，SHA-256 前后均为
 ce31f592fb1d6df976ced690dea3103104e5ec6b927a91a205c7f6626ad448a3，
 仍有八次 submission_without_output、零 abandoned_submission；没有追补旧原始记录。

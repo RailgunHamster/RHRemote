@@ -157,6 +157,39 @@ QSV 上下文派生及软件捕获断档仍需继续优化。
 九项输入／归档保护回归已通过，完整 MSYS2/UCRT64 构建、真实函数 CodecAPI 参数回归、
 新包部署及实际动态媒体前后对照仍待执行。旧 mf03 原始证据保持不变。
 
+### MF03 启动等待的进一步分解
+
+已取回其完整不可变主机初始化日志并校验 SHA-256
+`0f8f7ff41db01b1440a389b4404931965d4d54f5988272a4176484eb5c59e65c`。
+连接触发的 encoder_probe 为 10003.791 ms，包括实际验证、测试输入以及显示捕获重建。
+随后实际串流的 encoder_codec_open 为 2103.582 ms，encoder_frames_init 为 286.902 ms；
+first_encode 首次调用为 1233.812 ms。逐帧记录显示首个输入到首个编码输出为 1911.899 ms。
+video_initial_ping 开始到首个 send_end 为 6492.020 ms。
+这些均在同一主机单调时钟内测得；probe、create、open、first_encode 和首包跨度有父子／
+包含关系，不能相加。客户端 protocol-ready 到 render_return 的 6444.333 ms 使用客户端时钟，
+与主机区间是两个独立边界，不能把它们相减当作网络延迟。
+证据 `D:\RHRemoteTools\mf03-startup-host-substages-20261024.json`。
+
+另一个有 API 内计时的独立 SDK 探测在同一 B580 上约 7.926 秒完成，无输入样本：
+
+| API | 实测调用时间 |
+|---|---|
+| MFStartup | 0.174 ms |
+| D3D11CreateDevice | 562.999 ms |
+| MFTEnumEx | 8.880 ms |
+| IMFActivate::ActivateObject | 首次 1758.456 ms，后续 771.298–785.729 ms |
+| ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER) | 362.684–489.544 ms |
+| SetOutputType | 99.459–122.096 ms |
+| ShutdownObject | 130.455–229.151 ms |
+
+它再次确认整数设置后读回 false、布尔设置后读回 true，两个候选均一致。
+这是独立实例的 API 成本，不能代替实际 Sunshine 内部跨度；后续实例共享进程／驱动预热，
+也不能把两种类型之间的耗时差当作参数类型带来的初始化加速。至少该探测中枚举只需约 9 ms，
+主要成本在实例激活和设备交接；下一步应沿该方向验证，不能仅凭总耗时归因于网络或发现。
+源码／程序、结果及摘要位于私有工具目录的 `mf-property-call-timing02-20261024.*`，
+程序 SHA-256 为 `e57e7db50da51594836e2e7e79db6accd5553a4cee55953d73f357f1f48a7f8a`。
+探测正常退出，未改变服务、显示模式或业务配置，未捕获桌面或声音。
+
 随后独立 GPU 输入对照确认：固定 16 帧 hwupload 池在纹理创建处报 80070057，
 尚未进入编码器；改为与 Sunshine 相同的动态池方式后，D3D11 输入的一帧编码约
 11.253 秒成功，实际仍为 Intel MFT。90 帧生成视频、固定 GOP 120、主动请求第 15 / 45 帧
