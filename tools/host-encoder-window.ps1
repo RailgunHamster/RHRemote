@@ -12,6 +12,7 @@ param(
     [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')][string]$RunId,
     [ValidateSet('quicksync','software')][string]$Encoder='quicksync',
     [ValidateRange(120,600)][int]$DurationSeconds=480,
+    [ValidateRange(10,300)][int]$StartupWaitSeconds=25,
     [string]$ExpectedUuid,
     [switch]$LibraryOnly
 )
@@ -21,6 +22,10 @@ function Get-RHBytesHash([byte[]]$Bytes) {
     $hash=[Security.Cryptography.SHA256]::Create()
     try { ([BitConverter]::ToString($hash.ComputeHash($Bytes))).Replace('-','') }
     finally { $hash.Dispose() }
+}
+
+function Assert-RHEncoderWindowBudget([int]$Duration,[int]$StartupWait) {
+    if($Duration -lt 120 -or $Duration -gt 600 -or $StartupWait -lt 10 -or $StartupWait -gt 300 -or $Duration-$StartupWait -lt 60) { throw 'Startup observation must leave at least60seconds for recovery within the bounded comparison window' }
 }
 
 function New-RHEncoderBytes([byte[]]$Bytes,[string]$Value) {
@@ -117,9 +122,9 @@ public static class RhEncoderThreadInventory {
     $false
 }
 
-function Wait-OwnedReady([string]$Uuid) {
+function Wait-OwnedReady([string]$Uuid,[int]$TimeoutSeconds=25) {
     (Get-Service SunshineService).WaitForStatus('Running',[TimeSpan]::FromSeconds(25))
-    $deadline=(Get-Date).AddSeconds(25)
+    $deadline=(Get-Date).AddSeconds($TimeoutSeconds)
     do {
         try {
             $info=Invoke-RestMethod 'http://127.0.0.1:47989/serverinfo?uniqueid=0123456789ABCDEF' -TimeoutSec 3
@@ -158,6 +163,7 @@ function Restore-Lease($Lease) {
 
 switch($Action) {
     'start' {
+        Assert-RHEncoderWindowBudget $DurationSeconds $StartupWaitSeconds
         if(Test-Path -LiteralPath $work) { throw 'Immutable comparison ID already exists; inspect status instead' }
         if(-not $ExpectedUuid -or -not (Test-OwnedIdle)) { throw 'Expected UUID and idle owned service are required' }
         $service=Get-OwnedService
@@ -176,7 +182,7 @@ switch($Action) {
         [IO.File]::WriteAllBytes((Join-Path $work 'original.conf'),$original)
         Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $work 'control.ps1')
         $deadline=(Get-Date).AddSeconds($DurationSeconds)
-        $lease=[pscustomobject]@{runId=$RunId;uuid=$ExpectedUuid;encoder=$Encoder;originalHash=$originalHash;trialHash=$trialHash;originalSddl=(Get-Acl -LiteralPath $config).Sddl;engineSha256=(Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash;servicePath=$service.PathName;deadlineUtc=$deadline.ToUniversalTime().ToString('o');restartNeeded=$false;phase='prepared';startedUtc=[DateTime]::UtcNow.ToString('o');restoredUtc=$null;trialServicePid=0;trialEnginePid=0;trialServiceCreatedUtc=$null}
+        $lease=[pscustomobject]@{runId=$RunId;uuid=$ExpectedUuid;encoder=$Encoder;startupWaitSeconds=$StartupWaitSeconds;originalHash=$originalHash;trialHash=$trialHash;originalSddl=(Get-Acl -LiteralPath $config).Sddl;engineSha256=(Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash;servicePath=$service.PathName;deadlineUtc=$deadline.ToUniversalTime().ToString('o');restartNeeded=$false;phase='prepared';startedUtc=[DateTime]::UtcNow.ToString('o');restoredUtc=$null;trialServicePid=0;trialEnginePid=0;trialServiceCreatedUtc=$null}
         Save-Lease $lease
         $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+(Join-Path $work 'control.ps1')+'" -Action restore -RunId '+$RunId
         $taskAction=New-ScheduledTaskAction -Execute powershell.exe -Argument $arguments
@@ -196,7 +202,7 @@ switch($Action) {
             $children=@(Get-CimInstance Win32_Process -Filter "Name='sunshine.exe'"|Where-Object { $_.ParentProcessId -eq $trialService.ProcessId -and $_.ExecutablePath -eq $engine })
             if($children.Count -eq 1) { $lease.trialEnginePid=[int]$children[0].ProcessId }
             $lease.phase='initializing';Save-Lease $lease
-            Wait-OwnedReady $ExpectedUuid
+            Wait-OwnedReady $ExpectedUuid $StartupWaitSeconds
             $lease.phase='trial_active';Save-Lease $lease
         } catch {
             $errorText=$_.Exception.Message

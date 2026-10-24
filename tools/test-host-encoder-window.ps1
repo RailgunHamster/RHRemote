@@ -3,6 +3,12 @@ param([switch]$SystemGroup)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'host-encoder-window.ps1') -LibraryOnly
 function Assert($condition,$label) { if(-not $condition) { throw $label } }
+foreach($budget in @(@(480,300),@(120,60),@(600,300))) { Assert-RHEncoderWindowBudget $budget[0] $budget[1] }
+foreach($budget in @(@(120,61),@(119,25),@(601,25),@(480,9),@(480,301))) {
+    $rejected=$false
+    try { Assert-RHEncoderWindowBudget $budget[0] $budget[1] } catch { $rejected=$true }
+    Assert $rejected 'Startup observation was allowed to consume the recovery margin or exceed bounds'
+}
 $utf8=[Text.UTF8Encoding]::new($false)
 $cases=@(
     "encoder = software`r`nother = value`r`n",
@@ -57,4 +63,4 @@ try {
     if(Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     Remove-Item -LiteralPath $folder
 }
-'PASS: 5 byte-preserving round trips, 4 rejection cases, inherited/protected ACL replacement/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup
+'PASS: 8 recovery-budget checks, 5 byte-preserving round trips, 4 rejection cases, inherited/protected ACL replacement/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup
