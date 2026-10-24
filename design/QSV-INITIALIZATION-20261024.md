@@ -169,7 +169,12 @@ FFmpeg 的 random_seed 依赖 BCrypt，独立测试目标漏链接该库。源�
 修正版本成功，原版本按预期返回 3；已实际编译、链接并运行，不是源码字符串检查。
 负例返回其他错误不会被接受，此对照同时纳入后续 CI。
 本地证据 `D:\RHRemoteTools\mf-abi-regression-local-formal-targets03-20261024.log`。
-完整主机程序、100 项 Windows 引擎回归、打包、部署及动态媒体对照仍未完成。
+5d79c70d 的完整 CI 40076569884 随后成功，已下载实际测试 XML：100 项引擎测试、
+零失败／错误／禁用，包括 SubmittedRelease 和 SubmittedReleaseLifetime。
+其 SHA-256 为 `fbe3badae4346e9d8082ec6ea4405aed98f87bcc27e3f65ea214ac496552b916`。
+fbadb907 增加上述独立头文件顺序修正及 CI 原版反例，40077991343 的 Linux 独立回归及
+ThreadSanitizer 已成功，完整 Windows 构建仍在运行。尚未验证或部署该提交的完整安装包，
+也没有新的动态媒体性能结果；winserver 继续使用之前已验证的 604a5ec9 和原软件编码配置。
 
 ### MF03 启动等待的进一步分解
 
