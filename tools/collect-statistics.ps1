@@ -46,6 +46,10 @@ $hostData|Add-Member NoteProperty clockUncertaintyUs ([long](($after-$before)*50
 [IO.File]::WriteAllText($evidence,($hostData|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 $arguments=@((Join-Path $PSScriptRoot 'analyze-statistics.py'),$path,'--host-evidence',$evidence);if($KeepRaw){$arguments+='--keep-raw'}
 & python @arguments;if($LASTEXITCODE -ne 0){throw 'Statistics analysis failed'}
+if($Platform-eq'windows'){
+ & python (Join-Path $PSScriptRoot 'analyze-connection.py') $path
+ if($LASTEXITCODE-ne0){throw 'Connection-attempt summary failed; individual reports and raw evidence are retained'}
+}
 if($Platform -eq 'android' -and -not $KeepRaw -and (Test-Path -LiteralPath (Join-Path $path 'analysis-complete.json'))){
  # Fixed validated app-private paths only. Keep manifest+completion until next-run pruning.
  & $adb -s $serial shell run-as com.rhremote.client rm "files/statistics/$id/native.jsonl"

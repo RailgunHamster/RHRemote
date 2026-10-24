@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from test_connection_analysis import ConnectionAnalysisTest
 
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
