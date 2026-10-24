@@ -29,7 +29,11 @@ $folder=Join-Path ([IO.Path]::GetTempPath()) ('rh-encoder-config-test-'+[guid]::
 New-Item -ItemType Directory -Path $folder|Out-Null
 $path=Join-Path $folder 'sunshine.conf'
 try {
+  foreach($protected in @($false,$true)) {
     [byte[]]$before=$utf8.GetBytes($cases[2]);[IO.File]::WriteAllBytes($path,$before)
+    $descriptor=Get-Acl -LiteralPath $path
+    $descriptor.SetAccessRuleProtection($protected,$true)
+    Set-Acl -LiteralPath $path -AclObject $descriptor
     if($SystemGroup) {
         $descriptor=Get-Acl -LiteralPath $path
         $descriptor.SetGroup([Security.Principal.SecurityIdentifier]::new('S-1-5-18'))
@@ -47,9 +51,10 @@ try {
     Assert ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ceq (Get-RHBytesHash $after)) 'Rejected edit changed bytes'
     Set-RHConfigBytes $path $before (Get-RHBytesHash $after)
     Assert ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ceq $originalHash) 'Exact original bytes not restored'
+  }
 } finally {
     # Only this exact test file and then the empty, uniquely created test directory.
     if(Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     Remove-Item -LiteralPath $folder
 }
-'PASS: 5 byte-preserving round trips, 4 rejection cases, atomic replacement/ACL/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup
+'PASS: 5 byte-preserving round trips, 4 rejection cases, inherited/protected ACL replacement/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup

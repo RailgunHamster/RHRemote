@@ -42,6 +42,7 @@ function New-RHEncoderBytes([byte[]]$Bytes,[string]$Value) {
 function Set-RHConfigBytes([string]$Path,[byte[]]$Bytes,[string]$ExpectedHash) {
     if((Get-RHBytesHash ([IO.File]::ReadAllBytes($Path))) -cne $ExpectedHash) { throw 'Concurrent config change; refusing to overwrite' }
     $acl=Get-Acl -LiteralPath $Path
+    $originalSddl=$acl.Sddl
     $temporary=$Path+'.rh-encoder-'+[guid]::NewGuid().ToString('N')
     try {
         [IO.File]::WriteAllBytes($temporary,$Bytes)
@@ -51,7 +52,16 @@ function Set-RHConfigBytes([string]$Path,[byte[]]$Bytes,[string]$ExpectedHash) {
         Set-Acl -LiteralPath $temporary -AclObject $acl
         if((Get-RHBytesHash ([IO.File]::ReadAllBytes($Path))) -cne $ExpectedHash) { throw 'Concurrent config change before replacement' }
         [IO.File]::Replace($temporary,$Path,[NullString]::Value)
-        if((Get-RHBytesHash ([IO.File]::ReadAllBytes($Path))) -cne (Get-RHBytesHash $Bytes) -or (Get-Acl -LiteralPath $Path).Sddl -cne $acl.Sddl) { throw 'Config bytes or ACL did not survive replacement' }
+        # ReplaceFile can also merge inherited descriptor metadata differently
+        # on another volume/OS. Reapply the recorded descriptor to the resulting
+        # file rather than assuming the temporary-file copy covered every case.
+        if((Get-Acl -LiteralPath $Path).Sddl -cne $originalSddl) {
+            $restoreAcl=[Security.AccessControl.FileSecurity]::new()
+            $restoreAcl.SetSecurityDescriptorSddlForm($originalSddl)
+            Set-Acl -LiteralPath $Path -AclObject $restoreAcl
+        }
+        $actualSddl=(Get-Acl -LiteralPath $Path).Sddl
+        if((Get-RHBytesHash ([IO.File]::ReadAllBytes($Path))) -cne (Get-RHBytesHash $Bytes) -or $actualSddl -cne $originalSddl) { throw ('Config bytes or ACL did not survive replacement; expected descriptor='+$originalSddl+'; actual descriptor='+$actualSddl) }
     } finally { if(Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force } }
 }
 
