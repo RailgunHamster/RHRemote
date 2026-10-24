@@ -1,0 +1,24 @@
+name: RHRemote host timing evidence regressions
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/diagnose-host-startup.ps1'
+      - 'tools/test-host-timing-evidence.ps1'
+      - '.github/workflows/host-evidence-tools.yml'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Retained timing log fixtures (PowerShell 7)
+        shell: pwsh
+        run: ./tools/test-host-timing-evidence.ps1
+      - name: Retained timing log fixtures (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-host-timing-evidence.ps1
