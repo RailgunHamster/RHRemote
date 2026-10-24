@@ -736,3 +736,72 @@ ready 子集约 5.461 ms；其余约 95.899 ms 属于该线程运行或尚未解
 `encoder-filtered-queue-qsvjoint05-20261025/slowframe428-worker-queue-proof.json`、
 `encoder-etw-qsvjoint05-20261025/slowframe428-paging-worker-proof-v2.json`。
 保守 v1 与完整公共符号的 v2 均保留，最终采用 v2 分类；稳定 1080p30 仍未验收。
+
+## 分页线程的实际执行指令与无 WPR 复测
+
+继续使用同一 joint05 原始 CPU ETL，没有为了分析忙线程再开一次 WPR。
+按实际 PerfInfo/SampledProfile 事件的 TDH 布局读取 InstructionPointer、ThreadId，
+共 302928 次全机采样，其中线程 1416 为 26784 次；读取零错误、原始记录零丢失。
+没有把 Count 字段当作执行时长，采样事件的语义见
+[Microsoft SampledProfile](https://learn.microsoft.com/en-us/windows/win32/etw/sampledprofile)。
+
+全段中 26580 次有唯一原始 StackWalk，204 次缺失；26522 次落在已闭合的同 CPU 运行区间，
+另外 262 次不据此指派为已验证运行。第 428 帧选出的 126 次则全部通过更严格核对：
+实际切换记录为 System(4)/1416、相同 CPU 和原始 QPC、唯一原始栈，且采样指令等于栈顶地址。
+这避免了把 ReadyThread 或 CSwitch 栈误叫作执行采样。
+
+重新核对三个公共模块 PE，解析 256 个实际公共符号地址。126 次采样中有 89 次指令落在
+Intel KMD 内，栈同时经过 `DdiBuildPagingBuffer`，下层涉及
+`UpdatePageTable → CommitVirtualAddressRange`、映射 scratch 地址、
+`UncommitVirtualAddressRange` 及释放 GPU 虚拟地址的系统命令。
+两次明确 DPC 路径单独保留，没有当作普通分页工作；采样次数不能直接换算成毫秒。
+
+这 89 次中的 78 次集中到 Intel 驱动一个 315 字节的函数，最长 4 KiB 请求被选中之前包含其中 57 次。
+实际驱动为 32.0.101.8864，SHA256 与本次映像核对一致；x64 `.pdata` 将函数界定在
+RVA `0x51c0b0`–`0x51c1eb`，机器码 SHA256 为
+`A69ED25216764A182E29C88C6ECA28FEE54481B09C4D2DB45CEB41C64E6871AF`。
+反汇编的全部 315 字节与原 PE 精确一致：该函数有固定 20 字节模板复制、位域／地址／数据写入，
+分支均向前，无 call、pause、lock 前缀或向后跳转。不能把这个热点自身解释成 fence 自旋等待。
+
+模板头为 `0x10000002`，opcode 为 32，写入 bit 21／22、地址与两个数据 DWORD 的布局，
+与 Intel 公开的 `MI_STORE_DATA_IMM` 定义一致。此处是命令构造角色的推断，
+没有私有 PDB，不给它杜撰函数名，也没有读取实际调用参数或 GPU 命令负载。
+对照源固定为 Intel media-driver 提交 `53f7ac03bed6583e15fa689fb2201c25182c44a4` 的
+[Xe2 MI 命令定义](https://github.com/intel/media-driver/blob/53f7ac03bed6583e15fa689fb2201c25182c44a4/media_softlet/agnostic/Xe2_M_plus/Xe2_LPM_base/hw/mhw_mi_hwcmd_xe2_lpm_base_next.h)。
+这进一步说明共享分页线程的一部分运行正在构造页表相关命令；调用次数、参数范围及具体请求归因仍未确定。
+没有据此声称驱动编译选项错误、显存耗尽或该函数已不可优化。
+
+资源记录同时显示该帧中 22 次 64 KiB 页表／目录全局分配创建、7 次销毁。
+Backing-store 锁事件含 Sunshine、两个其他进程等资源所有者，不能把 System 事件头当成它们的所有者。
+30 次锁还与实际存活的全局分配元数据对应且所有者一致，117 条锁／传输事件缺少唯一创建元数据，保留未知。
+原始 Process 事件以相同 UniqueProcessKey 的开始／结束 rundown 核对进程，两个为 ffmpeg，
+另一个内存传输参与者为 Riichi.exe。没有读取 CommandLine、停止进程或拿当前 PID 列表反填历史身份；
+共享活动本身仍不证明某个进程单独导致这帧变慢。
+
+随后在当前业务负载下补跑一次静音、主屏、物理 1080p30、LAN 5 Mbps 的 H.264 QSV 观察，
+没有改代码或编码策略，没有 WPR，只保留既有逐帧统计与 1 Hz PDH。
+视频源时钟为实时的 0.999644，播放器新增丢帧为零；60.542 秒窗口及整段记录完整、零丢失。
+
+| 本轮完整窗口指标 | 实测 |
+| --- | ---: |
+| 服务端输出 / 客户端 render return | 22.606 / 22.596 FPS |
+| 捕获回调 | 25.490 FPS |
+| Sync 平均 / P99 / 最大 | 36.662 / 103.225 / 400.591 ms |
+| EncodeFrameAsync 平均 | 0.0356 ms |
+| 输出间隔 P99 / 最大 | 106.638 / 400.993 ms |
+| 客户端处理链平均 | 1.097 ms |
+| 实际首帧提交 / 脚本轮询首帧 | 6425.986 / 6905 ms |
+
+UI 最后一条瞬时统计为 27.13 FPS，不能用它替代完整窗口的 22.606 FPS。
+60 个完全落在同一主机 QPC 窗口的 PDH 区间内，整机 CPU 平均约 16.61%，最大 51.85%；
+ffmpeg 仍有活动，后台并未因旧 PID 退出而全部空闲。总体 CPU 利用率不能排除单个共享线程瓶颈。
+业务变化没有受控，不据此宣称相较早先样本的提升或回退是代码收益；稳定 30 FPS 仍未达到。
+源、配置、配对、显示及同步参数均恢复，PDH 已结束且停止标记不存在。
+下一步做相同输入下的 Media Foundation / QSV 对照，检查能否减少这条资源等待路径的影响。
+
+本轮主要私有证据为 `paging-worker-sampled-profile-proof.json`、
+`slowframe428-sampled-functions-proof.json`、`intel-paging-command-builder-interpretation.json`、
+`selected-process-identity.jsonl`、`slowframe428-paging-resource-activity-proof.json`
+（均在 `encoder-etw-qsvjoint05-20261025`），以及 `qsv-loadcheck01-analysis-20261025.json`。
+新的主机逐帧原始文件 SHA256 为
+`54AAA0CCC4AB40298DB05BC0A5513B6B6B4824B6A5389B391C25A6B5014B1E12`。
