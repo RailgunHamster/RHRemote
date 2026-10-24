@@ -102,6 +102,22 @@ Sunshine 的实际 mediafoundation 受控试验在厂商预检直接拒绝 Intel
 GPU 输入／媒体尚待验证。该 MF 路径的固定 GOP、丢包后的恢复同样需要实际测试。
 它是候选替代路径，不等于 QSV 的派生等待已经解决。
 
+随后独立 GPU 输入对照确认：固定 16 帧 hwupload 池在纹理创建处报 80070057，
+尚未进入编码器；改为与 Sunshine 相同的动态池方式后，D3D11 输入的一帧编码约
+11.253 秒成功，实际仍为 Intel MFT。90 帧生成视频、固定 GOP 120、主动请求第 15 / 45 帧
+为关键帧的对照约 15.925 秒完成，FFprobe 检出关键帧 0 / 15 / 45，码流共三个 IDR slice NAL。
+这些总耗时包含初始化和退出，既不是持续 FPS，也不证明实际网络丢包恢复已通过。
+全部独立进程和临时任务已结束，未更改服务配置，未捕获桌面或声音。
+
+为避免继续引用最新版代替实际依赖，已核对本项目固定 build-deps
+`a9a9277cdafe8a0ff9f197915fe43b383ed4f36b` 对应的 FFmpeg 子模块为
+`38b88335f99e76ed89ff3c93f877fdefce736c13`。
+该版本的 [hwcontext_qsv.c](https://github.com/FFmpeg/FFmpeg/blob/38b88335f99e76ed89ff3c93f877fdefce736c13/libavutil/hwcontext_qsv.c)
+确实先 MFXEnumImplementations 再 MFXCreateSession；
+[qsv.c](https://github.com/FFmpeg/FFmpeg/blob/38b88335f99e76ed89ff3c93f877fdefce736c13/libavcodec/qsv.c)
+在编码器会话初始化中也采用枚举／创建流程。仅优化基设备构造可能留下编码器的再次枚举，
+不能把移动等待位置当作消除了等待。固定源码确认调用结构，内部耗时仍须同构建实测。
+
 ## 测量实现与后续验收
 
 早期 encoder_create 只包住完整 make_avcodec_encode_session，不能细分等待。
@@ -138,3 +154,5 @@ encoder_apply_colorspace。不改动原操作参数、错误码、回退或资�
 - `D:\RHRemoteTools\qsv-nested01-analysis-20261024.json`
 - `D:\RHRemoteTools\mf-natural01-analysis-20261024.json`
 - `D:\RHRemoteTools\winserver-after-mf-natural01-20261024.json`
+- `D:\RHRemoteTools\ffmpeg-mf-gpuinput-dynamicpool02-20261024.json`
+- `D:\RHRemoteTools\ffmpeg-mf-idr-control03-frame-verification-20261024.json`
