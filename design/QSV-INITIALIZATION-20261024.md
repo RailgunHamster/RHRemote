@@ -319,3 +319,92 @@ MF05 为 `d2f04afc117c8fb6023252fe91350df735ba44529a7bc8d62fd0452570ccce4a`。
 `intel-mf05-secondary-fbadb907-frameclock-window-20261024.json`、
 `mf-natural04-variant-window-restore-20261024.json` 和
 `mf-natural05-secondary-window-restore-20261024.json`。
+
+## 独立 oneVPL 调用对照：慢枚举与快速会话路径
+
+八次独立 SDK 诊断在相同的 B580 输出设备上成功完成，会话 API 为 2.16。
+两轮采用相反顺序；每次都验证 MFX 的 D3D11 句柄就是本次创建的设备，
+没有输入视频帧、桌面捕获、音频或服务配置变更。以下都是 SDK 单次 CPU 调用耗时，
+不是 Sunshine 首帧，也不是硬件执行耗时。
+
+| 配置与调用顺序 | 第一轮主要等待 | 第二轮主要等待 | dispatcher 快速路径 |
+| --- | ---: | ---: | --- |
+| 固定 FFmpeg 的 DeviceID/LUID 过滤，Enum → Create | Enum 18917.639 ms | Enum 15784.534 ms | 关闭 |
+| 同样过滤，直接 Create | Create 15018.330 ms | Create 20740.403 ms | 关闭 |
+| ImplName/DXGIAdapterIndex 精确选择，Enum → Create | Enum 24767.647 ms | Enum 14110.159 ms | 关闭 |
+| 同样精确选择，直接 Create | Create 11.544 ms | Create 10.973 ms | 开启 |
+
+dispatcher 自身日志确认最后一行进入 `LoadLibsLowLatency`，其余路径关闭该分支。
+这支持继续验证“过滤属性与枚举共同触发完整能力查询”的假设；
+仅删枚举调用仍把慢查询放到 Create，不能当作优化。
+SDK 对照为独立静态 Intel VPL 2.17 构建，并非生产 FFmpeg 的同一翻译单元和链接产物。
+没有驱动重置、其他业务暂停或冷启动控制，不能据此宣称已消除实际串流的等待。
+
+设备选择必须先由本次自有输出路径定位到 DXGI adapter。现场有三个相同 DeviceID
+的 Intel adapter 身份，按厂商或型号取第一项不足以证明选对设备。
+早期 01 / 02 诊断在身份不唯一时直接拒绝；03 虽选对输出，但未设置与固定 FFmpeg
+相同的 D3D 多线程保护，SetHandle 返回 -16，四次均不算成功会话。
+04 补齐该初始化后，八次 SetHandle / GetHandle 和设备身份检查全部通过。
+这些诊断失败没有改为忽略错误，也没有改动旧证据。
+
+后续需在固定 FFmpeg 的设备派生和编码器创建两条真实路径上实现并验证候选，
+保留设备健康检查、精确设备绑定、失败时原路径回退和非目标平台行为。
+编码器侧再次枚举可能重新触发完整能力查询，不能只优化初次设备派生。
+候选应经过实际翻译单元回归、库成员及 ABI 校验、完整构建，再做实际媒体和首帧对照。
+当前尚未修改或部署 QSV 快速路径；默认软件编码配置保持不变。
+
+私有证据为 `qsv-dispatch-call04-counterbalanced-proof-20261024.json` 及其引用的
+八份逐调用 JSON、八份 dispatcher 日志。`qsv-sdk04-terminal-audit-20261024.json`
+确认诊断进程及任务已结束、没有媒体线程、原配置哈希和六个配对不变。
+
+## MF 内部调用的实际采样
+
+`c2e3a6a90a18492ec4040477986bf158290a9dce` / CI `40084202661` 已完整成功，
+103 项引擎回归、固定源码与原源码 CodecAPI 对照，以及真实 MF 调用边界测试通过。
+151 个包文件校验后部署 winserver，引擎 SHA-256 为
+`4898524e1c060a6ddc4f4379398872c68c5d277375790fdb53855a3e2c2a5a22`。
+默认软件编码配置和六个配对保留。该版本增加实际调用计时，没有实现 QSV 快速路径。
+
+MF06 在启动串流前被测试脚本拦截：脚本把合法的后台传输 worker 也算成主界面。
+保留失败记录及原脚本，修正为检查本次控制接口的实际进程及可见窗口，不结束 worker。
+MF07 的主界面及串流窗口均用物理坐标确认完整位于左侧副屏。
+151.553 秒动态窗口完成，原生／主机记录均完整，4291 个 encode invocation
+全部有 MF 内部计时，零丢记录、零丢弃调用、零结构异常；三类 API 调用结果均为成功。
+其中 GetEvent 为 8582 次，ProcessInput / ProcessOutput 各 4291 次。
+
+源播放器时钟速率为 0.999744，但丢帧 61，约占源区间的 1.324%，超过 1% 门槛。
+因此该轮只用于诊断，不能与 MF05 作合格性能横比，也不能证明稳定 30 FPS。
+窗口内实际 render_return 为 22.065 次/秒，最长间隔 8470.427 ms。
+输入与输出关联仍按原 PTS；以下调用耗时归属于当前 invocation，不能直接赋给另一帧的输出。
+
+| 当前调用帧 | encode 调用总长 | 主要等待 | 对应实际 API 跨度 |
+| --- | ---: | --- | ---: |
+| generation 3 / frame 2544，重复 source 1769 | 8466.970 ms | ProcessInput | 8461.018 ms |
+| generation 3 / frame 2540，重复 source 1767 | 866.917 ms | GetEvent | 865.753 ms |
+| generation 3 / frame 2545，新 source 1770 | 726.401 ms | ProcessInput | 720.132 ms |
+
+这证明存在服务端编码调用内的长等待。CPU API 区间包含阻塞和线程被抢占时间，
+不能把整个跨度称为 GPU 执行时间或已经定位到驱动内部某个函数。
+同机 Application Error 1000 在 UTC 10:43:04.342628 记录另一个 ffmpeg.exe
+于 Intel `igd11dxva64.dll` 32.0.101.8864 崩溃，错误码 0xc0000409。
+时间位于 frame 2540 的事件等待中，随后 frame 2544 的 ProcessInput 在
+UTC 10:43:05.368～10:43:13.835 间停留。这里只用主机自己的 unix / steady 锚点
+定位系统事件，没有跨机器相减。时间重合是共享显卡／驱动影响的线索，不证明唯一因果。
+崩溃进程的历史父进程未查明；不能因现存转码进程属于 RHVideo 就声称该崩溃也属于它。
+RHVideo 保持运行，未暂停业务、修改驱动或重启机器。
+
+MF07 操作到首次 render_return 为 22.200 秒。客户端记录显示准备 worker 3711.943 ms，
+HTTP launch 9202.197 ms，协议握手 144.071 ms，协议就绪到首包 6433.559 ms，
+首包到解码 10.139 ms，解码到渲染返回 1.796 ms。
+主机最近一次连接能力探测 9156.956 ms，实际编码器打开 2009.171 ms，
+实际 first_encode 1881.087 ms。阶段有包含和重叠，不能相加；
+服务启动时的另一轮 7247.408 ms 探测也不能重复算进这次点击的时长。
+初始化与持续帧率均仍未完成优化。
+
+两次试验均恢复默认配置，MF07 还核对显示、连接参数、同步、媒体源及任务全部恢复。
+最终引擎仍为 C2 版本、六个配对不变、没有活动媒体或遗留试验任务。
+主机原始记录 `host-frame-raw/1792838485313608100-1/frames.jsonl` SHA-256 为
+`7feeab2b6634d9f6f210a434c04fc2ef8669d4e27a66fd29265f0ff3418f637c`；
+保留供内部等待、驱动事件及后续候选对照，未删除或补写缺失记录。
+分析见私有工具目录的 `intel-mf07-api-secondary-c2e3a6a9-frameclock-window-20261024.json`、
+`mf07-api-slowframes-20261024.json`、`mf07-host-events-and-final-state-20261024.json`。
