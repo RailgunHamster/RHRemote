@@ -38,6 +38,7 @@ def analyze(case, events, host_rows, parse_issues=None):
     if any(type(v) not in (int, float) or not math.isfinite(v) for v in (lo, hi)) or hi <= lo:
         raise ValueError("Invalid client measurement interval")
     global_host, _, _, _ = host.analyze(host_rows, parse_issues)
+    direct_receive=client.direct_frame_clock(events)
     # Frame-local startup/shutdown defects may be outside this named window.
     # File integrity and identity defects cannot be hidden by selecting a subset.
     integrity_names = {"mixed_trace_identity", "invalid_event_fields", "unknown_event",
@@ -138,8 +139,8 @@ def analyze(case, events, host_rows, parse_issues=None):
             "client_encoded_payload_mbps": sum(by_frame[n]["fields"].get("bytes", 0) for n in received) * 8 / seconds / 1e6,
             "source": source, "measurement": {"absolute_network_latency_measured": False, "physical_scanout_measured": False,
             "unique_picture_fps_measured": False, "send_endpoint": "send_call_return",
-            "receive_assembly_high_resolution_proven": False,
-            "receive_assembly_timing": "Legacy native packet_first/frame_assembled timestamps are millisecond-clock backprojections. Reassembly and pre-decoder queue metrics retain those estimates; they are not exact receipt or waiting spans. Direct decode/render call events and host capture work are separate measurements.",
+            "receive_assembly_high_resolution_proven": direct_receive,
+            "receive_assembly_timing": "Direct recorder-domain microsecond timestamps at UDP receive return and decode-unit readiness. These are software call boundaries, not NIC receipt or scanout." if direct_receive else "Legacy native packet_first/frame_assembled timestamps are millisecond-clock backprojections, or the direct clock contract is incomplete. Reassembly and pre-decoder queue metrics retain those estimates; they are not exact receipt or waiting spans. Direct decode/render call events and host capture work are separate measurements.",
             "byte_rates": "Both payload rates use the client interval and aligned ordinal range, not link throughput. UDP payload includes FEC and packetization; no IP/TCP/TLS/iroh wire overhead is counted.",
             "missing_frames": "An absent frame number alone does not locate loss or prove a particular network queue.",
             "scope": "A complete selected window does not make a whole trace complete; unselected startup/shutdown anomalies remain reported."}}

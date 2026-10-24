@@ -37,6 +37,17 @@ def case_and_frames():
 
 
 class MediaWindowAnalysisTest(unittest.TestCase):
+    def test_direct_clock_requires_actual_contract_on_every_measured_frame(self):
+        case,events,rows=case_and_frames()
+        contract={"contract":"rh-cml-frame-clock-v1","clock_domain":"rhstatistics","unit":"us"}
+        for point in events:
+            if point["event"] in ("packet_first","frame_assembled"):point["fields"].update(contract)
+        marker=dict(event="frame_clock_contract",frame=-1,ts_us=1,fields=dict(contract,receive_site="udp_recv_return",assembly_site="decode_unit_ready"))
+        events.insert(0,marker)
+        self.assertTrue(analysis.analyze(case,events,rows)["measurement"]["receive_assembly_high_resolution_proven"])
+        next(p for p in events if p["event"]=="packet_first")["fields"].pop("contract")
+        self.assertFalse(analysis.analyze(case,events,rows)["measurement"]["receive_assembly_high_resolution_proven"])
+
     def test_source_health_is_recomputed_and_not_implied_by_complete_files_or_pass(self):
         case, events, rows = case_and_frames()
         case.update(result="PASS", sourcePerformanceValid=True,

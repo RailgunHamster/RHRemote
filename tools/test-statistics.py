@@ -9,6 +9,45 @@ from pathlib import Path
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def direct_rows(self):
+        contract={"contract":"rh-cml-frame-clock-v1","clock_domain":"rhstatistics","unit":"us"}
+        marker=dict(e("frame_clock_contract",200),fields=dict(contract,receive_site="udp_recv_return",assembly_site="decode_unit_ready"))
+        return [e("connect_action",100),marker,e("connection_ready",500),
+                dict(e("packet_first",1001,1),fields=contract.copy()),dict(e("frame_assembled",1234,1),fields=contract.copy()),
+                e("decode_submit",1301,1),e("decode_output",1500,1),e("render_return",2001,1),e("trace_end",2200)]
+
+    def test_direct_producer_clock_keeps_submillisecond_spans_and_exact_first_frame(self):
+        summary,_=a.analyze(self.direct_rows(),{"platform":"windows"})
+        self.assertTrue(summary["receive_assembly_timing"]["high_resolution_proven"])
+        self.assertEqual([],summary["receive_assembly_timing"]["estimated_metrics"])
+        self.assertEqual(.233,summary["frame_metrics"]["reassembly_ms"]["mean"])
+        self.assertEqual(.067,summary["frame_metrics"]["decoder_queue_ms"]["mean"])
+        self.assertEqual(1.901,summary["connection_measurement"]["total_ms"])
+        self.assertFalse(any("估计" in p["name"] for p in summary["connection_phases"]))
+        self.assertEqual([],summary["warnings"])
+
+    def test_a_clock_declaration_does_not_upgrade_legacy_mixed_or_invalid_points(self):
+        import copy
+        rows=self.direct_rows()
+        variants=[]
+        for stage in ("packet_first","frame_assembled","frame_clock_contract"):
+            missing=copy.deepcopy(rows);missing=[r for r in missing if r["event"]!=stage];variants.append(missing)
+        for field,value in (("clock_domain","other"),("contract","future"),("unit","ms")):
+            mixed=copy.deepcopy(rows);next(r for r in mixed if r["event"]=="packet_first")["fields"][field]=value;variants.append(mixed)
+        for value in (0,-1,float("inf"),True,1500):
+            invalid=copy.deepcopy(rows);next(r for r in invalid if r["event"]=="packet_first")["ts_us"]=value;variants.append(invalid)
+        variants.append(rows+[e("packet_first",3000,2),e("frame_assembled",3200,2)])
+        variants.append(rows+[e("frame_clock_missing",2100,2)])
+        for variant in variants:self.assertFalse(a.direct_frame_clock(variant))
+
+    def test_missing_direct_clock_is_visible_and_never_backprojected(self):
+        rows=self.direct_rows()+[e("frame_clock_missing",2100,2),e("decode_submit",2101,2)]
+        summary,frames=a.analyze(rows,{"platform":"windows"})
+        self.assertFalse(summary["receive_assembly_timing"]["high_resolution_proven"])
+        self.assertTrue(any("missing receive/assembly" in warning for warning in summary["warnings"]))
+        missing=next(f for f in frames if f["frame"]==2)
+        self.assertNotIn("packet_first",missing["events"]);self.assertNotIn("frame_assembled",missing["events"])
+
     def test_legacy_receive_clock_is_qualified_without_changing_first_frame_or_completeness(self):
         rows=[e("connect_action",0),e("connection_ready",500),e("packet_first",1000,1),
               e("frame_assembled",2000,1),e("decode_submit",3000,1),e("decode_output",5000,1),

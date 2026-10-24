@@ -11,6 +11,29 @@ from pathlib import Path
 
 PAIRS={"reassembly_ms":("packet_first","frame_assembled"),"decoder_queue_ms":("frame_assembled","decode_submit"),"decoder_submit_ms":("decode_submit","decode_submit_return"),"decode_ms":("decode_submit","decode_output"),"pacing_ms":("decode_output","render_submit"),"render_call_ms":("render_submit","render_return"),"surface_callback_delay_ms":("render_submit","surface_render_callback"),"client_pipeline_ms":("packet_first","render_return")}
 
+def direct_frame_clock(events):
+    """Recognize a declared producer contract and every associated measured frame.
+
+    A declaration alone is insufficient. Legacy, mixed, missing or reversed
+    measurements remain unverified; this never claims NIC receipt or scanout.
+    """
+    required={"contract":"rh-cml-frame-clock-v1","clock_domain":"rhstatistics","unit":"us"}
+    markers=[e.get("fields",{}) for e in events if e.get("event")=="frame_clock_contract"]
+    if not markers or any(any(m.get(k)!=v for k,v in required.items()) or
+                          m.get("receive_site")!="udp_recv_return" or m.get("assembly_site")!="decode_unit_ready" for m in markers):return False
+    points={}
+    for event in events:
+        if event.get("event")=="frame_clock_missing":return False
+        name=event.get("event")
+        if name not in ("packet_first","frame_assembled"):continue
+        frame=event.get("frame");stamp=event.get("ts_us");fields=event.get("fields",{})
+        if type(frame) not in (int,float) or not math.isfinite(frame) or frame<0 or int(frame)!=frame or type(stamp) not in (int,float) or not math.isfinite(stamp) or stamp<=0:return False
+        if any(fields.get(k)!=v for k,v in required.items()):return False
+        point=points.setdefault(int(frame),{})
+        if name in point and point[name]!=stamp:return False
+        point[name]=stamp
+    return bool(points) and all(set(p)=={"packet_first","frame_assembled"} and p["packet_first"]<=p["frame_assembled"] for p in points.values())
+
 def distribution(values):
     values=sorted(values)
     if not values:return None
@@ -31,12 +54,12 @@ def connection_measurement(events,platform):
     measurement["initial_display_before_capture_accepted"]=selection.get("fields",{}).get("beforeCapture") if selection else None
     measurement["display_timing_scope"]="host accepted per-launch source before capture" if measurement["initial_display_before_capture_accepted"] is True else "initial render only; target-display first frame unverified"
     labels={"connect_request_received":"客户端操作排队","native_spawn_begin":"连接请求处理","connection_begin":"客户端连接准备","connection_ready":"串流协议握手","packet_first":"等待视频首包","decode_output":"首帧组帧及解码",endpoint:"首帧排队及渲染提交" if platform=="windows" else "首帧排队及系统回调"}
-    phases=[];previous=origin
+    phases=[];previous=origin;direct_receive=direct_frame_clock(events) if platform=="windows" else False
     for name in ["connect_request_received","native_spawn_begin","connection_begin","connection_ready","packet_first","decode_output",endpoint]:
         point=first(name)
         if point is None or point["ts_us"]<previous["ts_us"]:continue
         phases.append({"name":("连接准备及协议握手" if name=="connection_ready" and previous is origin else labels[name]),"from":previous["event"],"to":name,"start_us":previous["ts_us"],"end_us":point["ts_us"],"start_ms":round((previous["ts_us"]-start)/1000,3),"end_ms":round((point["ts_us"]-start)/1000,3),"duration_ms":round((point["ts_us"]-previous["ts_us"])/1000,3)})
-        if platform=="windows" and (name=="packet_first" or previous["event"]=="packet_first"):
+        if platform=="windows" and not direct_receive and (name=="packet_first" or previous["event"]=="packet_first"):
             phases[-1]["timing_quality"]="legacy_receive_estimate"
             phases[-1]["name"]+="（估计）"
         previous=point
@@ -94,19 +117,16 @@ def analyze(events,manifest):
     if lost:errors.append(f"Recorder lost {lost} events; timeline is incomplete.")
     if negative:errors.append(f"Excluded {negative} negative durations (clock/association mismatch).")
     if by_name["connection_stage_failed"]:errors.append("Connection failed; partial trace retained.")
+    if by_name["frame_clock_missing"]:errors.append("Direct frame clock unavailable for some decoded frames; missing receive/assembly times were not estimated.")
     summary={"schema":"rhremote.statistics.analysis/v1","platform":manifest.get("platform"),"profile":manifest.get("profile"),"event_count":len(events),"frame_count":len(frames),"recorder_lost_events":lost,"warnings":errors,"startup":startup,"startup_spans":sorted(spans,key=lambda s:s["start_us"]),"frame_metrics":distributions,"cadence":frame_gaps,"missing_frame_numbers":missing,"frame_drops":sum("frame_drop" in f["events"] for f in frames.values()),"interpretation":{"Windows":"render_return measures CPU render/present submission return, not physical screen scanout.","Android":"surface_render_callback is callback arrival. surface_rendered is the framework-reported timestamp and can precede submission (e.g. a requested Choreographer timestamp). Neither measures physical scanout.","host":"host_processing_ms is a protocol aggregate. Capture/encode sub-stages require host instrumentation.","network":"packet_first is available for assembled frames; missing frame IDs do not identify the loss location."}}
     summary["connection_measurement"],summary["connection_phases"]=connection_measurement(events,manifest.get("platform"))
     if manifest.get("platform")=="windows":
-        # The maintained native producer still backprojects these two events
-        # from CML millisecond fields. This is measurement scope, not lost data:
-        # do not turn a complete file into a recorder warning or retain all raw
-        # files just because their receive clock is coarse. Update this contract
-        # together with the future actual receive/assembly producer, not alone.
-        summary["receive_assembly_timing"]={"high_resolution_proven":False,
-            "status":"legacy_windows_millisecond_backprojection",
-            "estimated_metrics":["reassembly_ms","decoder_queue_ms","client_pipeline_ms"],
-            "estimated_cadence":["packet_first"],
-            "note":"Windows 首包和组帧时间由毫秒字段回推；标为估计的收包、组帧及解码前排队数值不能直接当作真实线程等待。连接至首帧总耗时、直接解码／渲染调用和主机捕获跨度另行测量。"}
+        direct=direct_frame_clock(events)
+        summary["receive_assembly_timing"]={"high_resolution_proven":direct,
+            "status":"direct_recorder_clock_v1" if direct else "legacy_windows_millisecond_backprojection",
+            "estimated_metrics":[] if direct else ["reassembly_ms","decoder_queue_ms","client_pipeline_ms"],
+            "estimated_cadence":[] if direct else ["packet_first"],
+            "note":"Windows 首包在 UDP 接收调用返回后取时，组帧在解码单元就绪处取时；两者直接使用记录器时钟，单位为微秒。时间包含调用边界与线程调度，不是网卡收包时间或物理显示时间。" if direct else "Windows 首包和组帧的直接时钟契约未完整证实；旧格式由毫秒字段回推，标为估计的数值不能直接当作真实线程等待。连接至首帧总耗时、直接解码／渲染调用和主机捕获跨度另行测量。"}
     preparation=by_name["host_display_prepared"]
     if preparation:summary["display_preparation"]=preparation[-1].get("fields",{})
     requests=by_name["host_frame_trace_request"]
