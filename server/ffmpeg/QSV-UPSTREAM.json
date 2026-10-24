@@ -1,0 +1,32 @@
+{
+  "schema": "rhremote.ffmpeg-qsv-module/v1",
+  "revision": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+  "configSha256": "8ffb34d875fabf4528f4c68ef39f1970f03f7c26ab7ebf4e075b9317ae4fb3a8",
+  "avconfigSha256": "975611ad5eba15212d9e1d5fca9d4fdf0daec6d2269b2fcab8e29af8667164bc",
+  "sources": {
+    "hwcontext_qsv.c": {
+      "path": "libavutil/hwcontext_qsv.c",
+      "sha256": "b719cf0c814eeea1e7a5b3906f68057f330f0198b928d1656fa061f6d8a92e4b"
+    },
+    "qsv.c": {
+      "path": "libavcodec/qsv.c",
+      "sha256": "7ccd5cbc0d7ada60bda9143f13fd796c8302cc96d05e592fd9db744649d97be3"
+    }
+  },
+  "libraries": {
+    "util": {
+      "file": "libavutil.a",
+      "sha256": "59aff4631b750f57e58dd840ae4a52992e23afc2e36a616c6aa1506df8bcad8a",
+      "members": 113,
+      "member": "hwcontext_qsv.o",
+      "objectSha256": "537ba31d943bf3a762a0aa26048bc0d9c4192d751a34278ce48dce9255acefa1"
+    },
+    "codec": {
+      "file": "libavcodec.a",
+      "sha256": "e37841e1c25006785e83b0ca91b49eb9b449cc9850bda9d7099918eec1d2c5ae",
+      "members": 214,
+      "member": "qsv.o",
+      "objectSha256": "b075fc17415266b96b0fe8a683cdb20c21e8401ec457c30d6e064c1e7b1f5352"
+    }
+  }
+}

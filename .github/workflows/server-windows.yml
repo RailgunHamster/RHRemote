@@ -49,7 +49,7 @@ jobs:
           ./test-rhremote-launch-http
       - name: Analyze incomplete, reordered and closed host traces
         run: |
-          python -m unittest discover -s server/ffmpeg -p test_prepare_mf.py -v
+          python -m unittest discover -s server/ffmpeg -p 'test_*.py' -v
           python -m unittest discover -s tools -p test_host_frame_analysis.py -v
           python -m unittest discover -s tools -p test_media_window_analysis.py -v
           python tools/test-statistics.py
@@ -136,7 +136,7 @@ jobs:
           g++ -std=c++23 -pthread -DRHREMOTE_LAUNCH_HTTP_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_launch_http.cpp -o test-rhremote-launch-http.exe
           ./test-rhremote-launch-http.exe
           cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
-          cmake --build .deps/cmake-build-server --target test_rhremote_mf_variant test_rhremote_mf_original_variant test_rhremote_mf_trace --parallel 3
+          cmake --build .deps/cmake-build-server --target test_rhremote_mf_variant test_rhremote_mf_original_variant test_rhremote_mf_trace test_rhremote_qsv_device test_rhremote_qsv_child test_rhremote_qsv_original_device test_rhremote_qsv_original_child --parallel 3
           ./.deps/cmake-build-server/test_rhremote_mf_variant.exe
           ./.deps/cmake-build-server/test_rhremote_mf_trace.exe
           if ./.deps/cmake-build-server/test_rhremote_mf_original_variant.exe; then
@@ -147,6 +147,18 @@ jobs:
             if [ "$original_status" -ne 3 ]; then exit 1; fi
           fi
           echo "PASS: original pinned MF encoder fails the same CodecAPI regression (exit 3)"
+          ./.deps/cmake-build-server/test_rhremote_qsv_device.exe
+          ./.deps/cmake-build-server/test_rhremote_qsv_child.exe
+          for name in device child; do
+            if ./.deps/cmake-build-server/test_rhremote_qsv_original_$name.exe; then
+              echo "Original pinned QSV source unexpectedly passed create-first regression"
+              exit 1
+            else
+              original_status=$?
+              if [ "$original_status" -ne 3 ]; then exit 1; fi
+            fi
+            echo "PASS: original pinned QSV $name fails the same create-first boundary regression (exit 3)"
+          done
           cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine --parallel 3
           cmake --install .deps/cmake-build-server --prefix "$PWD/.deps/server-stage"
           cp server/UPSTREAM.json server/sunshine/LICENSE .deps/server-stage/

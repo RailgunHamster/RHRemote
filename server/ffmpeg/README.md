@@ -16,6 +16,12 @@ archive member is verified byte-identical. No executable byte patching occurs.
 The original vendor package is never modified. Source/config/library/member
 hash mismatches stop the build, rather than silently mixing private FFmpeg ABIs.
 
+This MF archive is an intermediate input to the optional QSV overlay described
+in QSV-README.md. That final codec archive retains the exact compiled MF member,
+also replaces `qsv.o`, and verifies the remaining 212 original members. The
+intermediate MF provenance still verifies its own 213 unchanged members; it must
+not be mistaken for the final archive's provenance. Both stages are packaged.
+
 The original FFmpeg and LizardByte build-deps pins remain unchanged. A future
 upstream update requires reviewing these explicit pins and removing this module
 if the fix is already upstream. Sunshine has one small include in its dependency

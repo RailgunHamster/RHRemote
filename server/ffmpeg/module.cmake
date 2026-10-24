@@ -32,7 +32,8 @@ add_custom_command(OUTPUT "${RHREMOTE_MF_ARCHIVE}"
     COMMAND "${Python3_EXECUTABLE}" "${RHREMOTE_FFMPEG_MODULE_DIR}/prepare-mf.py" archive
         --original "${FFMPEG_PREPARED_BINARIES}/lib/libavcodec.a" --module "${RHREMOTE_MF_GENERATED}/mfenc.o"
         --output "${RHREMOTE_MF_ARCHIVE}" --ar "${CMAKE_AR}" --ranlib "${CMAKE_RANLIB}"
-    DEPENDS rhremote_ffmpeg_mf_object "${RHREMOTE_FFMPEG_MODULE_DIR}/prepare-mf.py" "${FFMPEG_PREPARED_BINARIES}/lib/libavcodec.a"
+    DEPENDS rhremote_ffmpeg_mf_object $<TARGET_OBJECTS:rhremote_ffmpeg_mf_object>
+        "${RHREMOTE_FFMPEG_MODULE_DIR}/prepare-mf.py" "${FFMPEG_PREPARED_BINARIES}/lib/libavcodec.a"
     COMMAND_EXPAND_LISTS VERBATIM)
 add_custom_target(rhremote_ffmpeg_mf_archive DEPENDS "${RHREMOTE_MF_ARCHIVE}")
 add_library(rhremote_ffmpeg_mf STATIC IMPORTED GLOBAL)
@@ -45,6 +46,7 @@ if(_rh_mf_library_index LESS 0)
 endif()
 list(REMOVE_AT FFMPEG_LIBRARIES ${_rh_mf_library_index})
 list(INSERT FFMPEG_LIBRARIES ${_rh_mf_library_index} rhremote_ffmpeg_mf)
+include("${RHREMOTE_FFMPEG_MODULE_DIR}/qsv-module.cmake")
 if(BUILD_TESTS)
     # The same CodecAPI boundary test must accept the fixed source and reject the original.
     function(rhremote_add_mf_variant_test name)
