@@ -24,7 +24,7 @@ add_library(rhremote_ffmpeg_mf_object OBJECT "${RHREMOTE_MF_GENERATED}/mfenc.c")
 target_compile_features(rhremote_ffmpeg_mf_object PRIVATE c_std_11)
 target_compile_definitions(rhremote_ffmpeg_mf_object PRIVATE HAVE_AV_CONFIG_H)
 target_include_directories(rhremote_ffmpeg_mf_object PRIVATE
-    "${FFMPEG_PREPARED_BINARIES}/include" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}/libavcodec" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}")
+    "${rhremote_ffmpeg_mf_source_SOURCE_DIR}" "${FFMPEG_PREPARED_BINARIES}/include" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}/libavcodec")
 set(RHREMOTE_MF_ARCHIVE "${RHREMOTE_MF_GENERATED}/libavcodec.a")
 add_custom_command(OUTPUT "${RHREMOTE_MF_ARCHIVE}"
     COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_OBJECTS:rhremote_ffmpeg_mf_object>" "${RHREMOTE_MF_GENERATED}/mfenc.o"
@@ -44,13 +44,18 @@ endif()
 list(REMOVE_AT FFMPEG_LIBRARIES ${_rh_mf_library_index})
 list(INSERT FFMPEG_LIBRARIES ${_rh_mf_library_index} rhremote_ffmpeg_mf)
 if(BUILD_TESTS)
-    add_executable(test_rhremote_mf_variant "${RHREMOTE_FFMPEG_MODULE_DIR}/test-mf-variant.c")
-    target_compile_features(test_rhremote_mf_variant PRIVATE c_std_11)
-    target_compile_definitions(test_rhremote_mf_variant PRIVATE HAVE_AV_CONFIG_H)
-    target_include_directories(test_rhremote_mf_variant PRIVATE "${RHREMOTE_MF_GENERATED}"
-        "${FFMPEG_PREPARED_BINARIES}/include" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}/libavcodec" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}")
-    set_target_properties(test_rhremote_mf_variant PROPERTIES LINKER_LANGUAGE CXX)
-    target_link_libraries(test_rhremote_mf_variant PRIVATE ${FFMPEG_LIBRARIES} bcrypt)
+    # The same CodecAPI boundary test must accept the fixed source and reject the original.
+    function(rhremote_add_mf_variant_test name)
+        add_executable(${name} "${RHREMOTE_FFMPEG_MODULE_DIR}/test-mf-variant.c")
+        target_compile_features(${name} PRIVATE c_std_11)
+        target_compile_definitions(${name} PRIVATE HAVE_AV_CONFIG_H)
+        target_include_directories(${name} PRIVATE ${ARGN}
+            "${rhremote_ffmpeg_mf_source_SOURCE_DIR}" "${FFMPEG_PREPARED_BINARIES}/include" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}/libavcodec")
+        set_target_properties(${name} PROPERTIES LINKER_LANGUAGE CXX)
+        target_link_libraries(${name} PRIVATE ${FFMPEG_LIBRARIES} bcrypt)
+    endfunction()
+    rhremote_add_mf_variant_test(test_rhremote_mf_variant "${RHREMOTE_MF_GENERATED}")
+    rhremote_add_mf_variant_test(test_rhremote_mf_original_variant)
 endif()
 install(FILES "${RHREMOTE_FFMPEG_MODULE_DIR}/UPSTREAM.json" "${RHREMOTE_FFMPEG_MODULE_DIR}/README.md"
     "${RHREMOTE_MF_GENERATED}/module-source.json" "${RHREMOTE_MF_GENERATED}/libavcodec.provenance.json"

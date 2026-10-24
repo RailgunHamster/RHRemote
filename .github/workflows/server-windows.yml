@@ -136,8 +136,16 @@ jobs:
           g++ -std=c++23 -pthread -DRHREMOTE_LAUNCH_HTTP_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_launch_http.cpp -o test-rhremote-launch-http.exe
           ./test-rhremote-launch-http.exe
           cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
-          cmake --build .deps/cmake-build-server --target test_rhremote_mf_variant --parallel 3
+          cmake --build .deps/cmake-build-server --target test_rhremote_mf_variant test_rhremote_mf_original_variant --parallel 3
           ./.deps/cmake-build-server/test_rhremote_mf_variant.exe
+          if ./.deps/cmake-build-server/test_rhremote_mf_original_variant.exe; then
+            echo "Original pinned MF source unexpectedly passed the CodecAPI regression"
+            exit 1
+          else
+            original_status=$?
+            if [ "$original_status" -ne 3 ]; then exit 1; fi
+          fi
+          echo "PASS: original pinned MF encoder fails the same CodecAPI regression (exit 3)"
           cmake --build .deps/cmake-build-server --target sunshine sunshinesvc dxgi-info audio-info web-ui test_sunshine --parallel 3
           cmake --install .deps/cmake-build-server --prefix "$PWD/.deps/server-stage"
           cp server/UPSTREAM.json server/sunshine/LICENSE .deps/server-stage/
