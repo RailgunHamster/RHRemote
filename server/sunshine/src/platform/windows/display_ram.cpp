@@ -206,11 +206,16 @@ namespace platf::dxgi {
   }
 
   capture_e display_ddup_ram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
+    auto work = rhremote::capture_work::start(rh_capture_work_enabled);
     HRESULT status;
     DXGI_OUTDUPL_FRAME_INFO frame_info;
 
     resource_t::pointer res_p {};
-    auto capture_status = dup.next_frame(frame_info, timeout, &res_p);
+    capture_e capture_status;
+    {
+      rhremote::capture_work_scope scope(work, rhremote::capture_work_step::acquire);
+      capture_status = dup.next_frame(frame_info, timeout, &res_p);
+    }
     resource_t res {res_p};
 
     if (capture_status != capture_e::ok) {
@@ -231,83 +236,89 @@ namespace platf::dxgi {
       frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), qpc_displayed);
     }
 
-    if (frame_info.PointerShapeBufferSize > 0) {
-      auto &img_data = cursor.img_data;
+    {
+      rhremote::capture_work_scope scope(work, rhremote::capture_work_step::prepare);
+      if (frame_info.PointerShapeBufferSize > 0) {
+        auto &img_data = cursor.img_data;
 
-      img_data.resize(frame_info.PointerShapeBufferSize);
+        img_data.resize(frame_info.PointerShapeBufferSize);
 
-      UINT dummy;
-      status = dup.dup->GetFramePointerShape(img_data.size(), img_data.data(), &dummy, &cursor.shape_info);
-      if (FAILED(status)) {
-        BOOST_LOG(error) << "Failed to get new pointer shape [0x"sv << util::hex(status).to_string_view() << ']';
-
-        return capture_e::error;
-      }
-    }
-
-    if (frame_info.LastMouseUpdateTime.QuadPart) {
-      cursor.x = frame_info.PointerPosition.Position.x;
-      cursor.y = frame_info.PointerPosition.Position.y;
-      cursor.visible = frame_info.PointerPosition.Visible;
-    }
-
-    if (frame_update_flag) {
-      {
-        texture2d_t src {};
-        status = res->QueryInterface(IID_ID3D11Texture2D, (void **) &src);
-
+        UINT dummy;
+        status = dup.dup->GetFramePointerShape(img_data.size(), img_data.data(), &dummy, &cursor.shape_info);
         if (FAILED(status)) {
-          BOOST_LOG(error) << "Couldn't query interface [0x"sv << util::hex(status).to_string_view() << ']';
+          BOOST_LOG(error) << "Failed to get new pointer shape [0x"sv << util::hex(status).to_string_view() << ']';
+
           return capture_e::error;
         }
+      }
 
-        D3D11_TEXTURE2D_DESC desc;
-        src->GetDesc(&desc);
+      if (frame_info.LastMouseUpdateTime.QuadPart) {
+        cursor.x = frame_info.PointerPosition.Position.x;
+        cursor.y = frame_info.PointerPosition.Position.y;
+        cursor.visible = frame_info.PointerPosition.Visible;
+      }
 
-        // If we don't know the capture format yet, grab it from this texture and create the staging texture
-        if (capture_format == DXGI_FORMAT_UNKNOWN) {
-          capture_format = desc.Format;
-          BOOST_LOG(info) << "Capture format ["sv << dxgi_format_to_string(capture_format) << ']';
-
-          D3D11_TEXTURE2D_DESC t {};
-          t.Width = width;
-          t.Height = height;
-          t.MipLevels = 1;
-          t.ArraySize = 1;
-          t.SampleDesc.Count = 1;
-          t.Usage = D3D11_USAGE_STAGING;
-          t.Format = capture_format;
-          t.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-
-          auto status = device->CreateTexture2D(&t, nullptr, &texture);
+      if (frame_update_flag) {
+        {
+          texture2d_t src {};
+          status = res->QueryInterface(IID_ID3D11Texture2D, (void **) &src);
 
           if (FAILED(status)) {
-            BOOST_LOG(error) << "Failed to create staging texture [0x"sv << util::hex(status).to_string_view() << ']';
+            BOOST_LOG(error) << "Couldn't query interface [0x"sv << util::hex(status).to_string_view() << ']';
             return capture_e::error;
           }
-        }
 
-        // It's possible for our display enumeration to race with mode changes and result in
-        // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
-        if (desc.Width != width || desc.Height != height) {
-          BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
-          return capture_e::reinit;
-        }
+          D3D11_TEXTURE2D_DESC desc;
+          src->GetDesc(&desc);
 
-        // It's also possible for the capture format to change on the fly. If that happens,
-        // reinitialize capture to try format detection again and create new images.
-        if (capture_format != desc.Format) {
-          BOOST_LOG(info) << "Capture format changed ["sv << dxgi_format_to_string(capture_format) << " -> "sv << dxgi_format_to_string(desc.Format) << ']';
-          return capture_e::reinit;
-        }
+          // If we don't know the capture format yet, grab it from this texture and create the staging texture
+          if (capture_format == DXGI_FORMAT_UNKNOWN) {
+            capture_format = desc.Format;
+            BOOST_LOG(info) << "Capture format ["sv << dxgi_format_to_string(capture_format) << ']';
 
-        // Copy from GPU to CPU
-        device_ctx->CopyResource(texture.get(), src.get());
+            D3D11_TEXTURE2D_DESC t {};
+            t.Width = width;
+            t.Height = height;
+            t.MipLevels = 1;
+            t.ArraySize = 1;
+            t.SampleDesc.Count = 1;
+            t.Usage = D3D11_USAGE_STAGING;
+            t.Format = capture_format;
+            t.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+            auto status = device->CreateTexture2D(&t, nullptr, &texture);
+
+            if (FAILED(status)) {
+              BOOST_LOG(error) << "Failed to create staging texture [0x"sv << util::hex(status).to_string_view() << ']';
+              return capture_e::error;
+            }
+          }
+
+          // It's possible for our display enumeration to race with mode changes and result in
+          // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
+          if (desc.Width != width || desc.Height != height) {
+            BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
+            return capture_e::reinit;
+          }
+
+          // It's also possible for the capture format to change on the fly. If that happens,
+          // reinitialize capture to try format detection again and create new images.
+          if (capture_format != desc.Format) {
+            BOOST_LOG(info) << "Capture format changed ["sv << dxgi_format_to_string(capture_format) << " -> "sv << dxgi_format_to_string(desc.Format) << ']';
+            return capture_e::reinit;
+          }
+
+          // Copy from GPU to CPU
+          device_ctx->CopyResource(texture.get(), src.get());
+        }
       }
     }
 
-    if (!pull_free_image_cb(img_out)) {
-      return capture_e::interrupted;
+    {
+      rhremote::capture_work_scope scope(work, rhremote::capture_work_step::image_pool);
+      if (!pull_free_image_cb(img_out)) {
+        return capture_e::interrupted;
+      }
     }
     auto img = (img_t *) img_out.get();
 
@@ -320,7 +331,10 @@ namespace platf::dxgi {
       }
     } else {
       // Map the staging texture for CPU access (making it inaccessible for the GPU)
-      status = device_ctx->Map(texture.get(), 0, D3D11_MAP_READ, 0, &img_info);
+      {
+        rhremote::capture_work_scope scope(work, rhremote::capture_work_step::map);
+        status = device_ctx->Map(texture.get(), 0, D3D11_MAP_READ, 0, &img_info);
+      }
       if (FAILED(status)) {
         BOOST_LOG(error) << "Failed to map texture [0x"sv << util::hex(status).to_string_view() << ']';
 
@@ -328,25 +342,37 @@ namespace platf::dxgi {
       }
 
       // Now that we know the capture format, we can finish creating the image
-      if (complete_img(img, false)) {
-        device_ctx->Unmap(texture.get(), 0);
-        img_info.pData = nullptr;
-        return capture_e::error;
+      {
+        rhremote::capture_work_scope scope(work, rhremote::capture_work_step::image_setup);
+        if (complete_img(img, false)) {
+          device_ctx->Unmap(texture.get(), 0);
+          img_info.pData = nullptr;
+          return capture_e::error;
+        }
       }
 
-      std::copy_n((std::uint8_t *) img_info.pData, height * img_info.RowPitch, (std::uint8_t *) img->data);
+      {
+        rhremote::capture_work_scope scope(work, rhremote::capture_work_step::cpu_copy);
+        std::copy_n((std::uint8_t *) img_info.pData, height * img_info.RowPitch, (std::uint8_t *) img->data);
+      }
 
       // Unmap the staging texture to allow GPU access again
-      device_ctx->Unmap(texture.get(), 0);
+      {
+        rhremote::capture_work_scope scope(work, rhremote::capture_work_step::unmap);
+        device_ctx->Unmap(texture.get(), 0);
+      }
       img_info.pData = nullptr;
     }
 
     if (cursor_visible && cursor.visible) {
+      rhremote::capture_work_scope scope(work, rhremote::capture_work_step::cursor);
       blend_cursor(cursor, *img);
     }
 
     if (img) {
       img->frame_timestamp = frame_timestamp;
+      work.finish();
+      img->rh_capture_work = work;
     }
 
     return capture_e::ok;

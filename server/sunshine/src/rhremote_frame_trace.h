@@ -4,6 +4,8 @@
  */
 #pragma once
 
+#include "rhremote_capture_work.h"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -127,6 +129,7 @@ namespace rhremote {
     bool metadata_known {};  ///< Whether output was matched to its original submission.
     bool rtp_known {};  ///< Whether the sender assigned an actual RTP timestamp.
     bool wire_duplicate {};  ///< Whether RTP required a synthetic timestamp for repeated input.
+    capture_work capture;  ///< Optional snapshot work, serialized only on capture_ready events.
   };
 
   /** @brief Recorder resource bounds, configurable for deterministic regression tests. */
@@ -183,7 +186,29 @@ namespace rhremote {
           << ",\"packet\":" << row.packet << ",\"bytes\":" << row.bytes << ",\"packets\":" << row.packets
           << ",\"fec_us\":" << row.fec_us << ",\"pacing_us\":" << row.pacing_us << ",\"send_us\":" << row.send_us
           << ",\"rtp_timestamp\":" << row.rtp_timestamp << ",\"rtp_known\":" << row.rtp_known << ",\"wire_duplicate\":" << row.wire_duplicate
-          << ",\"fresh\":" << row.fresh << ",\"metadata_known\":" << row.metadata_known << ",\"result\":" << row.result << "}\n";
+          << ",\"fresh\":" << row.fresh << ",\"metadata_known\":" << row.metadata_known << ",\"result\":" << row.result;
+      if (row.stage == frame_stage::capture_ready) {
+        out << ",\"capture_work\":";
+        if (!row.capture.dxgi_ram) {
+          out << "null";
+        } else {
+          out << "{\"backend\":\"dxgi_ram\",\"begin_us\":" << row.capture.begin_us << ",\"end_us\":" << row.capture.end_us << ",\"steps\":{";
+          for (std::size_t i = 0; i < row.capture.steps.size(); ++i) {
+            if (i) {
+              out << ',';
+            }
+            out << '\"' << capture_work_step_name(static_cast<capture_work_step>(i)) << "\":";
+            const auto &step = row.capture.steps[i];
+            if (step.recorded) {
+              out << "{\"begin_us\":" << step.begin_us << ",\"end_us\":" << step.end_us << '}';
+            } else {
+              out << "null";
+            }
+          }
+          out << "}}";
+        }
+      }
+      out << "}\n";
       return out.str();
     }
 
@@ -195,7 +220,7 @@ namespace rhremote {
         header << "{\"event\":\"trace_begin\",\"schema\":\"rhremote.host-frame/v1\",\"trace_id\":\"" << shared->id
                << "\",\"client_id\":\"" << shared->client << "\",\"steady_origin_us\":" << shared->steady_origin
                << ",\"unix_origin_us\":" << shared->unix_origin
-               << ",\"physical_scanout_measured\":false,\"clocks_synchronized\":false,\"send_endpoint\":\"send_call_return\"}\n";
+               << ",\"physical_scanout_measured\":false,\"clocks_synchronized\":false,\"send_endpoint\":\"send_call_return\",\"capture_work_schema\":\"rhremote.capture-work/v1\"}\n";
         const auto first = header.str();
         *shared->output << first;
         bytes += first.size();
@@ -419,6 +444,14 @@ namespace rhremote {
     row.source = context.source;
     row.fresh = context.fresh;
     row.metadata_known = context.known;
+    return row;
+  }
+
+  /** @brief Copy the actual image's work into its capture delivery event. @param context Original source and trace. @param work That image's snapshot work, or explicitly unknown. @return Capture-only event with no encoder identity. */
+  inline frame_event capture_row(const frame_context &context, const capture_work &work) {
+    auto row = frame_row(context, frame_stage::capture_ready, -1);
+    row.generation = 0;
+    row.capture = work;
     return row;
   }
 

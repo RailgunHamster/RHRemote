@@ -134,6 +134,74 @@ namespace {
     require(known.ready_us >= before && missing.ready_us >= known.ready_us);
   }
 
+  /** @brief Disabled capture leaves every step unknown; enabled scopes retain actual steady-clock boundaries. */
+  void capture_work_scopes() {
+    auto disabled = rhremote::capture_work::start(false);
+    {
+      rhremote::capture_work_scope scope(disabled, rhremote::capture_work_step::map);
+    }
+    disabled.finish();
+    require(!disabled.dxgi_ram && disabled.begin_us == 0 && disabled.end_us == 0);
+    for (const auto &step : disabled.steps) {
+      require(!step.recorded && step.begin_us == 0 && step.end_us == 0);
+    }
+    auto active = rhremote::capture_work::start(true);
+    {
+      rhremote::capture_work_scope scope(active, rhremote::capture_work_step::acquire);
+    }
+    {
+      rhremote::capture_work_scope invalid(active, rhremote::capture_work_step::count);
+    }
+    active.finish();
+    const auto &acquire = active.steps[0];
+    require(active.dxgi_ram && active.begin_us <= acquire.begin_us && acquire.begin_us <= acquire.end_us && acquire.end_us <= active.end_us);
+    require(acquire.recorded && !active.steps[static_cast<std::size_t>(rhremote::capture_work_step::map)].recorded);
+    require(rhremote::capture_work_step_name(rhremote::capture_work_step::map) == "map");
+    require(rhremote::capture_work_step_name(rhremote::capture_work_step::count) == "unknown");
+  }
+
+  /** @brief Queue copies keep one image's timings isolated, and only capture events serialize them. */
+  void capture_work_serialization() {
+    std::stringbuf buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "capture-work", "client");
+    rhremote::frame_context context;
+    context.trace = trace;
+    context.generation = 99;
+    context.source = {123, 0, 1000, false};
+    context.fresh = true;
+    context.known = true;
+    rhremote::capture_work work;
+    work.dxgi_ram = true;
+    work.begin_us = 100;
+    work.end_us = 900;
+    work.steps[0] = {110, 210, true};
+    work.steps[1] = {220, 300, true};
+    work.steps[2] = {310, 330, true};
+    work.steps[3] = {340, 740, true};
+    work.steps[4] = {745, 750, true};
+    work.steps[5] = {760, 820, true};
+    work.steps[6] = {830, 840, true};
+    auto row = rhremote::capture_row(context, work);
+    require(row.frame == -1 && row.generation == 0 && row.source.id == 123 && row.capture.steps[3].end_us == 740);
+    work.steps[3].end_us = 999999;
+    emit_fixture(trace, row);
+    // Mutating the producer's POD after emit cannot alter the ring's copy.
+    row.capture.steps[3].end_us = 888888;
+    emit_fixture(trace, rhremote::frame_row(context, rhremote::frame_stage::encode_begin, 1));
+    emit_fixture(trace, rhremote::capture_row(context, {}));
+    trace->close();
+    require(trace->wait_closed(5s));
+    const auto output = buffer.str();
+    require(output.find("\"capture_work_schema\":\"rhremote.capture-work/v1\"") != std::string::npos);
+    require(output.find("\"map\":{\"begin_us\":340,\"end_us\":740}") != std::string::npos);
+    require(output.find("\"cursor\":null") != std::string::npos);
+    require(output.find("\"capture_work\":null") != std::string::npos);
+    require(output.find("999999") == std::string::npos && output.find("888888") == std::string::npos);
+    const auto encoded = output.find("\"event\":\"encode_begin\"");
+    require(encoded != std::string::npos);
+    require(output.substr(encoded, output.find('\n', encoded) - encoded).find("capture_work") == std::string::npos);
+  }
+
   /** @brief Slow disk cannot block producers or cancellation, and bounded overflow is counted. */
   void queue_overflow() {
     gated_buffer buffer;
@@ -501,6 +569,8 @@ namespace {
 int main() {
   request_validation();
   source_timestamps();
+  capture_work_scopes();
+  capture_work_serialization();
   queue_overflow();
   concurrent_producers();
   concurrent_close();
@@ -524,6 +594,14 @@ TEST(RhRemoteFrameTrace, RequestValidation) {
 
 TEST(RhRemoteFrameTrace, SourceTimestamps) {
   source_timestamps();
+}
+
+TEST(RhRemoteFrameTrace, CaptureWorkScopes) {
+  capture_work_scopes();
+}
+
+TEST(RhRemoteFrameTrace, CaptureWorkSerialization) {
+  capture_work_serialization();
 }
 
 TEST(RhRemoteFrameTrace, QueueOverflow) {

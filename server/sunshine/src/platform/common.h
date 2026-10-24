@@ -540,6 +540,7 @@ namespace platf {
 
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
     rhremote::capture_stamp rh_capture;  ///< Metadata assigned when a new source image is delivered, without image content.
+    rhremote::capture_work rh_capture_work;  ///< Opt-in snapshot timings for this image; unsupported paths remain unknown.
 
     /**
      * @brief Destroy the image.
@@ -682,6 +683,7 @@ namespace platf {
    */
   class display_t {
   public:
+    bool rh_capture_work_enabled {};  ///< Capture-thread-only opt-in, refreshed from its active traced sessions.
     /**
      * @brief Callback for when a new image is ready.
      * When display has a new image ready or a timeout occurs, this callback will be called with the image.

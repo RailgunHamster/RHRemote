@@ -43,7 +43,111 @@ def fixture():
                   send_us=300, rtp_known=True, rtp_timestamp=0), footer()]
 
 
+def measured_capture():
+    rows = fixture()
+    rows[0]["capture_work_schema"] = analysis.CAPTURE_WORK_SCHEMA
+    rows[1]["capture_work"] = {"backend": "dxgi_ram", "begin_us": 100, "end_us": 900,
+        "steps": {"acquire": {"begin_us": 110, "end_us": 210},
+                  "prepare": {"begin_us": 220, "end_us": 300},
+                  "image_pool": {"begin_us": 310, "end_us": 330},
+                  "map": {"begin_us": 340, "end_us": 740},
+                  "image_setup": {"begin_us": 745, "end_us": 750},
+                  "cpu_copy": {"begin_us": 760, "end_us": 820},
+                  "unmap": {"begin_us": 830, "end_us": 840}, "cursor": None}}
+    return rows
+
+
 class HostFrameAnalysisTest(unittest.TestCase):
+    def test_capture_work_exposes_map_pool_and_delivery_without_inventing_cursor_work(self):
+        rows = measured_capture()
+        result, _, _, timeline = analysis.analyze(rows)
+        self.assertTrue(result["complete"], result["issues"])
+        self.assertEqual({"dxgi_ram": 1}, result["capture_work"]["samples"])
+        for name, expected in {"snapshot": .8, "acquire": .1, "prepare": .08, "image_pool": .02,
+                               "map": .4, "image_setup": .005, "cpu_copy": .06, "unmap": .01,
+                               "callback_delivery": .1, "unattributed": .125}.items():
+            self.assertAlmostEqual(expected, result["metrics_ms"]["capture_" + name + "_ms"]["mean"])
+        self.assertNotIn("capture_cursor_ms", result["metrics_ms"])
+        maps = [e for e in timeline["traceEvents"] if e["name"] == "capture_map" and e["ph"] == "X"]
+        self.assertEqual((1, 400, 10), (len(maps), maps[0]["dur"], maps[0]["args"]["source"]))
+        self.assertTrue(all(e.get("ts", 0) >= 0 for e in timeline["traceEvents"]))
+
+    def test_capture_work_missing_legacy_and_explicit_unknown_are_distinct_from_measured_zero(self):
+        for declared in (False, True):
+            rows = fixture()
+            if declared:
+                rows[0]["capture_work_schema"] = analysis.CAPTURE_WORK_SCHEMA
+                rows[1]["capture_work"] = None
+            result, _, _, _ = analysis.analyze(rows)
+            self.assertTrue(result["complete"], result["issues"])
+            self.assertEqual({"unknown": 1}, result["capture_work"]["samples"])
+            self.assertNotIn("capture_map_ms", result["metrics_ms"])
+        rows = measured_capture()
+        del rows[1]["capture_work"]
+        result, _, _, _ = analysis.analyze(rows)
+        self.assertFalse(result["complete"])
+        self.assertEqual(1, result["issues"]["invalid_capture_work"])
+
+    def test_capture_work_rejects_malformed_overlapping_outside_and_incomplete_readback(self):
+        changes = [lambda w: w.update(backend="unmeasured"),
+                   lambda w: w.update(begin_us=True), lambda w: w.update(end_us=1001),
+                   lambda w: w.update(steps=[]), lambda w: w["steps"].pop("cursor"),
+                   lambda w: w["steps"].update(acquire=None),
+                   lambda w: w["steps"]["map"].update(begin_us=100),
+                   lambda w: w["steps"]["map"].update(end_us=200),
+                   lambda w: w["steps"]["map"].update(end_us=1001),
+                   lambda w: w["steps"].update(map=None),
+                   lambda w: w["steps"].update(cpu_copy=None)]
+        for change in changes:
+            rows = measured_capture()
+            change(rows[1]["capture_work"])
+            with self.subTest(change=change):
+                result, _, _, _ = analysis.analyze(rows)
+                self.assertFalse(result["complete"])
+                self.assertEqual(1, result["issues"]["invalid_capture_work"])
+        rows = measured_capture()
+        rows[0]["capture_work_schema"] = "rhremote.capture-work/future"
+        with self.assertRaisesRegex(ValueError, "capture work schema"):
+            analysis.analyze(rows)
+
+    def test_capture_work_export_preserves_samples_before_removing_only_complete_raw(self):
+        import csv
+        with tempfile.TemporaryDirectory() as temporary:
+            raw = Path(temporary) / "host-1" / "frames.jsonl"
+            raw.parent.mkdir()
+            raw.write_text("\n".join(json.dumps(r) for r in measured_capture()) + "\n", encoding="utf-8")
+            result, output = analysis.export(raw)
+            self.assertTrue(result["raw_deleted"])
+            with (output / "captures.csv").open(newline="", encoding="utf-8") as stream:
+                captures = list(csv.DictReader(stream))
+            self.assertEqual(1, len(captures))
+            self.assertEqual("dxgi_ram", captures[0]["work_backend"])
+            self.assertEqual("0.4", captures[0]["map_ms"])
+            self.assertEqual("", captures[0]["cursor_ms"])
+            self.assertEqual("340", captures[0]["map_begin_us"])
+            # A malformed span preserves raw evidence and cannot be reported complete.
+            rows = measured_capture()
+            rows[1]["capture_work"]["steps"]["map"]["end_us"] = -1
+            raw.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+            result, _ = analysis.export(raw)
+            self.assertFalse(result["complete"])
+            self.assertTrue(raw.exists())
+
+    def test_capture_work_export_failure_retains_the_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            raw = Path(temporary) / "host-1" / "frames.jsonl"
+            raw.parent.mkdir()
+            raw.write_text("\n".join(json.dumps(r) for r in measured_capture()) + "\n", encoding="utf-8")
+            original = analysis.write_csv
+            def fail_capture_table(path, columns, rows):
+                if path.name == "captures.csv":
+                    raise OSError("capture export failed")
+                return original(path, columns, rows)
+            with patch.object(analysis, "write_csv", side_effect=fail_capture_table):
+                with self.assertRaisesRegex(OSError, "capture export failed"):
+                    analysis.export(raw)
+            self.assertTrue(raw.exists())
+
     def test_real_stage_boundaries_and_known_zero_source_timestamp(self):
         result, frames, packets, timeline = analysis.analyze(fixture())
         self.assertTrue(result["complete"], result["issues"])

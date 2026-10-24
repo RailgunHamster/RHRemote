@@ -1683,6 +1683,7 @@ namespace video {
           // trim allocated but unused portion of the pool based on timeouts
           trim_imgs();
           img_out->frame_timestamp.reset();
+          img_out->rh_capture_work = {};
           return true;
         } else {
           // sleep and retry if image pool is full
@@ -1717,7 +1718,7 @@ namespace video {
               context.source = img->rh_capture;
               context.fresh = true;
               context.known = true;
-              trace->emit(rhremote::frame_row(context, rhremote::frame_stage::capture_ready, -1));
+              trace->emit(rhremote::capture_row(context, img->rh_capture_work));
             }
             capture_ctx->images->raise(img);
           }
@@ -1733,6 +1734,10 @@ namespace video {
           capture_ctxs.emplace_back(std::move(*capture_ctx_queue->pop()));
         }
 
+        disp->rh_capture_work_enabled = std::any_of(capture_ctxs.begin(), capture_ctxs.end(), [](const auto &ctx) {
+          return !ctx.config.frame_trace.expired();
+        });
+
         if (switch_display_event->peek()) {
           artificial_reinit = true;
           return false;
@@ -1741,6 +1746,9 @@ namespace video {
         return true;
       };
 
+      disp->rh_capture_work_enabled = std::any_of(capture_ctxs.begin(), capture_ctxs.end(), [](const auto &ctx) {
+        return !ctx.config.frame_trace.expired();
+      });
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
 
       if (artificial_reinit && status != platf::capture_e::error) {
@@ -2874,9 +2882,7 @@ namespace video {
             ctx->rh_source = img->rh_capture;
             rh_frame.source = ctx->rh_source;
             if (rh_frame.trace) {
-              auto row = rhremote::frame_row(rh_frame, rhremote::frame_stage::capture_ready, -1);
-              row.generation = 0;
-              rh_frame.trace->emit(row);
+              rh_frame.trace->emit(rhremote::capture_row(rh_frame, img->rh_capture_work));
             }
           }
           if (frame_captured && convert_traced(*pos->session, *img, rh_frame, ctx->frame_nr)) {
@@ -2908,15 +2914,22 @@ namespace video {
           return false;
         }
 
+        disp->rh_capture_work_enabled = std::any_of(synced_session_ctxs.begin(), synced_session_ctxs.end(), [](const auto &ctx) {
+          return !ctx->config.frame_trace.expired();
+        });
         return true;
       };
 
       auto pull_free_image_callback = [&img](std::shared_ptr<platf::img_t> &img_out) -> bool {
         img_out = img;
         img_out->frame_timestamp.reset();
+        img_out->rh_capture_work = {};
         return true;
       };
 
+      disp->rh_capture_work_enabled = std::any_of(synced_session_ctxs.begin(), synced_session_ctxs.end(), [](const auto &ctx) {
+        return !ctx->config.frame_trace.expired();
+      });
       auto status = disp->capture(push_captured_image_callback, pull_free_image_callback, &display_cursor);
       switch (status) {
         case platf::capture_e::reinit:

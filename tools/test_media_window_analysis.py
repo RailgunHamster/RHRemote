@@ -75,6 +75,15 @@ class MediaWindowAnalysisTest(unittest.TestCase):
         self.assertEqual(3, result["whole_file_integrity_issues"]["recorder_lost_events"])
         self.assertEqual(1, result["whole_file_integrity_issues"]["malformed_line"])
 
+    def test_invalid_capture_work_outside_selected_frames_still_retains_integrity_warning(self):
+        case, events, rows = case_and_frames()
+        row = fixtures.event("capture_ready", 35000, frame=-1, generation=0, source=99)
+        row["capture_work"] = {"backend": "invented"}
+        rows.insert(-1, row)
+        result = analysis.analyze(case, events, rows)
+        self.assertFalse(result["window_host_complete"])
+        self.assertEqual(1, result["whole_file_integrity_issues"]["invalid_capture_work"])
+
     def test_mixed_identity_outside_window_is_rejected(self):
         case, events, rows = case_and_frames()
         rows.insert(-1, dict(fixtures.event("encode_begin", 30000, frame=99), trace_id="another-host"))
