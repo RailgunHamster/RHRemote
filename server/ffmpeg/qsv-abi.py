@@ -17,7 +17,13 @@ COMMON = ("AVBufferRef", "AVFrame", "AVHWDeviceContext", "AVHWFramesContext", "A
           "AVQSVFramesContext", "mfxFrameSurface1", "mfxFrameInfo", "mfxFrameData", "mfxVariant",
           "mfxVersion", "mfxFrameAllocRequest", "mfxFrameAllocResponse", "mfxExtBuffer", "mfxImplDescription")
 ROOTS = {"codec": (*COMMON, "AVCodecContext", "mfxEncodeCtrl", "QSVMid", "QSVFrame", "QSVSession", "QSVFramesContext"),
-         "util": (*COMMON, "mfxVideoParam", "QSVDevicePriv", "QSVDeviceContext", "QSVFramesContext")}
+         "util": (*COMMON, "mfxVideoParam", "QSVDevicePriv", "QSVDeviceContext", "QSVFramesContext"),
+         # qsvenc.o never dereferences AVQSVDeviceContext and the vendor emits no
+         # layout for it. That type remains checked by both existing QSV units.
+         "encode": ("AVCodecContext", "AVPacket", "AVFrame", "AVBufferRef", "AVHWDeviceContext", "AVHWFramesContext",
+                    "AVQSVFramesContext", "QSVEncContext", "QSVFrame", "QSVPacket", "QSVSession",
+                    "QSVFramesContext", "mfxVideoParam", "mfxFrameSurface1", "mfxEncodeCtrl", "mfxBitstream",
+                    "mfxFrameData", "mfxFrameInfo", "mfxVersion", "mfxExtCodingOption", "mfxExtCodingOption2", "mfxExtCodingOption3")}
 
 
 def parse(text):
@@ -130,8 +136,8 @@ def compare_models(original, compiled, names):
 
 
 def audit(kind, vendor, module, objdump):
-    metadata = json.loads((HERE / "QSV-UPSTREAM.json").read_text(encoding="utf-8"))
-    pin = metadata["libraries"][kind]
+    metadata = json.loads((HERE / ("QSV-TRACE-UPSTREAM.json" if kind == "encode" else "QSV-UPSTREAM.json")).read_text(encoding="utf-8"))
+    pin = metadata["library"] if kind == "encode" else metadata["libraries"][kind]
     data = mf.checked(vendor, pin["sha256"])
     matches = [blob for name, blob in mf.members(data) if name == pin["member"]]
     if len(matches) != 1 or mf.digest(matches[0]) != pin["objectSha256"] or module.name != pin["member"]:

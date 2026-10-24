@@ -47,6 +47,7 @@ endif()
 list(REMOVE_AT FFMPEG_LIBRARIES ${_rh_mf_library_index})
 list(INSERT FFMPEG_LIBRARIES ${_rh_mf_library_index} rhremote_ffmpeg_mf)
 include("${RHREMOTE_FFMPEG_MODULE_DIR}/qsv-module.cmake")
+include("${RHREMOTE_FFMPEG_MODULE_DIR}/qsv-trace-module.cmake")
 if(BUILD_TESTS)
     # The same CodecAPI boundary test must accept the fixed source and reject the original.
     function(rhremote_add_mf_variant_test name)

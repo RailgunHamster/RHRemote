@@ -107,10 +107,14 @@ class StorageGuards(unittest.TestCase):
     def test_required_kind_inventory_has_forty_explicit_type_checks(self):
         self.assertEqual(21, len(abi.ROOTS["codec"]))
         self.assertEqual(19, len(abi.ROOTS["util"]))
-        for names in abi.ROOTS.values():
+        self.assertEqual(22, len(abi.ROOTS["encode"]))
+        self.assertIn("QSVEncContext", abi.ROOTS["encode"])
+        self.assertIn("QSVPacket", abi.ROOTS["encode"])
+        for kind, names in abi.ROOTS.items():
             self.assertEqual(len(names), len(set(names)))
             self.assertIn("mfxFrameSurface1", names)
-            self.assertIn("AVQSVDeviceContext", names)
+            if kind != "encode":
+                self.assertIn("AVQSVDeviceContext", names)
 
 
 if __name__ == "__main__":

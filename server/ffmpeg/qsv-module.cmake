@@ -33,6 +33,8 @@ foreach(_rh_qsv_kind IN ITEMS util codec)
         "${RHREMOTE_QSV_VPL_INCLUDE}")
     set(_rh_qsv_archive "${RHREMOTE_QSV_GENERATED}/${_rh_qsv_library}")
     add_custom_command(OUTPUT "${_rh_qsv_archive}"
+        BYPRODUCTS "${RHREMOTE_QSV_GENERATED}/${_rh_qsv_source}.o" "${RHREMOTE_QSV_GENERATED}/${_rh_qsv_library}.abi.json"
+            "${RHREMOTE_QSV_GENERATED}/${_rh_qsv_library}.provenance.json"
         COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_OBJECTS:rhremote_ffmpeg_qsv_${_rh_qsv_kind}_object>" "${RHREMOTE_QSV_GENERATED}/${_rh_qsv_source}.o"
         COMMAND "${Python3_EXECUTABLE}" "${RHREMOTE_FFMPEG_MODULE_DIR}/qsv-abi.py" --kind "${_rh_qsv_kind}"
             --vendor "${FFMPEG_PREPARED_BINARIES}/lib/${_rh_qsv_library}" --module "${RHREMOTE_QSV_GENERATED}/${_rh_qsv_source}.o"

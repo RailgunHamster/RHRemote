@@ -37,6 +37,25 @@ def case_and_frames():
 
 
 class MediaWindowAnalysisTest(unittest.TestCase):
+    def test_qsv_call_profiles_retain_backend_domain_in_the_aligned_window(self):
+        case,events,rows=case_and_frames()
+        rows[0]['encoder_work_schema']=analysis.host.ENCODER_WORK_SCHEMA
+        begins={(r['generation'],r['frame']):r['at_us'] for r in rows if r.get('event')=='encode_begin'}
+        for row in rows:
+            if row.get('event')=='encode_end':
+                begin=begins[(row['generation'],row['frame'])]
+                row['encoder_work']={'backend':'qsv','discarded':0,'calls':[
+                    dict(api='qsv_encode_async',begin_us=begin+10,end_us=begin+30,result=0),
+                    dict(api='qsv_sync_operation',begin_us=begin+30,end_us=row['at_us']-10,result=0)]}
+        result=analysis.analyze(case,events,rows)
+        self.assertTrue(result['window_host_complete'],result['window_host_issues'])
+        self.assertEqual(2,result['host_metrics_ms']['qsv_sync_operation_per_encode_ms']['count'])
+        self.assertNotIn('mf_get_event_per_encode_ms',result['host_metrics_ms'])
+        next(r for r in rows if r.get('event')=='encode_end')['encoder_work']['discarded']=1
+        result=analysis.analyze(case,events,rows)
+        self.assertFalse(result['window_host_complete'])
+        self.assertFalse(result['whole_host_trace_complete'])
+
     def test_direct_clock_requires_actual_contract_on_every_measured_frame(self):
         case,events,rows=case_and_frames()
         contract={"contract":"rh-cml-frame-clock-v1","clock_domain":"rhstatistics","unit":"us"}

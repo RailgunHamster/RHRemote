@@ -38,6 +38,7 @@ extern "C" {
 #include "platform/common.h"
 #include "rhremote_initial_display.h"
 #include "rhremote_mf_trace.h"
+#include "rhremote_qsv_trace.h"
 #include "rhremote_video_pacing.h"
 #include "sync.h"
 #include "video.h"
@@ -2013,6 +2014,7 @@ namespace video {
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
       const auto *codec = avcodec_session->avcodec_ctx->codec;
       rhremote::scoped_mf_trace mf_trace(rh_work, input.trace && codec && codec->name && std::string_view(codec->name).ends_with("_mf"));
+      rhremote::scoped_qsv_trace qsv_trace(rh_work, input.trace && codec && codec->name && std::string_view(codec->name).ends_with("_qsv"));
       result = encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       result = encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);

@@ -4,6 +4,7 @@
  */
 #include "src/rhremote_frame_trace.h"
 #include "src/rhremote_mf_trace.h"
+#include "src/rhremote_qsv_trace.h"
 
 #include <cstdlib>
 #include <iterator>
@@ -124,6 +125,8 @@ namespace {
     require(work.discarded == UINT32_MAX);
     require(rhremote::encoder_api_name(1) == "mf_get_event" && rhremote::encoder_api_name(2) == "mf_process_input");
     require(rhremote::encoder_api_name(3) == "mf_process_output" && rhremote::encoder_api_name(99) == "unknown");
+    require(rhremote::encoder_api_name(11) == "qsv_encode_async" && rhremote::encoder_api_name(12) == "qsv_sync_operation");
+    require(rhremote::encoder_api_name(13) == "qsv_busy_sleep");
   }
 
   /** @brief Real writer copies work with the original frame and distinguishes unknown from zero calls. */
@@ -154,6 +157,74 @@ namespace {
     require(text.find("\"encoder_work\":null") != std::string::npos);
     require(text.find("\"backend\":\"mf\",\"discarded\":0,\"calls\":[]") != std::string::npos);
   }
+
+  /** @brief QSV work retains statuses and call order, and ambiguous backend labels remain unknown. */
+  void qsv_work_serialization() {
+    std::stringbuf buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "qsv-work", "client");
+    rhremote::frame_context context;
+    context.trace = trace;
+    context.generation = 77;
+    context.known = true;
+    auto row = rhremote::frame_row(context, rhremote::frame_stage::encode_end, 8);
+    row.encoder.qsv = true;
+    row.encoder.record({11, 101, 199, 2});
+    row.encoder.record({13, 200, 299, 0});
+    row.encoder.record({12, 300, 399, -17});
+    emit_fixture(trace, row);
+    row.encoder.calls[0].end_us = 999;
+    row.encoder.mf = true;
+    emit_fixture(trace, row);
+    trace->close();
+    require(trace->wait_closed(5s));
+    const auto text = buffer.str();
+    require(text.find("\"backend\":\"qsv\",\"discarded\":0") != std::string::npos);
+    require(text.find("\"api\":\"qsv_encode_async\",\"begin_us\":101,\"end_us\":199,\"result\":2") != std::string::npos);
+    require(text.find("\"api\":\"qsv_sync_operation\",\"begin_us\":300,\"end_us\":399,\"result\":-17") != std::string::npos);
+    require(text.find("\"end_us\":999") == std::string::npos && text.find("\"encoder_work\":null") != std::string::npos);
+  }
+
+#if defined(_WIN32) && defined(RHREMOTE_FFMPEG_QSV_TRACE)
+  /** @brief QSV thread-local bindings restore on exceptions and never bind for disabled backends. */
+  void qsv_scope_lifetime() {
+    const auto initial = rhremote_qsv_set_sink({});
+    rhremote::encoder_work outer;
+    {
+      rhremote::scoped_qsv_trace scope(outer, true);
+      require(outer.qsv && !outer.mf);
+      auto sink = rhremote_qsv_set_sink({});
+      require(sink.opaque == &outer && sink.tick && sink.record);
+      const auto now = sink.tick(sink.opaque);
+      sink.record(sink.opaque, 11, now, now + 1, 2);
+      require(outer.count == 1 && outer.calls[0].api == 11 && outer.calls[0].result == 2);
+      rhremote_qsv_set_sink(sink);
+      try {
+        rhremote::encoder_work inner;
+        rhremote::scoped_qsv_trace nested(inner, true);
+        auto current = rhremote_qsv_set_sink({});
+        require(current.opaque == &inner);
+        rhremote_qsv_set_sink(current);
+        throw std::runtime_error("QSV owned scope regression");
+      } catch (const std::runtime_error &) {}
+      rhremote::encoder_work disabled;
+      {
+        rhremote::scoped_qsv_trace no_trace(disabled, false);
+        require(!disabled.qsv);
+        auto current = rhremote_qsv_set_sink({});
+        require(current.opaque == &outer);
+        rhremote_qsv_set_sink(current);
+      }
+      std::thread isolated([] {
+        const auto current = rhremote_qsv_set_sink({});
+        require(!current.tick && !current.record && !current.opaque);
+      });
+      isolated.join();
+    }
+    const auto restored = rhremote_qsv_set_sink({});
+    require(!restored.tick && !restored.record && !restored.opaque);
+    rhremote_qsv_set_sink(initial);
+  }
+#endif
 
 #if defined(_WIN32) && defined(RHREMOTE_FFMPEG_MF_TRACE)
   /** @brief Actual C ABI bindings survive nesting, exceptions, disabled scopes and another thread. */
@@ -751,6 +822,10 @@ int main() {
   capture_work_serialization();
   encoder_work_bounds();
   encoder_work_serialization();
+  qsv_work_serialization();
+#if defined(_WIN32) && defined(RHREMOTE_FFMPEG_QSV_TRACE)
+  qsv_scope_lifetime();
+#endif
 #if defined(_WIN32) && defined(RHREMOTE_FFMPEG_MF_TRACE)
   mf_scope_lifetime();
 #endif
@@ -796,6 +871,16 @@ TEST(RhRemoteFrameTrace, EncoderWorkBounds) {
 TEST(RhRemoteFrameTrace, EncoderWorkSerialization) {
   encoder_work_serialization();
 }
+
+TEST(RhRemoteFrameTrace, QsvWorkSerialization) {
+  qsv_work_serialization();
+}
+
+#if defined(_WIN32) && defined(RHREMOTE_FFMPEG_QSV_TRACE)
+TEST(RhRemoteFrameTrace, QsvScopeLifetime) {
+  qsv_scope_lifetime();
+}
+#endif
 
 #if defined(_WIN32) && defined(RHREMOTE_FFMPEG_MF_TRACE)
 TEST(RhRemoteFrameTrace, MfScopeLifetime) {

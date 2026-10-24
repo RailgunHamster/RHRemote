@@ -1,0 +1,17 @@
+{
+  "schema": "rhremote.ffmpeg-qsv-trace-module/v1",
+  "revision": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+  "configSha256": "8ffb34d875fabf4528f4c68ef39f1970f03f7c26ab7ebf4e075b9317ae4fb3a8",
+  "avconfigSha256": "975611ad5eba15212d9e1d5fca9d4fdf0daec6d2269b2fcab8e29af8667164bc",
+  "sources": {
+    "qsvenc.c": {"path": "libavcodec/qsvenc.c", "sha256": "06eda92355ffff87f3625667e1cbbe01bd3986a814127b41840594e45d187f13"},
+    "qsvenc.h": {"path": "libavcodec/qsvenc.h", "sha256": "389638fee7319cc6e962064ca9df8208ed552b42b612e50fdd2114777f3034c6"}
+  },
+  "library": {
+    "file": "libavcodec.a",
+    "sha256": "e37841e1c25006785e83b0ca91b49eb9b449cc9850bda9d7099918eec1d2c5ae",
+    "members": 214,
+    "member": "qsvenc.o",
+    "objectSha256": "ef87b415b22d4b6c574d68efa3ed2d46ac3ef0b9cae7bb8175e0a9ed6e16a180"
+  }
+}

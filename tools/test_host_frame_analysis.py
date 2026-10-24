@@ -70,6 +70,36 @@ def measured_encoder():
 
 
 class HostFrameAnalysisTest(unittest.TestCase):
+    def test_qsv_retries_and_sync_statuses_are_not_mf_hresults_or_gpu_execution(self):
+        rows=measured_encoder()
+        calls=[('qsv_encode_async',2100,2110,2),('qsv_busy_sleep',2110,2410,0),
+               ('qsv_encode_async',2410,2420,1),('qsv_encode_async',2420,2430,0),
+               ('qsv_sync_operation',2430,2500,1),('qsv_sync_operation',2500,2600,0)]
+        rows[6]['encoder_work']={'backend':'qsv','discarded':0,'calls':[
+            dict(api=api,begin_us=begin,end_us=end,result=status) for api,begin,end,status in calls]}
+        result,frames,_,timeline=analysis.analyze(rows)
+        self.assertTrue(result['complete'],result['issues'])
+        self.assertEqual({'qsv':1},result['encoder_work']['samples'])
+        self.assertEqual({},result['encoder_work']['hresults'])
+        self.assertEqual(1,result['encoder_work']['results']['qsv_encode_async:2'])
+        self.assertEqual('qsv',frames[0]['encoder_backend'])
+        self.assertEqual(3,frames[0]['qsv_encode_async_calls'])
+        self.assertEqual(2,frames[0]['qsv_sync_operation_calls'])
+        self.assertAlmostEqual(.3,frames[0]['qsv_busy_sleep_ms'])
+        self.assertNotIn('mf_get_event_per_encode_ms',result['metrics_ms'])
+        spans=[r for r in timeline['traceEvents'] if r['ph']=='X' and r['name']=='qsv_encode_async']
+        self.assertEqual([2,1,0],[r['args']['qsv_status'] for r in spans])
+        self.assertTrue(all('mf_hresult' not in r['args'] for r in spans))
+        self.assertIn('not GPU execution',result['measurement']['encoder_work'])
+
+    def test_encoder_backend_domains_and_malformed_backend_are_rejected(self):
+        for backend in ('qsv',[],{},True,'other'):
+            rows=measured_encoder();rows[6]['encoder_work']['backend']=backend
+            with self.subTest(backend=backend):
+                result=analysis.analyze(rows)[0]
+                self.assertFalse(result['complete'])
+                self.assertEqual(1,result['issues']['invalid_encoder_work'])
+
     def test_encoder_calls_keep_invocation_identity_results_and_actual_call_spans(self):
         result, frames, _, timeline = analysis.analyze(measured_encoder())
         self.assertTrue(result["complete"], result["issues"])

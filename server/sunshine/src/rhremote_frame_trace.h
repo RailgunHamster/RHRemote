@@ -215,10 +215,10 @@ namespace rhremote {
       }
       if (row.stage == frame_stage::encode_end) {
         out << ",\"encoder_work\":";
-        if (!row.encoder.mf) {
+        if (row.encoder.mf == row.encoder.qsv) {
           out << "null";
         } else {
-          out << "{\"backend\":\"mf\",\"discarded\":" << row.encoder.discarded << ",\"calls\":[";
+          out << "{\"backend\":\"" << (row.encoder.qsv ? "qsv" : "mf") << "\",\"discarded\":" << row.encoder.discarded << ",\"calls\":[";
           for (std::size_t i = 0; i < row.encoder.count && i < row.encoder.calls.size(); ++i) {
             if (i) {
               out << ',';

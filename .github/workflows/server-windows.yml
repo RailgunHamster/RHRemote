@@ -138,9 +138,10 @@ jobs:
           g++ -std=c++23 -pthread -DRHREMOTE_LAUNCH_HTTP_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_launch_http.cpp -o test-rhremote-launch-http.exe
           ./test-rhremote-launch-http.exe
           cmake -S server/sunshine -B .deps/cmake-build-server -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_WERROR=OFF -DBUILD_TESTS=ON -DBUILD_DOCS=OFF -DSUNSHINE_ENABLE_TRAY=OFF -DSUNSHINE_ASSETS_DIR=assets
-          cmake --build .deps/cmake-build-server --target test_rhremote_mf_variant test_rhremote_mf_original_variant test_rhremote_mf_trace test_rhremote_qsv_device test_rhremote_qsv_child test_rhremote_qsv_original_device test_rhremote_qsv_original_child --parallel 3
+          cmake --build .deps/cmake-build-server --target test_rhremote_mf_variant test_rhremote_mf_original_variant test_rhremote_mf_trace test_rhremote_qsv_device test_rhremote_qsv_child test_rhremote_qsv_original_device test_rhremote_qsv_original_child test_rhremote_qsv_trace --parallel 3
           ./.deps/cmake-build-server/test_rhremote_mf_variant.exe
           ./.deps/cmake-build-server/test_rhremote_mf_trace.exe
+          ./.deps/cmake-build-server/test_rhremote_qsv_trace.exe
           if ./.deps/cmake-build-server/test_rhremote_mf_original_variant.exe; then
             echo "Original pinned MF source unexpectedly passed the CodecAPI regression"
             exit 1
