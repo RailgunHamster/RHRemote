@@ -26,7 +26,8 @@ try {
     if($proxy.Host -ne 'repo.maven.apache.org'){$proxyArgs=@("-Dhttps.proxyHost=$($proxy.Host)","-Dhttps.proxyPort=$($proxy.Port)","-Dhttp.proxyHost=$($proxy.Host)","-Dhttp.proxyPort=$($proxy.Port)",'-Dhttp.nonProxyHosts=localhost')}
     $variant=if($BuildType-eq'release'){'Release'}else{'Debug'}
     $tasks=@(':app:assembleNonRoot'+$variant);if($BuildTests){$tasks+=@(':app:assembleNonRootDebugAndroidTest',(':app:testNonRoot'+$variant+'UnitTest'))}
-    & $gradle --no-daemon --console=plain @proxyArgs @tasks
+    $testArgs=@();if($BuildTests-and$BuildType-eq'release'){$testArgs+=@('-Pandroid.onlyEnableUnitTestForTheTestedBuildType=false')}
+    & $gradle --no-daemon --console=plain @proxyArgs @testArgs @tasks
     if($LASTEXITCODE -ne 0){throw 'Android build failed.'}
     $repo=Split-Path $PSScriptRoot -Parent;$out=Join-Path $repo 'dist/android'
     New-Item -ItemType Directory -Force -Path $out|Out-Null
