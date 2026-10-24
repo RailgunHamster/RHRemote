@@ -1118,59 +1118,131 @@ namespace platf {
     return display_names;
   }
 
-  /**
-   * @brief Check graphics changes, permitting only proven software mode-only reuse.
-   * @param allow_software_mode_reuse Whether an explicitly selected software encoder was already validated.
-   * @return `true` if a change has occurred or if it is unknown whether a change occurred.
-   */
-  bool needs_encoder_reenumeration(bool allow_software_mode_reuse) {
-    rhremote::scope rh_scope("encoder_environment_check");
-    // Serialize access to the static DXGI factory
-    static std::mutex reenumeration_state_lock;
-    auto lg = std::lock_guard(reenumeration_state_lock);
-    static dxgi::factory1_t factory;
-    static rhremote::encoder_probe_cache observations;
-    const bool current = factory && factory->IsCurrent();
-    if (current && !allow_software_mode_reuse) {
-      // Hardware selection and automatic fallback retain their existing policy.
-      return false;
+  namespace {
+    /** @brief Serialize factory observations and completed QSV validation evidence. */
+    struct encoder_reenumeration_state {
+      std::mutex mutex;  ///< Protects both pending and completed observations.
+      dxgi::factory1_t factory;  ///< Last fresh metadata factory, never a capture context.
+      rhremote::encoder_probe_cache software;  ///< Existing explicit software mode policy.
+      rhremote::validated_encoder_probe_cache quicksync;  ///< Only completed, stable QSV capability probes.
+    };
+
+    /** @brief Obtain the process-local bounded observation state. @return Shared observation state. */
+    encoder_reenumeration_state &encoder_observations() {
+      static encoder_reenumeration_state state;
+      return state;
     }
-    dxgi::factory1_t fresh_factory;
-    const auto status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &fresh_factory);
-    std::optional<rhremote::encoder_environment> fresh;
-    auto health = rhremote::probe_device_health::unknown;
-    if (SUCCEEDED(status)) {
+
+    /**
+     * @brief Read identities and all capability-relevant settings without creating a D3D device.
+     * @param factory Fresh factory used only for metadata enumeration.
+     * @param quicksync Whether strict active-driver identity and QSV settings are required.
+     * @return Complete environment, or empty on uncertainty.
+     */
+    std::optional<rhremote::encoder_environment> configured_encoder_environment(IDXGIFactory1 *factory, bool quicksync) {
       std::string reason;
-      fresh = rhremote::win_probe::snapshot(fresh_factory.get(), &reason);
+      auto fresh = rhremote::win_probe::snapshot(factory, &reason, quicksync);
       if (!fresh) {
-        BOOST_LOG(debug) << "Encoder environment unavailable at "sv << reason;
-      }
-      // Verify stability without creating D3D devices or trusting an old output index.
-      if (fresh && (fresh != rhremote::win_probe::snapshot(fresh_factory.get()) || !fresh_factory->IsCurrent())) {
-        fresh.reset();
-      }
-      if (fresh) {
-        // Include software options which can affect the probed codec capabilities.
-        auto &identity = fresh->invariant;
-        for (const auto *value : {&config::video.encoder, &config::video.capture, &config::video.adapter_name, &config::video.output_name, &config::video.sw.sw_preset, &config::video.sw.sw_tune}) {
-          identity.push_back(value->size());
-          identity.insert(identity.end(), value->begin(), value->end());
+        if (quicksync) {
+          BOOST_LOG(info) << "QSV capability environment unavailable at "sv << reason;
+        } else {
+          BOOST_LOG(debug) << "Encoder environment unavailable at "sv << reason;
         }
-        for (int value : {config::video.qp, config::video.hevc_mode, config::video.av1_mode, config::video.min_threads, int(config::video.sw.svtav1_preset.has_value()), config::video.sw.svtav1_preset.value_or(0), int(config::sunshine.flags[config::flag::FORCE_VIDEO_HEADER_REPLACE])}) {
+        return {};
+      }
+      auto &identity = fresh->invariant;
+      auto text = [&](const std::string &value) {
+        identity.push_back(value.size());
+        identity.insert(identity.end(), value.begin(), value.end());
+      };
+      for (const auto *value : {&config::video.encoder, &config::video.capture, &config::video.adapter_name, &config::video.output_name, &config::video.sw.sw_preset, &config::video.sw.sw_tune}) {
+        text(*value);
+      }
+      for (int value : {config::video.qp, config::video.hevc_mode, config::video.av1_mode, config::video.min_threads, int(config::video.sw.svtav1_preset.has_value()), config::video.sw.svtav1_preset.value_or(0), int(config::sunshine.flags[config::flag::FORCE_VIDEO_HEADER_REPLACE])}) {
+        identity.push_back(static_cast<std::uint64_t>(value));
+      }
+      if (quicksync) {
+        // This is the exact output used by validate_encoder(), not a remembered
+        // capture index. Actual per-session capture/encoding still starts fresh.
+        text(display_device::map_output_name(config::video.output_name));
+        for (int value : {int(config::video.qsv.qsv_preset.has_value()), config::video.qsv.qsv_preset.value_or(0), int(config::video.qsv.qsv_cavlc.has_value()), config::video.qsv.qsv_cavlc.value_or(0), int(config::video.qsv.qsv_slow_hevc)}) {
           identity.push_back(static_cast<std::uint64_t>(value));
         }
-        health = rhremote::win_probe::health(*fresh);
       }
-    } else {
-      BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
+      return fresh;
     }
-    const auto decision = observations.observe(current, allow_software_mode_reuse, std::move(fresh), health);
-    factory = std::move(fresh_factory);
+
+    /**
+     * @brief Collect twice and reject a raced factory, output inventory or configuration.
+     * @param factory Receives the new owning metadata factory, even when its observation fails.
+     * @param quicksync Whether strict QSV identity evidence is needed.
+     * @return Stable complete metadata, or empty on failure or concurrent change.
+     */
+    std::optional<rhremote::encoder_environment> fresh_encoder_environment(dxgi::factory1_t &factory, bool quicksync) {
+      dxgi::factory1_t next;
+      const auto status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &next);
+      std::optional<rhremote::encoder_environment> fresh;
+      if (SUCCEEDED(status)) {
+        fresh = configured_encoder_environment(next.get(), quicksync);
+        if (fresh && (fresh != configured_encoder_environment(next.get(), quicksync) || !next->IsCurrent())) {
+          fresh.reset();
+        }
+      } else {
+        BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
+      }
+      factory = std::move(next);
+      return fresh;
+    }
+  }  // namespace
+
+  /**
+   * @brief Check graphics changes, retaining only proven software or completed healthy QSV capabilities.
+   * @param allow_software_mode_reuse Whether an explicitly selected software encoder was already validated.
+   * @param allow_qsv_mode_reuse Whether the previously selected QSV encoder is still explicitly requested.
+   * @return True on first use, failed evidence, loss, relevant change or missing completed validation.
+   */
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse, bool allow_qsv_mode_reuse) {
+    rhremote::scope rh_scope("encoder_environment_check");
+    auto &state = encoder_observations();
+    auto lg = std::lock_guard(state.mutex);
+    const bool current = state.factory && state.factory->IsCurrent();
+    if (config::video.encoder == "quicksync") {
+      auto fresh = fresh_encoder_environment(state.factory, true);
+      const auto health = fresh ? rhremote::win_probe::health(*fresh) : rhremote::probe_device_health::unknown;
+      const bool required = state.quicksync.required(allow_qsv_mode_reuse, std::move(fresh), health);
+      BOOST_LOG(info) << (required ? "QSV capability validation required"sv : "Reusing QSV capabilities from a completed probe with matching healthy environment"sv);
+      return required;
+    }
+    state.quicksync.clear();
+    if (current && !allow_software_mode_reuse) {
+      // Other hardware and automatic fallback retain their existing policy.
+      return false;
+    }
+    auto fresh = fresh_encoder_environment(state.factory, false);
+    const auto health = fresh ? rhremote::win_probe::health(*fresh) : rhremote::probe_device_health::unknown;
+    const auto decision = state.software.observe(current, allow_software_mode_reuse, std::move(fresh), health);
     if (decision == rhremote::encoder_probe_decision::mode_only) {
       BOOST_LOG(info) << "Reusing software encoder capabilities after verified mode-only change"sv;
     } else if (decision == rhremote::encoder_probe_decision::required) {
       BOOST_LOG(info) << "Encoder reenumeration is required"sv;
     }
     return decision == rhremote::encoder_probe_decision::required;
+  }
+
+  /**
+   * @brief Commit QSV capabilities only after the full probe and fresh post-probe verification.
+   * @param quicksync_validated Whether explicit QSV selection completed all actual capability tests.
+   */
+  void encoder_probe_completed(bool quicksync_validated) {
+    auto &state = encoder_observations();
+    auto lg = std::lock_guard(state.mutex);
+    if (!quicksync_validated || config::video.encoder != "quicksync") {
+      state.quicksync.clear();
+      return;
+    }
+    auto fresh = fresh_encoder_environment(state.factory, true);
+    const auto health = fresh ? rhremote::win_probe::health(*fresh) : rhremote::probe_device_health::unknown;
+    const bool retained = state.quicksync.completed(true, std::move(fresh), health);
+    BOOST_LOG(info) << (retained ? "Completed QSV capability baseline retained"sv : "QSV capability baseline discarded: environment changed or device health unknown"sv);
   }
 }  // namespace platf

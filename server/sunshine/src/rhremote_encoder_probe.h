@@ -1,6 +1,6 @@
 /**
  * @file src/rhremote_encoder_probe.h
- * @brief Conservative capability reuse after a verified software capture mode change.
+ * @brief Conservative software mode reuse and completed, healthy QSV capability evidence.
  */
 #pragma once
 
@@ -63,6 +63,67 @@ namespace rhremote {
       }
       previous = std::move(fresh);
       return decision;
+    }
+  };
+
+  /**
+   * @brief Reuse QSV capabilities only from a completed probe with stable, healthy metadata.
+   *
+   * Pending observations are never evidence of successful encoding. Dimensions may
+   * change, but adapter, driver, selected probe output, color, desktop and options
+   * must still match. Capture eligibility and actual encoder creation remain fresh.
+   */
+  class validated_encoder_probe_cache {
+    std::optional<encoder_environment> validated;  ///< Environment of a completed successful capability probe.
+    std::optional<encoder_environment> pending;  ///< Exact observation immediately before a required probe.
+
+    /** @brief Reject incomplete metadata. @param state Candidate observation. @return Whether identities, outputs and adapters are present. */
+    static bool complete(const std::optional<encoder_environment> &state) {
+      return state && !state->invariant.empty() && !state->modes.empty() && !state->active_adapters.empty();
+    }
+
+  public:
+    /**
+     * @brief Request a probe unless a healthy, previously validated environment still matches.
+     * @param eligible Whether the selected encoder is still the explicitly requested, validated QSV encoder.
+     * @param fresh Complete, stable current metadata, including the probe configuration.
+     * @param health Removal state of the original real devices for all attached adapters.
+     * @return True when full capability validation remains necessary.
+     */
+    bool required(bool eligible, std::optional<encoder_environment> fresh, probe_device_health health) {
+      if (!complete(fresh)) {
+        clear();
+        return true;
+      }
+      pending = std::move(fresh);
+      if (!eligible || health != probe_device_health::healthy) {
+        validated.reset();
+        return true;
+      }
+      return !validated || validated->invariant != pending->invariant || validated->active_adapters != pending->active_adapters || validated->modes.size() != pending->modes.size();
+    }
+
+    /**
+     * @brief Accept a completed probe only if nothing changed during its actual execution.
+     * @param successful Whether the entire selected QSV capability probe succeeded.
+     * @param fresh Fresh metadata collected after the probe, never the pending snapshot itself.
+     * @param health Original device state after the actual probe.
+     * @return Whether a validated baseline was retained.
+     */
+    bool completed(bool successful, std::optional<encoder_environment> fresh, probe_device_health health) {
+      if (successful && complete(pending) && complete(fresh) && pending == fresh && health == probe_device_health::healthy) {
+        validated = std::move(fresh);
+      } else {
+        validated.reset();
+      }
+      pending.reset();
+      return validated.has_value();
+    }
+
+    /** @brief Forget both previous capabilities and unvalidated observations. */
+    void clear() {
+      validated.reset();
+      pending.reset();
     }
   };
 

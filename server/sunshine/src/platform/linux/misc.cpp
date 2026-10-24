@@ -1246,10 +1246,12 @@ namespace platf {
   /**
    * @brief Report whether encoder backends should be probed again before streaming.
    * @param allow_software_mode_reuse Windows-only permission; Linux keeps render-device change detection.
+   * @param allow_qsv_mode_reuse Windows-only permission; ignored by Linux.
    * @return Whether the resolved render device changed since the last call.
    */
-  bool needs_encoder_reenumeration(bool allow_software_mode_reuse) {
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse, bool allow_qsv_mode_reuse) {
     (void) allow_software_mode_reuse;
+    (void) allow_qsv_mode_reuse;
     // Only re-probe if the GPU render device changed (hotplug, driver reload).
     // Full re-probing on every reconnect leaks ~20 MB due to FFmpeg CBS
     // allocations during HEVC/AV1 codec validation.
@@ -1260,6 +1262,11 @@ namespace platf {
     }
     last_render_device = current;
     return true;
+  }
+
+  /** @brief Keep Windows QSV observations out of the Linux render-device policy. @param quicksync_validated Windows-only probe result. */
+  void encoder_probe_completed(bool quicksync_validated) {
+    (void) quicksync_validated;
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {

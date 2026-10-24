@@ -300,11 +300,18 @@ namespace platf {
   /**
    * @brief Report whether encoder backends should be probed again before streaming.
    * @param allow_software_mode_reuse Windows-only permission; macOS keeps its existing policy.
+   * @param allow_qsv_mode_reuse Windows-only permission; ignored by macOS.
    * @return Always `true` because macOS GPU changes are not tracked by this backend.
    */
-  bool needs_encoder_reenumeration(bool allow_software_mode_reuse) {
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse, bool allow_qsv_mode_reuse) {
     (void) allow_software_mode_reuse;
+    (void) allow_qsv_mode_reuse;
     // We don't track GPU state, so we will always reenumerate. Fortunately, it is fast on macOS.
     return true;
+  }
+
+  /** @brief Keep Windows QSV observations out of the macOS probe policy. @param quicksync_validated Windows-only probe result. */
+  void encoder_probe_completed(bool quicksync_validated) {
+    (void) quicksync_validated;
   }
 }  // namespace platf

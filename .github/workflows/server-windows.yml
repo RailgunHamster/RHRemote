@@ -47,6 +47,8 @@ jobs:
           ./test-rhremote-pending-launch
           g++ -std=c++23 -pthread -DRHREMOTE_LAUNCH_HTTP_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_launch_http.cpp -o test-rhremote-launch-http
           ./test-rhremote-launch-http
+          g++ -std=c++23 -DRHREMOTE_ENCODER_PROBE_STANDALONE -Iserver/sunshine server/sunshine/tests/unit/test_rhremote_encoder_probe.cpp -o test-rhremote-encoder-probe
+          ./test-rhremote-encoder-probe
       - name: Analyze incomplete, reordered and closed host traces
         run: |
           python -m unittest discover -s server/ffmpeg -p 'test_*.py' -v

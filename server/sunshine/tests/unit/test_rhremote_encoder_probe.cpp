@@ -134,6 +134,103 @@ namespace {
     devices.remember({64, 0}, std::make_shared<int>(1), valid);
     require(devices.state({{64, 0}}, valid) == health::healthy);
   }
+
+  /** @brief Observations alone and failed probes never authorize QSV reuse. */
+  void qsv_requires_completed_validation() {
+    validated_encoder_probe_cache cache;
+    require(cache.required(false, environment(), health::unknown));
+    require(cache.required(true, environment(), health::healthy));
+    require(!cache.completed(false, environment(), health::healthy));
+    require(cache.required(true, environment(), health::healthy));
+    require(cache.completed(true, environment(), health::healthy));
+    require(!cache.required(true, environment(), health::healthy));
+    require(!cache.required(true, environment(1920, 1080), health::healthy));
+    require(cache.required(false, environment(), health::healthy));
+    require(cache.required(true, environment(), health::healthy));
+  }
+
+  /** @brief Desktop, driver, selection, options and adapter changes need a new actual probe. */
+  void qsv_invariants_and_modes() {
+    for (std::size_t field = 0; field < environment().invariant.size(); ++field) {
+      validated_encoder_probe_cache cache;
+      require(cache.required(false, environment(), health::unknown));
+      require(cache.completed(true, environment(), health::healthy));
+      auto changed = environment(1920, 1080);
+      ++changed.invariant[field];
+      require(cache.required(true, changed, health::healthy));
+      require(cache.completed(true, changed, health::healthy));
+      require(!cache.required(true, changed, health::healthy));
+    }
+    validated_encoder_probe_cache cache;
+    cache.required(false, environment(), health::unknown);
+    require(cache.completed(true, environment(), health::healthy));
+    auto changed = environment();
+    changed.active_adapters[0].second++;
+    require(cache.required(true, changed, health::healthy));
+    require(cache.completed(true, changed, health::healthy));
+    changed.active_adapters.pop_back();
+    require(cache.required(true, changed, health::healthy));
+    require(cache.completed(true, changed, health::healthy));
+    changed.modes.pop_back();
+    require(cache.required(true, changed, health::healthy));
+  }
+
+  /** @brief A mode or identity race during validation discards its result. */
+  void qsv_rejects_probe_races() {
+    for (int field = 0; field < 3; ++field) {
+      validated_encoder_probe_cache cache;
+      cache.required(false, environment(), health::unknown);
+      auto changed = environment();
+      if (field == 0) {
+        ++changed.modes[0].first;
+      } else if (field == 1) {
+        ++changed.invariant[0];
+      } else {
+        ++changed.active_adapters[0].first;
+      }
+      require(!cache.completed(true, changed, health::healthy));
+      require(cache.required(true, changed, health::healthy));
+    }
+    validated_encoder_probe_cache cache;
+    require(!cache.completed(true, environment(), health::healthy));
+    require(cache.required(true, environment(), health::healthy));
+  }
+
+  /** @brief Unknown metadata or original device loss cannot reuse QSV capabilities. */
+  void qsv_requires_complete_healthy_state() {
+    for (auto state : {health::unknown, health::lost}) {
+      validated_encoder_probe_cache cache;
+      cache.required(false, environment(), health::unknown);
+      require(!cache.completed(true, environment(), state));
+      cache.required(false, environment(), health::unknown);
+      require(cache.completed(true, environment(), health::healthy));
+      require(cache.required(true, environment(), state));
+      require(cache.required(true, environment(), health::healthy));
+    }
+    for (int field = 0; field < 4; ++field) {
+      validated_encoder_probe_cache cache;
+      cache.required(false, environment(), health::unknown);
+      require(cache.completed(true, environment(), health::healthy));
+      std::optional<encoder_environment> invalid = environment();
+      if (field == 0) {
+        invalid.reset();
+      } else if (field == 1) {
+        invalid->invariant.clear();
+      } else if (field == 2) {
+        invalid->modes.clear();
+      } else {
+        invalid->active_adapters.clear();
+      }
+      require(cache.required(true, invalid, health::healthy));
+      require(!cache.completed(true, invalid, health::healthy));
+      require(cache.required(true, environment(), health::healthy));
+    }
+    validated_encoder_probe_cache cache;
+    cache.required(false, environment(), health::unknown);
+    require(cache.completed(true, environment(), health::healthy));
+    cache.clear();
+    require(cache.required(true, environment(), health::healthy));
+  }
 }  // namespace
 
 #ifdef RHREMOTE_ENCODER_PROBE_STANDALONE
@@ -145,6 +242,10 @@ int main() {
   invariant_and_adapter_changes();
   health_retains_original_and_replaces_lost_device();
   health_is_bounded();
+  qsv_requires_completed_validation();
+  qsv_invariants_and_modes();
+  qsv_rejects_probe_races();
+  qsv_requires_complete_healthy_state();
   return EXIT_SUCCESS;
 }
 #else
@@ -176,5 +277,25 @@ TEST(RhRemoteEncoderProbe, HealthOwnershipAndReplacement) {
 /** @brief Repeated adapter churn cannot grow retained device references without limit. */
 TEST(RhRemoteEncoderProbe, BoundedHealthSentinels) {
   health_is_bounded();
+}
+
+/** @brief Reuse requires a successful actual capability probe, not repeated observations. */
+TEST(RhRemoteEncoderProbe, QsvCompletedValidation) {
+  qsv_requires_completed_validation();
+}
+
+/** @brief Only dimensions may differ from the fully validated QSV environment. */
+TEST(RhRemoteEncoderProbe, QsvInvariantsAndModes) {
+  qsv_invariants_and_modes();
+}
+
+/** @brief Probe-time mode, driver or adapter changes invalidate the new baseline. */
+TEST(RhRemoteEncoderProbe, QsvProbeRaces) {
+  qsv_rejects_probe_races();
+}
+
+/** @brief Unknown or lost devices, incomplete snapshots and explicit clearing fail closed. */
+TEST(RhRemoteEncoderProbe, QsvCompleteHealthyState) {
+  qsv_requires_complete_healthy_state();
 }
 #endif

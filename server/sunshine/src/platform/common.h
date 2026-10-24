@@ -935,9 +935,16 @@ namespace platf {
   /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.
    * @param allow_software_mode_reuse Whether an explicitly selected software encoder may reuse capabilities after a proven mode-only change.
+   * @param allow_qsv_mode_reuse Whether a previously validated, explicitly selected QSV encoder may reuse capabilities from a matching healthy environment.
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */
-  bool needs_encoder_reenumeration(bool allow_software_mode_reuse = false);
+  bool needs_encoder_reenumeration(bool allow_software_mode_reuse = false, bool allow_qsv_mode_reuse = false);
+
+  /**
+   * @brief Commit or discard a pending Windows QSV capability observation after the full probe actually finishes.
+   * @param quicksync_validated Whether the explicitly selected QSV encoder completed full capability validation successfully.
+   */
+  void encoder_probe_completed(bool quicksync_validated);
 
   /**
    * @brief Launch a configured preparation or application command.

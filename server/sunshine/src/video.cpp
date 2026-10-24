@@ -2491,6 +2491,16 @@ namespace video {
   }
 
   /**
+   * @brief Invalidate cached QSV capabilities after an actual session failure, outside capability probing.
+   * @param encoder Encoder whose device, conversion or encoding failed.
+   */
+  void invalidate_session_encoder_probe(const encoder_t &encoder) {
+    if (encoder.name == "quicksync") {
+      platf::encoder_probe_completed(false);
+    }
+  }
+
+  /**
    * @brief Run one encode loop for a display capture stream.
    *
    * @param frame_nr Frame counter updated as frames are encoded.
@@ -2516,6 +2526,7 @@ namespace video {
   ) {
     auto session = make_encode_session(disp.get(), encoder, config, disp->width, disp->height, std::move(encode_device));
     if (!session) {
+      invalidate_session_encoder_probe(encoder);
       return;
     }
 
@@ -2557,6 +2568,7 @@ namespace video {
       auto dummy_img = disp->alloc_img();
       rhremote::frame_context initial {rh_trace, {}, session->rh_frames.generation(), false, true};
       if (!dummy_img || disp->dummy_img(dummy_img.get()) || convert_traced(*session, *dummy_img, initial, frame_nr)) {
+        invalidate_session_encoder_probe(encoder);
         return;
       }
     }
@@ -2591,6 +2603,7 @@ namespace video {
           rh_frame.fresh = true;
           if (convert_traced(*session, *img, rh_frame, frame_nr)) {
             BOOST_LOG(error) << "Could not convert image"sv;
+            invalidate_session_encoder_probe(encoder);
             return;
           }
         } else if (!images->running()) {
@@ -2615,6 +2628,7 @@ namespace video {
       refresh_budget.submitted(std::chrono::steady_clock::now());
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, rh_frame)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
+        invalidate_session_encoder_probe(encoder);
         return;
       }
 
@@ -2753,6 +2767,7 @@ namespace video {
 
     auto encode_device = make_encode_device(*disp, encoder, ctx.config);
     if (!encode_device) {
+      invalidate_session_encoder_probe(encoder);
       return std::nullopt;
     }
 
@@ -2772,6 +2787,7 @@ namespace video {
 
     auto session = make_encode_session(disp, encoder, ctx.config, img.width, img.height, std::move(encode_device));
     if (!session) {
+      invalidate_session_encoder_probe(encoder);
       return std::nullopt;
     }
 
@@ -2780,6 +2796,7 @@ namespace video {
     rhremote::frame_context initial {ctx.config.frame_trace.lock(), ctx.rh_source, session->rh_frames.generation(), false, true};
     if (convert_traced(*session, img, initial, ctx.frame_nr)) {
       BOOST_LOG(error) << "Could not convert initial image"sv;
+      invalidate_session_encoder_probe(encoder);
       return std::nullopt;
     }
 
@@ -2920,6 +2937,7 @@ namespace video {
           }
           if (frame_captured && convert_traced(*pos->session, *img, rh_frame, ctx->frame_nr)) {
             BOOST_LOG(error) << "Could not convert image"sv;
+            invalidate_session_encoder_probe(encoder);
             ctx->shutdown_event->raise(true);
 
             continue;
@@ -2932,6 +2950,7 @@ namespace video {
 
           if (encode(ctx->frame_nr++, *pos->session, ctx->packets, ctx->channel_data, frame_timestamp, rh_frame)) {
             BOOST_LOG(error) << "Could not encode video packet"sv;
+            invalidate_session_encoder_probe(encoder);
             ctx->shutdown_event->raise(true);
 
             continue;
@@ -3069,6 +3088,7 @@ namespace video {
 
       auto encode_device = make_encode_device(*display, encoder, config);
       if (!encode_device) {
+        invalidate_session_encoder_probe(encoder);
         return;
       }
 
@@ -3407,10 +3427,14 @@ namespace video {
 
     // If we already have a good encoder, check to see if another probe is required
     const bool explicit_software = chosen_encoder && chosen_encoder->name == "software" && config::video.encoder == "software";
-    const bool topology_changed = platf::needs_encoder_reenumeration(explicit_software);
+    const bool explicit_quicksync = chosen_encoder && chosen_encoder->name == "quicksync" && config::video.encoder == "quicksync";
+    const bool topology_changed = platf::needs_encoder_reenumeration(explicit_software, explicit_quicksync);
     if (chosen_encoder && (!(chosen_encoder->flags & ALWAYS_REPROBE) || explicit_software) && !topology_changed) {
       return 0;
     }
+    auto probe_result = util::fail_guard([]() {
+      platf::encoder_probe_completed(false);
+    });
 
     // Restart encoder selection
     auto previous_encoder = chosen_encoder;
@@ -3638,6 +3662,8 @@ namespace video {
       BOOST_LOG(debug) << "ENCODER STATUS ACTIVE_AV1_MODE: "sv << active_av1_mode;
     }
 
+    platf::encoder_probe_completed(chosen_encoder->name == "quicksync" && config::video.encoder == "quicksync");
+    probe_result.disable();
     return 0;
   }
 

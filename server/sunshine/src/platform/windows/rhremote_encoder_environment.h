@@ -1,6 +1,6 @@
 /**
  * @file src/platform/windows/rhremote_encoder_environment.h
- * @brief Read-only graphics identity and health evidence for software capability reuse.
+ * @brief Read-only graphics identity and original-device health evidence for capability reuse.
  */
 #pragma once
 
@@ -82,9 +82,10 @@ namespace rhremote::win_probe {
    * @brief Collect fresh metadata without creating a D3D device or capturing pixels.
    * @param factory Newly created factory, checked again by the caller after collection.
    * @param reason Optional bounded failure stage, without identity or credential contents.
+   * @param require_known_driver Require a successful driver-version query for every attached adapter when reusing QSV capabilities.
    * @return Complete identities and modes; empty on unknown, unsupported or raced state.
    */
-  inline std::optional<encoder_environment> snapshot(IDXGIFactory1 *factory, std::string *reason = nullptr) {
+  inline std::optional<encoder_environment> snapshot(IDXGIFactory1 *factory, std::string *reason = nullptr, bool require_known_driver = false) {
     if (reason) {
       reason->clear();
     }
@@ -193,6 +194,9 @@ namespace rhremote::win_probe {
       }
       add(0xE0D);
       if (attached) {
+        if (require_known_driver && FAILED(driver_status)) {
+          return fail("active-driver-version");
+        }
         result.active_adapters.emplace_back(desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart);
       }
     }
