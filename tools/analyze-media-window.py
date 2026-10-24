@@ -48,6 +48,7 @@ def analyze(case, events, host_rows, parse_issues=None):
                        "recorder_write_failed", "conflicting_capture_identity", "missing_capture_identity",
                        "packet_reused_across_frames", *(parse_issues or {})}
     integrity_names.add("invalid_capture_work")
+    integrity_names.update(("invalid_encoder_work", "encoder_work_overflow"))
     integrity = {k: v for k, v in global_host["issues"].items() if k in integrity_names}
     if any(k in integrity for k in ("mixed_trace_identity", "invalid_event_fields", "unknown_event",
                                    "missing_frame_identity", "missing_packet_identity", "unexpected_packet_identity")):

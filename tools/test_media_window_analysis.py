@@ -122,6 +122,23 @@ class MediaWindowAnalysisTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "identity/schema"):
             analysis.analyze(case, events, rows)
 
+    def test_invalid_or_overflowed_encoder_calls_outside_window_cannot_be_hidden(self):
+        for malformed in (True, False):
+            case, events, rows = case_and_frames()
+            context = dict(frame=3, source=12, capture_ready_us=21000, source_present_us=20000)
+            work = {"backend": "mf", "discarded": 1 if not malformed else 0, "calls": []}
+            if malformed:
+                work["calls"] = [{"api": "guess", "begin_us": 23000, "end_us": 24000, "result": 0}]
+            rows[-1:-1] = [fixtures.event("capture_ready", 21000, **dict(context, frame=-1, generation=0)),
+                           fixtures.event("convert_begin", 21100, **context), fixtures.event("convert_end", 21500, **context),
+                           fixtures.event("encode_begin", 22000, **context),
+                           fixtures.event("encode_end", 25000, encoder_work=work, **context),
+                           fixtures.event("submission_abandoned", 26000, result=2, **context)]
+            result = analysis.analyze(case, events, rows)
+            self.assertFalse(result["window_host_complete"])
+            issue = "invalid_encoder_work" if malformed else "encoder_work_overflow"
+            self.assertEqual(1, result["whole_file_integrity_issues"][issue])
+
     def test_missing_and_reused_wire_frame_numbers_cannot_be_guessed(self):
         case, events, rows = case_and_frames()
         with self.assertRaisesRegex(ValueError, "unmatched"):

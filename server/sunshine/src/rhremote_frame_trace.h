@@ -5,6 +5,7 @@
 #pragma once
 
 #include "rhremote_capture_work.h"
+#include "rhremote_encoder_work.h"
 
 #include <array>
 #include <atomic>
@@ -133,6 +134,7 @@ namespace rhremote {
     bool rtp_known {};  ///< Whether the sender assigned an actual RTP timestamp.
     bool wire_duplicate {};  ///< Whether RTP required a synthetic timestamp for repeated input.
     capture_work capture;  ///< Optional snapshot work, serialized only on capture_ready events.
+    encoder_work encoder;  ///< Optional backend API calls, serialized only on encode_end events.
   };
 
   /** @brief Recorder resource bounds, configurable for deterministic regression tests. */
@@ -211,6 +213,23 @@ namespace rhremote {
           out << "}}";
         }
       }
+      if (row.stage == frame_stage::encode_end) {
+        out << ",\"encoder_work\":";
+        if (!row.encoder.mf) {
+          out << "null";
+        } else {
+          out << "{\"backend\":\"mf\",\"discarded\":" << row.encoder.discarded << ",\"calls\":[";
+          for (std::size_t i = 0; i < row.encoder.count && i < row.encoder.calls.size(); ++i) {
+            if (i) {
+              out << ',';
+            }
+            const auto &call = row.encoder.calls[i];
+            out << "{\"api\":\"" << encoder_api_name(call.api) << "\",\"begin_us\":" << call.begin_us
+                << ",\"end_us\":" << call.end_us << ",\"result\":" << call.result << '}';
+          }
+          out << "]}";
+        }
+      }
       out << "}\n";
       return out.str();
     }
@@ -223,7 +242,7 @@ namespace rhremote {
         header << "{\"event\":\"trace_begin\",\"schema\":\"rhremote.host-frame/v1\",\"trace_id\":\"" << shared->id
                << "\",\"client_id\":\"" << shared->client << "\",\"steady_origin_us\":" << shared->steady_origin
                << ",\"unix_origin_us\":" << shared->unix_origin
-               << ",\"physical_scanout_measured\":false,\"clocks_synchronized\":false,\"send_endpoint\":\"send_call_return\",\"capture_work_schema\":\"rhremote.capture-work/v1\"}\n";
+               << ",\"physical_scanout_measured\":false,\"clocks_synchronized\":false,\"send_endpoint\":\"send_call_return\",\"capture_work_schema\":\"rhremote.capture-work/v1\",\"encoder_work_schema\":\"rhremote.encoder-work/v1\"}\n";
         const auto first = header.str();
         *shared->output << first;
         bytes += first.size();

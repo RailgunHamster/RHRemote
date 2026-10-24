@@ -14,6 +14,8 @@ import subprocess
 HERE=Path(__file__).resolve().parent
 OLD='ICodecAPI_SetValue(c->codec_api, &ff_CODECAPI_AVLowLatencyMode, FF_VAL_VT_UI4(1));'
 NEW='ICodecAPI_SetValue(c->codec_api, &ff_CODECAPI_AVLowLatencyMode, FF_VAL_VT_BOOL(VARIANT_TRUE));'
+TRACE_ANCHOR='#include "mf_utils.h"'
+TRACE_INCLUDE=TRACE_ANCHOR+'\n#include "mf-trace-impl.h"'
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -66,13 +68,17 @@ def prepare(source, prepared, output, metadata):
     if digest(mf_object(parts))!=metadata['mfencObjectSha256']:raise ValueError('Pinned MF object differs')
     text=original.decode('utf-8')
     if text.count(OLD)!=1:raise ValueError('MF low-latency anchor differs')
+    if text.count(TRACE_ANCHOR)!=1:raise ValueError('MF tracing include anchor differs')
+    headers={name:(HERE/name).read_bytes() for name in ('mf-trace.h','mf-trace-impl.h')}
     output.mkdir(parents=True,exist_ok=True)
-    (output/'mfenc.c').write_text(text.replace(OLD,NEW),encoding='utf-8',newline='\n')
+    (output/'mfenc.c').write_text(text.replace(OLD,NEW).replace(TRACE_ANCHOR,TRACE_INCLUDE),encoding='utf-8',newline='\n')
+    for name,data in headers.items():(output/name).write_bytes(data)
     (output/'module-source.json').write_text(json.dumps({
         'sourceRevision':metadata['revision'],'originalSourceSha256':digest(original),
         'modifiedSourceSha256':digest((output/'mfenc.c').read_bytes()),
         'configSha256':metadata['configSha256'],'avconfigSha256':metadata['avconfigSha256'],
-        'libavcodecSha256':metadata['libavcodecSha256'],'change':'encoder low-latency uses canonical VARIANT_BOOL'},indent=2),encoding='utf-8')
+        'libavcodecSha256':metadata['libavcodecSha256'],'traceHeadersSha256':{name:digest(data) for name,data in headers.items()},
+        'change':'canonical VARIANT_BOOL and opt-in thread-local MF API call tracing'},indent=2),encoding='utf-8')
 
 def rebuild(original, module, output, ar, ranlib, metadata):
     original_bytes=checked(original,metadata['libavcodecSha256']);before=members(original_bytes)

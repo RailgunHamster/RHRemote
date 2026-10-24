@@ -1,1 +1,2 @@
 /tools/*.sh text eol=lf
+/server/ffmpeg/*.h text eol=lf

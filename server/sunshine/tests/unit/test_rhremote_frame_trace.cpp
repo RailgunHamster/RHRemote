@@ -3,6 +3,7 @@
  * @brief Exercise real bounded writer behavior and frame/PTS identity without a GPU or network.
  */
 #include "src/rhremote_frame_trace.h"
+#include "src/rhremote_mf_trace.h"
 
 #include <cstdlib>
 #include <iterator>
@@ -105,6 +106,96 @@ namespace {
       std::this_thread::yield();
     }
   }
+
+  /** @brief Backend storage preserves order and failures, and reports every overflow. */
+  void encoder_work_bounds() {
+    rhremote::encoder_work work;
+    require(!work.mf && work.count == 0 && work.discarded == 0);
+    work.mf = true;
+    for (std::uint32_t index = 0; index < 19; ++index) {
+      work.record({1 + index % 3, index * 10, index * 10 + 7, -static_cast<std::int32_t>(index)});
+    }
+    require(work.count == 16 && work.discarded == 3);
+    for (std::uint32_t index = 0; index < work.count; ++index) {
+      require(work.calls[index].begin_us == index * 10 && work.calls[index].result == -static_cast<std::int32_t>(index));
+    }
+    work.discarded = UINT32_MAX;
+    work.record({1, 0, 1, 0});
+    require(work.discarded == UINT32_MAX);
+    require(rhremote::encoder_api_name(1) == "mf_get_event" && rhremote::encoder_api_name(2) == "mf_process_input");
+    require(rhremote::encoder_api_name(3) == "mf_process_output" && rhremote::encoder_api_name(99) == "unknown");
+  }
+
+  /** @brief Real writer copies work with the original frame and distinguishes unknown from zero calls. */
+  void encoder_work_serialization() {
+    std::stringbuf buffer;
+    auto trace = std::make_shared<rhremote::frame_trace>(std::make_unique<std::ostream>(&buffer), "encoder-work", "client");
+    rhremote::frame_context context;
+    context.trace = trace;
+    context.generation = 55;
+    context.known = true;
+    auto row = rhremote::frame_row(context, rhremote::frame_stage::encode_end, 8);
+    row.encoder.mf = true;
+    row.encoder.record({1, 101, 199, -2147467259});
+    emit_fixture(trace, row);
+    row.encoder.calls[0].end_us = 999;
+    row.frame = 9;
+    row.encoder = {};
+    emit_fixture(trace, row);
+    row.frame = 10;
+    row.encoder.mf = true;
+    emit_fixture(trace, row);
+    trace->close();
+    require(trace->wait_closed(5s));
+    const auto text = buffer.str();
+    require(text.find("\"encoder_work_schema\":\"rhremote.encoder-work/v1\"") != std::string::npos);
+    require(text.find("\"api\":\"mf_get_event\",\"begin_us\":101,\"end_us\":199,\"result\":-2147467259") != std::string::npos);
+    require(text.find("\"end_us\":999") == std::string::npos);
+    require(text.find("\"encoder_work\":null") != std::string::npos);
+    require(text.find("\"backend\":\"mf\",\"discarded\":0,\"calls\":[]") != std::string::npos);
+  }
+
+#if defined(_WIN32) && defined(RHREMOTE_FFMPEG_MF_TRACE)
+  /** @brief Actual C ABI bindings survive nesting, exceptions, disabled scopes and another thread. */
+  void mf_scope_lifetime() {
+    const auto initial = rhremote_mf_set_sink({});
+    rhremote::encoder_work outer;
+    {
+      rhremote::scoped_mf_trace scope(outer, true);
+      require(outer.mf);
+      auto sink = rhremote_mf_set_sink({});
+      require(sink.opaque == &outer && sink.tick && sink.record);
+      const auto now = sink.tick(sink.opaque);
+      sink.record(sink.opaque, 2, now, now + 1, -1);
+      require(outer.count == 1 && outer.calls[0].api == 2 && outer.calls[0].result == -1);
+      rhremote_mf_set_sink(sink);
+      try {
+        rhremote::encoder_work inner;
+        rhremote::scoped_mf_trace nested(inner, true);
+        auto nested_sink = rhremote_mf_set_sink({});
+        require(nested_sink.opaque == &inner);
+        rhremote_mf_set_sink(nested_sink);
+        throw std::runtime_error("owned scope regression");
+      } catch (const std::runtime_error &) {}
+      rhremote::encoder_work disabled;
+      {
+        rhremote::scoped_mf_trace no_trace(disabled, false);
+        require(!disabled.mf);
+        auto current = rhremote_mf_set_sink({});
+        require(current.opaque == &outer);
+        rhremote_mf_set_sink(current);
+      }
+      std::thread isolated([] {
+        auto thread_sink = rhremote_mf_set_sink({});
+        require(!thread_sink.tick && !thread_sink.record && !thread_sink.opaque);
+      });
+      isolated.join();
+    }
+    auto restored = rhremote_mf_set_sink({});
+    require(!restored.tick && !restored.record && !restored.opaque);
+    rhremote_mf_set_sink(initial);
+  }
+#endif
 
   /** @brief Validate opt-in and labels without treating user input as a path. */
   void request_validation() {
@@ -658,6 +749,11 @@ int main() {
   source_timestamps();
   capture_work_scopes();
   capture_work_serialization();
+  encoder_work_bounds();
+  encoder_work_serialization();
+#if defined(_WIN32) && defined(RHREMOTE_FFMPEG_MF_TRACE)
+  mf_scope_lifetime();
+#endif
   queue_overflow();
   concurrent_producers();
   concurrent_close();
@@ -692,6 +788,20 @@ TEST(RhRemoteFrameTrace, CaptureWorkScopes) {
 TEST(RhRemoteFrameTrace, CaptureWorkSerialization) {
   capture_work_serialization();
 }
+
+TEST(RhRemoteFrameTrace, EncoderWorkBounds) {
+  encoder_work_bounds();
+}
+
+TEST(RhRemoteFrameTrace, EncoderWorkSerialization) {
+  encoder_work_serialization();
+}
+
+#if defined(_WIN32) && defined(RHREMOTE_FFMPEG_MF_TRACE)
+TEST(RhRemoteFrameTrace, MfScopeLifetime) {
+  mf_scope_lifetime();
+}
+#endif
 
 TEST(RhRemoteFrameTrace, QueueOverflow) {
   queue_overflow();

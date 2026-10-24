@@ -10,6 +10,7 @@
 #include <atomic>
 #include <bitset>
 #include <list>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -36,6 +37,7 @@ extern "C" {
 #include "nvenc/nvenc_encoder.h"
 #include "platform/common.h"
 #include "rhremote_initial_display.h"
+#include "rhremote_mf_trace.h"
 #include "rhremote_video_pacing.h"
 #include "sync.h"
 #include "video.h"
@@ -2007,7 +2009,10 @@ namespace video {
       input.trace->emit(rhremote::frame_row(input, rhremote::frame_stage::encode_begin, frame_nr));
     }
     int result = -1;
+    rhremote::encoder_work rh_work;
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
+      const auto *codec = avcodec_session->avcodec_ctx->codec;
+      rhremote::scoped_mf_trace mf_trace(rh_work, input.trace && codec && codec->name && std::string_view(codec->name).ends_with("_mf"));
       result = encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       result = encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
@@ -2015,6 +2020,7 @@ namespace video {
     if (input.trace) {
       auto row = rhremote::frame_row(input, rhremote::frame_stage::encode_end, frame_nr);
       row.result = result;
+      row.encoder = rh_work;
       input.trace->emit(row);
     }
     return result;

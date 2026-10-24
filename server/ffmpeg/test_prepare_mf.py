@@ -31,7 +31,7 @@ class ModuleGuards(unittest.TestCase):
         self.output = self.root / "generated"
         source = self.source / "libavcodec/mfenc.c"
         source.parent.mkdir(parents=True)
-        source.write_text(mf.OLD + "\n", encoding="utf-8")
+        source.write_text(mf.TRACE_ANCHOR + "\n" + mf.OLD + "\n", encoding="utf-8")
         config = self.prepared / "include/config.h"
         config.parent.mkdir(parents=True)
         config.write_bytes(b"generated config")
@@ -57,10 +57,26 @@ class ModuleGuards(unittest.TestCase):
     def test_duplicate_basenames_are_retained_in_original_order(self):
         self.assertEqual(self.parts, mf.members(self.library.read_bytes()))
         mf.prepare(self.source, self.prepared, self.output, self.metadata)
-        self.assertEqual(mf.NEW + "\n", (self.output / "mfenc.c").read_text())
+        self.assertEqual(mf.TRACE_INCLUDE + "\n" + mf.NEW + "\n", (self.output / "mfenc.c").read_text())
         provenance = json.loads((self.output / "module-source.json").read_text())
         self.assertEqual(mf.digest((self.output / "mfenc.c").read_bytes()), provenance["modifiedSourceSha256"])
         self.assertEqual(self.parts, mf.members(self.library.read_bytes()))
+
+    def test_trace_anchor_is_exact_and_headers_have_packaged_provenance(self):
+        source = self.source / "libavcodec/mfenc.c"
+        for anchor in ("", mf.TRACE_ANCHOR + "\n" + mf.TRACE_ANCHOR):
+            source.write_text(anchor + "\n" + mf.OLD + "\n", encoding="utf-8")
+            self.metadata["sourceFileSha256"] = mf.digest(source.read_bytes())
+            with self.assertRaisesRegex(ValueError, "tracing include anchor"):
+                mf.prepare(self.source, self.prepared, self.output, self.metadata)
+            self.assertFalse(self.output.exists())
+        source.write_text(mf.TRACE_ANCHOR + "\n" + mf.OLD + "\n", encoding="utf-8")
+        self.metadata["sourceFileSha256"] = mf.digest(source.read_bytes())
+        mf.prepare(self.source, self.prepared, self.output, self.metadata)
+        provenance = json.loads((self.output / "module-source.json").read_text())
+        for name in ("mf-trace.h", "mf-trace-impl.h"):
+            self.assertEqual((mf.HERE / name).read_bytes(), (self.output / name).read_bytes())
+            self.assertEqual(mf.digest((self.output / name).read_bytes()), provenance["traceHeadersSha256"][name])
 
     def test_gnu_bsd_names_and_linker_indexes(self):
         data = archive([("/", b"linker index"), ("//", b"very-long-member.o/\n"),

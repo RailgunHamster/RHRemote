@@ -10,7 +10,8 @@ include(FetchContent)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(RHREMOTE_FFMPEG_MODULE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${RHREMOTE_FFMPEG_MODULE_DIR}/UPSTREAM.json" "${RHREMOTE_FFMPEG_MODULE_DIR}/prepare-mf.py")
+    "${RHREMOTE_FFMPEG_MODULE_DIR}/UPSTREAM.json" "${RHREMOTE_FFMPEG_MODULE_DIR}/prepare-mf.py"
+    "${RHREMOTE_FFMPEG_MODULE_DIR}/mf-trace.h" "${RHREMOTE_FFMPEG_MODULE_DIR}/mf-trace-impl.h")
 FetchContent_Declare(rhremote_ffmpeg_mf_source
     URL "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/38b88335f99e76ed89ff3c93f877fdefce736c13"
     URL_HASH SHA256=2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6
@@ -36,6 +37,7 @@ add_custom_command(OUTPUT "${RHREMOTE_MF_ARCHIVE}"
 add_custom_target(rhremote_ffmpeg_mf_archive DEPENDS "${RHREMOTE_MF_ARCHIVE}")
 add_library(rhremote_ffmpeg_mf STATIC IMPORTED GLOBAL)
 set_target_properties(rhremote_ffmpeg_mf PROPERTIES IMPORTED_LOCATION "${RHREMOTE_MF_ARCHIVE}")
+target_compile_definitions(rhremote_ffmpeg_mf INTERFACE RHREMOTE_FFMPEG_MF_TRACE=1)
 add_dependencies(rhremote_ffmpeg_mf rhremote_ffmpeg_mf_archive)
 list(FIND FFMPEG_LIBRARIES "${FFMPEG_PREPARED_BINARIES}/lib/libavcodec.a" _rh_mf_library_index)
 if(_rh_mf_library_index LESS 0)
@@ -56,6 +58,13 @@ if(BUILD_TESTS)
     endfunction()
     rhremote_add_mf_variant_test(test_rhremote_mf_variant "${RHREMOTE_MF_GENERATED}")
     rhremote_add_mf_variant_test(test_rhremote_mf_original_variant)
+    add_executable(test_rhremote_mf_trace "${RHREMOTE_FFMPEG_MODULE_DIR}/test-mf-trace.c")
+    target_compile_features(test_rhremote_mf_trace PRIVATE c_std_11)
+    target_compile_definitions(test_rhremote_mf_trace PRIVATE HAVE_AV_CONFIG_H)
+    target_include_directories(test_rhremote_mf_trace PRIVATE "${RHREMOTE_MF_GENERATED}"
+        "${rhremote_ffmpeg_mf_source_SOURCE_DIR}" "${FFMPEG_PREPARED_BINARIES}/include" "${rhremote_ffmpeg_mf_source_SOURCE_DIR}/libavcodec")
+    set_target_properties(test_rhremote_mf_trace PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_libraries(test_rhremote_mf_trace PRIVATE ${FFMPEG_LIBRARIES} bcrypt)
 endif()
 install(FILES "${RHREMOTE_FFMPEG_MODULE_DIR}/UPSTREAM.json" "${RHREMOTE_FFMPEG_MODULE_DIR}/README.md"
     "${RHREMOTE_MF_GENERATED}/module-source.json" "${RHREMOTE_MF_GENERATED}/libavcodec.provenance.json"

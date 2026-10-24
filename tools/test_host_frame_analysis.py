@@ -57,7 +57,104 @@ def measured_capture():
     return rows
 
 
+def measured_encoder():
+    rows = fixture()
+    rows[0]["encoder_work_schema"] = analysis.ENCODER_WORK_SCHEMA
+    rows[5]["at_us"] = 2650
+    rows[6]["encoder_work"] = {"backend": "mf", "discarded": 0, "calls": [
+        {"api": "mf_get_event", "begin_us": 2100, "end_us": 2200, "result": 0},
+        {"api": "mf_get_event", "begin_us": 2200, "end_us": 2400, "result": 0},
+        {"api": "mf_process_input", "begin_us": 2410, "end_us": 2430, "result": 0},
+        {"api": "mf_process_output", "begin_us": 2500, "end_us": 2600, "result": -1072873851}]}
+    return rows
+
+
 class HostFrameAnalysisTest(unittest.TestCase):
+    def test_encoder_calls_keep_invocation_identity_results_and_actual_call_spans(self):
+        result, frames, _, timeline = analysis.analyze(measured_encoder())
+        self.assertTrue(result["complete"], result["issues"])
+        self.assertEqual({"mf": 1}, result["encoder_work"]["samples"])
+        self.assertEqual(2, result["encoder_work"]["hresults"]["mf_get_event:0"])
+        self.assertEqual(1, result["encoder_work"]["hresults"]["mf_process_output:-1072873851"])
+        self.assertEqual(.15, result["metrics_ms"]["mf_get_event_call_ms"]["mean"])
+        self.assertEqual(.3, result["metrics_ms"]["mf_get_event_per_encode_ms"]["mean"])
+        self.assertAlmostEqual(.28, frames[0]["encoder_unattributed_ms"])
+        self.assertEqual(4, frames[0]["encoder_calls"])
+        calls = [r for r in timeline["traceEvents"] if r["name"] == "mf_process_output" and r["ph"] == "X"]
+        self.assertEqual((1, 100, 1, -1072873851), (len(calls), calls[0]["dur"], calls[0]["args"]["frame"], calls[0]["args"]["mf_hresult"]))
+
+    def test_encoder_unknown_and_measured_empty_calls_are_distinct(self):
+        for declared in (False, True):
+            rows = fixture()
+            if declared:
+                rows[0]["encoder_work_schema"] = analysis.ENCODER_WORK_SCHEMA
+                rows[6]["encoder_work"] = None
+            result, frames, _, _ = analysis.analyze(rows)
+            self.assertTrue(result["complete"], result["issues"])
+            self.assertEqual({"unknown": 1}, result["encoder_work"]["samples"])
+            self.assertNotIn("mf_get_event_per_encode_ms", result["metrics_ms"])
+            self.assertNotIn("encoder_unattributed_ms", frames[0])
+        rows = measured_encoder()
+        rows[6]["encoder_work"]["calls"] = []
+        result, frames, _, _ = analysis.analyze(rows)
+        self.assertTrue(result["complete"], result["issues"])
+        self.assertEqual(0, frames[0]["mf_get_event_calls"])
+        self.assertEqual(0, result["metrics_ms"]["mf_get_event_per_encode_ms"]["mean"])
+        self.assertEqual(.7, frames[0]["encoder_unattributed_ms"])
+
+    def test_encoder_work_rejects_missing_unknown_overlapping_outside_and_malformed_calls(self):
+        mutations = [lambda w: w.update(backend="other"), lambda w: w.update(discarded=True),
+                     lambda w: w.update(discarded=-1), lambda w: w.update(calls={}),
+                     lambda w: w.update(calls=w["calls"] * 5), lambda w: w["calls"][0].update(api="guess"),
+                     lambda w: w["calls"][0].update(begin_us=1999), lambda w: w["calls"][0].update(end_us=2701),
+                     lambda w: w["calls"][1].update(begin_us=2199), lambda w: w["calls"][0].update(result=True),
+                     lambda w: w["calls"][0].update(result=0x80000000), lambda w: w["calls"][0].pop("end_us")]
+        for mutate in mutations:
+            rows = measured_encoder()
+            mutate(rows[6]["encoder_work"])
+            with self.subTest(mutate=mutate):
+                result, _, _, _ = analysis.analyze(rows)
+                self.assertFalse(result["complete"])
+                self.assertEqual(1, result["issues"]["invalid_encoder_work"])
+        rows = measured_encoder()
+        del rows[6]["encoder_work"]
+        self.assertEqual(1, analysis.analyze(rows)[0]["issues"]["invalid_encoder_work"])
+        rows = fixture()
+        rows[4]["encoder_work"] = None
+        self.assertEqual(1, analysis.analyze(rows)[0]["issues"]["invalid_encoder_work"])
+        rows = measured_encoder()
+        rows[0]["encoder_work_schema"] = "future"
+        with self.assertRaisesRegex(ValueError, "encoder work schema"):
+            analysis.analyze(rows)
+
+    def test_encoder_api_overflow_is_incomplete_and_does_not_report_unattributed_time(self):
+        rows = measured_encoder()
+        rows[6]["encoder_work"]["discarded"] = 2
+        result, frames, _, _ = analysis.analyze(rows)
+        self.assertFalse(result["complete"])
+        self.assertEqual(2, result["issues"]["encoder_work_overflow"])
+        self.assertNotIn("encoder_unattributed_ms", frames[0])
+
+    def test_encoder_work_survives_export_and_invalid_spans_keep_original_raw(self):
+        import csv
+        with tempfile.TemporaryDirectory() as temporary:
+            raw = Path(temporary) / "host-1" / "frames.jsonl"
+            raw.parent.mkdir()
+            rows = measured_encoder()
+            raw.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+            result, output = analysis.export(raw)
+            self.assertTrue(result["raw_deleted"])
+            with (output / "frames.csv").open(newline="", encoding="utf-8") as stream:
+                frame = next(csv.DictReader(stream))
+            self.assertEqual("mf", frame["encoder_backend"])
+            self.assertEqual("2", frame["mf_get_event_calls"])
+            self.assertAlmostEqual(.3, float(frame["mf_get_event_ms"]))
+            rows[6]["encoder_work"]["calls"][0]["begin_us"] = -1
+            raw.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+            result, _ = analysis.export(raw)
+            self.assertFalse(result["complete"])
+            self.assertTrue(raw.exists())
+
     def test_capture_work_exposes_map_pool_and_delivery_without_inventing_cursor_work(self):
         rows = measured_capture()
         result, _, _, timeline = analysis.analyze(rows)

@@ -18,6 +18,8 @@ import tempfile
 
 SCHEMA = "rhremote.host-frame/v1"
 CAPTURE_WORK_SCHEMA = "rhremote.capture-work/v1"
+ENCODER_WORK_SCHEMA = "rhremote.encoder-work/v1"
+ENCODER_APIS = ("mf_get_event", "mf_process_input", "mf_process_output")
 CAPTURE_STEPS = ("acquire", "prepare", "image_pool", "map", "image_setup", "cpu_copy", "unmap", "cursor")
 STAGES = {"capture_ready", "convert_begin", "convert_end", "encode_begin",
           "encode_end", "encode_output", "input_abandoned", "submission_abandoned", "metadata_evicted", "metadata_missing",
@@ -31,7 +33,8 @@ FRAME_COLUMNS = ("generation", "frame", "source", "fresh", "metadata_known",
                  "outcome", "abandon_reason", "abandoned_us",
                  "encode_begin_us", "encode_end_us", "encode_result", "encode_call_ms",
                  "conversion_calls", "conversion_errors", "packet_count", "sent_packets",
-                 "send_errors", "first_output_us", "last_send_return_us")
+                 "send_errors", "first_output_us", "last_send_return_us", "encoder_backend", "encoder_calls",
+                 *(field for api in ENCODER_APIS for field in (api + "_calls", api + "_ms")), "encoder_unattributed_ms")
 PACKET_COLUMNS = ("packet", "generation", "frame", "source", "fresh", "metadata_known",
                   "output_us", "send_begin_us", "send_end_us", "result", "encoded_bytes",
                   "udp_payload_bytes", "datagrams", "rtp_known", "rtp_timestamp", "wire_duplicate",
@@ -154,6 +157,30 @@ def load(path, max_bytes=128 * 1024 * 1024, max_events=220000, max_line=16384):
     return events, issues, {"bytes": size, "sha256": digest.hexdigest()}
 
 
+def encoder_work(row, begin, declared=False):
+    """Validate actual flat API spans within this invocation; unknown profiles stay unknown."""
+    if "encoder_work" not in row:
+        if declared:
+            raise ValueError("Declared encoder work is missing")
+        return None
+    work = row["encoder_work"]
+    if work is None:
+        return None
+    if (not isinstance(work, dict) or set(work) != {"backend", "discarded", "calls"} or
+            work["backend"] != "mf" or not integer(work["discarded"], 0) or work["discarded"] > 0xffffffff or
+            not isinstance(work["calls"], list) or len(work["calls"]) > 16 or begin is None):
+        raise ValueError("Invalid encoder work")
+    previous = begin["at_us"]
+    for call in work["calls"]:
+        if (not isinstance(call, dict) or set(call) != {"api", "begin_us", "end_us", "result"} or
+                call["api"] not in ENCODER_APIS or not integer(call["begin_us"], previous) or
+                not integer(call["end_us"], call["begin_us"]) or call["end_us"] > row["at_us"] or
+                not integer(call["result"]) or not -0x80000000 <= call["result"] <= 0x7fffffff):
+            raise ValueError("Invalid encoder API call")
+        previous = call["end_us"]
+    return work
+
+
 def analyze(rows, parse_issues=None):
     """Associate by encoder generation and PTS, and independently by packet ID."""
     issues = collections.Counter(parse_issues or {})
@@ -165,6 +192,8 @@ def analyze(rows, parse_issues=None):
         raise ValueError("Unsupported host trace schema or identity")
     if header.get("capture_work_schema", CAPTURE_WORK_SCHEMA) != CAPTURE_WORK_SCHEMA:
         raise ValueError("Unsupported capture work schema")
+    if header.get("encoder_work_schema", ENCODER_WORK_SCHEMA) != ENCODER_WORK_SCHEMA:
+        raise ValueError("Unsupported encoder work schema")
     for field in ("steady_origin_us", "unix_origin_us"):
         if not integer(header.get(field), 0):
             raise ValueError("Invalid host clock origin")
@@ -186,6 +215,8 @@ def analyze(rows, parse_issues=None):
         if name not in STAGES:
             issues["unknown_event"] += 1
             continue
+        if name != "encode_end" and "encoder_work" in row:
+            issues["invalid_encoder_work"] += 1
         if (row.get("trace_id") != header["trace_id"] or row.get("client_id") != header["client_id"]):
             issues["mixed_trace_identity"] += 1
             continue
@@ -223,6 +254,9 @@ def analyze(rows, parse_issues=None):
     metrics = collections.defaultdict(list)
     spans = []
     capture_work_counts = collections.Counter()
+    encoder_work_counts = collections.Counter()
+    encoder_hresult_counts = collections.Counter()
+    encoder_discarded = 0
     for row in events:
         name = row["event"]
         if name == "capture_ready":
@@ -325,6 +359,38 @@ def analyze(rows, parse_issues=None):
         if begin and end:
             output["encode_call_ms"] = duration(metrics, issues, "encode_call_ms", begin["at_us"], end["at_us"])
             span(spans, "encode_call", begin, end)
+        if end:
+            try:
+                work = encoder_work(end, begin, "encoder_work_schema" in header)
+            except ValueError:
+                issues["invalid_encoder_work"] += 1
+                work = None
+            if work is None:
+                encoder_work_counts["unknown"] += 1
+            else:
+                encoder_work_counts["mf"] += 1
+                encoder_discarded += work["discarded"]
+                if work["discarded"]:
+                    issues["encoder_work_overflow"] += work["discarded"]
+                output.update(encoder_backend="mf", encoder_calls=len(work["calls"]))
+                totals = collections.Counter()
+                call_counts = collections.Counter()
+                for call in work["calls"]:
+                    api = call["api"]
+                    ms = (call["end_us"] - call["begin_us"]) / 1000
+                    totals[api] += ms
+                    call_counts[api] += 1
+                    metrics[api + "_call_ms"].append(ms)
+                    encoder_hresult_counts[api + ":" + str(call["result"])] += 1
+                    spans.append((api, dict(end, at_us=call["begin_us"], mf_hresult=call["result"]), dict(end, at_us=call["end_us"])))
+                for api in ENCODER_APIS:
+                    output[api + "_ms"] = totals[api]
+                    output[api + "_calls"] = call_counts[api]
+                    metrics[api + "_per_encode_ms"].append(totals[api])
+                if not work["discarded"] and begin and end["at_us"] >= begin["at_us"]:
+                    remaining = (end["at_us"] - begin["at_us"]) / 1000 - sum(totals.values())
+                    output["encoder_unattributed_ms"] = max(0, remaining)
+                    metrics["encoder_unattributed_ms"].append(max(0, remaining))
         pending = collections.defaultdict(list)
         successful_conversions = []
         for conversion in sorted(groups["convert_begin"] + groups["convert_end"], key=lambda r: r["at_us"]):
@@ -424,6 +490,8 @@ def analyze(rows, parse_issues=None):
                "packet_count": len(packets), "captures_delivered": len(captures),
                "capture_work": {"schema": header.get("capture_work_schema"), "samples": dict(capture_work_counts),
                                 "unknown_is_zero": False},
+               "encoder_work": {"schema": header.get("encoder_work_schema"), "samples": dict(encoder_work_counts),
+                                "discarded_calls": encoder_discarded, "hresults": dict(encoder_hresult_counts), "unknown_is_zero": False},
                "fresh_submissions": sum(bool(f.get("fresh")) and f["outcome"] in ("submitted", "abandoned_after_submit") for f in frame_table),
                "repeat_or_priming_submissions": sum(f.get("fresh") is False and f["outcome"] in ("submitted", "abandoned_after_submit") for f in frame_table),
                "wire_duplicate_packets": sum(p.get("wire_duplicate") is True for p in packet_table),
@@ -434,11 +502,14 @@ def analyze(rows, parse_issues=None):
                "capture": "Source timestamp is platform desktop presentation, not application drawing or scanout.",
                "capture_work": "Opt-in CPU call spans for delivered DXGI RAM images only. Prepare ends at copy API return, not GPU completion. Unsupported/unexecuted work stays unknown. Timeouts and failed snapshots have no delivered image profile.",
                "encoding": "Output uses its actual PTS; multiple packets with one PTS do not create extra frames.",
+               "encoder_work": "Opt-in actual CPU API spans inside one encode invocation. Work may service earlier output PTS and is not assigned as the latency of that output. HRESULTs include normal flow control. Unknown profiles are not zero; discarded calls prevent completeness.",
                "abandoned": "Only an explicit terminal event resolves an unsubmitted conversion or a submitted input without stream output at encoder release. This does not prove no internal encoding occurred. File position or a footer never implies abandonment. frame_count counts all submitted inputs; work_item_count includes converted candidates.",
                "repeats": "Source-to-send and capture-to-send distributions include repeated inputs, retaining the original source time.",
                "cadence": "Output/send cadence counts packets and timestamps, not distinct pictures or received/displayed frames.",
                "send": "Bytes/datagrams include UDP payload and FEC; no NIC completion or receipt is measured."}}
     lanes = {"capture": 1, "convert": 2, "encode": 3, "metadata": 4, "send": 5, "encode_queue": 6, "input": 7, "submission": 8}
+    if encoder_work_counts["mf"]:
+        lanes["mf"] = 9
     timeline = {"traceEvents": [{"name": "process_name", "ph": "M", "pid": 1, "tid": 0,
                                   "args": {"name": "RHRemote host " + header["trace_id"]}}],
                 "displayTimeUnit": "ms", "metadata": {**summary["measurement"], "trace_id": header["trace_id"]}}
@@ -452,7 +523,7 @@ def analyze(rows, parse_issues=None):
             timeline["traceEvents"].append({"name": name, "ph": "X", "pid": 1,
                                             "tid": lanes[name if name in lanes else name.split("_")[0]],
                                             "ts": start["at_us"] - origin, "dur": end["at_us"] - start["at_us"],
-                                            "args": {k: start[k] for k in ("generation", "frame", "packet", "source", "fresh")}})
+                                            "args": {k: start[k] for k in ("generation", "frame", "packet", "source", "fresh", "mf_hresult") if k in start}})
     # Include every original validated event; spans are a navigational view, not a replacement.
     for row in events:
         timeline["traceEvents"].append({"name": row["event"], "ph": "i", "s": "t", "pid": 1,
