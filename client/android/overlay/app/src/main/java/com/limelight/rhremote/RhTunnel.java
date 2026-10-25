@@ -38,5 +38,5 @@ public final class RhTunnel {
     }
     public static synchronized JSONObject state(){try{return new JSONObject(state.toString());}catch(Exception e){return new JSONObject();}}
     public static synchronized int port(String host,int port){return "127.77.0.2".equals(host)&&port>=47984&&port<=48010?port+state.optInt("portOffset"):port;}
-    public static synchronized void stop(){if(loaded)stopNative();state=new JSONObject();try{Os.unsetenv("RHREMOTE_TUNNEL_PORT_OFFSET");}catch(Exception ignored){}}
+    public static synchronized void stop(){try(RhStatistics.Scope trace=new RhStatistics.Scope("transport_stop")){if(loaded)stopNative();state=new JSONObject();try{Os.unsetenv("RHREMOTE_TUNNEL_PORT_OFFSET");}catch(Exception ignored){}}}
 }

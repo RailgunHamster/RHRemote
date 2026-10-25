@@ -37,6 +37,9 @@ public final class RhHome implements RhActions.Target {
     private final RhSync sync;private boolean syncBusy;
     private final RhUpdates updates;private boolean updatesBusy;
     private boolean resumeInstall;
+    private TextView updateStatus,updateProvider,updateBytes;
+    private ProgressBar updateProgress;
+    private Button updateCheck,updateDownload,updateInstall;
     private final android.os.Handler updateUi=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable updateTick=this::refreshUpdateUi;
     private boolean pairing;private String pairPin="";
@@ -78,7 +81,7 @@ public final class RhHome implements RhActions.Target {
     public void dispose(){if(admission!=null)admission.cancel();updateUi.removeCallbacks(updateTick);}
     public void rebind(){activity.setContentView(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(draft!=null)showProfile(selected,draft);else showDevices();}
     public void resumed(){if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();}
-    private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
+    private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
     public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);if(!RhActions.lastConnectionError().isEmpty())message(RhActions.lastConnectionError());}
     private void showAdmission(RhAdmission operation){
         pageId="connecting";profileVisible=true;content.removeAllViews();heading("连接","");
@@ -225,17 +228,31 @@ public final class RhHome implements RhActions.Target {
     }
     private void showGlobal(){profileVisible=true;content.removeAllViews();heading("设置","");LinearLayout tabs=row();for(String tab:new String[]{"updates","sync","appearance","about"}){String title=tab.equals("appearance")?"外观":tab.equals("sync")?"配置同步":tab.equals("updates")?"更新":"关于";tabs.addView(button(title,settingsTab.equals(tab),()->invoke("app.settings.tab",RhActions.obj("tab",tab))));}android.widget.HorizontalScrollView tabScroll=new android.widget.HorizontalScrollView(activity);tabScroll.setHorizontalScrollBarEnabled(false);tabScroll.addView(tabs);content.addView(tabScroll);if(settingsTab.equals("sync")){showSync();return;}if(settingsTab.equals("updates")){showUpdates();return;}label(settingsTab.equals("about")?"RHRemote-Moonlight · Android 原生 View + Java":"主题");if(settingsTab.equals("about")){content.addView(button(RhStatistics.enabled()?"测试统计：开启":"测试统计：关闭",RhStatistics.enabled(),()->invoke("statistics.configure",RhActions.obj("enabled",!RhStatistics.enabled()))));label("测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。");label(RhStatistics.state().optString("latest"));}if(settingsTab.equals("appearance"))content.addView(button("切换深色 / 浅色",false,()->invoke("appearance.toggle",RhActions.obj())));}
     private void showUpdates(){
-        org.json.JSONObject state=updates.state();label("RHRemote-Moonlight "+state.optString("currentVersion"));label("GitHub / Gitee");
-        boolean available=!state.isNull("availableVersion");if(available)label("可用版本 "+state.optString("availableVersion"));label(state.optString("status"));
-        if(updatesBusy){ProgressBar progress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);long total=state.optLong("totalBytes"),bytes=state.optLong("downloadedBytes");boolean downloading=state.optString("phase").equals("downloading")&&total>0;progress.setIndeterminate(!downloading);if(downloading)progress.setProgress((int)(bytes*100/total));content.addView(progress,new LinearLayout.LayoutParams(-1,dp(12)));}
-        LinearLayout commands=row();Button check=button(updatesBusy?"处理中…":"检查更新",false,()->invoke("updates.check",RhActions.obj()));check.setEnabled(!updatesBusy);commands.addView(check);
-        Button download=button("下载 APK",false,()->invoke("updates.download",RhActions.obj()));download.setEnabled(available&&!updatesBusy);commands.addView(download);
-        content.addView(commands);Button install=button(state.optBoolean("downloaded")?"安装更新":"下载并安装",true,()->invoke("updates.install",RhActions.obj()));install.setEnabled(available&&!updatesBusy);content.addView(install,new LinearLayout.LayoutParams(-1,dp(48)));
+        org.json.JSONObject state=updates.state();label("RHRemote-Moonlight "+state.optString("currentVersion"));
+        if(!state.isNull("availableVersion"))label("可用版本 "+state.optString("availableVersion"));
+        updateProvider=text("",13,muted,false);content.addView(updateProvider);
+        updateStatus=text("",15,ink,false);updateStatus.setPadding(0,dp(10),0,dp(10));content.addView(updateStatus);
+        updateBytes=text("",13,muted,false);content.addView(updateBytes);
+        updateProgress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);content.addView(updateProgress,new LinearLayout.LayoutParams(-1,dp(12)));
+        LinearLayout commands=row();updateCheck=button("检查更新",false,()->invoke("updates.check",RhActions.obj()));commands.addView(updateCheck);
+        updateDownload=button("下载 APK",false,()->invoke("updates.download",RhActions.obj()));commands.addView(updateDownload);
+        content.addView(commands);updateInstall=button("下载并安装",true,()->invoke("updates.install",RhActions.obj()));content.addView(updateInstall,new LinearLayout.LayoutParams(-1,dp(48)));
+        refreshUpdateControls();
         label("安装时在系统界面手动确认；需要安装权限时会先打开对应设置。");
+    }
+    private void refreshUpdateControls(){
+        if(updateStatus==null)return;org.json.JSONObject s=updates.state();String phase=s.optString("phase"),provider=s.optString("provider");
+        updateStatus.setText(s.optString("status"));updateStatus.setTextColor(phase.equals("error")?c("#b04452"):ink);
+        updateProvider.setText(provider.isEmpty()?"更新源：Gitee / GitHub":"更新源："+provider);
+        long total=s.optLong("totalBytes"),bytes=s.optLong("downloadedBytes");boolean downloading=phase.equals("downloading")&&total>0;
+        updateBytes.setVisibility(total>0?View.VISIBLE:View.GONE);updateBytes.setText(String.format(Locale.ROOT,"%.1f / %.1f MB",bytes/1048576.0,total/1048576.0));
+        updateProgress.setVisibility(updatesBusy?View.VISIBLE:View.GONE);updateProgress.setIndeterminate(!downloading);if(downloading)updateProgress.setProgress((int)(bytes*100/total));
+        updateCheck.setText(updatesBusy&&phase.equals("checking")?"检查中…":"检查更新");updateInstall.setText(s.optBoolean("downloaded")?"安装更新":"下载并安装");
+        for(Button b:new Button[]{updateCheck,updateDownload,updateInstall}){b.setEnabled(!updatesBusy);b.setAlpha(updatesBusy?0.45f:1f);}
     }
     private void startUpdate(String id){startUpdate(id,false);}
     private void startUpdate(String id,boolean automatic){
-        updatesBusy=true;updateUi.removeCallbacks(updateTick);refreshUpdateUi();
+        updatesBusy=true;updates.pending(id);updateUi.removeCallbacks(updateTick);refreshUpdateUi();
         NETWORK.execute(()->{
             String error=null;boolean installReady=false;
             try{if(id.equals("updates.check")){updates.check();if(automatic&&!updates.state().isNull("availableVersion"))updates.download();}else if(id.equals("updates.install")){installReady=updates.prepareInstall();}else updates.download();}
@@ -248,7 +265,6 @@ public final class RhHome implements RhActions.Target {
                 if(problem!=null&&!automatic){message(problem);Toast.makeText(activity,problem,Toast.LENGTH_LONG).show();}
                 if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();
                 if(resumeInstall){resumeInstall=false;startUpdate("updates.install");}
-                else if(problem==null&&!automatic&&id.equals("updates.download"))invoke("updates.install",RhActions.obj());
             });
         });
     }

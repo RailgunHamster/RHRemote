@@ -39,10 +39,12 @@ public class RhUpdateInstallTest {
     }
     @Implements(value=RhUpdates.class,isInAndroidSdk=false)
     public static class Requests {
-        static byte[] bytes;static String feed;static int downloads,checks;static boolean corrupt;
+        static byte[] bytes;static String feed;static int downloads,checks;static boolean corrupt,failMetadata,failFirstDownloadOpen,failAllDownloads;
         static CountDownLatch entered,release;
         @Implementation protected static HttpURLConnection open(String address)throws IOException {
             boolean metadata=address.endsWith("releases.android.json");if(metadata)checks++;else downloads++;
+            if(metadata&&failMetadata)throw new SocketTimeoutException("metadata fixture timeout");
+            if(!metadata&&(failAllDownloads||failFirstDownloadOpen&&downloads==1))throw new UnknownHostException("download fixture DNS");
             return new HttpURLConnection(new URL(address)){
                 @Override public int getResponseCode(){return 200;}
                 @Override public InputStream getInputStream()throws IOException{
@@ -66,7 +68,7 @@ public class RhUpdateInstallTest {
     private void archive(){for(String name:new String[]{"pending.apk","RHRemote-update.apk"})manager.setPackageArchiveInfo(new File(folder,name).getAbsolutePath(),incoming);}
     private String sha(byte[] bytes)throws Exception{StringBuilder value=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();}
     @Before public void setup()throws Exception{
-        Requests.downloads=0;Requests.checks=0;Requests.corrupt=false;Requests.entered=null;Requests.release=null;Requests.bytes="test APK fixture bytes".getBytes(StandardCharsets.UTF_8);
+        Requests.downloads=0;Requests.checks=0;Requests.corrupt=false;Requests.failMetadata=false;Requests.failFirstDownloadOpen=false;Requests.failAllDownloads=false;Requests.entered=null;Requests.release=null;Requests.bytes="test APK fixture bytes".getBytes(StandardCharsets.UTF_8);
         // AndroidX retains its static cache while Robolectric allocates a new filesDir per test.
         java.lang.reflect.Field cache=androidx.core.content.FileProvider.class.getDeclaredField("sCache");cache.setAccessible(true);((java.util.Map<?,?>)cache.get(null)).clear();
         activity=Robolectric.buildActivity(Activity.class).setup().get();manager=Shadows.shadowOf(activity.getPackageManager());
@@ -95,6 +97,13 @@ public class RhUpdateInstallTest {
     }
     @Test public void checkingAgainPreservesTheVerifiedDownloadedPackage()throws Exception{
         downloaded();updates.check();assertTrue(updates.state().getBoolean("downloaded"));assertTrue(updates.prepareInstall());assertEquals(1,Requests.downloads);
+    }
+    @Test public void downloadConnectionFailureFallsBackBeforeReadingAnyBytes()throws Exception{
+        Requests.failFirstDownloadOpen=true;downloaded();assertEquals(2,Requests.downloads);assertEquals("GitHub",updates.state().getString("provider"));assertEquals(1,updates.state().getJSONArray("sourceFailures").length());
+    }
+    @Test public void bothDownloadConnectionFailuresExposeTheirSources()throws Exception{
+        Requests.failAllDownloads=true;updates.check();try{updates.download();fail("Unreachable APK sources accepted");}catch(IOException expected){assertTrue(expected.getMessage().contains("GitHub UnknownHostException"));}
+        assertEquals(2,Requests.downloads);assertEquals(2,updates.state().getJSONArray("sourceFailures").length());assertFalse(updates.state().getBoolean("downloaded"));assertNull(next());
     }
     @Test public void newUpdaterRestoresThePackageAndDoesNotDownloadAgain()throws Exception{
         downloaded();updates=new RhUpdates(activity);assertTrue(updates.state().getBoolean("downloaded"));assertTrue(updates.prepareInstall());assertEquals(1,Requests.downloads);
@@ -142,6 +151,31 @@ public class RhUpdateInstallTest {
     @Test public void updateFailureIsVisibleInThePageAndToast()throws Exception{
         page();Requests.corrupt=true;home.perform("updates.install",RhActions.obj());awaitUpdate();
         JSONObject state=home.state().getJSONObject("updates");assertEquals("error",state.getString("phase"));assertTrue(state.getString("status").contains("校验失败"));assertTrue(ShadowToast.getTextOfLatestToast().contains("校验失败"));assertNull(next());
+    }
+    @Test public void visibleDownloadButtonChecksFirstAndDoesNotOpenAnInstaller()throws Exception{
+        home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
+        Button download=button(activity.getWindow().getDecorView(),"下载 APK");assertNotNull(download);assertTrue(download.isEnabled());
+        assertTrue(button(activity.getWindow().getDecorView(),"下载并安装").isEnabled());download.performClick();awaitUpdate();
+        assertTrue(home.state().getJSONObject("updates").getBoolean("downloaded"));assertEquals(1,Requests.checks);assertEquals(1,Requests.downloads);assertNull(next());
+    }
+    @Test public void visibleCheckButtonCompletesThroughTheDispatcher()throws Exception{
+        home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
+        Button check=button(activity.getWindow().getDecorView(),"检查更新");assertTrue(check.isEnabled());check.performClick();awaitUpdate();
+        assertEquals(1,Requests.checks);assertEquals("available",home.state().getJSONObject("updates").getString("phase"));assertEquals(0,Requests.downloads);
+    }
+    @Test public void progressTicksKeepThePressedViewsInsteadOfRebuildingThePage()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);
+        Button download=button(activity.getWindow().getDecorView(),"下载 APK");download.performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
+        Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(650));
+        assertSame(download,button(activity.getWindow().getDecorView(),"下载 APK"));assertFalse(download.isEnabled());assertEquals(0.45f,download.getAlpha(),0.001f);
+        Requests.release.countDown();awaitUpdate();assertNull(next());
+    }
+    @Test public void failedSourcesExposeBothReasonsAndLeaveRetryButtonsEnabled()throws Exception{
+        Requests.failMetadata=true;home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
+        button(activity.getWindow().getDecorView(),"检查更新").performClick();awaitUpdate();JSONObject state=home.state().getJSONObject("updates");
+        assertEquals("error",state.getString("phase"));assertEquals(2,state.getJSONArray("sourceFailures").length());
+        assertTrue(state.getString("status").contains("Gitee SocketTimeoutException"));assertTrue(state.getString("status").contains("GitHub SocketTimeoutException"));
+        assertTrue(button(activity.getWindow().getDecorView(),"下载 APK").isEnabled());assertTrue(button(activity.getWindow().getDecorView(),"下载并安装").isEnabled());
     }
     @Test public void missingInstallerHasAVisibleFailureInsteadOfSilentNoOp()throws Exception{
         activity=Robolectric.buildActivity(NoInstaller.class).setup().get();page();home.perform("updates.install",RhActions.obj());awaitUpdate();assertTrue(home.state().getJSONObject("updates").getString("status").contains("系统安装界面未能打开"));assertNotNull(ShadowToast.getTextOfLatestToast());

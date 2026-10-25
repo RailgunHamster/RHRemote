@@ -14,6 +14,9 @@ public final class RhStatistics {
     private static volatile Session current;private static Context context;private static String latest="";
     private static volatile long requestedUs;
     public static long originUs(){return requestedUs;}
+    /** Captures one recording; delayed renderer cleanup must not finish its successor. */
+    public static final class Owner{private final Session session;private Owner(Session session){this.session=session;}}
+    public static Owner owner(){return new Owner(current);}
     public static void initialize(Context c){context=c.getApplicationContext();}
     public static boolean enabled(){return context!=null&&context.getSharedPreferences("rhremote.statistics",0).getBoolean("enabled",false);}
     public static String launchQuery(){Session session=current;return RhHostFrameTrace.query(session!=null&&!session.stopping,new File(latest).getName());}
@@ -56,7 +59,8 @@ public final class RhStatistics {
     }
     public static void event(String name){event(name,-1,new JSONObject(),0,0);}
     public static void event(String name,long frame,JSONObject fields){event(name,frame,fields,0,0);}
-    public static void event(String name,long frame,JSONObject fields,long at,long duration){Session s=current;if(s==null||s.stopping)return;JSONObject row=RhActions.obj("event",name,"frame",frame,"thread",Thread.currentThread().getName(),"ts_us",at==0?s.now():at,"fields",fields);if(duration>0)try{row.put("dur_us",duration);}catch(Exception ignored){}if(!s.queue.offer(row))s.lost.incrementAndGet();}
+    public static void event(String name,long frame,JSONObject fields,long at,long duration){emit(current,name,frame,fields,at,duration);}
+    private static void emit(Session s,String name,long frame,JSONObject fields,long at,long duration){if(s==null||s.stopping)return;JSONObject row=RhActions.obj("event",name,"frame",frame,"thread",Thread.currentThread().getName(),"ts_us",at==0?s.now():at,"fields",fields);if(duration>0)try{row.put("dur_us",duration);}catch(Exception ignored){}if(!s.queue.offer(row))s.lost.incrementAndGet();}
     public static long now(){Session s=current;return s==null?0:s.now();}
     public static void received(int frame,int bytes,char hostLatency,long receive,long enqueue){Session s=current;if(s==null)return;long now=s.now(),common=MoonBridge.rhGetMicroseconds();event("packet_first",frame,new JSONObject(),now-(common-receive),0);event("frame_assembled",frame,RhActions.obj("bytes",bytes,"host_processing_us",(int)hostLatency*100),now-(common-enqueue),0);event("decode_submit",frame,new JSONObject());}
     public static void submitted(long pts,int frame){Session s=current;if(s==null)return;if(s.pts.size()>8192){s.pts.clear();s.lost.incrementAndGet();}s.pts.put(pts,(long)frame);}
@@ -65,5 +69,6 @@ public final class RhStatistics {
     public static void release(int buffer,boolean render){Session s=current;if(s==null)return;Long frame=s.buffers.remove(buffer);if(frame!=null){event(render?"render_submit":"frame_drop",frame,RhActions.obj("reason",render?"surface_submit":"decoder_backlog"));if(!render)s.pts.values().remove(frame);}}
     public static void rendered(long pts,long nano){Session s=current;if(s==null)return;Long frame=s.pts.remove(pts);if(frame!=null){long reported=s.epoch+(nano-s.nano)/1000;event("surface_render_callback",frame,RhActions.obj("reported_render_us",reported));event("surface_rendered",frame,RhActions.obj("semantics","framework_reported_timestamp_may_precede_submission"),reported,0);}}
     public static synchronized void finish(){Session s=current;if(s==null)return;event("session_end");s.stopping=true;current=null;/* Writer drains asynchronously; exporter waits for trace_end. */}
-    public static final class Scope implements AutoCloseable{final String name;final long start;public Scope(String name){this.name=name;start=now();}public void close(){if(start!=0)event(name,-1,new JSONObject(),start,now()-start);}}
+    public static synchronized void finish(Owner owner){if(owner!=null&&owner.session!=null&&current==owner.session)finish();}
+    public static final class Scope implements AutoCloseable{final String name;final Session session;final long start;public Scope(String name){this.name=name;session=current;start=session==null?0:session.now();}public void close(){if(start!=0)emit(session,name,-1,new JSONObject(),start,session.now()-start);}}
 }

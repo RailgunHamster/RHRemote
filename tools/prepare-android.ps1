@@ -28,7 +28,7 @@ Edit-Source 'app/build.gradle' {
     $s=$s.Replace('"Moonlight (Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight (Root Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight"','"RHRemote-Moonlight"').Replace('"Moonlight (Root)"','"RHRemote-Moonlight"')
     # Build only the actual OPPO architecture; don't spend time building unused ABIs.
     $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters 'arm64-v8a' }")
-    $s=$s.Replace('targetSdk 36',"targetSdk 36`n        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'")
+    $s=$s.Replace('targetSdk 36',"targetSdk 36`n        testInstrumentationRunner (project.findProperty('rhremote.instrumentationRunner') ?: 'androidx.test.runner.AndroidJUnitRunner')")
     $s=$s.Replace('    compileOptions {',@'
     testOptions {
         unitTests.includeAndroidResources = true

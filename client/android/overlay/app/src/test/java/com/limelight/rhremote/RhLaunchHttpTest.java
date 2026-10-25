@@ -124,9 +124,12 @@ public class RhLaunchHttpTest {
         try(Host host=new Host(server,identity,true,false)){
             NvHTTP h=client(host,server,identity);host.applistBodyDelayMs=150;
             RhStatistics.configure(true);RhStatistics.begin(RhProfile.load(RuntimeEnvironment.getApplication(),"host"));
+            boolean verbose=ReflectionHelpers.getStaticField(NvHTTP.class,"verbose");
+            // Exercise the shipped streaming-reader path even in a debug test variant.
+            ReflectionHelpers.setStaticField(NvHTTP.class,"verbose",false);
             try{
                 assertEquals("Desktop",h.getAppList().getFirst().getAppName());
-            }finally{RhStatistics.finish();RhStatistics.configure(false);}
+            }finally{ReflectionHelpers.setStaticField(NvHTTP.class,"verbose",verbose);RhStatistics.finish();RhStatistics.configure(false);}
             File trace=new File(RhStatistics.state().getString("latest"),"native.jsonl");
             String contents="";long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
             do{contents=new String(java.nio.file.Files.readAllBytes(trace.toPath()),StandardCharsets.UTF_8);if(contents.contains("\"trace_end\""))break;Thread.sleep(10);}while(System.nanoTime()<until);

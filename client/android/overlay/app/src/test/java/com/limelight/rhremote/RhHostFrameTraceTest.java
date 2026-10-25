@@ -35,6 +35,18 @@ public class RhHostFrameTraceTest {
         RhStatistics.configure(true);begin();String first=RhStatistics.launchQuery();RhStatistics.finish();awaitFooter(traces.get(0));
         begin();assertNotEquals(first,RhStatistics.launchQuery());
     }
+    @Test public void delayedRendererCleanupCannotFinishTheNextRecording()throws Exception{
+        RhStatistics.configure(true);begin();RhStatistics.Owner old=RhStatistics.owner();RhStatistics.finish();awaitFooter(traces.get(0));
+        begin();String next=RhStatistics.launchQuery();RhStatistics.finish(old);
+        assertTrue(RhStatistics.state().optBoolean("recording"));assertEquals(next,RhStatistics.launchQuery());
+        RhStatistics.finish(RhStatistics.owner());assertFalse(RhStatistics.state().optBoolean("recording"));
+    }
+    @Test public void delayedScopeCannotWriteItsOldSpanIntoTheNextRecording()throws Exception{
+        RhStatistics.configure(true);begin();RhStatistics.Scope old=new RhStatistics.Scope("delayed_old_cleanup");RhStatistics.finish();awaitFooter(traces.get(0));
+        begin();old.close();RhStatistics.event("new_session_marker");RhStatistics.finish();awaitFooter(traces.get(1));
+        String text=new String(Files.readAllBytes(new File(traces.get(1),"native.jsonl").toPath()),StandardCharsets.UTF_8);
+        assertTrue(text.contains("new_session_marker"));assertFalse(text.contains("delayed_old_cleanup"));
+    }
     @Test public void invalidOrInjectedLabelsCannotBecomeLaunchParameters(){
         for(String tag:new String[]{null,"",".","..","../file","a/b","a\\b","x&appid=2","a b","名字","quote\"","a\nb"})assertEquals("",RhHostFrameTrace.query(true,tag));
         assertEquals("",RhHostFrameTrace.query(false,"valid"));assertEquals("",RhHostFrameTrace.query(true,new String(new char[97]).replace('\0','a')));

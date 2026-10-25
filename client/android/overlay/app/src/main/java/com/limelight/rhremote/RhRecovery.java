@@ -41,7 +41,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private volatile boolean retrying,fatal,handoff,cleanupPending,workerRunning,cancelCleanupDone,completed,gameAdmitted,oldStopped;
     private Stopper successorStopper;
     private RhRecovery successor;
-    private boolean successorStopping;
+    private boolean successorStopping,terminalPending;
     private Intent claimedIntent;
     private String error="";
     private final Runnable watchdog,handoffTimeout=()->failed("串流窗口未能接管连接");
@@ -99,10 +99,23 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         onMain(()->{RhActions.connectionError("连接失败："+stage+" ("+code+")");background();activity.finish();});
     }
     public boolean terminated(int code){
-        if(code==MoonBridge.ML_ERROR_GRACEFUL_TERMINATION)return retrying;
+        if(code==MoonBridge.ML_ERROR_GRACEFUL_TERMINATION){if(!retrying)terminal(code,false);return true;}
         boolean eligible=policy.rendered()||code==MoonBridge.ML_ERROR_NO_VIDEO_TRAFFIC||code==MoonBridge.ML_ERROR_NO_VIDEO_FRAME||code==MoonBridge.ML_ERROR_UNEXPECTED_EARLY_TERMINATION;
         if(code==MoonBridge.ML_ERROR_PROTECTED_CONTENT||code==MoonBridge.ML_ERROR_FRAME_CONVERSION)eligible=false;
-        return retry(eligible,"串流中断 ("+code+")");
+        if(!retry(eligible,"串流中断 ("+code+")"))terminal(code,true);
+        return true;
+    }
+    /** Terminal failures retain the cleanup lease and close the obsolete Game. */
+    private void terminal(int code,boolean failure){
+        onMain(()->{
+            if(terminalPending)return;terminalPending=true;
+            if(!RhActions.belongsElsewhere(activity)){
+                RhStatistics.event("connection_terminated",-1,RhActions.obj("code",code,"retry",false));
+                if(failure)RhActions.connectionError("连接已断开 ("+code+")");
+                background();
+            }
+            activity.finish();
+        });
     }
     public void interruptForTest(){
         if(!RhStatistics.enabled())throw new IllegalStateException("仅测试模式可注入中断");
@@ -128,7 +141,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private void stopOriginal(long delay){
         try{stopper.stop(cleaned->onMain(()->{
             if(oldStopped||completed)return;
-            if(!cleaned){if(!cancelled)failed("上一会话清理超时，已停止自动重连");return;}
+            if(!cleaned){RhStatistics.event("recovery_cleanup_timeout",-1,RhActions.obj("attemptId",id));if(!cancelled)failed("上一会话清理超时，已停止自动重连");return;}
             oldStopped=true;cleanupPending=false;
             if(cancelled){RhStatistics.finish();release();return;}
             resolveNext(delay);
@@ -205,9 +218,11 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         if(previous!=null&&RhActions.ownsRecovery(previous)){previous.successorReady(this);previous.cancel();return;}
         predecessor=null;
         if(handoff||completed)return;
+        if(RhActions.belongsElsewhere(activity)){completed=true;main.removeCallbacks(watchdog);return;}
         cancel();
         if(!retrying){retrying=true;cleanupPending=true;RhActions.beginRecovery(this);stopOriginal(0);}
     }
+    boolean belongsTo(Activity owner){return activity==owner;}
     void clearAdmission(RhAdmission owner){if(initialAdmission==owner)initialAdmission=null;}
     void stopBeforeAttach(Consumer<Boolean> completed){main.removeCallbacks(watchdog);stopper.stop(completed);}
     private boolean canLaunch(){return handoff&&!gameAdmitted&&!cancelled&&!completed&&oldStopped;}

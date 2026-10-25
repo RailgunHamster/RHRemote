@@ -24,6 +24,10 @@ public final class RhUpdates {
     private volatile String message="尚未检查更新",phase="idle",provider="";
     private volatile boolean ready,prepared;
     private volatile long downloadedBytes,totalBytes;
+    private volatile JSONArray sourceFailures=new JSONArray();
+    /** Package-local injection for device tests; production uses only the fixed HTTPS sources. */
+    interface Connections{HttpURLConnection open(String url)throws IOException;}
+    private Connections connections=RhUpdates::open;
     public RhUpdates(Context c){
         context=c.getApplicationContext();directory=new File(c.getFilesDir(),"updates");
         apk=new File(directory,"RHRemote-update.apk");receipt=new File(directory,"ready.json");
@@ -34,11 +38,12 @@ public final class RhUpdates {
     private boolean allowed(){return Build.VERSION.SDK_INT<26||context.getPackageManager().canRequestPackageInstalls();}
     public JSONObject state(){JSONObject candidate=available;return RhActions.obj("managed",true,"currentVersion",currentName(),"availableVersion",candidate==null?JSONObject.NULL:candidate.optString("version"),
         "pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,
-        "downloadedBytes",downloadedBytes,"totalBytes",totalBytes,"installPermissionGranted",allowed(),"installPermissionPending",preferences.getBoolean("permission",false));}
+        "downloadedBytes",downloadedBytes,"totalBytes",totalBytes,"sourceFailures",sourceFailures,"installPermissionGranted",allowed(),"installPermissionPending",preferences.getBoolean("permission",false));}
     private void status(String phase,String text){this.phase=phase;message=text;}
     public void failure(String text){status("error",text==null||text.isEmpty()?"更新操作失败，请重试":text);}
+    public void pending(String action){status(action.equals("updates.check")?"checking":"preparing",action.equals("updates.check")?"正在检查更新":action.equals("updates.download")?"正在准备下载 APK":"正在准备安装更新");}
     private static byte[] read(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>limit)throw new IOException("更新信息过大");out.write(b,0,n);}return out.toByteArray();}
-    private static HttpURLConnection open(String url)throws IOException{if(!url.startsWith("https://"))throw new IOException("HTTPS required");HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(10000);c.setReadTimeout(20000);return c;}
+    private static HttpURLConnection open(String url)throws IOException{if(!url.startsWith("https://"))throw new IOException("HTTPS required");HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(7000);c.setReadTimeout(10000);return c;}
     private static void name(String value)throws IOException{if(value.isEmpty()||value.equals(".")||value.equals("..")||!value.matches("[A-Za-z0-9._-]+"))throw new IOException("更新文件名无效");}
     private void validate(JSONObject candidate)throws Exception{
         for(String key:new String[]{"version","fileName","tag"})name(candidate.getString(key));
@@ -61,17 +66,19 @@ public final class RhUpdates {
         java.nio.file.Files.move(temporary.toPath(),receipt.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
     public void check()throws Exception{
-        status("checking","正在检查更新");JSONObject manifest=null;
+        status("checking","正在检查更新");JSONObject manifest=null;JSONArray failures=new JSONArray();sourceFailures=failures;
         for(String url:new String[]{GITEE+"latest/releases.android.json",GITHUB+"latest/download/releases.android.json"}){
-            HttpURLConnection c=open(url);try{
-                if(c.getResponseCode()!=200)continue;
+            provider=url.startsWith(GITEE)?"Gitee":"GitHub";status("checking","正在从 "+provider+" 检查更新");
+            HttpURLConnection c=null;try{
+                c=connections.open(url);int response=c.getResponseCode();if(response!=200)throw new IOException("HTTP "+response);
                 try(InputStream in=c.getInputStream()){
                     JSONObject feed=new JSONObject(new String(read(in,2*1024*1024),StandardCharsets.UTF_8));
-                    if(feed.getInt("schemaVersion")!=1)continue;JSONObject candidate=feed.getJSONObject("android");validate(candidate);manifest=candidate;provider=url.startsWith(GITEE)?"Gitee":"GitHub";break;
+                    if(feed.getInt("schemaVersion")!=1)throw new IOException("更新信息格式不支持");JSONObject candidate=feed.getJSONObject("android");validate(candidate);manifest=candidate;break;
                 }
-            }catch(Exception ignored){}finally{c.disconnect();}
+            }catch(Exception error){String reason=error.getClass().getSimpleName()+": "+(error.getMessage()==null?"请求失败":error.getMessage());failures.put(RhActions.obj("provider",provider,"reason",reason));android.util.Log.w("RHRemote updates",provider+" check failed: "+reason);}
+            finally{if(c!=null)c.disconnect();}
         }
-        if(manifest==null){failure("GitHub 与 Gitee 暂无可用更新信息");throw new IOException(message);}
+        if(manifest==null){StringBuilder detail=new StringBuilder("检查更新失败");for(int i=0;i<failures.length();i++){JSONObject item=failures.getJSONObject(i);detail.append(i==0?"：":"；").append(item.getString("provider")).append(' ').append(item.getString("reason"));}failure(detail.toString());throw new IOException(message);}
         available=manifest.getLong("versionCode")>currentCode()?manifest:null;prepared=false;ready=false;
         if(available==null){receipt.delete();apk.delete();preferences.edit().clear().apply();status("current","已是最新版本");return;}
         totalBytes=available.getLong("size");
@@ -95,21 +102,21 @@ public final class RhUpdates {
         if(!digest(hash.digest()).equalsIgnoreCase(expected.getString("sha256")))throw new IOException("APK 校验失败，请重新下载");verifyPackage(file,expected);
     }
     public void download()throws Exception{
-        JSONObject selected=available;if(selected==null)throw new IOException("请先检查更新");
+        if(available==null)check();JSONObject selected=available;if(selected==null)return;
         if(!directory.exists()&&!directory.mkdirs())throw new IOException("更新目录不可用");
         ready=false;prepared=false;downloadedBytes=0;totalBytes=selected.getLong("size");status("downloading","正在下载 APK（0%）");
-        File pending=new File(directory,"pending.apk");boolean downloaded=false;String lastError="APK 下载失败，请检查网络后重试";
+        File pending=new File(directory,"pending.apk");boolean downloaded=false;String lastError="APK 下载失败，请检查网络后重试";JSONArray failures=new JSONArray();sourceFailures=failures;
         for(String url:new String[]{GITEE+selected.getString("tag")+"/"+selected.getString("fileName"),GITHUB+"download/"+selected.getString("tag")+"/"+selected.getString("fileName")}){
-            HttpURLConnection c=open(url);try{
-                provider=url.startsWith(GITEE)?"Gitee":"GitHub";downloadedBytes=0;
-                if(c.getResponseCode()!=200){lastError="更新源返回 HTTP "+c.getResponseCode();continue;}
+            HttpURLConnection c=null;provider=url.startsWith(GITEE)?"Gitee":"GitHub";downloadedBytes=0;
+            try{
+                c=connections.open(url);int response=c.getResponseCode();if(response!=200)throw new IOException("更新源返回 HTTP "+response);
                 long count=0,expected=selected.getLong("size");
                 try(InputStream in=c.getInputStream();OutputStream out=new FileOutputStream(pending)){
                     byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1){count+=n;if(count>expected)throw new IOException("APK 长度不符");out.write(b,0,n);downloadedBytes=count;status("downloading","正在下载 APK（"+(count*100/expected)+"%）");}
                 }
                 status("verifying","正在校验 APK");verifyFile(pending,selected);
                 java.nio.file.Files.move(pending.toPath(),apk.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);remember();downloaded=true;break;
-            }catch(Exception e){lastError=e.getMessage()==null?"APK 下载或校验失败":e.getMessage();}finally{c.disconnect();pending.delete();}
+            }catch(Exception e){lastError=provider+" "+e.getClass().getSimpleName()+": "+(e.getMessage()==null?"APK 下载或校验失败":e.getMessage());failures.put(RhActions.obj("provider",provider,"reason",lastError));android.util.Log.w("RHRemote updates",lastError);}finally{if(c!=null)c.disconnect();pending.delete();}
         }
         if(!downloaded){failure(lastError);throw new IOException(message);}ready=true;status("downloaded","APK 已下载，可安装更新");
     }

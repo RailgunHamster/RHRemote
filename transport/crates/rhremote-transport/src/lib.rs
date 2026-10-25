@@ -256,6 +256,7 @@ pub struct ProxyInfo {
 pub struct Client {
     runtime: tokio::runtime::Runtime,
     current: Option<(Endpoint, Proxy, Address, bool)>,
+    retiring: JoinSet<()>,
 }
 impl Client {
     pub fn new() -> Result<Self> {
@@ -265,6 +266,7 @@ impl Client {
                 .enable_all()
                 .build()?,
             current: None,
+            retiring: JoinSet::new(),
         })
     }
     pub fn start(
@@ -331,7 +333,7 @@ impl Client {
                 }.await;
                 match result {
                     Ok(proxy)=>Ok((endpoint, proxy)),
-                    Err(error)=>{endpoint.close().await;Err(error)},
+                    Err(error)=>{let _=tokio::time::timeout(Duration::from_secs(3),endpoint.close()).await;Err(error)},
                 }
             })?;
             self.current = Some((endpoint, proxy, remote, relay_only));
@@ -363,15 +365,31 @@ impl Client {
         })
     }
     pub fn stop(&mut self) {
-        if let Some((endpoint, proxy, _, _)) = self.current.take() {
-            drop(proxy);
-            self.runtime.block_on(endpoint.close());
+        if let Some((endpoint, mut proxy, _, _)) = self.current.take() {
+            self.runtime.block_on(async {
+                // Local native listeners and flows must be gone before reuse.
+                // QUIC's peer acknowledgement can take many seconds on a lost path;
+                // drain it separately from the next native connection's admission.
+                proxy.connection.close(0u32.into(), b"proxy closed");
+                proxy.jobs.abort_all();
+                while proxy.jobs.join_next().await.is_some() {}
+                drop(proxy);
+                while self.retiring.try_join_next().is_some() {}
+                if self.retiring.len() >= 4 {
+                    self.retiring.abort_all();
+                    while self.retiring.join_next().await.is_some() {}
+                }
+                self.retiring.spawn(async move {
+                    let _ = tokio::time::timeout(Duration::from_secs(3), endpoint.close()).await;
+                });
+            });
         }
     }
 }
 impl Drop for Client {
     fn drop(&mut self) {
         self.stop();
+        self.retiring.abort_all();
     }
 }
 impl Drop for Proxy {
@@ -623,6 +641,59 @@ mod tests {
                 .await
                 .is_ok()
         );
+    }
+    #[test]
+    fn stop_releases_native_ports_without_waiting_for_a_blackholed_quic_peer() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let mut client = Client::new().unwrap();
+        let (endpoint, proxy, server, accepted, router, blackhole) = client.runtime.block_on(async {
+            let build = || Endpoint::builder(presets::Minimal)
+                .alpns(vec![ALPN.to_vec()])
+                .relay_mode(RelayMode::Disabled)
+                .bind_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+            let server = build().bind().await.unwrap();
+            let endpoint = build().bind().await.unwrap();
+            let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let router_address = socket.local_addr().unwrap();
+            let server_address = server.bound_sockets()[0];
+            let blackhole = Arc::new(AtomicBool::new(false));
+            let dropped = blackhole.clone();
+            let router = tokio::spawn(async move {
+                let mut source = None;let mut buffer = [0;65536];
+                loop {
+                    let Ok((size, from)) = socket.recv_from(&mut buffer).await else { break };
+                    if dropped.load(Ordering::SeqCst) { continue; }
+                    let target = if from == server_address { source } else { source=Some(from);Some(server_address) };
+                    if let Some(target) = target {
+                        // Establish a genuine nontrivial RTT before dropping the peer.
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        let _ = socket.send_to(&buffer[..size],target).await;
+                    }
+                }
+            });
+            let remote = EndpointAddr::new(server.id()).with_ip_addr(router_address);
+            let (connection, accepted) = tokio::join!(endpoint.connect(remote,ALPN), async { server.accept().await.unwrap().await.unwrap() });
+            let connection = connection.unwrap();
+            let (offset,tcp,udp) = bind_proxy_ports(650).await.unwrap();
+            let mut jobs = JoinSet::new();
+            jobs.spawn(async move { let ports=(tcp,udp);std::future::pending::<()>().await;drop(ports); });
+            let proxy=Proxy {address:"127.77.0.2".into(),endpoint_id:endpoint.id().to_string(),offset,connection,jobs};
+            (endpoint,proxy,server,accepted,router,blackhole)
+        });
+        let offset=proxy.offset;
+        let remote=Address {endpoint_id:server.id().to_string(),relay_url:DEFAULT_RELAY.into()};
+        client.current=Some((endpoint,proxy,remote,false));
+        blackhole.store(true,Ordering::SeqCst);
+        let began=Instant::now();client.stop();
+        assert!(began.elapsed()<Duration::from_millis(300),"native cleanup waited for the remote QUIC drain: {:?}",began.elapsed());
+        assert!(client.current.is_none());
+        drop(accepted);
+        client.runtime.block_on(async {
+            for &port in TCP_PORTS { assert!(TcpListener::bind((Ipv4Addr::new(127,77,0,2),port+offset)).await.is_ok()); }
+            for &port in UDP_PORTS { assert!(UdpSocket::bind((Ipv4Addr::new(127,77,0,2),port+offset)).await.is_ok()); }
+            router.abort();let _=router.await;
+            let _=tokio::time::timeout(Duration::from_secs(3),server.close()).await;
+        });
     }
     #[test]
     fn management_and_unpaired_media_are_denied() {

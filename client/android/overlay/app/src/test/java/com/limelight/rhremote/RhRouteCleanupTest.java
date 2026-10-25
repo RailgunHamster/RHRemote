@@ -27,8 +27,9 @@ public class RhRouteCleanupTest {
     @Implements(value=RhNetwork.class,isInAndroidSdk=false)
     public static class Probes {
         static int lan,proxy;static boolean rejectProxy;
-        @Implementation protected static String check(String address,String uuid,int port,RhCancellation operation)throws Exception{
+        @Implementation protected static String check(String address,String uuid,int port,RhCancellation operation,int timeoutMs)throws Exception{
             if(operation!=null)operation.checkpoint();
+            assertEquals(address.equals("127.77.0.2")?8000:1000,timeoutMs);
             if(address.equals("127.77.0.2")){proxy++;assertTrue(Transport.active);if(rejectProxy)throw new IOException("uuid_mismatch");}
             else{lan++;assertFalse("Previous rejected tunnel survived into a direct route",Transport.active);}
             return address;

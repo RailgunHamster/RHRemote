@@ -98,6 +98,17 @@ public class RhRecoveryTest {
         assertFalse(RhActions.hasStream());assertEquals(0,resolutions);
         assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
     }
+    @Test public void terminalFailureClosesTheGameAndKeepsItsLeaseUntilNativeCleanup(){
+        recovery=make(Runnable::run);assertTrue(recovery.terminated(MoonBridge.ML_ERROR_PROTECTED_CONTENT));idle();
+        assertTrue(activity.isFinishing());assertTrue(RhActions.hasStream());assertNotNull(cleanup);assertEquals(0,resolutions);
+        cleanup.accept(false);assertTrue(RhActions.hasStream());cleanup.accept(true);cleanup=null;idle();
+        assertFalse(RhActions.hasStream());assertEquals(0,resolutions);
+    }
+    @Test public void gracefulTerminationAlsoClosesTheWindowAndWaitsForCleanup(){
+        recovery=make(Runnable::run);RhActions.clearConnectionError();assertTrue(recovery.terminated(MoonBridge.ML_ERROR_GRACEFUL_TERMINATION));idle();
+        assertTrue(activity.isFinishing());assertTrue(RhActions.hasStream());assertEquals("",RhActions.lastConnectionError());
+        cleanup.accept(true);cleanup=null;idle();assertFalse(RhActions.hasStream());
+    }
     @Test public void cancelAfterResolveCannotLeaveStatisticsOrLaunchAnActivity(){
         RhStatistics.configure(true);recovery=make(Runnable::run);
         assertTrue(recovery.stageFailed(1,-1));idle();cleanup.accept(true);cleanup=null;

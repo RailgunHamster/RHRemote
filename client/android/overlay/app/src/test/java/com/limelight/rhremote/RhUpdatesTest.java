@@ -85,6 +85,6 @@ public class RhUpdatesTest {
     }
     @Test public void unavailableFeedsKeepFailureOnTheUpdatePage()throws Exception {
         try{updates.check();fail("Unavailable feeds must fail");}catch(IOException expected){}
-        assertEquals(2,Requests.count);String text=page();assertTrue(text,text.contains("GitHub 与 Gitee 暂无可用更新信息"));assertFalse(text,text.contains("null"));
+        assertEquals(2,Requests.count);String text=page();assertTrue(text,text.contains("检查更新失败"));assertTrue(text,text.contains("Gitee IOException: HTTP 503"));assertTrue(text,text.contains("GitHub IOException: HTTP 503"));assertFalse(text,text.contains("null"));
     }
 }

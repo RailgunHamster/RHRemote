@@ -90,9 +90,15 @@ public final class RhNetwork {
     }
     private static void checkpoint(RhCancellation operation)throws IOException {if(operation!=null)operation.checkpoint();}
     private static String check(String address,String uuid,int port,RhCancellation operation)throws Exception {
+        return check(address,uuid,port,operation,1000);
+    }
+    /** WAN probes allow TCP retransmission and a delayed response; LAN keeps its short budget. */
+    static int probeTimeoutMs(String route){return route.equals("lan")?1000:8000;}
+    static final class Probe extends RhCancellation {void cancel(){cancelRequests();}}
+    static String check(String address,String uuid,int port,RhCancellation operation,int timeoutMs)throws Exception {
         checkpoint(operation);
         String host=address.replace("[","").replace("]","");HttpURLConnection connection=(HttpURLConnection)new URI("http",null,host,port,"/serverinfo","uniqueid=0123456789ABCDEF",null).toURL().openConnection(Proxy.NO_PROXY);
-        connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(1000);connection.setReadTimeout(1000);
+        connection.setInstanceFollowRedirects(false);connection.setConnectTimeout(timeoutMs);connection.setReadTimeout(timeoutMs);
         try(RhCancellation.Watch request=operation==null?null:operation.watch(connection::disconnect)){
             checkpoint(operation);
             try(InputStream in=connection.getInputStream()){
@@ -127,10 +133,10 @@ public final class RhNetwork {
                     try {
                         JSONObject tunnel=RhTunnel.start(c,address.substring(4),profile.relayUrl,route.equals("relay"),operation);
                         if(route.equals("punch_direct")&&!tunnel.optString("path").equals("direct"))throw new IOException("打洞未形成直连，继续尝试后续路径");
-                        offset=tunnel.getInt("portOffset");check(tunnel.getString("address"),source.uuid,47989+offset,operation);
+                        offset=tunnel.getInt("portOffset");check(tunnel.getString("address"),source.uuid,47989+offset,operation,probeTimeoutMs(route));
                         selected=tunnel.getString("address");selectedRemote=address;chosenPath=tunnel.optString("path","unknown");chosenRoute=route;
-                        attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));accepted=true;break;
-                    }catch(Exception|LinkageError e){checkpoint(operation);attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
+                        attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"timeoutMs",probeTimeoutMs(route),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));accepted=true;break;
+                    }catch(Exception|LinkageError e){checkpoint(operation);attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"timeoutMs",probeTimeoutMs(route),"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
                     finally{if(!accepted)RhTunnel.stop();}
                 }
                 if(selected!=null)break;continue;
@@ -139,11 +145,13 @@ public final class RhNetwork {
             // Tailscale candidates therefore belong to the explicit unknown bucket.
             List<String> group=new ArrayList<>();for(String address:candidates){if(RhRecoveryPolicy.excluded(failed,route,address))continue;String kind=kind(address);if(route.equals("lan")&&(kind.equals("lan")||kind.equals("auto"))||route.equals("public_direct")&&kind.equals("internet")||route.equals("tailscale_relay")&&kind.equals("tailscale"))group.add(address);}
             if(group.isEmpty())continue;
-            CompletionService<JSONObject> queue=new ExecutorCompletionService<>(PROBES);List<Future<JSONObject>> tasks=new ArrayList<>();long end=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(2200),grace=end;long best=Long.MAX_VALUE;
-            try {
-                for(String address:group)tasks.add(queue.submit(()->{long at=System.nanoTime();try{check(address,source.uuid,47989,operation);return RhActions.obj("address",address,"route",route,"ok",true,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}catch(Exception e){return RhActions.obj("address",address,"route",route,"ok",false,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}}));
+            int timeoutMs=probeTimeoutMs(route);
+            CompletionService<JSONObject> queue=new ExecutorCompletionService<>(PROBES);List<Future<JSONObject>> tasks=new ArrayList<>();List<Probe> probes=new ArrayList<>();for(int i=0;i<group.size();i++)probes.add(new Probe());
+            long end=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(2L*timeoutMs+200),grace=end;long best=Long.MAX_VALUE;
+            try(RhCancellation.Watch request=operation==null?null:operation.watch(()->{for(Probe probe:probes)probe.cancel();})) {
+                for(int i=0;i<group.size();i++){String address=group.get(i);Probe probe=probes.get(i);tasks.add(queue.submit(()->{long at=System.nanoTime();try{check(address,source.uuid,47989,probe,timeoutMs);return RhActions.obj("address",address,"route",route,"ok",true,"timeoutMs",timeoutMs,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}catch(Exception e){return RhActions.obj("address",address,"route",route,"ok",false,"timeoutMs",timeoutMs,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}}));}
                 for(int remaining=tasks.size();remaining>0;){checkpoint(operation);long wait=Math.min(end,grace)-System.nanoTime();if(wait<=0)break;Future<JSONObject> future=queue.poll(Math.min(wait,TimeUnit.MILLISECONDS.toNanos(50)),TimeUnit.NANOSECONDS);if(future==null)continue;remaining--;JSONObject result=future.get();attempts.put(result);if(result.optBoolean("ok")&&result.getLong("elapsedMs")<best){best=result.getLong("elapsedMs");selected=result.getString("address");grace=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(50);}}
-            }finally{for(Future<?> future:tasks)future.cancel(true);}
+            }finally{for(Probe probe:probes)probe.cancel();for(Future<?> future:tasks)future.cancel(true);}
             if(selected!=null){selectedRemote=selected;chosenRoute=route;chosenPath=route.equals("tailscale_relay")?"unknown":"direct";offset=0;break;}
         }
         checkpoint(operation);last=RhActions.obj("uuid",source.uuid,"selectedAddress",selected==null?JSONObject.NULL:selected,"remoteAddress",selectedRemote,"attempts",attempts,"route",chosenRoute,"routeOrder",new JSONArray(profile.routeOrder),"path",chosenPath,"portOffset",offset,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began),"mediaUdp","not_tested");

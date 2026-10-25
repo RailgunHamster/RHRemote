@@ -1,6 +1,7 @@
 package com.limelight.rhremote;
 
 import android.content.Context;
+import android.app.Activity;
 import android.os.Handler;
 import android.os.Looper;
 import org.json.*;
@@ -17,6 +18,7 @@ public final class RhActions {
     public interface Target { JSONObject perform(String id,JSONObject args) throws Exception; JSONObject state() throws Exception; }
     private static final Handler MAIN=new Handler(Looper.getMainLooper());
     private static WeakReference<Target> home=new WeakReference<>(null),stream=new WeakReference<>(null);
+    private static WeakReference<Activity> streamActivity=new WeakReference<>(null);
     private static volatile RhRecovery recovering;
     private static volatile RhAdmission admitting;
     private static JSONArray catalog;private static String token;private static boolean started;
@@ -37,16 +39,25 @@ public final class RhActions {
         }catch(Exception e){throw new IllegalStateException("RHRemote control initialization failed",e);}
     }
     public static synchronized boolean attachStream(Target target){
+        return attachStream(target,null);
+    }
+    public static synchronized boolean attachStream(Target target,Activity owner){
         RhAdmission pending=admitting;
         RhRecovery recovery=recovering;
         if(pending!=null&&!pending.canAttach()||recovery!=null&&!recovery.canAttach())return false;
-        stream=new WeakReference<>(target);if(pending!=null)pending.attached();if(recovery!=null)recovery.attached();return true;
+        stream=new WeakReference<>(target);streamActivity=new WeakReference<>(owner);if(pending!=null)pending.attached();if(recovery!=null)recovery.attached();return true;
     }
     static synchronized void beginAdmission(RhAdmission target){if(hasStream())throw new IllegalStateException("请先断开当前连接");admitting=target;}
     static synchronized void endAdmission(RhAdmission target){if(admitting==target)admitting=null;}
     static boolean ownsAdmission(RhAdmission target){return target!=null&&admitting==target;}
     static RhAdmission admission(){return admitting;}
-    public static void detachStream(Target target){if(stream.get()==target)stream.clear();}
+    public static void detachStream(Target target){if(stream.get()==target){stream.clear();streamActivity.clear();}}
+    /** A delayed old Activity callback cannot take ownership from the next connection. */
+    static boolean belongsElsewhere(Activity owner){
+        if(recovering!=null)return !recovering.belongsTo(owner);
+        if(admitting!=null)return !admitting.belongsTo(owner);
+        Activity active=streamActivity.get();return active!=null&&active!=owner;
+    }
     static synchronized void beginRecovery(RhRecovery target){if(admitting!=null||recovering!=null&&recovering!=target)throw new IllegalStateException("上一连接尚未清理");recovering=target;}
     static synchronized void endRecovery(Target target){if(recovering==target)recovering=null;}
     static RhRecovery recovery(){return recovering;}

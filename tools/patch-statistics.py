@@ -155,6 +155,7 @@ def android(root):
         ("    public void stageFailed(final String stage, final int portFlags, final int errorCode) {",f'    public void stageFailed(final String stage, final int portFlags, final int errorCode) {{\n        {stat}.event("connection_stage_failed",-1,com.limelight.rhremote.RhActions.obj("name",stage,"code",errorCode));\n        {stat}.finish();')])
     p=prefix+"java/com/limelight/binding/video/MediaCodecDecoderRenderer.java"
     edits=[
+        ("public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {",f'public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {{\n    private final {stat}.Owner rhStatisticsOwner={stat}.owner();'),
         ("        if (stopping) {\n            // Don't bother if we're stopping",f'        if(decodeUnitType==MoonBridge.BUFFER_TYPE_PICDATA){stat}.received(frameNumber,decodeUnitLength,frameHostProcessingLatency,receiveTimeUs,enqueueTimeUs);\n        if (stopping) {{\n            // Don\'t bother if we\'re stopping'),
         ("        if (!queueNextInputBuffer(timestampUs, codecFlags)) {",f'        {stat}.submitted(timestampUs,frameNumber);\n        boolean rhQueued=queueNextInputBuffer(timestampUs, codecFlags);\n        {stat}.submitReturned(frameNumber,rhQueued);\n        if (!rhQueued) {{'),
         ("                            long presentationTimeUs = info.presentationTimeUs;", f'                            {stat}.decoded(outIndex,info.presentationTimeUs);\n                            long presentationTimeUs = info.presentationTimeUs;'),
@@ -167,7 +168,7 @@ def android(root):
         ("videoDecoder.releaseOutputBuffer(lastIndex, 0);",f'{stat}.release(lastIndex,true);\n                                    videoDecoder.releaseOutputBuffer(lastIndex, 0);'),
         ("videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());",f'{stat}.release(lastIndex,true);\n                                    videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());'),
         ("videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);",f'int rhDropped=outputBufferQueue.take();{stat}.release(rhDropped,false);videoDecoder.releaseOutputBuffer(rhDropped, false);'),
-        ("    public void cleanup() {\n        videoDecoder.release();",f'    public void cleanup() {{\n        videoDecoder.release();\n        {stat}.finish();')]
+        ("    public void cleanup() {\n        videoDecoder.release();",f'    public void cleanup() {{\n        videoDecoder.release();\n        {stat}.finish(rhStatisticsOwner);')]
     edit(root,p,edits)
 
 if __name__ == "__main__":

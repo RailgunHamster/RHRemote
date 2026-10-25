@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.os.Looper;
 import com.limelight.Game;
+import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.nvstream.http.ComputerDetails;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -107,6 +108,14 @@ public class RhRecoveryOwnershipTest {
     @Test public void oldGamesBackgroundDoesNotCancelItsSuccessor(){
         Intent next=launch();recovery.background();assertTrue(jobs.isEmpty());assertEquals("starting",recovery.state().optString("phase"));
         assertTrue(RhRecovery.allowGame(next));assertTrue(RhActions.attachStream(stream));assertEquals(0,RhAdmissionTest.Transport.stops);
+    }
+    @Test public void delayedUnreservedOldGameCannotStealANewActivitiesStream(){
+        recovery=new RhRecovery(activity,profile,done->{throw new AssertionError("Old Game must not stop the new session");},(i,p,f,op)->{throw new AssertionError("No route resolution expected");},jobs::add);
+        Activity next=Robolectric.buildActivity(Activity.class).setup().get();
+        assertTrue(RhActions.attachStream(stream,next));RhActions.clearConnectionError();
+        recovery.background();assertFalse(RhActions.ownsRecovery(recovery));assertTrue(RhActions.hasStream());assertTrue(jobs.isEmpty());
+        assertTrue(recovery.terminated(MoonBridge.ML_ERROR_PROTECTED_CONTENT));idle();
+        assertTrue(activity.isFinishing());assertTrue(RhActions.hasStream());assertEquals("",RhActions.lastConnectionError());
     }
     @Test public void wrongHostAndUnmarkedGameCannotClaimARecovery(){
         Intent next=launch();assertFalse(RhRecovery.allowGame(new Intent(next).putExtra(Game.EXTRA_PC_UUID,"wrong-host")));

@@ -52,7 +52,10 @@ def patch(root):
         ("        StreamConfiguration config = new StreamConfiguration.Builder()", "        decoderRenderer.rhFrameReady=rhRecovery::frame;\n        StreamConfiguration config = new StreamConfiguration.Builder()"),
         ("            attemptedConnection = true;", "            attemptedConnection = true;\n            connecting = true;"),
         ("        super.onStop();", "        super.onStop();\n        if(rhRecovery!=null)rhRecovery.background();"),
-        ("                    conn.stop();", """                    try{conn.stop();rhNativeStopped=true;rhCleanupComplete=conn.rhAwaitStopped(10000);}
+        ("                    conn.stop();", """                    try{
+                        try(com.limelight.rhremote.RhStatistics.Scope scope=new com.limelight.rhremote.RhStatistics.Scope("native_client_stop")){conn.stop();rhNativeStopped=true;}
+                        try(com.limelight.rhremote.RhStatistics.Scope scope=new com.limelight.rhremote.RhStatistics.Scope("native_starter_join")){rhCleanupComplete=conn.rhAwaitStopped(10000);}
+                    }
                     finally{rhStopped.countDown();}"""),
         ("""            }.start();
         }

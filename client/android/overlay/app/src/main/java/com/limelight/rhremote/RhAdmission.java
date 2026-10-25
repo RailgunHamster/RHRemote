@@ -125,6 +125,7 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
             if(Looper.myLooper()==Looper.getMainLooper())acknowledged.run();else main.post(acknowledged);
         });}catch(RuntimeException|LinkageError e){failure="串流窗口清理失败，请重新启动 RHRemote";phase="error";listener.changed(this);}
     }
+    boolean belongsTo(Activity owner){return activity==owner;}
     public static void stamp(Intent intent){
         RhAdmission operation=RhActions.admission();
         if(operation!=null&&operation.canLaunch()&&operation.uuid.equals(intent.getStringExtra(Game.EXTRA_PC_UUID)))intent.putExtra(EXTRA,operation.id);

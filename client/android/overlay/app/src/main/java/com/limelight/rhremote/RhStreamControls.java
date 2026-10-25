@@ -23,7 +23,7 @@ public final class RhStreamControls implements RhActions.Target {
         this.profile=profile;
         this.game=game;this.touch=touch;this.preferences=preferences;
         panel=new RhStreamPanel(game,game.findViewById(android.R.id.content),RhActions::click);
-        updatePanel();RhActions.initialize(game,null);if(!RhActions.attachStream(this))dispose();
+        updatePanel();RhActions.initialize(game,null);if(!RhActions.attachStream(this,game))dispose();
     }
     public void dispose(){if(disposed)return;disposed=true;touch.cancel();panel.dispose();RhActions.detachStream(this);}
     public void markConnected(){connected=true;try{if(display!=null)display.applyInitial();}catch(Exception e){displayError=e.getMessage()==null?"屏幕切换失败":e.getMessage();}updatePanel();}
