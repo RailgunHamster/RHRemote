@@ -19,6 +19,7 @@ public final class RhUpdates {
     private static final String GITEE="https://gitee.com/railgunhamster/RHRemote/releases/download/",GITHUB="https://github.com/RailgunHamster/RHRemote/releases/";
     private final Context context;
     private final File directory,apk,receipt;
+    private File installationFile;
     private final SharedPreferences preferences;
     private volatile JSONObject available;
     private volatile String message="尚未检查更新",phase="idle",provider="";
@@ -31,7 +32,7 @@ public final class RhUpdates {
     public RhUpdates(Context c){
         context=c.getApplicationContext();directory=new File(c.getFilesDir(),"updates");
         apk=new File(directory,"RHRemote-update.apk");receipt=new File(directory,"ready.json");
-        preferences=context.getSharedPreferences("rhremote.updates",0);restore();
+        preferences=context.getSharedPreferences("rhremote.updates",0);restore();pruneInstalledSnapshots();
     }
     private long currentCode()throws Exception{PackageInfo p=context.getPackageManager().getPackageInfo(context.getPackageName(),0);return Build.VERSION.SDK_INT>=28?p.getLongVersionCode():p.versionCode;}
     private String currentName(){try{return context.getPackageManager().getPackageInfo(context.getPackageName(),0).versionName;}catch(Exception e){return "";}}
@@ -101,6 +102,25 @@ public final class RhUpdates {
         MessageDigest hash=MessageDigest.getInstance("SHA-256");try(InputStream in=new FileInputStream(file)){byte[] b=new byte[65536];int n;while((n=in.read(b))!=-1)hash.update(b,0,n);}
         if(!digest(hash.digest()).equalsIgnoreCase(expected.getString("sha256")))throw new IOException("APK 校验失败，请重新下载");verifyPackage(file,expected);
     }
+    private void pruneInstalledSnapshots(){
+        try{
+            long installed=currentCode();File[] files=directory.listFiles();if(files==null)return;
+            for(File file:files){java.util.regex.Matcher name=java.util.regex.Pattern.compile("RHRemote-installer-([0-9]+)-[0-9a-f]{64}\\.apk").matcher(file.getName());
+                if(name.matches()&&Long.parseLong(name.group(1))<=installed&&file.isFile())file.delete();}
+        }catch(Exception ignored){/* A cleanup failure must not prevent update checks. */}
+    }
+    /** The exported name/URI never changes contents between versions. Some OEM
+     * installers retain a parsed copy keyed by the URI or display filename. */
+    private File snapshotForInstaller(JSONObject expected)throws Exception{
+        File snapshot=new File(directory,"RHRemote-installer-"+expected.getLong("versionCode")+"-"+expected.getString("sha256").toLowerCase(Locale.ROOT)+".apk");
+        if(snapshot.isFile())try{verifyFile(snapshot,expected);return snapshot;}catch(Exception stale){/* Rebuild a corrupt private snapshot from the verified download. */}
+        File temporary=new File(directory,snapshot.getName()+".partial");
+        try{
+            java.nio.file.Files.copy(apk.toPath(),temporary.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            java.nio.file.Files.move(temporary.toPath(),snapshot.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            verifyFile(snapshot,expected);return snapshot;
+        }finally{temporary.delete();}
+    }
     public void download()throws Exception{
         if(available==null)check();JSONObject selected=available;if(selected==null)return;
         if(!directory.exists()&&!directory.mkdirs())throw new IOException("更新目录不可用");
@@ -122,21 +142,21 @@ public final class RhUpdates {
     }
     /** Worker thread only: the primary install action downloads when necessary. */
     public boolean prepareInstall()throws Exception{
-        prepared=false;if(available==null)check();if(available==null)return false;
+        prepared=false;installationFile=null;if(available==null)check();if(available==null)return false;
         if(!ready)download();status("verifying","正在校验安装包");
-        try{verifyFile(apk,available);}catch(Exception invalid){ready=false;receipt.delete();failure(invalid.getMessage());throw invalid;}
+        try{verifyFile(apk,available);installationFile=snapshotForInstaller(available);}catch(Exception invalid){ready=false;receipt.delete();failure(invalid.getMessage());throw invalid;}
         prepared=true;status("ready","安装包校验完成");return true;
     }
     /** UI thread: no APK parsing or hashing. Android still requires manual confirmation. */
     public void install(Activity activity)throws Exception{
-        if(!prepared||!ready||available==null)throw new IOException("请先下载并校验更新");prepared=false;
+        if(!prepared||!ready||available==null||installationFile==null)throw new IOException("请先下载并校验更新");prepared=false;
         if(RhActions.hasStream())throw new IOException("请先断开当前连接再安装更新");
         if(!allowed()){
             preferences.edit().putBoolean("permission",true).apply();status("permission","请允许 RHRemote 安装应用，返回后继续安装");
             try{activity.startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+context.getPackageName())));}
             catch(ActivityNotFoundException|SecurityException blocked){preferences.edit().remove("permission").apply();throw new IOException("无法打开安装权限设置，请在系统设置中允许 RHRemote 安装应用",blocked);}return;
         }
-        Uri uri=FileProvider.getUriForFile(context,context.getPackageName()+".updates",apk);
+        Uri uri=FileProvider.getUriForFile(context,context.getPackageName()+".updates",installationFile);
         Intent intent=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/vnd.android.package-archive").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.setClipData(ClipData.newRawUri("RHRemote update",uri));
         try{activity.startActivity(intent);preferences.edit().putBoolean("installer",true).apply();status("installer","已打开系统安装界面，请手动确认");}

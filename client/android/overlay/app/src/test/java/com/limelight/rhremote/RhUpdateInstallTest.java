@@ -65,7 +65,8 @@ public class RhUpdateInstallTest {
         public void pair(com.limelight.nvstream.http.ComputerDetails d,String pin){}public void cancelPair(){}public void refresh(){}
     };
     private SigningInfo signing(String value){SigningInfo info=Shadow.newInstanceOf(SigningInfo.class);((ShadowSigningInfo)Shadow.extract(info)).setSignatures(new Signature[]{new Signature(value)});return info;}
-    private void archive(){for(String name:new String[]{"pending.apk","RHRemote-update.apk"})manager.setPackageArchiveInfo(new File(folder,name).getAbsolutePath(),incoming);}
+    private File snapshot()throws Exception{return new File(folder,"RHRemote-installer-"+incoming.getLongVersionCode()+"-"+sha(Requests.bytes)+".apk");}
+    private void archive()throws Exception{for(String name:new String[]{"pending.apk","RHRemote-update.apk",snapshot().getName()})manager.setPackageArchiveInfo(new File(folder,name).getAbsolutePath(),incoming);}
     private String sha(byte[] bytes)throws Exception{StringBuilder value=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();}
     @Before public void setup()throws Exception{
         Requests.downloads=0;Requests.checks=0;Requests.corrupt=false;Requests.failMetadata=false;Requests.failFirstDownloadOpen=false;Requests.failAllDownloads=false;Requests.entered=null;Requests.release=null;Requests.bytes="test APK fixture bytes".getBytes(StandardCharsets.UTF_8);
@@ -137,6 +138,26 @@ public class RhUpdateInstallTest {
     }
     @Test public void returningWithoutInstallingKeepsThePackageAndAllowsRetry()throws Exception{
         assertTrue(updates.prepareInstall());updates.install(activity);next();assertFalse(updates.resumeInstallRequest());assertTrue(updates.state().getBoolean("downloaded"));assertTrue(updates.state().getString("status").contains("安装尚未完成"));assertNull(next());
+    }
+    @Test public void successiveVersionsHaveDistinctInstallerUrisAndKeepTheOldContents()throws Exception{
+        assertTrue(updates.prepareInstall());updates.install(activity);Intent first=next();File oldSnapshot=snapshot();byte[] old=Requests.bytes.clone();
+        incoming.versionCode++;Requests.bytes="another signed APK fixture".getBytes(StandardCharsets.UTF_8);archive();
+        manifest.put("versionCode",incoming.getLongVersionCode()).put("size",Requests.bytes.length).put("sha256",sha(Requests.bytes));feed();
+        updates.check();assertTrue(updates.prepareInstall());updates.install(activity);Intent second=next();
+        assertInstaller(first);assertInstaller(second);assertNotEquals(first.getData(),second.getData());
+        assertTrue(second.getData().getLastPathSegment().contains(sha(Requests.bytes)));
+        assertArrayEquals(old,Files.readAllBytes(oldSnapshot.toPath()));assertArrayEquals(Requests.bytes,Files.readAllBytes(snapshot().toPath()));
+    }
+    @Test public void aCorruptInstallerSnapshotIsRebuiltBeforeItCanBeShared()throws Exception{
+        assertTrue(updates.prepareInstall());Files.write(snapshot().toPath(),new byte[]{0,1,2});
+        updates=new RhUpdates(activity);assertTrue(updates.prepareInstall());updates.install(activity);assertInstaller(next());
+        assertArrayEquals(Requests.bytes,Files.readAllBytes(snapshot().toPath()));assertEquals(1,Requests.downloads);
+    }
+    @Test public void completedInstallCleansOwnedSnapshotsWithoutDeletingOtherFiles()throws Exception{
+        assertTrue(updates.prepareInstall());File complete=snapshot();File other=new File(folder,"user-owned.apk");Files.write(other.toPath(),new byte[]{42});
+        File future=new File(folder,"RHRemote-installer-2100000000-"+sha(Requests.bytes)+".apk");Files.write(future.toPath(),Requests.bytes);
+        manager.getInternalMutablePackageInfo(activity.getPackageName()).versionCode=incoming.versionCode;
+        updates=new RhUpdates(activity);assertFalse(complete.exists());assertTrue(other.isFile());assertTrue(future.isFile());
     }
     private Button button(View view,String text){if(view instanceof Button&&((Button)view).getText().toString().equals(text))return(Button)view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){Button b=button(((ViewGroup)view).getChildAt(i),text);if(b!=null)return b;}return null;}
     private void awaitUpdate()throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);do{idle();if(!home.state().getBoolean("updatesBusy"))return;Thread.sleep(10);}while(System.nanoTime()<end);fail(home.state().getJSONObject("updates").toString());}
