@@ -11,6 +11,30 @@ from pathlib import Path
 
 PAIRS={"reassembly_ms":("packet_first","frame_assembled"),"decoder_queue_ms":("frame_assembled","decode_submit"),"decoder_submit_ms":("decode_submit","decode_submit_return"),"decode_ms":("decode_submit","decode_output"),"pacing_ms":("decode_output","render_submit"),"render_call_ms":("render_submit","render_return"),"surface_callback_delay_ms":("render_submit","surface_render_callback"),"client_pipeline_ms":("packet_first","render_return")}
 
+def http_transport_calls(events):
+    """Keep concurrent HTTP calls separate; ambiguous retries never become one fake span."""
+    calls={}
+    for event in events:
+        if event.get("event")!="http_transport":continue
+        fields=event.get("fields",{})
+        key=(fields.get("request"),fields.get("command"),fields.get("secure"))
+        if key[0] is None:continue
+        call=calls.setdefault(key,{"request":key[0],"command":key[1],"secure":key[2],"thread":event.get("thread"),"phases":defaultdict(list)})
+        call["phases"][fields.get("phase")].append(event["ts_us"])
+    pairs={"call_ms":("call_start","call_end"),"connect_including_tls_ms":("connect_start","connect_end"),
+           "tcp_before_tls_ms":("connect_start","tls_start"),"tls_ms":("tls_start","tls_end"),
+           "headers_wait_ms":("request_headers_end","response_headers_end"),"body_after_headers_ms":("response_headers_end","response_body_end")}
+    result=[]
+    for call in calls.values():
+        phases=call["phases"];durations={}
+        for name,(begin,end) in pairs.items():
+            starts,ends=phases.get(begin,[]),phases.get(end,[])
+            if len(starts)==len(ends)==1 and ends[0]>=starts[0]:durations[name]=round((ends[0]-starts[0])/1000,3)
+        call["phases"]=dict(phases);call["durations_ms"]=durations
+        call["complete"]=len(phases.get("call_start",[]))==1 and len(phases.get("call_end",[]))+len(phases.get("call_failed",[]))==1
+        result.append(call)
+    return result
+
 def direct_frame_clock(events):
     """Recognize a declared producer contract and every associated measured frame.
 
@@ -120,6 +144,7 @@ def analyze(events,manifest):
     if by_name["frame_clock_missing"]:errors.append("Direct frame clock unavailable for some decoded frames; missing receive/assembly times were not estimated.")
     summary={"schema":"rhremote.statistics.analysis/v1","platform":manifest.get("platform"),"profile":manifest.get("profile"),"event_count":len(events),"frame_count":len(frames),"recorder_lost_events":lost,"warnings":errors,"startup":startup,"startup_spans":sorted(spans,key=lambda s:s["start_us"]),"frame_metrics":distributions,"cadence":frame_gaps,"missing_frame_numbers":missing,"frame_drops":sum("frame_drop" in f["events"] for f in frames.values()),"interpretation":{"Windows":"render_return measures CPU render/present submission return, not physical screen scanout.","Android":"surface_render_callback is callback arrival. surface_rendered is the framework-reported timestamp and can precede submission (e.g. a requested Choreographer timestamp). Neither measures physical scanout.","host":"host_processing_ms is a protocol aggregate. Capture/encode sub-stages require host instrumentation.","network":"packet_first is available for assembled frames; missing frame IDs do not identify the loss location."}}
     summary["connection_measurement"],summary["connection_phases"]=connection_measurement(events,manifest.get("platform"))
+    summary["http_transport_calls"]=http_transport_calls(events)
     if manifest.get("platform")=="windows":
         direct=direct_frame_clock(events)
         summary["receive_assembly_timing"]={"high_resolution_proven":direct,
@@ -212,6 +237,14 @@ def import_host(path,lo,hi):
         ts=int(dt.datetime.fromisoformat(m[1]).replace(tzinfo=zone).timestamp()*1e6)-offset
         if not lo-2e6<=ts<=hi+2e6:continue
         message=m[2];name="host_log"
+        http_read=re.fullmatch(r"RHREMOTE_HTTP_READ name=(applist) queued_us=(\d+) start_us=(\d+) end_us=(\d+)",message)
+        if http_read:
+            queued,started,finished=map(int,http_read.groups()[1:])
+            if queued<=started<=finished:
+                fields={"measurement":"server steady clock; HTTP worker boundaries","alignment":"end log marker; cross-machine placement is approximate"}
+                for stage,begin,end in [("queue",queued,started),("handler",started,finished)]:
+                    result.append({"event":"host_applist_"+stage,"ts_us":ts-(finished-begin),"dur_us":end-begin,"frame":-1,"thread":"Sunshine HTTP applist","fields":dict(fields)})
+            continue
         phase=re.match(r"RHREMOTE_PHASE (begin|end) id=(\d+) name=(\w+) tick_us=(\d+)(?: elapsed_us=(\d+))?",message)
         if phase:
             if phase[1]=="begin":scopes[phase[2]]=(ts,phase[3])

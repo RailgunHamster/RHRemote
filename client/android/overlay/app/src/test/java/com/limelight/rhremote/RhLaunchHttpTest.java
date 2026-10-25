@@ -49,6 +49,7 @@ public class RhLaunchHttpTest {
         final List<String> cancellationCredentials=Collections.synchronizedList(new ArrayList<>());
         final Set<Socket> sockets=ConcurrentHashMap.newKeySet();
         volatile String launchCredential,initialDisplay;
+        volatile long applistBodyDelayMs;
         volatile boolean closed;
         final boolean capable;
         Host(AndroidCryptoProvider host,AndroidCryptoProvider client,boolean capable,boolean holdCancel)throws Exception {
@@ -75,6 +76,7 @@ public class RhLaunchHttpTest {
                 for(String field:rawQuery.split("&"))if(field.startsWith("rhremoteLaunchToken="))credential=field.substring("rhremoteLaunchToken=".length());
                 if(!secure)plainRequests.incrementAndGet();String body;
                 if(path.equals("/serverinfo"))body="<root status_code=\"200\"><appversion>7.1.0</appversion><PairStatus>"+(secure?"1":"0")+"</PairStatus><RHLaunchCancel>"+(capable?"1":"0")+"</RHLaunchCancel><HttpsPort>"+tls.getLocalPort()+"</HttpsPort></root>";
+                else if(path.equals("/applist"))body="<root status_code=\"200\"><App><AppTitle>Desktop</AppTitle><ID>1</ID></App></root>";
                 else if(path.equals("/launch")||path.equals("/resume")){
                     launches.incrementAndGet();launchCredential=credential;launchReceived.countDown();releaseLaunch.await(8,TimeUnit.SECONDS);
                     String display=null;
@@ -87,7 +89,9 @@ public class RhLaunchHttpTest {
                     body="<root status_code=\"200\"><cancel>1</cancel><RHLaunchState>cancelled</RHLaunchState></root>";
                 }else body="<root status_code=\"404\"/>";
                 byte[] bytes=body.getBytes(StandardCharsets.UTF_8);OutputStream output=owned.getOutputStream();
-                output.write(("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: "+bytes.length+"\r\n\r\n").getBytes(StandardCharsets.US_ASCII));output.write(bytes);output.flush();
+                output.write(("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: "+bytes.length+"\r\n\r\n").getBytes(StandardCharsets.US_ASCII));output.flush();
+                if(path.equals("/applist")&&applistBodyDelayMs>0)Thread.sleep(applistBodyDelayMs);
+                output.write(bytes);output.flush();
             }catch(IOException expected){/* Cancelled HTTP or rejected mutual TLS. */}catch(InterruptedException interrupted){Thread.currentThread().interrupt();}finally{sockets.remove(socket);}
         }
         @Override public void close()throws Exception {closed=true;releaseLaunch.countDown();releaseCancel.countDown();tls.close();plain.close();for(Socket socket:sockets)socket.close();workers.shutdownNow();assertTrue(workers.awaitTermination(5,TimeUnit.SECONDS));}
@@ -113,6 +117,34 @@ public class RhLaunchHttpTest {
             assertTrue(h.launchApp(stream(),"resume",1,false));
             assertEquals("\\\\.\\DISPLAY25",host.initialDisplay);display.applyInitial();
             assertEquals(1,host.launches.get());assertTrue(host.mutualTls.get()>0);
+        }
+    }
+    @Test public void directAppListRecordsTlsAndDelayedBodyWithoutRequestSecrets()throws Exception {
+        AndroidCryptoProvider server=identity("timing-host"),identity=identity("timing-client");
+        try(Host host=new Host(server,identity,true,false)){
+            NvHTTP h=client(host,server,identity);host.applistBodyDelayMs=150;
+            RhStatistics.configure(true);RhStatistics.begin(RhProfile.load(RuntimeEnvironment.getApplication(),"host"));
+            try{
+                assertEquals("Desktop",h.getAppList().getFirst().getAppName());
+            }finally{RhStatistics.finish();RhStatistics.configure(false);}
+            File trace=new File(RhStatistics.state().getString("latest"),"native.jsonl");
+            String contents="";long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+            do{contents=new String(java.nio.file.Files.readAllBytes(trace.toPath()),StandardCharsets.UTF_8);if(contents.contains("\"trace_end\""))break;Thread.sleep(10);}while(System.nanoTime()<until);
+            assertTrue("Writer did not finish",contents.contains("\"trace_end\""));
+            java.util.Map<String,Long> phases=new java.util.HashMap<>();long parseUs=0;
+            for(String line:contents.split("\n")){
+                org.json.JSONObject row=new org.json.JSONObject(line);
+                if(row.optString("event").equals("http_transport")){
+                    org.json.JSONObject fields=row.getJSONObject("fields");assertEquals("applist",fields.getString("command"));assertTrue(fields.getBoolean("secure"));
+                    phases.put(fields.getString("phase"),row.getLong("ts_us"));
+                    assertEquals(4,fields.length());
+                }
+                if(row.optString("event").equals("http_applist_read_parse"))parseUs=row.getLong("dur_us");
+            }
+            assertTrue(phases.containsKey("tls_start"));assertTrue(phases.containsKey("tls_end"));assertTrue(phases.containsKey("call_end"));
+            assertTrue("Body wait must be visible separately from TLS",phases.get("response_body_end")-phases.get("response_headers_end")>=100_000);
+            assertTrue("Direct streaming XML read was previously missing",parseUs>=100_000);
+            assertFalse(contents.contains("127.0.0.1"));assertFalse(contents.contains("0123456789ABCDEF"));assertFalse(contents.contains("https://"));
         }
     }
     @Test public void establishedStreamCleanupDoesNotDependOnReachableAdmissionHttp()throws Exception {

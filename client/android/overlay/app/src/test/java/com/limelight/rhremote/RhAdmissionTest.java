@@ -43,11 +43,12 @@ public class RhAdmissionTest {
     Activity activity;RhAdmission operation;RhHome home;
     ArrayDeque<Runnable> queued=new ArrayDeque<>();
     AtomicInteger launches=new AtomicInteger(),finishes=new AtomicInteger(),pairCancels=new AtomicInteger();
+    boolean discoveryPaused;int discoveryResumes;
     boolean transferred;String result;CountDownLatch release;
     RhActions.Target stream=new RhActions.Target(){public JSONObject state(){return RhActions.obj();}public JSONObject perform(String id,JSONObject args){return RhActions.obj();}};
     @Before public void setup(){
         Transport.stops=0;Transport.fail=false;
-        activity=Robolectric.buildActivity(Activity.class).setup().get();RhStatistics.initialize(activity);RhStatistics.configure(false);
+        activity=Robolectric.buildActivity(Activity.class).setup().get();RhStatistics.initialize(activity);RhStatistics.configure(false);RhActions.clearConnectionError();
     }
     @After public void cleanup()throws Exception{
         if(release!=null)release.countDown();Transport.fail=false;
@@ -73,6 +74,7 @@ public class RhAdmissionTest {
         operation.cancel();assertTrue(RhActions.hasStream());rejectNew();run();
         assertEquals(0,work.get());assertEquals(0,launches.get());assertTrue(RhActions.hasStream());assertEquals(0,Transport.stops);
         run();assertFalse(RhActions.hasStream());assertEquals(1,Transport.stops);assertEquals("已取消连接",result);
+        assertEquals("",RhActions.lastConnectionError());
     }
     @Test public void lateSuccessCannotLaunchAndCannotReleaseTheReservationEarly(){
         operation=make();operation.start(op->launches::incrementAndGet);queued.removeFirst().run();
@@ -89,6 +91,7 @@ public class RhAdmissionTest {
     @Test public void linkageFailureAlsoCleansAndReleasesTheReservation(){
         operation=make();operation.start(op->{throw new UnsatisfiedLinkError("library unavailable");});run();
         assertTrue(RhActions.hasStream());run();assertEquals(1,finishes.get());assertTrue(result,result.contains("library unavailable"));
+        assertEquals(result,RhActions.lastConnectionError());
     }
     @Test public void handoffKeepsTheReservationUntilTheStreamAttaches()throws Exception{
         Intent intent=new Intent().putExtra(Game.EXTRA_PC_UUID,"host");operation=make();operation.start(op->()->{try{op.handoff(()->{RhAdmission.stamp(intent);launches.incrementAndGet();});}catch(IOException e){throw new IllegalStateException(e);}});run();
@@ -139,6 +142,7 @@ public class RhAdmissionTest {
     private RhHome.Actions callbacks(CountDownLatch entered){return new RhHome.Actions(){
         public void connect(ComputerDetails d){launches.incrementAndGet();}public void add(String address){}public void advanced(){}
         public void pair(ComputerDetails d,String pin){}public void cancelPair(){pairCancels.incrementAndGet();}public void refresh(){}
+        public void setDiscoveryPaused(boolean paused){discoveryPaused=paused;if(!paused){assertFalse("Discovery must wait for reservation cleanup",RhActions.hasStream());discoveryResumes++;}}
         public Runnable prepareConnect(ComputerDetails d,RhAdmission op)throws Exception{
             try(RhAdmission.Watch request=op.watch(()->{})){entered.countDown();if(!release.await(3,TimeUnit.SECONDS))throw new IOException("test gate timed out");return ()->launches.incrementAndGet();}
         }
@@ -155,11 +159,14 @@ public class RhAdmissionTest {
     @Test public void homeCancelButtonAndApiUseTheSameReservationWhileAppListIsPending()throws Exception{
         release=new CountDownLatch(1);CountDownLatch entered=new CountDownLatch(1);home=new RhHome(activity,callbacks(entered));home.update(device());
         assertTrue(RhActions.dispatch("device.connect",RhActions.obj("uuid","host")).toString(),RhActions.hasStream());
+        assertTrue(discoveryPaused);assertEquals(0,discoveryResumes);
         assertTrue(entered.await(3,TimeUnit.SECONDS));Button cancel=button(activity.getWindow().getDecorView(),"取消连接");assertNotNull(cancel);cancel.performClick();
         assertTrue(home.state().getBoolean("networkBusy"));assertTrue(home.state().getJSONObject("admission").getBoolean("cancelled"));
         assertFalse(RhActions.dispatch("device.connect",RhActions.obj("uuid","host")).getBoolean("ok"));
         assertTrue(RhActions.dispatch("stream.disconnect",RhActions.obj()).getBoolean("ok"));
+        assertTrue("Discovery must remain paused until cancellation cleanup",discoveryPaused);
         release.countDown();awaitIdle();assertEquals(0,launches.get());assertFalse(home.state().getBoolean("networkBusy"));assertEquals(1,Transport.stops);
+        assertFalse(discoveryPaused);assertEquals(1,discoveryResumes);
     }
     @Test public void homePairCancelApiWaitsForPairCompletion()throws Exception{
         release=new CountDownLatch(0);home=new RhHome(activity,callbacks(new CountDownLatch(0)));home.update(device());

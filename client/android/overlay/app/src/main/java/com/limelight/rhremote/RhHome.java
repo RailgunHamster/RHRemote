@@ -17,6 +17,7 @@ import java.util.*;
 public final class RhHome implements RhActions.Target {
     public interface Actions { void connect(ComputerDetails d); void add(String address); void advanced(); void pair(ComputerDetails d,String pin);void cancelPair();void refresh();
         default Runnable prepareConnect(ComputerDetails d,RhAdmission operation)throws Exception{return ()->connect(d);}
+        default void setDiscoveryPaused(boolean paused){}
     }
     private long lastSyncAttempt=0;private final Activity activity;private final Actions actions;
     private final LinearLayout root,content,bar;private final TextView status;
@@ -89,8 +90,8 @@ public final class RhHome implements RhActions.Target {
         RhActions.clearConnectionError();
         RhProfile profile=RhProfile.load(activity,target.uuid);networkBusy=true;
         admission=new RhAdmission(activity,target.uuid,CONNECT,new RhAdmission.Listener(){
-            public void changed(RhAdmission operation){if(activity.isDestroyed())return;if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
-            public void finished(RhAdmission operation,boolean handedOff,String result){if(admission!=operation)return;admission=null;networkBusy=false;pairing=false;pairPin="";if(!activity.isDestroyed()){showDevices();if(!result.isEmpty())message(result);}}
+            public void changed(RhAdmission operation){if(activity.isDestroyed())return;actions.setDiscoveryPaused(true);if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
+            public void finished(RhAdmission operation,boolean handedOff,String result){if(admission!=operation)return;admission=null;networkBusy=false;pairing=false;pairPin="";if(!activity.isDestroyed()){showDevices();if(!result.isEmpty())message(result);actions.setDiscoveryPaused(false);}}
         });
         admission.start(operation->{
             if(connect)RhStatistics.begin(profile);
@@ -98,7 +99,7 @@ public final class RhHome implements RhActions.Target {
             operation.progress("identity");ComputerDetails resolved=RhNetwork.refreshConnectionDetails(activity,routed,operation);
             if(!connect||resolved.pairState!=PairingManager.PairState.PAIRED||resolved.serverCert==null)return ()->{update(resolved);pairPin=pin;pairing=true;showPair();try{operation.pair(()->actions.pair(resolved,pin),actions::cancelPair);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
             Runnable launch=actions.prepareConnect(resolved,operation);operation.checkpoint();
-            return ()->{update(resolved);try{operation.handoff(launch);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
+            return ()->{try(RhStatistics.Scope trace=new RhStatistics.Scope("admission_ui_update")){update(resolved);}try{operation.handoff(launch);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
         });
     }
     private void renderDevices(boolean resetScroll){

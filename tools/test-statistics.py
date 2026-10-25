@@ -10,6 +10,35 @@ from test_connection_analysis import ConnectionAnalysisTest
 spec=importlib.util.spec_from_file_location("analysis",Path(__file__).with_name("analyze-statistics.py"));a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 def e(name,t,frame=-1,**extra):return dict(event=name,ts_us=t,frame=frame,fields={},**extra)
 class StatisticsTest(unittest.TestCase):
+    def test_host_app_list_queue_and_handler_use_independent_server_clock_intervals(self):
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/"host.json";path.write_text(json.dumps({"utcOffsetMinutes":0,"log":[
+                "[2026-10-25 01:00:00.000]: Info: RHREMOTE_HTTP_READ name=applist queued_us=100 start_us=2000100 end_us=2000200",
+                "[2026-10-25 01:00:00.001]: Info: RHREMOTE_HTTP_READ name=applist queued_us=30 start_us=20 end_us=40"]}),encoding="utf-8")
+            stamp=int(a.dt.datetime(2026,10,25,1,tzinfo=a.dt.timezone.utc).timestamp()*1e6)
+            events,_=a.import_host(path,stamp-4_000_000,stamp+1_000_000)
+            self.assertEqual(["host_applist_queue","host_applist_handler"],[row["event"] for row in events])
+            self.assertEqual([2_000_000,100],[row["dur_us"] for row in events])
+            self.assertEqual(stamp-2_000_100,events[0]["ts_us"])
+            self.assertIn("approximate",events[0]["fields"]["alignment"])
+
+    def test_http_calls_distinguish_parallel_polls_tls_and_body_wait(self):
+        def phase(request,command,name,stamp):return dict(e("http_transport",stamp),fields={"request":request,"command":command,"secure":True,"phase":name})
+        rows=[phase(1,"applist","call_start",0),phase(1,"applist","connect_start",100),phase(1,"applist","tls_start",200),
+              phase(2,"serverinfo","call_start",250),phase(1,"applist","tls_end",1000),phase(1,"applist","connect_end",1100),
+              phase(1,"applist","request_headers_end",1200),phase(1,"applist","response_headers_end",2000),
+              phase(1,"applist","response_body_end",5000),phase(1,"applist","call_end",5100),phase(2,"serverinfo","call_failed",6000)]
+        calls=a.http_transport_calls(rows);self.assertEqual(2,len(calls))
+        self.assertEqual({"call_ms":5.1,"connect_including_tls_ms":1.0,"tcp_before_tls_ms":.1,"tls_ms":.8,"headers_wait_ms":.8,"body_after_headers_ms":3.0},calls[0]["durations_ms"])
+        self.assertTrue(calls[0]["complete"]);self.assertTrue(calls[1]["complete"]);self.assertEqual({},calls[1]["durations_ms"])
+
+    def test_incomplete_and_retried_http_phases_are_not_guessed(self):
+        rows=[dict(e("http_transport",t),fields={"request":1,"command":"applist","secure":True,"phase":name}) for name,t in
+              [("connect_start",1),("connect_failed",2),("connect_start",3),("tls_start",4),("tls_end",5),("connect_end",6)]]
+        call=a.http_transport_calls(rows)[0];self.assertFalse(call["complete"])
+        self.assertNotIn("connect_including_tls_ms",call["durations_ms"]);self.assertNotIn("tcp_before_tls_ms",call["durations_ms"])
+        self.assertEqual(.001,call["durations_ms"]["tls_ms"])
+
     def direct_rows(self):
         contract={"contract":"rh-cml-frame-clock-v1","clock_domain":"rhstatistics","unit":"us"}
         marker=dict(e("frame_clock_contract",200),fields=dict(contract,receive_site="udp_recv_return",assembly_site="decode_unit_ready"))

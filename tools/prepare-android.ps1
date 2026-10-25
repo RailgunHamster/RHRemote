@@ -179,6 +179,10 @@ Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.ja
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
+    $s=Replace-Once $s '    private void startComputerUpdates() {' @'
+    private void startComputerUpdates() {
+        if(com.limelight.rhremote.RhActions.hasStream())return;
+'@
     $s=Replace-Once $s '                            managerBinder.getComputer(computer.uuid).serverCert = pm.getPairedCert();' @'
                             try {
                                 computer.update(managerBinder.saveRhPairing(computer, pm.getPairedCert()));
@@ -204,6 +208,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
             public void pair(ComputerDetails d,String pin) { startRhPair(d,pin); }
             public void cancelPair() { RhPairOperation operation=rhPairOperation;if(operation!=null)synchronized(operation){operation.cancelled=true;NvHTTP current=operation.http;if(current!=null)current.cancelRhPairing();} }
             public void refresh() { if(managerBinder!=null) for(int i=0;i<pcGridAdapter.getCount();i++)managerBinder.invalidateStateForComputer(((ComputerObject)pcGridAdapter.getItem(i)).details.uuid);startComputerUpdates(); }
+            public void setDiscoveryPaused(boolean paused) { if(paused)stopComputerUpdates(false);else startComputerUpdates(); }
         });
         noPcFoundLayout = rhHome.emptyView();
         for(int i=0;i<pcGridAdapter.getCount();i++) rhHome.update(((ComputerObject)pcGridAdapter.getItem(i)).details);
@@ -267,7 +272,12 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         if(binder==null)throw new IOException("连接管理器尚未准备好");
         operation.checkpoint();
         operation.progress("apps");
-        NvHTTP http=new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),computer.httpsPort,binder.getUniqueId(),computer.serverCert,PlatformBinding.getCryptoProvider(this),true);
+        final com.limelight.nvstream.http.LimelightCryptoProvider crypto;
+        try(com.limelight.rhremote.RhStatistics.Scope trace=new com.limelight.rhremote.RhStatistics.Scope("admission_crypto_provider")){crypto=PlatformBinding.getCryptoProvider(this);}
+        final NvHTTP http;
+        try(com.limelight.rhremote.RhStatistics.Scope trace=new com.limelight.rhremote.RhStatistics.Scope("admission_http_client")){
+            http=new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),computer.httpsPort,binder.getUniqueId(),computer.serverCert,crypto,true);
+        }
         try(com.limelight.rhremote.RhAdmission.Watch request=operation.watch(http::cancelRhRequests)) {
             java.util.List<NvApp> apps=http.getAppList();operation.checkpoint();
             NvApp desktop=null;

@@ -40,7 +40,10 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
             Runnable next=null;Throwable error=null;
             try{checkpoint();next=work.run(this);checkpoint();}catch(Exception|LinkageError e){error=e;}
             final Runnable continuation=next;final Throwable failed=error;
+            final long preparedAt=RhStatistics.now();
+            RhStatistics.event("connection_admission_work_ready",-1,RhActions.obj("attemptId",id,"failed",failed!=null));
             main.post(()->{
+                if(preparedAt!=0)RhStatistics.event("connection_admission_ui_queue",-1,RhActions.obj("attemptId",id),preparedAt,RhStatistics.now()-preparedAt);
                 running=false;
                 if(cancelled||activity.isFinishing()||activity.isDestroyed()){cancel();return;}
                 if(failed!=null){fail(message(failed));return;}
@@ -55,9 +58,11 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
         main.post(()->{if(running&&!cancelled){phase=stage;listener.changed(this);}});
     }
     public void handoff(Runnable launch)throws IOException {
-        checkpoint();handoff=true;phase="starting";listener.changed(this);
+        checkpoint();handoff=true;phase="starting";
+        try(RhStatistics.Scope trace=new RhStatistics.Scope("admission_ui_launch_state")){listener.changed(this);}
         RhStatistics.event("connection_admission_handoff",-1,RhActions.obj("attemptId",id));
-        main.postDelayed(handoffTimeout,15_000);launch.run();
+        main.postDelayed(handoffTimeout,15_000);
+        try(RhStatistics.Scope trace=new RhStatistics.Scope("admission_activity_launch")){launch.run();}
     }
     public void pair(Runnable begin,Runnable abort)throws IOException {
         checkpoint();external=true;cancelExternal=abort;phase="pairing";listener.changed(this);
@@ -94,6 +99,7 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
         });}catch(RuntimeException rejected){cleaning=false;failure="通道清理任务无法启动";phase="error";listener.changed(this);}
     }
     private void complete(boolean transferred,String message){
+        if(!transferred&&!failure.isEmpty())RhActions.connectionError(message);
         completed=true;phase="complete";main.removeCallbacks(handoffTimeout);
         forgetRequests();
         if(transferred&&claimedIntent!=null)claimedIntent.removeExtra(EXTRA);claimedIntent=null;

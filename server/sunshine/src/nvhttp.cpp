@@ -1374,9 +1374,19 @@ namespace nvhttp {
   /** @brief Keep process-state readers on the same serial worker as launch/resume. @tparam Response HTTP response type. @tparam Request HTTP request type. @tparam Handler Existing protocol handler. @param worker Owned bounded queue. @param response Owned response. @param request Accepted request. @param handler Existing server-info or app handler. */
   template<class Response, class Request, class Handler>
   void defer_process_read(rhremote::launch_worker &worker, std::shared_ptr<Response> response, std::shared_ptr<Request> request, Handler handler) {
-    if (!worker.submit([response, request, handler] {
-          handler(response, request);
-        })) {
+    const auto task = [response, request, handler] {
+      handler(response, request);
+    };
+    // Only the authenticated application-list path needs these diagnostics.
+    const bool accepted = request->path == "/applist" ? worker.submit_observed(task, [](const auto timing) {
+      const auto us = [](const auto point) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(point.time_since_epoch()).count();
+      };
+      BOOST_LOG(info) << "RHREMOTE_HTTP_READ name=applist queued_us=" << us(timing.queued)
+                      << " start_us=" << us(timing.started) << " end_us=" << us(timing.finished);
+    }) :
+                                                        worker.submit(task);
+    if (!accepted) {
       write_launch_result(response, launch_error(503, "Host state queue is full or closed"));
     }
   }

@@ -134,7 +134,20 @@ def android(root):
     stat="com.limelight.rhremote.RhStatistics"
     edit(root,prefix+"java/com/limelight/nvstream/http/NvHTTP.java",[(
         "private String openHttpConnectionToString(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {\n        try {",
-        f'private String openHttpConnectionToString(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {{\n        try ({stat}.Scope rhTrace = new {stat}.Scope("http_"+path)) {{')])
+        f'private String openHttpConnectionToString(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {{\n        try ({stat}.Scope rhTrace = new {stat}.Scope("http_"+path)) {{'),
+        ('        initializeHttpState(cryptoProvider);',f'        try ({stat}.Scope trace = new {stat}.Scope("http_client_initialize")) {{ initializeHttpState(cryptoProvider); }}'),
+        ('                .connectionPool(new ConnectionPool(0, 1, TimeUnit.MILLISECONDS))',
+         '                .eventListenerFactory(com.limelight.rhremote.RhHttpStatistics::create)\n                .connectionPool(new ConnectionPool(0, 1, TimeUnit.MILLISECONDS))'),
+        ('        try {\n            SSLContext sc = SSLContext.getInstance("TLS");',
+         f'        try ({stat}.Scope trace = new {stat}.Scope("http_tls_context_initialize")) {{\n            SSLContext sc = SSLContext.getInstance("TLS");'),
+        ('    public LinkedList<NvApp> getAppList() throws HostHttpResponseException, IOException, XmlPullParserException {',
+         f'    public LinkedList<NvApp> getAppList() throws HostHttpResponseException, IOException, XmlPullParserException {{\n        try ({stat}.Scope trace = new {stat}.Scope("applist_fetch_parse")) {{'),
+        ('            return getAppListByReader(new StringReader(getAppListRaw()));',
+         f'            String raw=getAppListRaw();\n            try ({stat}.Scope traceParse = new {stat}.Scope("http_applist_parse")) {{ return getAppListByReader(new StringReader(raw)); }}'),
+        ('                return getAppListByReader(new InputStreamReader(resp.byteStream()));',
+         f'                try ({stat}.Scope traceParse = new {stat}.Scope("http_applist_read_parse")) {{ return getAppListByReader(new InputStreamReader(resp.byteStream())); }}'),
+        ('    String executePairingCommand(String additionalArguments, boolean enableReadTimeout)',
+         '    }\n\n    String executePairingCommand(String additionalArguments, boolean enableReadTimeout)')])
     edit(root,prefix+"java/com/limelight/Game.java",[
         ("    public void stageStarting(final String stage) {", f'    public void stageStarting(final String stage) {{\n        {stat}.event("connection_stage_begin",-1,com.limelight.rhremote.RhActions.obj("name",stage));'),
         ("    public void stageComplete(String stage) {", f'    public void stageComplete(String stage) {{\n        {stat}.event("connection_stage_end",-1,com.limelight.rhremote.RhActions.obj("name",stage));'),

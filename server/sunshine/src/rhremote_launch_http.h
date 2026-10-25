@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -80,6 +81,13 @@ namespace rhremote {
   /** @brief One owned worker keeps slow display preparation off the HTTPS cancellation thread. */
   class launch_worker {
   public:
+    /** @brief Independent queue and handler boundaries on one server monotonic clock. */
+    struct work_timing {
+      std::chrono::steady_clock::time_point queued;  ///< Submission before acquiring the queue lock.
+      std::chrono::steady_clock::time_point started;  ///< Worker invocation, after removing the task.
+      std::chrono::steady_clock::time_point finished;  ///< Handler return or exception, before reporting.
+    };
+
     /** @brief Start the worker. @param capacity Maximum queued tasks, excluding the one executing. @param failure Notification for unexpected task exceptions. */
     explicit launch_worker(std::size_t capacity = 2, std::function<void()> failure = {}):
         capacity_(capacity),
@@ -102,6 +110,32 @@ namespace rhremote {
       tasks_.push_back(std::move(task));
       ready_.notify_one();
       return true;
+    }
+
+    /** @brief Observe admitted work without changing its ordering or exception policy. @param task Owned handler. @param observer Timing-only callback; its exceptions cannot strand work. @return Whether the queue accepted the task. */
+    bool submit_observed(std::function<void()> task, std::function<void(work_timing)> observer) {
+      if (!task || !observer) {
+        return false;
+      }
+      const auto queued = std::chrono::steady_clock::now();
+      return submit([task = std::move(task), observer = std::move(observer), queued] {
+        const auto started = std::chrono::steady_clock::now();
+        const auto report = [&] {
+          const work_timing timing {queued, started, std::chrono::steady_clock::now()};
+          try {
+            observer(timing);
+          } catch (...) {
+            // Diagnostics cannot change the handler's success or failure.
+          }
+        };
+        try {
+          task();
+        } catch (...) {
+          report();
+          throw;
+        }
+        report();
+      });
     }
 
     /** @brief Reject new work, finish queued ownership cleanup, then join. Called only by the owning server thread. */

@@ -29,7 +29,7 @@ function Get-RHHostTimingEvidence {
  # otherwise evict the connection/encoder phases within just a few seconds.
  $filtered=@(& {foreach($path in $selectedPaths){Get-Content -LiteralPath $path | Where-Object {
  $_ -match '(?i)(Info|Warning|Error|Debug):' -and
- $_ -match '(?i)RHREMOTE_PHASE|RHREMOTE_GPU_PRIORITY|encoder|capture|display|desktop|session|client|audio|quicksync|qsv|creating|initializ|sunshine version|launch|configuration|stream|probe|duplicat|resolution|refresh|adapter|ready|performance|latency|access.lost|0x887a0026' -and
+ $_ -match '(?i)RHREMOTE_PHASE|RHREMOTE_HTTP_READ|RHREMOTE_GPU_PRIORITY|encoder|capture|display|desktop|session|client|audio|quicksync|qsv|creating|initializ|sunshine version|launch|configuration|stream|probe|duplicat|resolution|refresh|adapter|ready|performance|latency|access.lost|0x887a0026' -and
  $_ -notmatch '(?i)password|private.?key|certificate|token|credential|pin=|rikey|https?://'
  } | ForEach-Object { "$_" }}} | Select-Object -Last $Tail)
  [pscustomobject]@{path=$selected;paths=$selectedPaths;retainedAcrossEngineRestarts=$retained;previousWrapperIncluded=($retained-and$selectedPaths-contains$PreviousWrapperLog);tailLimit=$Tail;lines=$filtered}
