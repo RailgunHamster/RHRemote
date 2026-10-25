@@ -61,9 +61,20 @@ try{
  $code='$ErrorActionPreference="Stop";'+"Add-Type -Path '$source';`n"+'$j=[RhMovieBrowser]::new($env:ComSpec,''/d /c "ping -n 30 127.0.0.1 >nul"'','''+$root.Replace("'","''")+"');Start-Sleep -Milliseconds 500;`n"+'$owned=@($j.Members()|ForEach-Object{$p=Get-Process -Id $_;@{pid=$p.Id;started=$p.StartTime.ToUniversalTime().Ticks}});[IO.File]::WriteAllText('''+$childFile.Replace("'","''")+''',($owned|ConvertTo-Json -Compress));Start-Sleep -Seconds 30'
  [IO.File]::WriteAllText($ownerScript,$code,[Text.UTF8Encoding]::new($true))
  $ownerError=Join-Path $root 'owner-error.txt'
- $owner=Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+$ownerScript+'"')) -WindowStyle Hidden -PassThru -RedirectStandardError $ownerError
- $until=(Get-Date).AddSeconds(15);while(-not(Test-Path -LiteralPath $childFile)-and-not$owner.HasExited-and(Get-Date)-lt$until){Start-Sleep -Milliseconds 100}
- if(-not(Test-Path -LiteralPath $childFile)){throw ('Job owner did not publish its identity: '+[IO.File]::ReadAllText($ownerError))}
+ # Exercise this step's actual PowerShell runtime. Cold Add-Type compilation on
+ # a hosted Windows runner can exceed 15 seconds; it is outside the job-lifetime
+ # assertion, so give startup a separate bounded deadline.
+ $ownerHost=(Get-Process -Id $PID).Path
+ $owner=Start-Process -FilePath $ownerHost -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+$ownerScript+'"')) -WindowStyle Hidden -PassThru -RedirectStandardError $ownerError
+ $until=(Get-Date).AddSeconds(60);while(-not(Test-Path -LiteralPath $childFile)-and-not$owner.HasExited-and(Get-Date)-lt$until){Start-Sleep -Milliseconds 100}
+ if(-not(Test-Path -LiteralPath $childFile)){
+  # Start-Process still holds its redirected error file while the child runs.
+  # Close the owner first so a secondary sharing violation cannot hide the
+  # actual startup failure; KILL_ON_JOB_CLOSE also cleans any created children.
+  if(-not$owner.HasExited){$owner.Kill()};$null=$owner.WaitForExit(5000)
+  $owner.Dispose();$owner=$null
+  throw ('Job owner did not publish its identity: '+[IO.File]::ReadAllText($ownerError))
+ }
  Assert $true 'Job owner identity published'
  $ownedChildren=Get-Content -LiteralPath $childFile -Raw|ConvertFrom-Json
  Assert ($ownedChildren.Count-ge2) 'Failure-path test did not create a descendant tree'
