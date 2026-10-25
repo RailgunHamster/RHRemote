@@ -78,7 +78,7 @@ public final class RhHome implements RhActions.Target {
     public void rebind(){activity.setContentView(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(draft!=null)showProfile(selected,draft);else showDevices();}
     public void resumed(){if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();}
     private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
-    public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);}
+    public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);if(!RhActions.lastConnectionError().isEmpty())message(RhActions.lastConnectionError());}
     private void showAdmission(RhAdmission operation){
         pageId="connecting";profileVisible=true;content.removeAllViews();heading("连接","");
         org.json.JSONObject state=operation.state();String phase=state.optString("phase");
@@ -86,6 +86,7 @@ public final class RhHome implements RhActions.Target {
         Button cancel=button("取消连接",false,()->invoke("stream.disconnect",RhActions.obj()));cancel.setEnabled(!state.optBoolean("cancelled"));content.addView(cancel);
     }
     private void beginAdmission(ComputerDetails target,boolean connect,String pin){
+        RhActions.clearConnectionError();
         RhProfile profile=RhProfile.load(activity,target.uuid);networkBusy=true;
         admission=new RhAdmission(activity,target.uuid,CONNECT,new RhAdmission.Listener(){
             public void changed(RhAdmission operation){if(activity.isDestroyed())return;if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
@@ -176,6 +177,7 @@ public final class RhHome implements RhActions.Target {
         if(draft!=null&&id.startsWith("settings.")&&!id.equals("settings.cancel")){org.json.JSONObject pending=draft.json();for(Map.Entry<String,EditText> entry:numberEditors.entrySet()){try{pending.put(entry.getKey(),Integer.parseInt(entry.getValue().getText().toString()));}catch(NumberFormatException e){throw new IllegalArgumentException("请输入有效的数字");}}draft=RhProfile.fromJson(selected.uuid,pending);}
         switch(id){
             case "statistics.state":return RhStatistics.state();
+            case "statistics.complete":return RhStatistics.complete(args.getString("runId"),args.getString("sha256"));
             case "statistics.configure":if(!(args.get("enabled") instanceof Boolean))throw new IllegalArgumentException("enabled must be boolean");org.json.JSONObject tracing=RhStatistics.configure(args.getBoolean("enabled"));if(pageId.equals("global-settings"))showGlobal();return tracing;
             case "devices.open":case "settings.cancel":showDevices();break;
             case "devices.refresh":actions.refresh();break;

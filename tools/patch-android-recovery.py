@@ -58,7 +58,7 @@ def patch(root):
     @Override
     public void stageFailed"""),
         ("    public void stageFailed(final String stage, final int portFlags, final int errorCode) {", """    public void stageFailed(final String stage, final int portFlags, final int errorCode) {
-        if(rhRecovery!=null&&rhRecovery.stageFailed(stage,portFlags,errorCode))return;"""),
+        if(rhRecovery!=null){rhRecovery.handleStageFailure(stage,portFlags,errorCode);return;}"""),
         ("    public void connectionTerminated(final int errorCode) {", """    public void connectionTerminated(final int errorCode) {
         if(rhRecovery!=null&&rhRecovery.terminated(errorCode))return;"""),
     ])

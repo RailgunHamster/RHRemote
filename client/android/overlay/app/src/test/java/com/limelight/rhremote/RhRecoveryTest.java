@@ -74,6 +74,13 @@ public class RhRecoveryTest {
         assertTrue(RhActions.hasStream());cleanup.accept(true);cleanup=null;idle();
         assertEquals(0,resolutions);assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
     }
+    @Test public void fatalStartupReturnsHomeAndReleasesOwnershipOnlyAfterCleanup(){
+        recovery=make(Runnable::run);recovery.handleStageFailure("Desktop",0,400);idle();
+        assertTrue(activity.isFinishing());assertTrue(RhActions.hasStream());assertEquals(0,resolutions);
+        assertNotNull(cleanup);cleanup.accept(true);cleanup=null;idle();
+        assertFalse(RhActions.hasStream());assertEquals(0,resolutions);
+        assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+    }
     @Test public void cancelAfterResolveCannotLeaveStatisticsOrLaunchAnActivity(){
         RhStatistics.configure(true);recovery=make(Runnable::run);
         assertTrue(recovery.stageFailed(1,-1));idle();cleanup.accept(true);cleanup=null;

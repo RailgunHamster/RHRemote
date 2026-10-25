@@ -24,6 +24,10 @@ def patch(root):
         com.limelight.rhremote.RhLaunchAttempt attempt;synchronized(rhLaunchLock){attempt=rhLaunch;}
         return attempt==null||attempt.await(timeoutMs);
     }
+    public void markRhLaunchHandedOff(){
+        com.limelight.rhremote.RhLaunchAttempt attempt;synchronized(rhLaunchLock){attempt=rhLaunch;}
+        if(attempt!=null)attempt.handedOff();
+    }
     private String beginRhLaunch()throws IOException {
         com.limelight.rhremote.RhLaunchAttempt previous;synchronized(rhLaunchLock){previous=rhLaunch;}
         try{if(previous!=null&&!previous.await(3000))throw new IOException("Previous launch cleanup is incomplete");}
@@ -94,11 +98,16 @@ def patch(root):
         }catch(InterruptedException e){Thread.currentThread().interrupt();return false;}
     }'''
     text = replace(text, before, after)
+    text = replace(text, '    public boolean rhAwaitStopped(long timeoutMs){', '''    public void rhMarkLaunchHandedOff(){NvHTTP http=rhHttp;if(http!=null)http.markRhLaunchHandedOff();}
+    public boolean rhAwaitStopped(long timeoutMs){''')
     path.write_text(text, encoding="utf-8", newline="\n")
 
     path = root / "app/src/main/java/com/limelight/Game.java"
     text = path.read_text(encoding="utf-8")
     text = replace(text, 'while(!conn.rhAwaitStopped(1000)){}', 'while(!conn.rhAwaitStopped(1000)){Thread.sleep(1000);}')
+    text = replace(text, '    public void connectionStarted() {', '''    public void connectionStarted() {
+        conn.rhMarkLaunchHandedOff();
+        com.limelight.rhremote.RhStatistics.event("launch_handed_off_client");''')
     path.write_text(text, encoding="utf-8", newline="\n")
 
 

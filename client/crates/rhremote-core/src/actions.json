@@ -2,6 +2,7 @@
  {"id":"devices.open","label":"设备","args":{}},
  {"id":"statistics.configure","label":"测试模式逐帧统计","args":{"enabled":"boolean; local only; change while disconnected"}},
  {"id":"statistics.state","label":"测试统计文件状态","args":{}},
+ {"id":"statistics.complete","label":"确认统计分析完成","platforms":["android"],"args":{"runId":"closed statistics run ID","sha256":"SHA-256 of exported native.jsonl; prune before next recording"}},
  {"id":"devices.refresh","label":"刷新设备","args":{}},
  {"id":"device.move","label":"调整设备顺序","args":{"uuid":"string","direction":"up / down"}},
  {"id":"device.add.open","label":"添加电脑","args":{}},

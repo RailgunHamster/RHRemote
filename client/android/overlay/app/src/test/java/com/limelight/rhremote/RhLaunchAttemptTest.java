@@ -46,4 +46,13 @@ public class RhLaunchAttemptTest {
         }
         assertNull(RhLaunchAttempt.redact(null));assertEquals("ordinary",RhLaunchAttempt.redact("ordinary"));
     }
+    @Test public void confirmedRtspHandoffNeedsNoNetworkCleanupAndCannotBeOverwritten()throws Exception {
+        AtomicInteger calls=new AtomicInteger();
+        RhLaunchAttempt active=new RhLaunchAttempt(true,key->{calls.incrementAndGet();throw new java.io.IOException("offline");});
+        active.handedOff();assertTrue(active.await(0));active.cancel();assertEquals(0,calls.get());
+        ArrayDeque<Runnable> jobs=new ArrayDeque<>();
+        RhLaunchAttempt racing=new RhLaunchAttempt(true,key->"invalid",jobs::add,()->1000);
+        racing.cancel();assertFalse(racing.await(0));racing.handedOff();assertTrue(racing.await(0));
+        jobs.remove().run();assertEquals(RhLaunchAttempt.Result.HANDED_OFF,racing.result());assertTrue(racing.await(0));
+    }
 }

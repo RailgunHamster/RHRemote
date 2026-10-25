@@ -28,6 +28,11 @@ public final class RhLaunchAttempt {
     }
     public String query(){return supported?"&rhremoteLaunchToken="+credential:"";}
     public synchronized Result result(){return result;}
+    /** Native connectionStarted follows successful RTSP PLAY: the pending slot has transferred to this stream. */
+    public synchronized void handedOff(){
+        if(!supported||acknowledged(result))return;
+        result=Result.HANDED_OFF;done.countDown();
+    }
     public static boolean acknowledged(Result result){return result==Result.CANCELLED||result==Result.HANDED_OFF||result==Result.FINISHED||result==Result.EXPIRED;}
     public static Result reply(String value){if("cancelled".equals(value))return Result.CANCELLED;if("handed_off".equals(value))return Result.HANDED_OFF;if("finished".equals(value))return Result.FINISHED;if("expired".equals(value))return Result.EXPIRED;return Result.FAILED;}
     public void cancel(){
@@ -38,7 +43,7 @@ public final class RhLaunchAttempt {
         }
         try{executor.execute(()->{
             Result outcome=Result.FAILED;try{outcome=reply(cleanup.send(credential));}catch(Exception|LinkageError failed){/* Retain ownership; a later wait can retry the same request. */}
-            synchronized(this){result=outcome;active=false;retryAfter=clock.getAsLong()+1000;}
+            synchronized(this){if(!acknowledged(result))result=outcome;active=false;retryAfter=clock.getAsLong()+1000;}
             completion.countDown();
         });}catch(RuntimeException rejected){synchronized(this){result=Result.FAILED;active=false;retryAfter=clock.getAsLong()+1000;}completion.countDown();}
     }

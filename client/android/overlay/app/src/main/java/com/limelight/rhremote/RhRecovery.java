@@ -1,7 +1,6 @@
 package com.limelight.rhremote;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
@@ -93,6 +92,12 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     public void frame(){if(!cancelled&&!retrying){boolean first=!policy.rendered();policy.frame(SystemClock.elapsedRealtime());if(first)main.removeCallbacks(watchdog);}}
     public boolean stageFailed(int portFlags,int code){return stageFailed("",portFlags,code);}
     public boolean stageFailed(String stage,int portFlags,int code){return retry(RhRecoveryPolicy.networkStage(stage,portFlags,code),"连接阶段失败 ("+code+")");}
+    /** Fatal startup errors return to the device list after scoped cleanup, without a modal connection owner. */
+    public void handleStageFailure(String stage,int portFlags,int code){
+        if(stageFailed(stage,portFlags,code))return;
+        RhStatistics.event("connection_stage_failed",-1,RhActions.obj("name",stage,"code",code));
+        onMain(()->{RhActions.connectionError("连接失败："+stage+" ("+code+")");background();activity.finish();});
+    }
     public boolean terminated(int code){
         if(code==MoonBridge.ML_ERROR_GRACEFUL_TERMINATION)return retrying;
         boolean eligible=policy.rendered()||code==MoonBridge.ML_ERROR_NO_VIDEO_TRAFFIC||code==MoonBridge.ML_ERROR_NO_VIDEO_FRAME||code==MoonBridge.ML_ERROR_UNEXPECTED_EARLY_TERMINATION;
@@ -153,8 +158,9 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private void failed(String message){
         if(completed)return;
         error=message;cancel();RhStatistics.finish();
-        if(!activity.isFinishing())new AlertDialog.Builder(activity).setTitle("连接失败").setMessage(message).setPositiveButton("确定",(dialog,which)->activity.finish()).setOnCancelListener(dialog->activity.finish()).show();
-        else android.widget.Toast.makeText(activity.getApplicationContext(),message,android.widget.Toast.LENGTH_LONG).show();
+        RhActions.connectionError("连接失败："+message);
+        android.widget.Toast.makeText(activity.getApplicationContext(),message,android.widget.Toast.LENGTH_LONG).show();
+        activity.finish();
     }
     private synchronized void release(){
         if(completed||cleanupPending||workerRunning||!RhActions.ownsRecovery(this)||!cancelled)return;

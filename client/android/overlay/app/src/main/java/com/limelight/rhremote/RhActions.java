@@ -21,6 +21,7 @@ public final class RhActions {
     private static volatile RhAdmission admitting;
     private static JSONArray catalog;private static String token;private static boolean started;
     private static Context appContext;
+    private static String lastConnectionError="";
     public static JSONObject obj(Object... pairs){JSONObject value=new JSONObject();try{for(int i=0;i<pairs.length;i+=2)value.put((String)pairs[i],pairs[i+1]);}catch(JSONException e){throw new IllegalArgumentException(e);}return value;}
     public static synchronized void initialize(Context context,Target target){
         appContext=context.getApplicationContext();
@@ -51,6 +52,9 @@ public final class RhActions {
     static RhRecovery recovery(){return recovering;}
     static boolean ownsRecovery(Target target){return recovering==target;}
     public static boolean hasStream(){return stream.get()!=null||recovering!=null||admitting!=null;}
+    static String lastConnectionError(){return lastConnectionError;}
+    static void clearConnectionError(){lastConnectionError="";}
+    static void connectionError(String message){lastConnectionError=message;Target target=home.get();if(target instanceof RhHome)((RhHome)target).message(message);}
     private static Target activeTarget(){return recovering!=null?recovering:admitting!=null?admitting:stream.get();}
     public static JSONObject dispatch(String id,JSONObject args){
         if(Looper.myLooper()==Looper.getMainLooper())return execute(id,args);
@@ -68,7 +72,7 @@ public final class RhActions {
     }
     public static void click(String id,JSONObject args){JSONObject response=dispatch(id,args);if(!response.optBoolean("ok")){Target target=home.get();if(target instanceof RhHome)((RhHome)target).message(response.optString("error"));}}
     private static JSONObject snapshot(){
-        if(Looper.myLooper()==Looper.getMainLooper()){try{JSONObject state=home.get()==null?new JSONObject():home.get().state();Target target=activeTarget();JSONObject active=target==null?new JSONObject():target.state();state.put("streaming",active.optBoolean("connected"));state.put("connecting",target!=null&&!active.optBoolean("connected"));if(target!=null)state.put("stream",active);return obj("ok",true,"state",state);}catch(Exception e){return obj("ok",false,"error","state unavailable");}}
+        if(Looper.myLooper()==Looper.getMainLooper()){try{JSONObject state=home.get()==null?new JSONObject():home.get().state();Target target=activeTarget();JSONObject active=target==null?new JSONObject():target.state();state.put("streaming",active.optBoolean("connected"));state.put("connecting",target!=null&&!active.optBoolean("connected"));state.put("lastConnectionError",lastConnectionError);if(target!=null)state.put("stream",active);return obj("ok",true,"state",state);}catch(Exception e){return obj("ok",false,"error","state unavailable");}}
         JSONObject[] result=new JSONObject[1];CountDownLatch latch=new CountDownLatch(1);MAIN.post(()->{result[0]=snapshot();latch.countDown();});try{if(latch.await(5,TimeUnit.SECONDS))return result[0];}catch(InterruptedException e){Thread.currentThread().interrupt();}return obj("ok",false,"error","state timeout");
     }
     private static byte[] read(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1){if(out.size()+n>limit)throw new IOException("request too large");out.write(b,0,n);}return out.toByteArray();}
@@ -83,6 +87,21 @@ public final class RhActions {
         else if(request.length!=3){status=400;result=obj("ok",false,"error","invalid request");}
         else if(request[0].equals("GET")&&request[1].equals("/v1/state")){result=snapshot();}
         else if(request[0].equals("GET")&&request[1].equals("/v1/actions")){result=obj("ok",true,"actions",catalog);}
+        else if(request[0].equals("GET")&&request[1].startsWith("/v1/statistics/")){
+            String[] path=request[1].split("/",-1);
+            if(path.length!=5){status=404;result=obj("ok",false,"error","unknown statistics file");}
+            else{
+                RhStatisticsExport.Export trace;
+                try{trace=RhStatistics.export(path[3],path[4]);}
+                catch(Exception unavailable){trace=null;}
+                if(trace==null){status=409;result=obj("ok",false,"error","closed statistics file unavailable");}
+                else try(RhStatisticsExport.Export exported=trace){
+                    OutputStream output=socket.getOutputStream();
+                    output.write(("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "+exported.length+"\r\nX-Content-SHA256: "+exported.sha256+"\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                    byte[] chunk=new byte[65536];int n;while((n=exported.input.read(chunk))!=-1)output.write(chunk,0,n);output.flush();return;
+                }
+            }
+        }
         else if(request[0].equals("POST")&&request[1].equals("/v1/action")){
             int length=Integer.parseInt(headers.getOrDefault("content-length","-1"));if(length<0||length>8192)throw new IOException("bounded body required");byte[] body=new byte[length];new DataInputStream(in).readFully(body);JSONObject action=new JSONObject(new String(body,StandardCharsets.UTF_8));result=dispatch(action.getString("id"),action.optJSONObject("args")==null?new JSONObject():action.getJSONObject("args"));if(!result.optBoolean("ok"))status=422;
         }else{status=404;result=obj("ok",false,"error","unknown endpoint");}

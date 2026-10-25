@@ -7,34 +7,25 @@ $s=& (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') @params
 if(-not $s.ok){throw 'Statistics state unavailable'}
 $path=[string]$s.result.latest
 if($RunId){
- if($Platform-ne'windows'-or$RunId-notmatch'^\d+-[a-f0-9-]+$'){throw 'Explicit run selection requires a valid Windows run ID'}
- $directory=[string]$s.result.directory;if(-not $directory){throw 'Statistics directory unavailable'}
- $path=Join-Path $directory $RunId
- if(-not(Test-Path -LiteralPath (Join-Path $path 'manifest.json'))){throw 'Selected Windows trace does not exist'}
+ if($RunId-notmatch'^\d+-[a-f0-9-]+$'){throw 'Invalid statistics run ID'}
+ if($Platform-eq'windows'){
+  $directory=[string]$s.result.directory;if(-not $directory){throw 'Statistics directory unavailable'}
+  $path=Join-Path $directory $RunId
+  if(-not(Test-Path -LiteralPath (Join-Path $path 'manifest.json'))){throw 'Selected Windows trace does not exist'}
+ }else{$path='/data/user/0/com.rhremote.client/files/statistics/'+$RunId}
 }elseif(-not $path){throw 'No statistics run available'}
 if($Platform -eq 'android'){
  $prefix='/data/user/0/com.rhremote.client/files/statistics/'
  if(-not $path.StartsWith($prefix)){throw 'Unexpected app statistics path'}
  $id=$path.Substring($prefix.Length);if($id -notmatch '^\d+-[a-f0-9-]+$'){throw 'Invalid run ID'}
- $adb='C:\Users\40608\AppData\Local\Android\Sdk\platform-tools\adb.exe';$serial='192.168.0.103:5555'
   $androidRoot=[IO.Path]::GetFullPath((Join-Path $repo 'results/statistics/android'))
  if(Test-Path -LiteralPath $androidRoot){foreach($old in (Get-ChildItem -LiteralPath $androidRoot -Directory)){
   $resolved=[IO.Path]::GetFullPath($old.FullName)
   if([IO.Path]::GetDirectoryName($resolved) -ne $androidRoot){throw 'Statistics cleanup escaped root'}
   if($old.Name -ne $id -and (Test-Path -LiteralPath (Join-Path $resolved 'analysis-complete.json')) -and -not(Test-Path -LiteralPath (Join-Path $resolved 'keep'))){Remove-Item -LiteralPath $resolved -Recurse -Force}
  }}
- $out=Join-Path $androidRoot $id;New-Item -ItemType Directory -Force -Path $out|Out-Null
- $deadline=(Get-Date).AddSeconds(8)
- do{
-  $rows=@(& $adb -s $serial exec-out run-as com.rhremote.client cat "files/statistics/$id/native.jsonl")
-  if($LASTEXITCODE -ne 0){throw 'Could not export app trace'}
-  if($rows.Count -gt 0 -and $rows[-1] -match '"event":"trace_end"'){break}
-  Start-Sleep -Milliseconds 250
- }while((Get-Date)-lt $deadline)
- if($rows[-1] -notmatch '"event":"trace_end"'){throw 'Statistics writer is still active or trace ended incompletely'}
- [IO.File]::WriteAllLines((Join-Path $out 'native.jsonl'),$rows,[Text.UTF8Encoding]::new($false))
- $manifest=@(& $adb -s $serial exec-out run-as com.rhremote.client cat "files/statistics/$id/manifest.json")
- [IO.File]::WriteAllLines((Join-Path $out 'manifest.json'),$manifest,[Text.UTF8Encoding]::new($false));$path=$out
+ $export=& (Join-Path $PSScriptRoot 'export-android-statistics.ps1') -RunId $id -Directory $androidRoot
+ $path=$export.directory
 }
 $before=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $evidence=Join-Path $path 'host-evidence.json'
@@ -51,8 +42,5 @@ if($Platform-eq'windows'){
  if($LASTEXITCODE-ne0){throw 'Connection-attempt summary failed; individual reports and raw evidence are retained'}
 }
 if($Platform -eq 'android' -and -not $KeepRaw -and (Test-Path -LiteralPath (Join-Path $path 'analysis-complete.json'))){
- # Fixed validated app-private paths only. Keep manifest+completion until next-run pruning.
- & $adb -s $serial shell run-as com.rhremote.client rm "files/statistics/$id/native.jsonl"
- $marker='{"schema":"rhremote.statistics.cleanup/v1","rawDeleted":true}'
- $marker | & $adb -s $serial shell run-as com.rhremote.client sh -c "'cat > files/statistics/$id/analysis-complete.json'"
+ & (Join-Path $PSScriptRoot 'Invoke-RHRemoteAction.ps1') -Action statistics.complete -Port 48754 -TokenFile $params.TokenFile -Arguments @{runId=$id;sha256=$export.nativeSha256}|Out-Null
 }

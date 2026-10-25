@@ -25,7 +25,7 @@ public final class RhDisplay {
         JSONObject result=request.call("/v1/display/prepare",RhActions.obj("mode",mode,"displayId",mode.equals("physical")?id:"","width",profile.width,"height",profile.height)).getJSONObject("result");
         if(send)apply(result.optJSONObject("selected"));data=result;error="";
     }
-    /** Build a bounded, encoded query for this connection's freshly prepared source. */
+    /** NvHTTP expects a raw query: pre-encoding here would make HttpUrl.Builder.query() escape the percent signs. */
     public String launchQuery()throws IOException {
         initialBeforeCapture=false;requestedInitialSource="";JSONObject selected=data.optJSONObject("selected");String source=selected==null?"":selected.optString("gdi");
         if(source.isEmpty())return "";
@@ -33,7 +33,7 @@ public final class RhDisplay {
         if(!source.startsWith(prefix)||source.length()<=prefix.length()||source.length()>31||source.charAt(prefix.length())=='0')throw new IOException("Invalid prepared display source");
         for(int i=prefix.length();i<source.length();i++)if(source.charAt(i)<'0'||source.charAt(i)>'9')throw new IOException("Invalid prepared display source");
         requestedInitialSource=source;
-        return "&rhrdisplay="+java.net.URLEncoder.encode(requestedInitialSource,"UTF-8");
+        return "&rhrdisplay="+requestedInitialSource;
     }
     /** Suppress the legacy post-start hotkey only after a matching host acknowledgement. */
     public void acknowledgeInitial(String ack)throws IOException {

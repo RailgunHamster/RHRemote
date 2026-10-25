@@ -41,7 +41,11 @@ public class RhDisplayTest {
     }
     @Test public void acknowledgedInitialSourceDoesNotSendPostStartHotkey()throws Exception{
         RhDisplay display=new RhDisplay(profile(),(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("id","virtual","gdi","\\\\.\\DISPLAY25","captureIndex",2),"initialCaptureIndex",1)));
-        display.prepare();assertEquals("&rhrdisplay=%5C%5C.%5CDISPLAY25",display.launchQuery());
+        display.prepare();
+        okhttp3.HttpUrl url=new okhttp3.HttpUrl.Builder().scheme("https").host("example.com")
+            .query("appid=1"+display.launchQuery()).build();
+        assertEquals("\\\\.\\DISPLAY25",url.queryParameter("rhrdisplay"));
+        assertFalse(url.encodedQuery().contains("%25"));
         display.acknowledgeInitial("\\\\.\\DISPLAY25");display.applyInitial(); // A JNI call here would fail this JVM test.
         try{display.acknowledgeInitial("\\\\.\\DISPLAY1");fail("Wrong source must be rejected");}catch(IOException expected){}
         display.acknowledgeInitial(null);display.acknowledgeInitial(""); // Older servers use the legacy hotkey.

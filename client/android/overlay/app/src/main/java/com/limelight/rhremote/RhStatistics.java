@@ -18,6 +18,13 @@ public final class RhStatistics {
     public static boolean enabled(){return context!=null&&context.getSharedPreferences("rhremote.statistics",0).getBoolean("enabled",false);}
     public static String launchQuery(){Session session=current;return RhHostFrameTrace.query(session!=null&&!session.stopping,new File(latest).getName());}
     public static JSONObject state(){Session s=current;return RhActions.obj("enabled",enabled(),"latest",latest,"recording",s!=null,"lostEvents",s==null?0:s.lost.get(),"format","rhremote.statistics/v1");}
+    static RhStatisticsExport.Export export(String run,String file)throws Exception {
+        return RhStatisticsExport.open(new File(context.getFilesDir(),"statistics"),run,file);
+    }
+    static JSONObject complete(String run,String sha256)throws Exception {
+        RhStatisticsExport.complete(new File(context.getFilesDir(),"statistics"),run,sha256);
+        return RhActions.obj("analysisComplete",true,"pruneBeforeNextRecording",true);
+    }
     public static JSONObject configure(boolean enabled){if(current!=null)throw new IllegalStateException("disconnect before changing test mode");context.getSharedPreferences("rhremote.statistics",0).edit().putBoolean("enabled",enabled).apply();return state();}
     public static synchronized void begin(RhProfile profile)throws IOException{beginAt(profile,System.currentTimeMillis()*1000);}
     public static synchronized void beginAt(RhProfile profile,long originUs)throws IOException{

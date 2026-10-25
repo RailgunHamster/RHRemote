@@ -8,7 +8,7 @@ Windows 的 render_return 只表示 CPU 渲染/Present 提交返回，不代表�
 
 高频线程仅入有界队列，后台线程落盘；队列最多 65,536 条、单文件最多 512 MiB，结束写 trace_end 和丢记录计数。报告明确标出记录丢失或缺少结束标记。只记录时间、帧号、大小、配置与状态，不存像素、音频、键盘文本、URL 参数、配对密钥或令牌。
 
-`tools/collect-statistics.ps1 -Platform windows|android` 导出并分析最新测试。OPPO 用 app-private run-as 导出，不读取应用令牌到结果。主机只读日志在结束后采集，用 SSH 往返时间估计时钟偏移和误差范围；主机自身阶段耗时不依赖跨机时钟对齐。主机日志中的 Creating encoder → Streaming bitrate 区间仅是这两个标记之间的时间，后者位于 avcodec_open2 之前，不能声称是完整编码器打开耗时。
+`tools/collect-statistics.ps1 -Platform windows|android` 导出并分析最新测试。Android 正式版通过现有回环鉴权接口导出，不要求 debuggable 或 run-as，也不把令牌写入结果。GET /v1/statistics/<runId>/manifest.json 和 native.jsonl 仅允许已写入 trace_end 的应用统计，返回长度与 SHA-256；导出工具校验两者。statistics.complete 必须提交导出原文的 SHA-256，分析完成的记录在下次录制前清理；未确认的记录保留。主机只读日志在结束后采集，用 SSH 往返时间估计时钟偏移和误差范围；主机自身阶段耗时不依赖跨机时钟对齐。主机日志中的 Creating encoder → Streaming bitrate 区间仅是这两个标记之间的时间，后者位于 avcodec_open2 之前，不能声称是完整编码器打开耗时。
 
 输出 summary.json、frames.csv、Chrome Trace Event 格式 timeline.json 与独立 report.html。HTML 时间线支持缩放、平移、按帧号定位与事件详情，并给出平均/P95/P99/最大耗时和逐帧间隔。原始 JSONL 分析成功后删除；下次测试删除已分析的旧目录，只保留当前仍用于排查的结果。`--keep-raw` 为明确仍需要的对照创建 keep 标记，使用完必须清理。未结束/损坏记录先保留以便诊断，不悄悄当作完整统计。
 

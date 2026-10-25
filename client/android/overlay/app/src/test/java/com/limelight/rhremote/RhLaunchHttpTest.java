@@ -48,7 +48,7 @@ public class RhLaunchHttpTest {
         final AtomicBoolean denyClient=new AtomicBoolean();
         final List<String> cancellationCredentials=Collections.synchronizedList(new ArrayList<>());
         final Set<Socket> sockets=ConcurrentHashMap.newKeySet();
-        volatile String launchCredential;
+        volatile String launchCredential,initialDisplay;
         volatile boolean closed;
         final boolean capable;
         Host(AndroidCryptoProvider host,AndroidCryptoProvider client,boolean capable,boolean holdCancel)throws Exception {
@@ -70,13 +70,18 @@ public class RhLaunchHttpTest {
             try(Socket owned=socket){
                 owned.setSoTimeout(5000);BufferedReader input=new BufferedReader(new InputStreamReader(owned.getInputStream(),StandardCharsets.US_ASCII));
                 String request=input.readLine();if(request==null)return;String line;while((line=input.readLine())!=null&&!line.isEmpty()){}
-                URI uri=URI.create("https://fixture"+request.split(" ")[1]);String path=uri.getPath();String credential=null;
-                if(uri.getRawQuery()!=null)for(String field:uri.getRawQuery().split("&"))if(field.startsWith("rhremoteLaunchToken="))credential=field.substring("rhremoteLaunchToken=".length());
+                String target=request.split(" ")[1];int question=target.indexOf('?');
+                String path=question<0?target:target.substring(0,question),rawQuery=question<0?"":target.substring(question+1),credential=null;
+                for(String field:rawQuery.split("&"))if(field.startsWith("rhremoteLaunchToken="))credential=field.substring("rhremoteLaunchToken=".length());
                 if(!secure)plainRequests.incrementAndGet();String body;
                 if(path.equals("/serverinfo"))body="<root status_code=\"200\"><appversion>7.1.0</appversion><PairStatus>"+(secure?"1":"0")+"</PairStatus><RHLaunchCancel>"+(capable?"1":"0")+"</RHLaunchCancel><HttpsPort>"+tls.getLocalPort()+"</HttpsPort></root>";
                 else if(path.equals("/launch")||path.equals("/resume")){
                     launches.incrementAndGet();launchCredential=credential;launchReceived.countDown();releaseLaunch.await(8,TimeUnit.SECONDS);
-                    body="<root status_code=\"200\"><resume>1</resume><gamesession>1</gamesession></root>";
+                    String display=null;
+                    for(String field:rawQuery.split("&"))if(field.startsWith("rhrdisplay="))display=URLDecoder.decode(field.substring("rhrdisplay=".length()),"UTF-8");
+                    initialDisplay=display;
+                    if(display!=null&&!display.equals("\\\\.\\DISPLAY25"))body="<root status_code=\"400\" status_message=\"Invalid initial display\"/>";
+                    else body="<root status_code=\"200\"><resume>1</resume><gamesession>1</gamesession>"+(display==null?"":"<RHInitialDisplay>"+display+"</RHInitialDisplay>")+"</root>";
                 }else if(path.equals("/rhremote/launch/cancel")){
                     cancels.incrementAndGet();cancellationCredentials.add(credential);cancelReceived.countDown();releaseCancel.await(3,TimeUnit.SECONDS);
                     body="<root status_code=\"200\"><cancel>1</cancel><RHLaunchState>cancelled</RHLaunchState></root>";
@@ -97,6 +102,27 @@ public class RhLaunchHttpTest {
         client.getServerInfo(true);return client;
     }
     private static Thread launch(NvHTTP client,AtomicReference<Throwable> failure){Thread thread=new Thread(()->{try{client.launchApp(stream(),"resume",1,false);}catch(Throwable e){failure.set(e);}},"fixture actual launch");thread.start();return thread;}
+
+    @Test public void preparedDisplaySurvivesActualPinnedHttpQueryEncoding()throws Exception {
+        AndroidCryptoProvider server=identity("display-host"),identity=identity("display-client");
+        try(Host host=new Host(server,identity,true,false)){
+            NvHTTP h=client(host,server,identity);
+            RhProfile profile=RhProfile.fromJson("host",RhActions.obj("width",1920,"height",1080,"fps",30,"bitrateMbps",25,"codec","HEVC","swapButtons",false,"trackpad",false,"statistics",false));
+            RhDisplay display=new RhDisplay(profile,(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("gdi","\\\\.\\DISPLAY25","captureIndex",2),"initialCaptureIndex",1)));
+            display.prepare();h.setRhInitialDisplay(display);host.releaseLaunch.countDown();
+            assertTrue(h.launchApp(stream(),"resume",1,false));
+            assertEquals("\\\\.\\DISPLAY25",host.initialDisplay);display.applyInitial();
+            assertEquals(1,host.launches.get());assertTrue(host.mutualTls.get()>0);
+        }
+    }
+    @Test public void establishedStreamCleanupDoesNotDependOnReachableAdmissionHttp()throws Exception {
+        AndroidCryptoProvider server=identity("established-host"),identity=identity("established-client");
+        try(Host host=new Host(server,identity,true,false)){
+            NvHTTP h=client(host,server,identity);host.releaseLaunch.countDown();assertTrue(h.launchApp(stream(),"resume",1,false));
+            h.markRhLaunchHandedOff();host.denyClient.set(true);h.cancelRhRequests();
+            assertTrue(h.awaitRhLaunchCleanup(0));assertEquals(0,host.cancels.get());
+        }
+    }
 
     @Test public void connectionStopWaitsForScopedTlsCleanupWhileResponseIsUnknown()throws Exception {
         AndroidCryptoProvider server=identity("stop-host"),identity=identity("stop-client");
