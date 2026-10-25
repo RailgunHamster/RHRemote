@@ -6,6 +6,7 @@
 #include "display.h"
 #include "misc.h"
 #include "src/logging.h"
+#include "src/rhremote_sws_input.h"
 
 namespace platf {
   using namespace std::literals;
@@ -22,6 +23,7 @@ namespace platf::dxgi {
     ~img_t() override {
       delete[] data;
       data = nullptr;
+      data_capacity = 0;
     }
   };
 
@@ -409,12 +411,19 @@ namespace platf::dxgi {
     // Reallocate the image buffer if the pitch changes
     if (!dummy && img->row_pitch != img_info.RowPitch) {
       img->row_pitch = img_info.RowPitch;
-      delete img->data;
+      delete[] img->data;
       img->data = nullptr;
+      img->data_capacity = 0;
     }
 
     if (!img->data) {
-      img->data = new std::uint8_t[img->row_pitch * height];
+      const auto capacity = rhremote::padded_source_bytes(img->row_pitch > 0 ? img->row_pitch : 0, height > 0 ? height : 0);
+      if (!capacity) {
+        return -1;
+      }
+      img->data = new std::uint8_t[*capacity];
+      img->data_capacity = *capacity;
+      std::fill_n(img->data + *capacity - rhremote::source_frame_padding, rhremote::source_frame_padding, 0);
     }
 
     return 0;

@@ -533,6 +533,7 @@ namespace platf {
     img_t &operator=(const img_t &) = delete;
 
     std::uint8_t *data {};  ///< Pointer to the captured image buffer.
+    std::size_t data_capacity {};  ///< Known allocation size including zero tail; zero keeps copying conversion.
     std::int32_t width {};  ///< Image width in pixels.
     std::int32_t height {};  ///< Image height in pixels.
     std::int32_t pixel_pitch {};  ///< Bytes per pixel in the image buffer.

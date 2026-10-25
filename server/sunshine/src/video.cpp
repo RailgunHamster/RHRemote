@@ -39,6 +39,7 @@ extern "C" {
 #include "rhremote_initial_display.h"
 #include "rhremote_mf_trace.h"
 #include "rhremote_qsv_trace.h"
+#include "rhremote_sws_input.h"
 #include "rhremote_video_pacing.h"
 #include "sync.h"
 #include "video.h"
@@ -265,6 +266,15 @@ namespace video {
     sws_input_frame->linesize[2] = 0;
     sws_input_frame->data[3] = nullptr;
     sws_input_frame->linesize[3] = 0;
+
+    // Captures with a known padded allocation retain their actual shared owner.
+    // Without buf[0], the legacy sws_frame_start path allocates and copies this
+    // entire BGR0 image in av_frame_ref before it performs any conversion.
+    rhremote::sws_source_reference source_reference(*sws_input_frame, img.weak_from_this().lock(), img.data_capacity);
+    if (source_reference.status() < 0) {
+      BOOST_LOG(error) << "Could not reference software conversion input"sv;
+      return -1;
+    }
 
     // Perform color conversion and scaling to the final size
     auto status = sws_scale_frame(sws.get(), requires_padding ? sws_output_frame.get() : sw_frame.get(), sws_input_frame.get());

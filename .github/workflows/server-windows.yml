@@ -168,7 +168,7 @@ jobs:
       - name: Test pairing sessions and client authorization
         shell: msys2 {0}
         working-directory: .deps/cmake-build-server/tests
-        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteEncoderTrace*:*RhRemoteIntelMfProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*:*RhRemoteVideoPacing*:*RhRemotePendingLaunch*:*RhRemoteLaunchHttp*:*RhRemoteGpuPriority*' --gtest_output=xml:pairing-results.xml
+        run: ./test_sunshine.exe --gtest_color=yes '--gtest_filter=*Pairing*:*ClientAuth*:*RhRemoteEncoderProbe*:*RhRemoteEncoderTrace*:*RhRemoteIntelMfProbe*:*RhRemoteDeviceProbe*:*RhRemoteInitialDisplay*:*RhRemoteFrameTrace*:*RhRemoteVideoPacing*:*RhRemotePendingLaunch*:*RhRemoteLaunchHttp*:*RhRemoteGpuPriority*:*RhRemoteSwsInput*' --gtest_output=xml:pairing-results.xml
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:

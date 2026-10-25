@@ -17,6 +17,8 @@ The script requires a clean tracked working tree, verifies the official remote a
 
 Third-party modules retain the exact commits from Sunshine. Their paths are registered in the root `.gitmodules` so normal recursive checkout works in this monorepo. The sync tool updates registrations after upstream adds or removes modules. Moonlight remains a pinned client reference and is not automatically merged by this script.
 
+The software input reference optimization is isolated in `sunshine/src/rhremote_sws_input.h`, with small integration changes to `video.cpp`, the generic image capacity metadata and Windows RAM capture allocation. When merging capture or FFmpeg updates, retain the real shared image owner, known allocation size and zero tail; unknown backends must keep the original copying fallback. Run `RhRemoteSwsInput` against the actual linked FFmpeg to check retained references, allocation failures and byte-identical conversion before deploying. The investigation and current acceptance boundaries are recorded in `design/BROWSER60-SOFTWARE-BUDGET-20261025.md` at the repository root.
+
 ## Builds and identity
 
 The `RHRemote-Sunshine Windows` workflow builds `server/sunshine` from this repository, including its web UI and service supervisor. Local builds use `tools/build-server.ps1` with an existing MSYS2 UCRT64 toolchain. Client builds remain separate.
