@@ -58,6 +58,23 @@ public class RhRecoveryTest {
         },executor);
     }
     private void idle(){org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    @Test public void recoveryUsesANewGameInstanceInsteadOfReusingTheFinishingActivity()throws Exception{
+        android.content.pm.ActivityInfo info=activity.getPackageManager().getActivityInfo(new android.content.ComponentName(activity,Game.class),0);
+        assertEquals("singleTask loses the reconnect intent when the old Game finishes",android.content.pm.ActivityInfo.LAUNCH_MULTIPLE,info.launchMode);
+    }
+    @Test public void testInterruptionRequiresTestModeAndRealFrameThenUsesNormalCleanup(){
+        recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{
+            resolutions++;assertEquals("Established streams retry the current route first",0,failed.length());
+            ComputerDetails d=new ComputerDetails();d.activeAddress=new ComputerDetails.AddressTuple("192.168.0.104",47989);return d;
+        },Runnable::run);
+        try{recovery.interruptForTest();fail("Production mode accepted injected failure");}catch(IllegalStateException expected){}
+        RhStatistics.configure(true);
+        try{recovery.interruptForTest();fail("Unestablished stream accepted injected failure");}catch(IllegalStateException expected){}
+        recovery.frame();recovery.interruptForTest();idle();assertNotNull(cleanup);assertEquals(0,resolutions);
+        try{recovery.interruptForTest();fail("Repeated failure injection changed recovery ownership");}catch(IllegalStateException expected){}
+        cleanup.accept(true);cleanup=null;idle();assertEquals(1,resolutions);
+        assertNotNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+    }
     @Test public void nextRouteWaitsForCleanupAndPreservesPairingAndProfile()throws Exception{
         recovery=make(Runnable::run);
         assertTrue(recovery.stageFailed(1,-1));idle();assertEquals(0,resolutions);assertTrue(RhActions.hasStream());

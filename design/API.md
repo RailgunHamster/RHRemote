@@ -100,4 +100,6 @@ Android 的 `stream.controls.toggle` 控制顶部分类面板，开关坐标保�
 
 Windows 意外中断后，`statistics.phase=reconnecting`、`connecting=true`，恢复首帧后回到 `connected`。`statistics.reconnectAttempts` 是当前连续恢复次数；主动 `stream.disconnect` 会取消待执行的恢复。仅有已渲染会话能够自动恢复，首次连接失败不会无限重试。`stream.test.interrupt` 仅在已启用逐帧统计的活动 Windows 会话中可用，注入一次明确标记的模拟中断，走完整的底层终止及恢复路径。
 
+Android 也支持 `stream.test.interrupt`：必须已启用 `statistics.configure` 测试模式、实际提交过首帧且当前没有恢复任务。接口记录 `test_connection_interrupt {synthetic:true}`，进入与意外终止相同的清理／选路／新 Game 交接路径；重复注入或未满足前置条件会被拒绝。Android 的新 Game 使用独立 Activity 实例，admission/recovery 保留继续防止并发连接；不能用上游 `singleTask` 复用即将结束的旧实例。
+
 设备网络接口及参数见 [NETWORK.md](NETWORK.md)：`device.network.configure`、`device.network.diagnose`、`network.state`。设置分类新增 `network`；设备的多地址参与同步，诊断和当前路径保留在本机。

@@ -1,5 +1,6 @@
 """Apply RHRemote session lifecycle changes after statistics/tunnel adaptation."""
 import argparse
+import re
 from pathlib import Path
 
 def change(root, relative, replacements):
@@ -12,12 +13,20 @@ def change(root, relative, replacements):
     path.write_text(text,encoding="utf-8",newline="\n")
 
 def patch(root):
+    manifest=root/"app/src/main/AndroidManifest.xml"
+    text=manifest.read_text(encoding="utf-8")
+    # The owned recovery path creates a new Game after stopping the old native
+    # session. singleTask would deliver onNewIntent to the old, finishing Game.
+    text,count=re.subn(r'(<activity\s+android:name="\.Game"[^>]*?android:launchMode=")(?:singleTask|standard)(")',r'\g<1>standard\2',text)
+    if count!=1:raise RuntimeError("Recovery Game launch-mode anchor missing or ambiguous")
+    manifest.write_text(text,encoding="utf-8",newline="\n")
     change(root,"com/limelight/Game.java",[
         ("    private boolean connecting = false;", """    private boolean connecting = false;
     private com.limelight.rhremote.RhRecovery rhRecovery;
     private final java.util.concurrent.CountDownLatch rhStopped=new java.util.concurrent.CountDownLatch(1);
     private volatile boolean rhCleanupComplete,rhNativeStopped;
     public void rhCancelConnection(){if(rhRecovery!=null)rhRecovery.background();}
+    public void rhTestInterrupt(){if(rhRecovery==null)throw new IllegalStateException("no recovery controller");rhRecovery.interruptForTest();}
     private void rhStopForRetry(java.util.function.Consumer<Boolean> completed){
         runOnUiThread(()->{
             displayedFailureDialog=true;stopConnection();

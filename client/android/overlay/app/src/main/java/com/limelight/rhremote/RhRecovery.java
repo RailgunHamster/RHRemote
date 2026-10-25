@@ -104,6 +104,12 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         if(code==MoonBridge.ML_ERROR_PROTECTED_CONTENT||code==MoonBridge.ML_ERROR_FRAME_CONVERSION)eligible=false;
         return retry(eligible,"串流中断 ("+code+")");
     }
+    public void interruptForTest(){
+        if(!RhStatistics.enabled())throw new IllegalStateException("仅测试模式可注入中断");
+        if(!policy.rendered()||retrying||cancelled||completed)throw new IllegalStateException("当前串流不可注入中断");
+        RhStatistics.event("test_connection_interrupt",-1,RhActions.obj("synthetic",true,"attemptId",id));
+        terminated(MoonBridge.ML_ERROR_NO_VIDEO_TRAFFIC);
+    }
     private synchronized boolean retry(boolean eligible,String message){
         if(completed||handoff||cancelled)return retrying;
         if(!eligible){fatal=true;cancelRequests();main.removeCallbacks(watchdog);if(retrying)main.post(()->failed(message));return false;}
