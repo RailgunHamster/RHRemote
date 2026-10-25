@@ -55,4 +55,21 @@ public class RhLaunchAttemptTest {
         racing.cancel();assertFalse(racing.await(0));racing.handedOff();assertTrue(racing.await(0));
         jobs.remove().run();assertEquals(RhLaunchAttempt.Result.HANDED_OFF,racing.result());assertTrue(racing.await(0));
     }
+    @Test public void boundedDrainRetriesAFailedHttpsCancelWithTheSameCredential()throws Exception{
+        List<String> keys=Collections.synchronizedList(new ArrayList<>());
+        RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->{keys.add(key);if(keys.size()==1)throw new java.net.SocketTimeoutException("TLS timeout");return "cancelled";});
+        assertTrue(attempt.await(3000));assertEquals(2,keys.size());assertEquals(keys.get(0),keys.get(1));assertEquals(RhLaunchAttempt.Result.CANCELLED,attempt.result());
+    }
+    @Test public void unacknowledgedDrainStillTimesOutAndRetainsOwnership()throws Exception{
+        RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->"invalid");long began=System.nanoTime();
+        assertFalse(attempt.await(120));assertFalse(RhLaunchAttempt.acknowledged(attempt.result()));
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began)<1000);
+    }
+    @Test public void aCallerCanInterruptItsDrainWaitWithoutFakingAcknowledgement()throws Exception{
+        CountDownLatch entered=new CountDownLatch(1);AtomicBoolean interrupted=new AtomicBoolean();
+        RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->{entered.countDown();throw new java.net.SocketTimeoutException();});
+        Thread waiter=new Thread(()->{try{attempt.await(3000);}catch(InterruptedException expected){interrupted.set(true);}});
+        waiter.start();assertTrue(entered.await(2,TimeUnit.SECONDS));waiter.interrupt();waiter.join(1000);
+        assertFalse(waiter.isAlive());assertTrue(interrupted.get());assertFalse(RhLaunchAttempt.acknowledged(attempt.result()));
+    }
 }

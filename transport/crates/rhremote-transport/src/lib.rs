@@ -33,6 +33,13 @@ pub const DEFAULT_OFFSET: u16 = 1000;
 const MAX_FLOWS: usize = 32;
 const MAX_PACKET: usize = 1150;
 
+// Only an actual dial deadline is safe to retry automatically. Validation,
+// identity, permission and local setup failures keep their original behavior.
+#[cfg(any(target_os = "android", test))]
+fn startup_retryable(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<tokio::time::error::Elapsed>())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Address {
@@ -250,6 +257,8 @@ pub struct ProxyInfo {
     pub endpoint_id: String,
     pub path: String,
     pub rtt_ms: f64,
+    #[serde(default)]
+    pub reused: bool,
     pub relay_url: String,
 }
 /// A per-application runtime retained between native engine processes.
@@ -361,6 +370,7 @@ impl Client {
             endpoint_id: proxy.endpoint_id.clone(),
             path: path.into(),
             rtt_ms: rtt,
+            reused: reusable,
             relay_url: address.relay_url.clone(),
         })
     }
@@ -559,6 +569,15 @@ async fn serve_connection(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn only_a_real_dial_deadline_allows_automatic_network_retry() {
+        let elapsed = tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())
+            .await.unwrap_err();
+        assert!(startup_retryable(&anyhow::Error::new(elapsed).context("dial")));
+        assert!(!startup_retryable(&anyhow::anyhow!("deadline has elapsed")));
+        assert!(!startup_retryable(&anyhow::anyhow!("Invalid transport endpoint identity")));
+        assert!(!startup_retryable(&anyhow::anyhow!("Connection cancelled")));
+    }
     use super::*;
     #[test]
     fn cancelled_transport_connect_reaps_the_endpoint_before_returning() {
@@ -683,6 +702,10 @@ mod tests {
         let offset=proxy.offset;
         let remote=Address {endpoint_id:server.id().to_string(),relay_url:DEFAULT_RELAY.into()};
         client.current=Some((endpoint,proxy,remote,false));
+        let remote=client.current.as_ref().unwrap().2.clone();
+        let reused=client.start(Path::new(""),remote,false).unwrap();
+        assert!(reused.reused,"an established fallback channel was dialed again");
+        assert_eq!(reused.port_offset,offset);
         blackhole.store(true,Ordering::SeqCst);
         let began=Instant::now();client.stop();
         assert!(began.elapsed()<Duration::from_millis(300),"native cleanup waited for the remote QUIC drain: {:?}",began.elapsed());

@@ -14,6 +14,18 @@ import java.util.concurrent.*;
 
 /** UUID preflight only. Streaming still verifies the paired Sunshine certificate. */
 public final class RhNetwork {
+    /** Exhausted transient network paths, distinct from identity/configuration errors. */
+    static final class Unavailable extends IOException {Unavailable(String message){super(message);}}
+    static boolean unavailable(Throwable failure){
+        for(Throwable cause=failure;cause!=null;cause=cause.getCause())
+            if(cause instanceof javax.net.ssl.SSLException||cause instanceof java.security.cert.CertificateException)return false;
+        return failure instanceof Unavailable||failure instanceof SocketTimeoutException||failure instanceof SocketException||failure instanceof UnknownHostException;
+    }
+    private static boolean unavailable(JSONArray attempts){
+        boolean tried=false;
+        for(int i=0;i<attempts.length();i++){JSONObject row=attempts.optJSONObject(i);if(row.optBoolean("deferred"))continue;tried=true;if(!row.optBoolean("retryable"))return false;}
+        return tried;
+    }
     private static volatile JSONObject last=new JSONObject();
     private static final java.util.concurrent.ConcurrentHashMap<String,Long> LEARNED=new java.util.concurrent.ConcurrentHashMap<>();
     private static final ExecutorService PROBES=new ThreadPoolExecutor(4,4,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16),new ThreadPoolExecutor.AbortPolicy());
@@ -124,20 +136,30 @@ public final class RhNetwork {
         List<String> candidates=addresses(metadata);candidates.removeIf(a->!profile.networkMode.equals("auto")&&!kind(a).equals("auto")&&!kind(a).equals(profile.networkMode)&&!(profile.networkMode.equals("internet")&&kind(a).equals("transport")));
         JSONArray failed=options==null?null:options.optJSONArray("failedRoutes");
         JSONArray attempts=new JSONArray();String selected=null,selectedRemote="",chosenRoute="",chosenPath="unknown";int offset=0;
-        for(String route:profile.routeOrder) {
+        String retainedRelay="";
+        try{for(String route:profile.routeOrder) {
             checkpoint(operation);
             if(route.equals("punch_direct")||route.equals("relay")) {
                 for(String address:candidates)if(kind(address).equals("transport")) {
                     if(RhRecoveryPolicy.excluded(failed,route,address))continue;
-                    long at=System.nanoTime();boolean accepted=false;
+                    boolean reuse=route.equals("relay")&&address.equals(retainedRelay);
+                    if(!retainedRelay.isEmpty()&&!reuse){RhTunnel.stop();retainedRelay="";}
+                    long at=System.nanoTime();boolean accepted=false,retain=false;
                     try {
-                        JSONObject tunnel=RhTunnel.start(c,address.substring(4),profile.relayUrl,route.equals("relay"),operation);
-                        if(route.equals("punch_direct")&&!tunnel.optString("path").equals("direct"))throw new IOException("打洞未形成直连，继续尝试后续路径");
+                        // The automatic punch attempt may already have a working relay.
+                        // Reuse its non-forced endpoint only when the ordered relay route
+                        // gets its turn. Explicit relay-only connections remain forced.
+                        JSONObject tunnel=RhTunnel.start(c,address.substring(4),profile.relayUrl,route.equals("relay")&&!reuse,operation);
+                        if(route.equals("punch_direct")&&!tunnel.optString("path").equals("direct")){
+                            retain=tunnel.optString("path").equals("relay")&&profile.routeOrder.indexOf("relay")>profile.routeOrder.indexOf(route)&&!RhRecoveryPolicy.excluded(failed,"relay",address);
+                            if(retain)retainedRelay=address;
+                            throw new IOException(retain?"打洞未形成直连，已保留中继通道等待回退":"打洞未形成直连，继续尝试后续路径");
+                        }
                         offset=tunnel.getInt("portOffset");check(tunnel.getString("address"),source.uuid,47989+offset,operation,probeTimeoutMs(route));
                         selected=tunnel.getString("address");selectedRemote=address;chosenPath=tunnel.optString("path","unknown");chosenRoute=route;
-                        attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"timeoutMs",probeTimeoutMs(route),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));accepted=true;break;
-                    }catch(Exception|LinkageError e){checkpoint(operation);attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"timeoutMs",probeTimeoutMs(route),"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
-                    finally{if(!accepted)RhTunnel.stop();}
+                        attempts.put(RhActions.obj("address",address,"route",route,"ok",true,"reusedTunnel",tunnel.optBoolean("reused"),"timeoutMs",probeTimeoutMs(route),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));accepted=true;retainedRelay="";break;
+                    }catch(Exception|LinkageError e){checkpoint(operation);attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"deferred",retain,"retryable",unavailable(e),"timeoutMs",probeTimeoutMs(route),"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at)));}
+                    finally{if(!accepted&&!retain){RhTunnel.stop();if(reuse)retainedRelay="";}}
                 }
                 if(selected!=null)break;continue;
             }
@@ -145,18 +167,25 @@ public final class RhNetwork {
             // Tailscale candidates therefore belong to the explicit unknown bucket.
             List<String> group=new ArrayList<>();for(String address:candidates){if(RhRecoveryPolicy.excluded(failed,route,address))continue;String kind=kind(address);if(route.equals("lan")&&(kind.equals("lan")||kind.equals("auto"))||route.equals("public_direct")&&kind.equals("internet")||route.equals("tailscale_relay")&&kind.equals("tailscale"))group.add(address);}
             if(group.isEmpty())continue;
+            // An intervening usable route has priority over the retained relay.
+            // Dispose before its probes, so a rejected tunnel cannot survive into it.
+            if(!retainedRelay.isEmpty()){RhTunnel.stop();retainedRelay="";}
             int timeoutMs=probeTimeoutMs(route);
             CompletionService<JSONObject> queue=new ExecutorCompletionService<>(PROBES);List<Future<JSONObject>> tasks=new ArrayList<>();List<Probe> probes=new ArrayList<>();for(int i=0;i<group.size();i++)probes.add(new Probe());
             long end=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(2L*timeoutMs+200),grace=end;long best=Long.MAX_VALUE;
             try(RhCancellation.Watch request=operation==null?null:operation.watch(()->{for(Probe probe:probes)probe.cancel();})) {
-                for(int i=0;i<group.size();i++){String address=group.get(i);Probe probe=probes.get(i);tasks.add(queue.submit(()->{long at=System.nanoTime();try{check(address,source.uuid,47989,probe,timeoutMs);return RhActions.obj("address",address,"route",route,"ok",true,"timeoutMs",timeoutMs,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}catch(Exception e){return RhActions.obj("address",address,"route",route,"ok",false,"timeoutMs",timeoutMs,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}}));}
+                for(int i=0;i<group.size();i++){String address=group.get(i);Probe probe=probes.get(i);tasks.add(queue.submit(()->{long at=System.nanoTime();try{check(address,source.uuid,47989,probe,timeoutMs);return RhActions.obj("address",address,"route",route,"ok",true,"timeoutMs",timeoutMs,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}catch(Exception e){return RhActions.obj("address",address,"route",route,"ok",false,"retryable",unavailable(e),"timeoutMs",timeoutMs,"error",e.getMessage(),"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-at));}}));}
                 for(int remaining=tasks.size();remaining>0;){checkpoint(operation);long wait=Math.min(end,grace)-System.nanoTime();if(wait<=0)break;Future<JSONObject> future=queue.poll(Math.min(wait,TimeUnit.MILLISECONDS.toNanos(50)),TimeUnit.NANOSECONDS);if(future==null)continue;remaining--;JSONObject result=future.get();attempts.put(result);if(result.optBoolean("ok")&&result.getLong("elapsedMs")<best){best=result.getLong("elapsedMs");selected=result.getString("address");grace=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(50);}}
+                if(selected==null)for(String address:group){boolean recorded=false;for(int i=0;i<attempts.length();i++){JSONObject row=attempts.getJSONObject(i);if(route.equals(row.optString("route"))&&address.equals(row.optString("address")))recorded=true;}if(!recorded)attempts.put(RhActions.obj("address",address,"route",route,"ok",false,"retryable",true,"error","probe_deadline","timeoutMs",timeoutMs));}
             }finally{for(Probe probe:probes)probe.cancel();for(Future<?> future:tasks)future.cancel(true);}
             if(selected!=null){selectedRemote=selected;chosenRoute=route;chosenPath=route.equals("tailscale_relay")?"unknown":"direct";offset=0;break;}
-        }
+        }}finally{if(!retainedRelay.isEmpty())RhTunnel.stop();}
         checkpoint(operation);last=RhActions.obj("uuid",source.uuid,"selectedAddress",selected==null?JSONObject.NULL:selected,"remoteAddress",selectedRemote,"attempts",attempts,"route",chosenRoute,"routeOrder",new JSONArray(profile.routeOrder),"path",chosenPath,"portOffset",offset,"elapsedMs",TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began),"mediaUdp","not_tested");
         RhStatistics.event(selected==null?"network_resolve_failed":"network_resolve_end",-1,last);
-        if(selected==null)throw new IOException("已启用的连接路径均不可达或 UUID 不符；请运行网络诊断");
+        if(selected==null){
+            if(unavailable(attempts))throw new Unavailable("连接路径暂时不可达");
+            throw new IOException("已启用的连接路径均不可达或 UUID 不符；请运行网络诊断");
+        }
         ComputerDetails resolved=new ComputerDetails(source);resolved.activeAddress=new ComputerDetails.AddressTuple(selected.replace("[","").replace("]",""),47989+offset);resolved.manualAddress=resolved.activeAddress;resolved.state=ComputerDetails.State.ONLINE;
         if(options==null&&!selected.equals("127.77.0.2")&&source.serverCert!=null)learn(c.getApplicationContext(),source,selected);
         return resolved;

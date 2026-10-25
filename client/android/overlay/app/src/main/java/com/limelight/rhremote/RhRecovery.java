@@ -26,6 +26,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     // A false callback is a timeout. Only a later true callback proves native/HTTP cleanup.
     public interface Stopper { void stop(Consumer<Boolean> completed); }
     interface Resolver { ComputerDetails resolve(Intent intent,RhProfile profile,JSONArray failed,RhCancellation operation)throws Exception; }
+    interface Sleeper {void sleep(long milliseconds)throws InterruptedException;}
     private final long id=IDS.incrementAndGet();
     private final Activity activity;
     private final String uuid;
@@ -33,6 +34,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private final Stopper stopper;
     private final Resolver resolver;
     private final Executor worker;
+    private final Sleeper sleeper;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final RhRecoveryPolicy policy;
     private final JSONObject route;
@@ -45,6 +47,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private Intent claimedIntent;
     private String error="";
     private final Runnable watchdog,handoffTimeout=()->failed("串流窗口未能接管连接");
+    private final Runnable networkTimeout=()->failed("网络恢复等待超时，请检查网络后重试");
 
     public RhRecovery(Activity activity,RhProfile profile,Stopper stopper){
         this(activity,profile,stopper,(intent,p,failed,operation)->{
@@ -62,8 +65,11 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         },task->new Thread(task,"RHRemote reconnect").start());
     }
     RhRecovery(Activity activity,RhProfile profile,Stopper stopper,Resolver resolver,Executor worker){
+        this(activity,profile,stopper,resolver,worker,Thread::sleep);
+    }
+    RhRecovery(Activity activity,RhProfile profile,Stopper stopper,Resolver resolver,Executor worker,Sleeper sleeper){
         this.activity=activity;this.uuid=activity.getIntent().getStringExtra(Game.EXTRA_PC_UUID);
-        this.profile=profile;this.stopper=stopper;this.resolver=resolver;this.worker=worker;
+        this.profile=profile;this.stopper=stopper;this.resolver=resolver;this.worker=worker;this.sleeper=sleeper;
         RhRecovery pending=RhActions.recovery();predecessor=pending!=null&&pending.matchesClaim(activity.getIntent())?pending:null;
         RhAdmission entering=RhActions.admission();initialAdmission=entering!=null&&entering.matchesClaim(activity.getIntent())?entering:null;
         // Initialization must finish before this stopper can access Game's connection fields.
@@ -79,7 +85,9 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         long origin=RhStatistics.originUs();if(origin<=0)origin=System.currentTimeMillis()*1000;
         policy=new RhRecoveryPolicy(saved,origin);route=RhNetwork.state();
         watchdog=()->{if(!policy.rendered()&&!cancelled&&!retrying&&!retry(true,"首帧等待超时")){background();failed("首帧等待超时，已停止本轮连接");}};
-        main.postDelayed(watchdog,15_000);
+        // WAN HTTP launch plus RTSP can legitimately exceed the LAN deadline.
+        // This is a ceiling only; a received frame disarms it immediately.
+        main.postDelayed(watchdog,route.optString("route").equals("lan")?15_000:30_000);
         RhStatistics.event("native_attempt",-1,policy.state());
     }
     private static JSONObject parse(String json){try{return json==null?new JSONObject():new JSONObject(json);}catch(Exception e){return new JSONObject();}}
@@ -149,14 +157,28 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     }
     private void resolveNext(long delay){
         workerRunning=true;
+        main.postDelayed(networkTimeout,policy.remainingMs(SystemClock.elapsedRealtime()));
         try{worker.execute(()->{
             try{
                 checkpoint();
                 try(Watch interrupt=watch(Thread.currentThread()::interrupt)){
                     if(delay>0)Thread.sleep(delay);checkpoint();
                     RhStatistics.finish();RhStatistics.beginAt(profile,policy.originUs);
-                    ComputerDetails resolved=resolver.resolve(new Intent(activity.getIntent()),profile,policy.excluded(),this);
+                    ComputerDetails resolved;int networkRetries=0;
+                    while(true){
+                        checkpoint();
+                        if(policy.remainingMs(SystemClock.elapsedRealtime())<=0)throw new IOException("网络恢复等待超时，请检查网络后重试");
+                        try{resolved=resolver.resolve(new Intent(activity.getIntent()),profile,policy.excluded(),this);break;}
+                        catch(RhNetwork.Unavailable unavailable){
+                            checkpoint();long remaining=policy.remainingMs(SystemClock.elapsedRealtime());
+                            if(remaining<=0)throw unavailable;
+                            long wait=Math.min(remaining,1000L<<Math.min(networkRetries++,2));
+                            RhStatistics.event("recovery_network_retry",-1,RhActions.obj("retry",networkRetries,"waitMs",wait,"remainingMs",remaining,"reason",unavailable.getMessage()));
+                            sleeper.sleep(wait);
+                        }
+                    }
                     checkpoint();
+                    if(policy.remainingMs(SystemClock.elapsedRealtime())<=0)throw new IOException("网络恢复等待超时，请检查网络后重试");
                     Intent next=new Intent(activity.getIntent());
                     next.putExtra(Game.EXTRA_HOST,resolved.activeAddress.address);
                     next.putExtra(Game.EXTRA_PORT,resolved.activeAddress.port);
@@ -164,8 +186,8 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
                     main.post(()->launch(next));
                 }
             }catch(Exception|LinkageError e){main.post(()->{if(!cancelled)failed(e.getMessage()==null?"自动重连失败":e.getMessage());});}
-            finally{workerRunning=false;main.post(()->{if(cancelled)release();});}
-        });}catch(RuntimeException rejected){workerRunning=false;failed("重连任务无法启动");}
+            finally{main.removeCallbacks(networkTimeout);workerRunning=false;main.post(()->{if(cancelled)release();});}
+        });}catch(RuntimeException rejected){main.removeCallbacks(networkTimeout);workerRunning=false;failed("重连任务无法启动");}
     }
     private void launch(Intent next){
         if(cancelled||fatal||activity.isFinishing()||activity.isDestroyed()){cancel();return;}
@@ -194,7 +216,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     }
     public void cancel(){
         if(completed)return;
-        cancelRequests();main.removeCallbacks(watchdog);main.removeCallbacks(handoffTimeout);
+        cancelRequests();main.removeCallbacks(watchdog);main.removeCallbacks(handoffTimeout);main.removeCallbacks(networkTimeout);
         onMain(()->{stopSuccessor();release();});
     }
     private void successorReady(RhRecovery next){

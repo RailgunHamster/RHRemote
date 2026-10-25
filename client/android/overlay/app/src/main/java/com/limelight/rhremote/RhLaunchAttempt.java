@@ -49,9 +49,17 @@ public final class RhLaunchAttempt {
     }
     /** Unsupported hosts keep the legacy policy; failures never count as an acknowledgement. */
     public boolean await(long timeoutMs)throws InterruptedException {
-        cancel();final CountDownLatch completion;synchronized(this){if(!supported)return true;completion=done;}
-        if(!completion.await(Math.max(0,timeoutMs),TimeUnit.MILLISECONDS))return false;
-        synchronized(this){return acknowledged(result);}
+        long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(Math.max(0,timeoutMs));
+        while(true){
+            cancel();final CountDownLatch completion;synchronized(this){if(!supported)return true;completion=done;}
+            if(!completion.await(Math.max(0,deadline-System.nanoTime()),TimeUnit.NANOSECONDS))return false;
+            final long backoff;
+            synchronized(this){if(acknowledged(result))return true;backoff=Math.max(1,retryAfter-clock.getAsLong());}
+            long remaining=deadline-System.nanoTime();if(remaining<=0)return false;
+            // A failed HTTPS cancellation is not a negative acknowledgement.
+            // Retry the same credential within the caller's existing drain budget.
+            TimeUnit.NANOSECONDS.sleep(Math.min(remaining,TimeUnit.MILLISECONDS.toNanos(backoff)));
+        }
     }
     public static String redact(String value){return value==null?null:SECRET.matcher(value).replaceAll("$1[redacted]");}
 }

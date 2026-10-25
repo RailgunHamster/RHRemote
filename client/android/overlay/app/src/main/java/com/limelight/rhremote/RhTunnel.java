@@ -30,7 +30,11 @@ public final class RhTunnel {
         if(operation!=null)operation.checkpoint();
         JSONObject reply=new JSONObject(startNative(new File(context.getFilesDir(),"transport.key").getAbsolutePath(),peer,relay,relayOnly,attemptId));
         if(operation!=null)operation.checkpoint();
-        if(!reply.optBoolean("ok"))throw new IOException(reply.optString("error","独立连接失败"));
+        if(!reply.optBoolean("ok")){
+            String message=reply.optString("error","独立连接失败");
+            if(reply.optBoolean("retryable"))throw new RhNetwork.Unavailable(message);
+            throw new IOException(message);
+        }
         state=reply.getJSONObject("result");
         Os.setenv("RHREMOTE_TUNNEL_PORT_OFFSET",String.valueOf(state.getInt("portOffset")),true);
         return new JSONObject(state.toString());

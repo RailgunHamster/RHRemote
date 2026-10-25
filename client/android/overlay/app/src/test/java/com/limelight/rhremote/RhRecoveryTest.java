@@ -121,6 +121,12 @@ public class RhRecoveryTest {
         org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(16));
         assertEquals(0,resolutions);assertFalse(RhActions.hasStream());
     }
+    @Test public void wanLaunchCanPassTheOldFifteenSecondLimitButRemainsBounded()throws Exception{
+        Field field=RhNetwork.class.getDeclaredField("last");field.setAccessible(true);field.set(null,RhActions.obj("route","relay","remoteAddress","rhr:host"));
+        recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{throw new java.io.IOException("stop fixture");},Runnable::run);
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(20));assertFalse(RhActions.hasStream());assertNull(cleanup);
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(11));assertTrue(RhActions.hasStream());assertNotNull(cleanup);
+    }
     @Test public void statisticsKeepTheInitialActionClockAcrossAttempts()throws Exception{
         RhStatistics.configure(true);long origin=System.currentTimeMillis()*1000-250_000;
         RhStatistics.beginAt(profile,origin);String first=RhStatistics.state().getString("latest");RhStatistics.finish();
@@ -178,6 +184,47 @@ public class RhRecoveryTest {
         assertFalse(RhRecoveryPolicy.networkStage("video stream establishment",0,-1));
         assertTrue(RhRecoveryPolicy.networkStage("video stream establishment",0,111));
         assertTrue(RhRecoveryPolicy.networkStage("name resolution",0,-2));
+    }
+    @Test public void temporaryNetworkLossWaitsThenHandsOffWithoutAnotherUserConnect(){
+        java.util.List<Long> waits=new java.util.ArrayList<>();
+        recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{
+            resolutions++;if(resolutions<3)throw new RhNetwork.Unavailable("offline");
+            ComputerDetails d=new ComputerDetails();d.activeAddress=new ComputerDetails.AddressTuple("127.77.0.2",48989);return d;
+        },Runnable::run,milliseconds->{waits.add(milliseconds);org.robolectric.shadows.ShadowSystemClock.advanceBy(Duration.ofMillis(milliseconds));});
+        assertTrue(recovery.stageFailed(1,-1));idle();cleanup.accept(true);cleanup=null;idle();
+        assertEquals(java.util.Arrays.asList(1000L,2000L),waits);assertEquals(3,resolutions);
+        assertNotNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+        assertTrue("The successor must still claim the recovery lease",RhActions.hasStream());
+    }
+    @Test public void networkWaitDoesNotRetryIdentityOrUnclassifiedIoFailure(){
+        recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{
+            resolutions++;throw new java.io.IOException("uuid_mismatch");
+        },Runnable::run,milliseconds->{fail("Identity failure must not wait/retry");});
+        assertTrue(recovery.stageFailed(1,-1));idle();cleanup.accept(true);cleanup=null;idle();
+        assertEquals(1,resolutions);assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());assertFalse(RhActions.hasStream());
+    }
+    @Test public void prolongedOutageExhaustsTheExistingBurstBudget(){
+        recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{
+            resolutions++;throw new RhNetwork.Unavailable("offline");
+        },Runnable::run,milliseconds->org.robolectric.shadows.ShadowSystemClock.advanceBy(Duration.ofSeconds(60)));
+        assertTrue(recovery.stageFailed(1,-1));idle();cleanup.accept(true);cleanup=null;idle();
+        assertEquals(1,resolutions);assertFalse(RhActions.hasStream());assertTrue(activity.isFinishing());
+        assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+    }
+    @Test public void cancelInterruptsAnActualNetworkWaitAndReapsItsLease()throws Exception{
+        java.util.concurrent.CountDownLatch waiting=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService executor=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try{
+            recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{
+                resolutions++;throw new RhNetwork.Unavailable("offline");
+            },executor,milliseconds->{waiting.countDown();Thread.sleep(10_000);});
+            assertTrue(recovery.stageFailed(1,-1));idle();cleanup.accept(true);cleanup=null;idle();
+            assertTrue(waiting.await(3,java.util.concurrent.TimeUnit.SECONDS));assertTrue(RhActions.hasStream());
+            recovery.cancel();executor.submit(()->{}).get(2,java.util.concurrent.TimeUnit.SECONDS);idle();
+            executor.submit(()->{}).get(2,java.util.concurrent.TimeUnit.SECONDS);idle();
+            assertEquals(1,resolutions);assertFalse(RhActions.hasStream());
+            assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+        }finally{executor.shutdownNow();assertTrue(executor.awaitTermination(3,java.util.concurrent.TimeUnit.SECONDS));}
     }
     @Test public void stopBeforeStartDoesNotReleaseAnotherConnectionsPermit()throws Exception{
         Field field=NvConnection.class.getDeclaredField("connectionAllowed");field.setAccessible(true);

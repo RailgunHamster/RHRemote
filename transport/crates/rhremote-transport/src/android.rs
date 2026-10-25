@@ -64,7 +64,7 @@ pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_startNative(
         Ok(serde_json::json!({"ok":true,"result":info}))
     })();
     let reply =
-        result.unwrap_or_else(|error| serde_json::json!({"ok":false,"error":error.to_string()}));
+        result.unwrap_or_else(|error| serde_json::json!({"ok":false,"error":error.to_string(),"retryable":crate::startup_retryable(&error)}));
     env.new_string(reply.to_string())
         .map(JString::into_raw)
         .unwrap_or(std::ptr::null_mut())

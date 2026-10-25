@@ -41,6 +41,7 @@ public final class RhRecoveryPolicy {
         return 0;
     }
     public synchronized JSONObject next(){return RhActions.obj("attempt",attempt+1,"originUs",originUs,"burstStartMs",burstStart,"recoveries",recoveries,"failedRoutes",excluded());}
+    public synchronized long remainingMs(long nowMs){return burstStart<0?0:Math.max(0,60_000-(nowMs-burstStart));}
     public synchronized JSONObject state(){return RhActions.obj("attempt",attempt,"originUs",originUs,"recoveries",recoveries,"firstFrame",rendered,"failedRoutes",excluded());}
     public static boolean excluded(JSONArray failed,String route,String address){
         if(failed!=null)for(int i=0;i<failed.length();i++){JSONObject entry=failed.optJSONObject(i);if(entry!=null&&route.equals(entry.optString("route"))&&address.equals(entry.optString("address")))return true;}
