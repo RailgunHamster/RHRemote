@@ -1,16 +1,21 @@
 <#
 .SYNOPSIS
-  Bounded encoder comparison on an idle RHRemote-Sunshine service.
+  Bounded encoder or software-thread comparison on an idle RHRemote-Sunshine service.
 .DESCRIPTION
-  Saves the exact config bytes, changes only an existing encoder value, and registers
+  Saves the exact config bytes, changes only the encoder and optional software-thread value, and registers
   automatic restoration before stopping the service. Restoration never overwrites a
   concurrently changed config or interrupts active media. Run elevated on the host.
   Config contents and pairing credentials are never included in the result.
+.PARAMETER MinThreads
+  Zero preserves the original thread setting. Values1..64 are an optional bounded
+  software-only comparison; the full original bytes are restored, including removal
+  of a key appended for the trial. This controls swscale workers and software slices.
 #>
 param(
     [ValidateSet('start','restore','status')][string]$Action='status',
     [ValidatePattern('^[A-Za-z0-9_-]{1,64}$')][string]$RunId,
     [ValidateSet('quicksync','mediafoundation','software')][string]$Encoder='quicksync',
+    [ValidateRange(0,64)][int]$MinThreads=0,
     [ValidateRange(120,600)][int]$DurationSeconds=480,
     [ValidateRange(10,300)][int]$StartupWaitSeconds=25,
     [string]$ExpectedUuid,
@@ -44,6 +49,27 @@ function New-RHEncoderBytes([byte[]]$Bytes,[string]$Value) {
     ,([byte[]]($prefix+$encoding.GetBytes($replacement)))
 }
 
+function New-RHSoftwareThreadBytes([byte[]]$Bytes,[int]$Value) {
+    if($Value -lt 1 -or $Value -gt 64) { throw 'Software comparison thread count must be1..64' }
+    if($Bytes.Length -ge 2 -and (($Bytes[0] -eq 255 -and $Bytes[1] -eq 254) -or ($Bytes[0] -eq 254 -and $Bytes[1] -eq 255))) { throw 'UTF-16 config is unsupported; original bytes retained' }
+    $encoding=[Text.Encoding]::GetEncoding(28591);$offset=0
+    if($Bytes.Length -ge 3 -and $Bytes[0] -eq 239 -and $Bytes[1] -eq 187 -and $Bytes[2] -eq 191) { $offset=3 }
+    $text=$encoding.GetString($Bytes,$offset,$Bytes.Length-$offset)
+    $matches=[regex]::Matches($text,'(?m)^[ \t]*min_threads[ \t]*=[ \t]*(?<value>[^#\r\n]*?)(?<suffix>[ \t]*(?:#[^\r\n]*)?)(?=\r?$)')
+    if($matches.Count -gt 1) { throw 'Ambiguous software thread key' }
+    if($matches.Count -eq 1) {
+        $group=$matches[0].Groups['value'];$current=0
+        if(-not[int]::TryParse($group.Value.Trim(),[ref]$current) -or $current -lt 1 -or $current -gt 64) { throw 'Existing software thread value is unsupported' }
+        $replacement=$text.Substring(0,$group.Index)+$Value.ToString([Globalization.CultureInfo]::InvariantCulture)+$text.Substring($group.Index+$group.Length)
+    } else {
+        $newline=if($text.Contains("`r`n")) { "`r`n" } else { "`n" }
+        $separator=if($text.Length -and -not $text.EndsWith("`n")) { $newline } else { '' }
+        $replacement=$text+$separator+'min_threads = '+$Value.ToString([Globalization.CultureInfo]::InvariantCulture)+$newline
+    }
+    [byte[]]$prefix=if($offset) { $Bytes[0..2] } else { @() }
+    ,([byte[]]($prefix+$encoding.GetBytes($replacement)))
+}
+
 function Set-RHConfigBytes([string]$Path,[byte[]]$Bytes,[string]$ExpectedHash) {
     if((Get-RHBytesHash ([IO.File]::ReadAllBytes($Path))) -cne $ExpectedHash) { throw 'Concurrent config change; refusing to overwrite' }
     $acl=Get-Acl -LiteralPath $Path
@@ -71,6 +97,7 @@ function Set-RHConfigBytes([string]$Path,[byte[]]$Bytes,[string]$ExpectedHash) {
 }
 
 if($LibraryOnly) { return }
+if($MinThreads -gt 0 -and $Encoder -ne 'software') { throw 'Thread comparisons require the software encoder' }
 if(-not $RunId) { throw 'A unique run ID is required' }
 $root=Join-Path $env:ProgramData 'RHRemote-Sunshine\encoder-comparisons'
 $work=Join-Path $root $RunId
@@ -172,6 +199,7 @@ switch($Action) {
         if([string]$info.root.uniqueid -ne $ExpectedUuid) { throw 'Unexpected UUID' }
         [byte[]]$original=[IO.File]::ReadAllBytes($config)
         [byte[]]$trial=New-RHEncoderBytes $original $Encoder
+        if($MinThreads -gt 0) { $trial=New-RHSoftwareThreadBytes $trial $MinThreads }
         $originalHash=Get-RHBytesHash $original;$trialHash=Get-RHBytesHash $trial
         if($originalHash -ceq $trialHash) { throw 'Encoder already selected; no comparison change required' }
         New-Item -ItemType Directory -Path $work -Force|Out-Null
@@ -182,7 +210,7 @@ switch($Action) {
         [IO.File]::WriteAllBytes((Join-Path $work 'original.conf'),$original)
         Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $work 'control.ps1')
         $deadline=(Get-Date).AddSeconds($DurationSeconds)
-        $lease=[pscustomobject]@{runId=$RunId;uuid=$ExpectedUuid;encoder=$Encoder;startupWaitSeconds=$StartupWaitSeconds;originalHash=$originalHash;trialHash=$trialHash;originalSddl=(Get-Acl -LiteralPath $config).Sddl;engineSha256=(Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash;servicePath=$service.PathName;deadlineUtc=$deadline.ToUniversalTime().ToString('o');restartNeeded=$false;phase='prepared';startedUtc=[DateTime]::UtcNow.ToString('o');restoredUtc=$null;trialServicePid=0;trialEnginePid=0;trialServiceCreatedUtc=$null}
+        $lease=[pscustomobject]@{runId=$RunId;uuid=$ExpectedUuid;encoder=$Encoder;minThreads=$MinThreads;startupWaitSeconds=$StartupWaitSeconds;originalHash=$originalHash;trialHash=$trialHash;originalSddl=(Get-Acl -LiteralPath $config).Sddl;engineSha256=(Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash;servicePath=$service.PathName;deadlineUtc=$deadline.ToUniversalTime().ToString('o');restartNeeded=$false;phase='prepared';startedUtc=[DateTime]::UtcNow.ToString('o');restoredUtc=$null;trialServicePid=0;trialEnginePid=0;trialServiceCreatedUtc=$null}
         Save-Lease $lease
         $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+(Join-Path $work 'control.ps1')+'" -Action restore -RunId '+$RunId
         $taskAction=New-ScheduledTaskAction -Execute powershell.exe -Argument $arguments
@@ -214,5 +242,5 @@ switch($Action) {
     'status' { $lease=Get-Content -LiteralPath $statePath -Raw|ConvertFrom-Json }
 }
 $currentService=Get-OwnedService
-$result=[ordered]@{runId=$RunId;phase=$lease.phase;encoder=$lease.encoder;deadlineUtc=$lease.deadlineUtc;restoredUtc=$lease.restoredUtc;originalHash=$lease.originalHash;trialHash=$lease.trialHash;currentHash=(Get-FileHash -LiteralPath $config -Algorithm SHA256).Hash;restoreTaskPresent=[bool](Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue);serviceState=$currentService.State;servicePid=$currentService.ProcessId;utc=[DateTime]::UtcNow.ToString('o')}
+$result=[ordered]@{runId=$RunId;phase=$lease.phase;encoder=$lease.encoder;minThreads=$lease.minThreads;deadlineUtc=$lease.deadlineUtc;restoredUtc=$lease.restoredUtc;originalHash=$lease.originalHash;trialHash=$lease.trialHash;currentHash=(Get-FileHash -LiteralPath $config -Algorithm SHA256).Hash;restoreTaskPresent=[bool](Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue);serviceState=$currentService.State;servicePid=$currentService.ProcessId;utc=[DateTime]::UtcNow.ToString('o')}
 $result|ConvertTo-Json -Compress

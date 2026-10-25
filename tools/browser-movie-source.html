@@ -1,0 +1,83 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RHRemote movie source</title>
+<style nonce="__RH_MOVIE_NONCE__">html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}video{width:100%;height:100%;object-fit:contain;display:block}</style>
+<video id="movie" muted playsinline preload="auto"></video>
+<script nonce="__RH_MOVIE_NONCE__">
+"use strict";
+const config = __RH_MOVIE_CONFIG__;
+const video = document.getElementById("movie");
+video.muted = true;
+video.defaultMuted = true;
+video.volume = 0;
+let phase = "loading", failure = null, seq = 0, callbacks = 0, lastFrame = null;
+let pending = [], events = [], sending = false, ended = false, flush = false;
+const began = performance.now();
+const event = name => events.push({name, nowMs: performance.now(), mediaTime: video.currentTime});
+function fail(message) { failure = String(message); phase = "error"; ended = true; video.pause(); }
+function frame(now, metadata) {
+  if (ended) return;
+  callbacks++;
+  lastFrame = {nowMs: now, presentationTime: metadata.presentationTime,
+    expectedDisplayTime: metadata.expectedDisplayTime, mediaTime: metadata.mediaTime,
+    presentedFrames: metadata.presentedFrames, width: metadata.width, height: metadata.height,
+    processingDuration: Number.isFinite(metadata.processingDuration) ? metadata.processingDuration : null};
+  pending.push(lastFrame);
+  if (phase === "waiting_for_frame" && metadata.mediaTime >= config.startSeconds) phase = "playing";
+  if (pending.length > 12000) { fail("Frame telemetry buffer limit exceeded"); return; }
+  video.requestVideoFrameCallback(frame);
+}
+function snapshot() {
+  const q = video.getVideoPlaybackQuality();
+  return {schema: "rhremote.browser-source/v1", seq: ++seq, phase, ended, error: failure,
+    nowMs: performance.now(), timeOriginMs: performance.timeOrigin, currentTime: video.currentTime,
+    paused: video.paused, seeking: video.seeking, readyState: video.readyState,
+    width: video.videoWidth, height: video.videoHeight, playbackRate: video.playbackRate,
+    muted: video.muted, volume: video.volume, visible: document.visibilityState,
+    pageHasFocus: document.hasFocus(), innerWidth, innerHeight, devicePixelRatio,
+    callbackCount: callbacks, lastFrame,
+    quality: {totalVideoFrames: q.totalVideoFrames, droppedVideoFrames: q.droppedVideoFrames,
+      corruptedVideoFrames: Number.isFinite(q.corruptedVideoFrames) ? q.corruptedVideoFrames : null},
+    frames: pending.splice(0), events: events.splice(0)};
+}
+async function send() {
+  if (sending) { flush = true; return; }
+  sending = true;
+  try {
+    const packet = snapshot();
+    const response = await fetch("telemetry", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(packet)});
+    if (!response.ok) throw new Error("Telemetry HTTP " + response.status);
+    const control = await response.json();
+    if (control.stop && !ended) { ended = true; phase = "ended"; video.pause(); event("controlled_stop"); flush = true; }
+  } catch (error) { fail(error.message); }
+  finally { sending = false; if (flush) { flush = false; void send(); } }
+}
+for (const name of ["playing", "waiting", "stalled", "seeking", "seeked", "pause", "ended", "resize"]) {
+  video.addEventListener(name, () => event(name));
+}
+document.addEventListener("visibilitychange", () => event("visibility_" + document.visibilityState));
+video.addEventListener("error", () => { fail("Media error " + (video.error ? video.error.code : "unknown")); void send(); });
+video.addEventListener("ended", () => { ended = true; phase = "ended"; void send(); });
+if (!video.requestVideoFrameCallback || !video.getVideoPlaybackQuality) {
+  fail("Required compositor frame and playback quality APIs are unavailable");
+} else {
+  video.requestVideoFrameCallback(frame);
+  video.addEventListener("loadedmetadata", () => {
+    if (video.videoWidth !== config.width || video.videoHeight !== config.height) { fail("Actual movie dimensions differ"); return; }
+    phase = "seeking";
+    video.currentTime = config.startSeconds;
+    video.addEventListener("seeked", async () => {
+      try { await video.play(); phase = lastFrame && lastFrame.mediaTime >= config.startSeconds ? "playing" : "waiting_for_frame"; }
+      catch (error) { fail("Playback rejected: " + error.message); }
+      void send();
+    }, {once: true});
+  }, {once: true});
+  video.src = "asset.mp4";
+}
+setInterval(() => {
+  if (!ended && performance.now() - began >= config.seconds * 1000) { ended = true; phase = "ended"; video.pause(); event("bounded_end"); }
+  void send();
+}, 1000);
+void send();
+</script>

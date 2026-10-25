@@ -1,0 +1,33 @@
+name: RHRemote browser movie source regressions
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/browser-movie-source.*'
+      - 'tools/test-browser-movie-source.ps1'
+      - 'tools/analyze-browser-source.py'
+      - 'tools/test-analyze-browser-source.py'
+      - 'tools/test-browser-movie-page.cjs'
+      - '.github/workflows/browser-source-tools.yml'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Loopback transport and owned job lifetime (PowerShell 7)
+        shell: pwsh
+        run: ./tools/test-browser-movie-source.ps1
+      - name: Loopback transport and owned job lifetime (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tools/test-browser-movie-source.ps1
+      - name: Source evidence counterexamples
+        shell: pwsh
+        run: python tools/test-analyze-browser-source.py
+      - name: First-composition readiness and mute ordering
+        shell: pwsh
+        run: node tools/test-browser-movie-page.cjs

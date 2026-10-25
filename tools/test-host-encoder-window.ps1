@@ -36,6 +36,31 @@ foreach($text in @('other=software',"encoder=software`nencoder=software",'encode
 $rejected=$false
 try { $null=New-RHEncoderBytes ([byte[]](255,254,101,0)) 'quicksync' } catch { $rejected=$true }
 Assert $rejected 'UTF-16 was silently corrupted'
+$threadCases=@(
+ @("encoder=software`nmin_threads = 2  # preserve`nother=2`n","encoder=software`nmin_threads = 4  # preserve`nother=2`n"),
+ @("# min_threads=8`r`nencoder=software`r`n","# min_threads=8`r`nencoder=software`r`nmin_threads = 4`r`n"),
+ @("encoder=software","encoder=software`nmin_threads = 4`n"),
+ @(([char]0xFEFF+"encoder=software`r`nmin_threads=2"),([char]0xFEFF+"encoder=software`r`nmin_threads=4")),
+ @(("# "+[char]0x4e2d+"`nencoder=software`nmin_threads=2`n"),("# "+[char]0x4e2d+"`nencoder=software`nmin_threads=4`n"))
+)
+foreach($pair in $threadCases) {
+ Assert ($utf8.GetString((New-RHSoftwareThreadBytes $utf8.GetBytes($pair[0]) 4)) -ceq $pair[1]) 'Software thread edit changed unrelated bytes/BOM/newlines'
+}
+foreach($text in @("encoder=software`nmin_threads=2`nmin_threads=3",'min_threads=auto','min_threads=0','min_threads=65')) {
+ $rejected=$false;try{$null=New-RHSoftwareThreadBytes $utf8.GetBytes($text) 4}catch{$rejected=$true}
+ Assert $rejected 'Ambiguous/unsupported software thread value was accepted'
+}
+foreach($value in @(0,65)) {
+ $rejected=$false;try{$null=New-RHSoftwareThreadBytes $utf8.GetBytes('encoder=software') $value}catch{$rejected=$true}
+ Assert $rejected 'Software thread comparison escaped its range'
+}
+$rejected=$false;try{$null=New-RHSoftwareThreadBytes ([byte[]](255,254,101,0)) 4}catch{$rejected=$true}
+Assert $rejected 'Software thread edit silently corrupted UTF-16'
+foreach($hardware in @('quicksync','mediafoundation')) {
+ $rejected=$false
+ try{& (Join-Path $PSScriptRoot 'host-encoder-window.ps1') -Action status -RunId rejected-thread-comparison -Encoder $hardware -MinThreads 4}catch{$rejected=$_.Exception.Message-eq'Thread comparisons require the software encoder'}
+ Assert $rejected 'Hardware thread override was not rejected before service/scheduler access'
+}
 $folder=Join-Path ([IO.Path]::GetTempPath()) ('rh-encoder-config-test-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $folder|Out-Null
 $path=Join-Path $folder 'sunshine.conf'
@@ -68,4 +93,4 @@ try {
     if(Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
     Remove-Item -LiteralPath $folder
 }
-'PASS: 8 recovery-budget checks, 10 byte-preserving round trips, unrelated-value preservation, 4 rejection cases, inherited/protected ACL replacement/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup
+'PASS: 8 recovery-budget checks, 10 byte-preserving round trips, unrelated-value preservation, 4 rejection cases,14 software-thread cases, inherited/protected ACL replacement/CAS/exact restore; SYSTEM group fixture='+[bool]$SystemGroup
