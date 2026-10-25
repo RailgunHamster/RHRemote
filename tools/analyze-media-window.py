@@ -106,7 +106,15 @@ def analyze(case, events, host_rows, parse_issues=None):
     host_payload = sum(p.get("udp_payload_bytes", 0) for p in packets)
     source_before, source_after = case.get("sourceBefore", {}), case.get("sourceAfter", {})
     source_seconds = source_after.get("elapsed_s", 0) - source_before.get("elapsed_s", 0)
-    source = {"physical_paint_measured": False, "file_fps": source_before.get("source_file_fps")}
+    source = {"physical_paint_measured": False, "file_fps": source_before.get("source_file_fps"),
+              "client_window_seconds": seconds, "controller_healthy_at_endpoints": None,
+              "scope_covers_client_window": None}
+    if source_before and source_after:
+        source["controller_healthy_at_endpoints"] = all(
+            endpoint.get("phase") == "playing" and endpoint.get("ended") is False and not endpoint.get("error")
+            for endpoint in (source_before, source_after))
+    if source_seconds > 0:
+        source["scope_covers_client_window"] = source_seconds >= seconds
     if source_seconds > 0 and source_before.get("media_time_s") is not None and source_after.get("media_time_s") is not None:
         source.update(reading_interval_s=source_seconds,
                       playback_clock_rate=(source_after["media_time_s"] - source_before["media_time_s"]) / source_seconds,
@@ -119,9 +127,11 @@ def analyze(case, events, host_rows, parse_issues=None):
         dropped = source["player_dropped_frames_delta"]
         fraction = dropped / (source["reading_interval_s"] * source["file_fps"])
         source["player_dropped_fraction"] = fraction
-        source["comparison_eligible"] = (.98 <= source["playback_clock_rate"] <= 1.02 and
+        source["comparison_eligible"] = (source["controller_healthy_at_endpoints"] is True and
+                                         source["scope_covers_client_window"] is True and
+                                         .98 <= source["playback_clock_rate"] <= 1.02 and
                                          dropped >= 0 and fraction <= .01)
-    source["comparison_criteria"] = "Playback clock within2% of real time and player drops<=1%; neither proves unique pictures or physical paint"
+    source["comparison_criteria"] = "Playing controller endpoints, actual source scope covering the full client window, playback clock within2% of real time and player drops<=1%; neither proves unique pictures or physical paint"
     return {"schema": "rhremote.media-window/v1", "client_id": global_host["client_id"], "trace_id": global_host["trace_id"],
             "scope": {"client_start_us": lo, "client_end_us": hi, "seconds": seconds, "first_frame": first, "last_frame": last,
                       "selection": "Client assembly timestamps select ordinal boundaries; host submissions use that inclusive frame-number range in the same trace. Source captures for metrics are referenced inputs.",

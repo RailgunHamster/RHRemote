@@ -41,6 +41,12 @@ duplicate media timestamps and invalid viewport/mute/rate state. It independentl
 recomputes the source clock/drop gate and compositor submission rate; it never
 accepts remote performance on the basis of source counters. Processing duration
 also covers possible queuing/conversion and excludes unreported dropped frames.
+An ended/failed source controller cannot be validated by its last playing packet.
+When `measurementSeconds` is present, the source counter scope must cover that
+entire duration; an absent client duration remains unknown. Runners can use
+`Test-RHRemoteSourceWindow` in `source-window-contract.ps1` before accepting a
+movie window, including sources using another player. A geometry-guard exit
+must fail the measurement even when client streaming continued normally.
 
 Run the following contracts before deployment:
 
@@ -48,6 +54,7 @@ Run the following contracts before deployment:
 ./tools/test-browser-movie-source.ps1
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./tools/test-browser-movie-source.ps1
 python tools/test-analyze-browser-source.py
+./tools/test-source-window-contract.ps1
 node tools/test-browser-movie-page.cjs
 ```
 

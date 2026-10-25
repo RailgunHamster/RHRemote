@@ -8,6 +8,8 @@ on:
       - 'tools/analyze-browser-source.py'
       - 'tools/test-analyze-browser-source.py'
       - 'tools/test-browser-movie-page.cjs'
+      - 'tools/source-window-contract.ps1'
+      - 'tools/test-source-window-contract.ps1'
       - '.github/workflows/browser-source-tools.yml'
 permissions:
   contents: read
@@ -28,6 +30,12 @@ jobs:
       - name: Source evidence counterexamples
         shell: pwsh
         run: python tools/test-analyze-browser-source.py
+      - name: Source controller and full measurement coverage
+        shell: pwsh
+        run: ./tools/test-source-window-contract.ps1
+      - name: Source coverage in Windows PowerShell
+        shell: powershell
+        run: ./tools/test-source-window-contract.ps1
       - name: First-composition readiness and mute ordering
         shell: pwsh
         run: node tools/test-browser-movie-page.cjs

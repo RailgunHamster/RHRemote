@@ -24,8 +24,10 @@ def fixture(fps=60, processing=.002):
                         "width": 1920, "height": 1080, "innerWidth": 1920, "innerHeight": 1080,
                         "devicePixelRatio": 1, "visible": "visible", "paused": ended, "seeking": False,
                         "muted": True, "volume": 0, "playbackRate": 1})
-    case = {"before": {"producer": "browser_movie", "source_file_fps": 60, "browser": copy.deepcopy(packets[1])},
-            "after": {"producer": "browser_movie", "source_file_fps": 60, "browser": copy.deepcopy(packets[2])}}
+    case = {"before": {"producer": "browser_movie", "phase": "playing", "ended": False,
+                       "source_file_fps": 60, "browser": copy.deepcopy(packets[1])},
+            "after": {"producer": "browser_movie", "phase": "playing", "ended": False,
+                      "source_file_fps": 60, "browser": copy.deepcopy(packets[2])}}
     return case, packets
 
 
@@ -34,6 +36,44 @@ def records(packets):
 
 
 class SourceAnalysis(unittest.TestCase):
+    def test_perfect_short_source_cannot_validate_a_longer_client_measurement(self):
+        case, packets = fixture()
+        case["measurementSeconds"] = 150
+        result = module.analyze(case, records(packets))
+        self.assertTrue(result["originalClockDropGatePass"])
+        self.assertFalse(result["sourceScopeCoversClientMeasurement"])
+        self.assertFalse(result["sourceComparisonEligible"])
+
+    def test_complete_source_scope_covers_a_shorter_measurement(self):
+        case, packets = fixture()
+        case["measurementSeconds"] = .9
+        result = module.analyze(case, records(packets))
+        self.assertTrue(result["sourceScopeCoversClientMeasurement"])
+        self.assertTrue(result["sourceComparisonEligible"])
+
+    def test_controller_exit_or_error_cannot_be_hidden_by_its_last_playing_packet(self):
+        for patch in ({"ended": True}, {"error": "Owned movie geometry changed"}, {"phase": "error"},
+                      {"ended": None}, {"phase": None}):
+            case, packets = fixture()
+            case["after"].update(patch)
+            result = module.analyze(case, records(packets))
+            self.assertTrue(result["originalClockDropGatePass"])
+            self.assertFalse(result["sourceControllerHealthyAtEndpoints"])
+            self.assertFalse(result["sourceComparisonEligible"])
+
+    def test_absent_measurement_duration_remains_unknown(self):
+        case, packets = fixture()
+        result = module.analyze(case, records(packets))
+        self.assertIsNone(result["sourceScopeCoversClientMeasurement"])
+        self.assertIsNone(result["clientMeasurementSeconds"])
+
+    def test_invalid_client_duration_is_rejected(self):
+        for seconds in (0, -1, True, float("nan")):
+            case, packets = fixture()
+            case["measurementSeconds"] = seconds
+            with self.assertRaises(ValueError):
+                module.analyze(case, records(packets))
+
     def test_valid_source_does_not_accept_remote_or_claim_cpu(self):
         case, packets = fixture()
         result = module.analyze(case, records(packets))

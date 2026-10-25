@@ -110,6 +110,20 @@ def analyze(case, records, source_fps=60):
     callback_gaps = [b["nowMs"] - a["nowMs"] for a, b in zip(selected, selected[1:])]
     counter_skips = [b["presentedFrames"] - a["presentedFrames"] - 1 for a, b in zip(selected, selected[1:])]
     clock_drop_pass = .98 <= rate <= 1.02 and drop_fraction <= .01
+    # A successfully closed raw browser transport does not prove its owner
+    # remained alive throughout the client measurement. Preserve the diagnostic
+    # counters, but reject a failed/ended controller or a shorter source scope.
+    lifecycle_pass = all(endpoint.get("ended") is False
+                         and not endpoint.get("error")
+                         and endpoint.get("phase") == "playing"
+                         for endpoint in (before, after))
+    measurement_seconds = None
+    measurement_covered = None
+    if "measurementSeconds" in case:
+        measurement_seconds = number(case["measurementSeconds"], "client measurement duration")
+        if measurement_seconds <= 0:
+            raise ValueError("Client measurement duration must be positive")
+        measurement_covered = seconds >= measurement_seconds
     cpu_percent = None
     if before.get("cpu_seconds") is not None and after.get("cpu_seconds") is not None:
         cpu_span = number(after.get("cpu_sample_elapsed_s"), "end CPU sample clock") - number(before.get("cpu_sample_elapsed_s"), "begin CPU sample clock")
@@ -128,7 +142,11 @@ def analyze(case, records, source_fps=60):
             "decodeReadyDurationMs": distribution(processing), "unknownProcessingDurationCount": len(selected) - len(processing),
             "callbackMinusExpectedDisplayMs": distribution([f["nowMs"] - f["expectedDisplayTime"] for f in selected]),
             "originalClockDropGatePass": clock_drop_pass,
-            "sourceComparisonEligible": clock_drop_pass and source_fps * .99 <= submitted_fps <= source_fps * 1.01,
+            "sourceControllerHealthyAtEndpoints": lifecycle_pass,
+            "clientMeasurementSeconds": measurement_seconds,
+            "sourceScopeCoversClientMeasurement": measurement_covered,
+            "sourceComparisonEligible": lifecycle_pass and measurement_covered is not False
+                                        and clock_drop_pass and source_fps * .99 <= submitted_fps <= source_fps * 1.01,
             "remotePerformanceAccepted": False,
             "processCpuPercentOfOneCore": cpu_percent,
             "limits": ["Composition counters are not physical scanout, optical latency or an end-to-end remote performance acceptance",
@@ -136,6 +154,7 @@ def analyze(case, records, source_fps=60):
                        "Processing durations exist only for reported presented frames; missing/dropped frames cannot be cleared by fast surviving-frame samples",
                        "Composition gaps sampled through callbacks may combine submissions when callbacks are missed; counter skips are reported separately",
                        "Missing process CPU and optional processing durations remain unknown, never zero",
+                       "Source counters covering only part of a client measurement cannot validate that entire measurement; absent client duration stays unknown",
                        "Before/after browser clocks are matched to raw source packets; no sub-millisecond browser-to-host QPC alignment is claimed"]}
 
 

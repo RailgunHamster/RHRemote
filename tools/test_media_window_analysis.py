@@ -70,8 +70,8 @@ class MediaWindowAnalysisTest(unittest.TestCase):
     def test_source_health_is_recomputed_and_not_implied_by_complete_files_or_pass(self):
         case, events, rows = case_and_frames()
         case.update(result="PASS", sourcePerformanceValid=True,
-                    sourceBefore={"elapsed_s": 10., "media_time_s": 35., "player_dropped_frames": 5, "source_file_fps": 30},
-                    sourceAfter={"elapsed_s": 110., "media_time_s": 135., "player_dropped_frames": 65})
+                    sourceBefore={"phase": "playing", "ended": False, "elapsed_s": 10., "media_time_s": 35., "player_dropped_frames": 5, "source_file_fps": 30},
+                    sourceAfter={"phase": "playing", "ended": False, "elapsed_s": 110., "media_time_s": 135., "player_dropped_frames": 65})
         result = analysis.analyze(case, events, rows)
         self.assertTrue(result["whole_host_trace_complete"])
         self.assertFalse(result["source"]["comparison_eligible"])
@@ -80,6 +80,30 @@ class MediaWindowAnalysisTest(unittest.TestCase):
         self.assertTrue(analysis.analyze(case, events, rows)["source"]["comparison_eligible"])
         case["sourceAfter"]["media_time_s"] = 115.
         self.assertFalse(analysis.analyze(case, events, rows)["source"]["comparison_eligible"])
+
+    def test_perfect_partial_source_cannot_clear_a_longer_client_window(self):
+        case, events, rows = case_and_frames()
+        case.update(sourceBefore={"phase": "playing", "ended": False, "elapsed_s": 1., "media_time_s": 35.,
+                                  "player_dropped_frames": 0, "source_file_fps": 30},
+                    sourceAfter={"phase": "playing", "ended": False, "elapsed_s": 1.05,
+                                 "media_time_s": 35.05, "player_dropped_frames": 0})
+        result = analysis.analyze(case, events, rows)
+        self.assertTrue(result["window_host_complete"])
+        self.assertFalse(result["source"]["scope_covers_client_window"])
+        self.assertFalse(result["source"]["comparison_eligible"])
+
+    def test_ended_failed_or_unconfirmed_source_cannot_clear_good_clock_and_drop_counters(self):
+        for patch in ({"phase": "ended"}, {"ended": True}, {"error": "Viewport changed"},
+                      {"phase": None}, {"ended": None}):
+            case, events, rows = case_and_frames()
+            case.update(sourceBefore={"phase": "playing", "ended": False, "elapsed_s": 1., "media_time_s": 35.,
+                                      "player_dropped_frames": 0, "source_file_fps": 30},
+                        sourceAfter={"phase": "playing", "ended": False, "elapsed_s": 2.,
+                                     "media_time_s": 36., "player_dropped_frames": 0, **patch})
+            result = analysis.analyze(case, events, rows)
+            self.assertTrue(result["source"]["scope_covers_client_window"])
+            self.assertFalse(result["source"]["controller_healthy_at_endpoints"])
+            self.assertFalse(result["source"]["comparison_eligible"])
 
     def test_missing_source_observations_and_legacy_native_clock_remain_unproven(self):
         case, events, rows = case_and_frames()
