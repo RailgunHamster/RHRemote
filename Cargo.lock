@@ -5454,7 +5454,7 @@ dependencies = [
 
 [[package]]
 name = "rhremote-ui"
-version = "0.2.11-preview.8"
+version = "0.2.11-preview.10"
 dependencies = [
  "base64 0.22.1",
  "embed-resource",

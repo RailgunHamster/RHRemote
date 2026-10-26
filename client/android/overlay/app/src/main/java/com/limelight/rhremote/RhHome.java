@@ -49,6 +49,8 @@ public final class RhHome implements RhActions.Target {
     private String draftDisplayName="",draftAddress="",draftAddresses="",draftRelay="";private EditText displayNameEditor,primaryEditor,backupEditor,relayEditor;
     private boolean networkBusy=false;
     private RhAdmission admission;
+    private final RhConnection connection=new RhConnection();
+    private final Runnable connectionTick=this::refreshConnection;
     private String profileTab="video";private final Map<String,EditText> numberEditors=new HashMap<>();
     private final Map<String,String> numberInputs=new LinkedHashMap<>();
     private final Map<String,View> profileControls=new HashMap<>();
@@ -133,24 +135,62 @@ public final class RhHome implements RhActions.Target {
     public void update(ComputerDetails d){String signature=d.name+"|"+d.state+"|"+d.pairState+"|"+RhProfile.load(activity,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&!signature.equals(old))renderDevices(false);}
     public void message(String value){statusScope=pageId+(pageId.equals("global-settings")?"/"+settingsTab:"");if(pageId.equals("device-info")&&!infoError.isEmpty()&&infoError.equals(value)||draft!=null&&!formError.isEmpty()&&formError.equals(value)||syncDraft!=null&&!syncError.isEmpty()&&syncError.equals(value)||pageId.equals("add")&&!addError.isEmpty()&&addError.equals(value))value="";status.setText(value==null?"":value);status.setVisibility(value==null||value.isEmpty()?View.GONE:View.VISIBLE);}
     public boolean goBack(){if(pendingNavigation!=null){invoke("navigation.resolve",RhActions.obj("choice","stay"));return true;}if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(pageId.equals("add")){invoke("device.add.cancel",RhActions.obj());return true;}if(profileVisible||pageId.equals("global-settings")){invoke("navigation.back",RhActions.obj());return true;}if(browser.isDetailOpen()){invoke("navigation.back",RhActions.obj());return true;}return false;}
-    public void dispose(){systemBack.close();if(addOperation!=null){RhDeviceAdd retired=addOperation;addOperation=null;retired.cancel();}if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();updateUi.removeCallbacks(updateTick);}
-    public void rebind(){activity.setContentView(root);ViewCompat.requestApplyInsets(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("device-info"))showInfo();else if(draft!=null)showProfile(selected,draft);else if(pageId.equals("add"))showAdd();else renderDevices(false);if(pendingNavigation!=null)showNavigationPrompt();}
-    public void resumed(){if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();}
+    public void dispose(){systemBack.close();if(addOperation!=null){RhDeviceAdd retired=addOperation;addOperation=null;retired.cancel();}if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();updateUi.removeCallbacks(updateTick);updateUi.removeCallbacks(connectionTick);}
+    public void rebind(){activity.setContentView(root);ViewCompat.requestApplyInsets(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("connection"))showConnection();else if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("device-info"))showInfo();else if(draft!=null)showProfile(selected,draft);else if(pageId.equals("add"))showAdd();else renderDevices(false);if(pendingNavigation!=null)showNavigationPrompt();}
+    public void resumed(){if(pageId.equals("connection"))refreshConnection();if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();}
     private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
-    public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";discardDraft();selected=null;browser.showDetail(false);renderDevices(true);if(!RhActions.lastConnectionError().isEmpty())message(RhActions.lastConnectionError());}
+    public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";discardDraft();selected=null;browser.showDetail(false);renderDevices(true);message("");}
     private void returnToDevice(){String uuid=selected==null?browserUuid:selected.uuid;showDevices();browserUuid=uuid;browser.showDetail(true);renderDevices(false);}
-    private void showAdmission(RhAdmission operation){
-        pageId="connecting";profileVisible=true;showContent();content.removeAllViews();heading("连接","");
-        org.json.JSONObject state=operation.state();String phase=state.optString("phase");
-        label(phase.equals("cancelling")?"正在取消并清理连接…":phase.equals("cleaning")?"正在清理连接…":phase.equals("starting")?"正在启动串流…":phase.equals("apps")?"正在读取应用列表…":phase.equals("identity")?"正在确认配对状态…":phase.equals("error")?state.optString("error"):"正在检查连接地址…");
-        Button cancel=button("取消连接",false,()->invoke("stream.disconnect",RhActions.obj()));cancel.setEnabled(!state.optBoolean("cancelled"));content.addView(cancel);
+    private boolean connectionBusy(){return connection.busy()||RhActions.hasStream();}
+    void connectionFailure(String failure){connection.fail(failure);if(pageId.equals("connection"))showConnection();}
+    void connectionStopping(String uuid){if(connection.uuid.equals(uuid)){connection.stop();if(pageId.equals("connection"))showConnection();}}
+    void connectionFrame(String uuid){if(connection.uuid.equals(uuid)){connection.frame();if(pageId.equals("connection"))showConnection();}}
+    private void refreshConnection(){
+        updateUi.removeCallbacks(connectionTick);if(activity.isDestroyed()||!pageId.equals("connection"))return;
+        org.json.JSONObject active=RhActions.activeState();String before=connection.phase;boolean wasBusy=connectionBusy();
+        if(admission==null&&connection.busy()){
+            if(RhActions.hasStream()){
+                if(active.optBoolean("firstFrame"))connection.frame();
+                else if(active.optString("phase").equals("reconnecting"))connection.phase="reconnecting";
+            }else if(!connection.stopping)connection.fail("远程连接已结束");
+            else connection.finished(false,"");
+        }
+        if(!wasBusy||!before.equals(connection.phase)||!RhActions.hasStream()){
+            if(connection.stopping&&!connectionBusy()){returnToDevice();message(connection.title());return;}
+            showConnection();
+        }
+        if(connectionBusy())updateUi.postDelayed(connectionTick,300);
+    }
+    private void showAdmission(RhAdmission operation){connection.stage(operation.state());showConnection();}
+    private void showConnection(){
+        pageId="connection";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
+        TextView title=text("连接",23,ink,true);formHeader.addView(title);heading(connection.name,"");
+        TextView stage=text(connection.title(),16,connection.phase.equals("failed")?c("#b04452"):blue,true);stage.setContentDescription("连接阶段");content.addView(stage);
+        if(connectionBusy()&&!connection.phase.equals("connected")){ProgressBar progress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams progressParams=new LinearLayout.LayoutParams(-1,dp(4));progressParams.topMargin=dp(20);content.addView(progress,progressParams);}
+        label("1  检查地址与配对");label("2  建立串流");label("3  显示远程画面");
+        if(!connection.error.isEmpty()){String detail=connection.error.startsWith("连接失败：")?connection.error.substring(5):connection.error;TextView error=text(detail,14,c("#b04452"),false);error.setContentDescription("连接错误");error.setPadding(0,dp(20),0,dp(8));content.addView(error);}
+        RhActionRow footer=actionRow();
+        if(connectionBusy()){
+            boolean cleaning=connection.stopping||connection.phase.equals("cleaning")||connection.phase.equals("failed");
+            Button cancel=button(cleaning?"正在清理…":connection.phase.equals("connected")?"断开连接":"取消连接",false,()->invoke("stream.disconnect",RhActions.obj()));cancel.setEnabled(!cleaning);footer.addView(cancel);
+        }else{
+            footer.addView(button("返回设备",false,()->invoke("connection.dismiss",RhActions.obj())));
+            if(connection.phase.equals("failed"))footer.addView(button("重试连接",true,()->invoke("connection.retry",RhActions.obj())));
+        }
+        LinearLayout aligned=row();aligned.setGravity(Gravity.END);aligned.addView(footer,new LinearLayout.LayoutParams(-2,-2));formFooter.addView(aligned);formPadding(scroll.getWidth());refreshNavigation();
     }
     private void beginAdmission(ComputerDetails target,boolean connect,String pin){
-        RhActions.clearConnectionError();browserUuid=target.uuid;
+        RhActions.clearConnectionError();browserUuid=target.uuid;selected=target;String alias=RhShared.alias(activity,target.uuid);connection.begin(target.uuid,alias.isEmpty()?target.name:alias);
         RhProfile profile=RhProfile.load(activity,target.uuid);networkBusy=true;
         admission=new RhAdmission(activity,target.uuid,CONNECT,new RhAdmission.Listener(){
             public void changed(RhAdmission operation){if(activity.isDestroyed())return;actions.setDiscoveryPaused(true);if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
-            public void finished(RhAdmission operation,boolean handedOff,String result){if(admission!=operation)return;admission=null;networkBusy=false;pairing=false;pairPin="";if(!activity.isDestroyed()){showDevices();if(!result.isEmpty())message(result);actions.setDiscoveryPaused(false);}}
+            public void finished(RhAdmission operation,boolean handedOff,String result){if(admission!=operation)return;admission=null;networkBusy=false;pairing=false;pairPin="";
+                String error=operation.state().optString("error");connection.finished(handedOff,error.isEmpty()?"":result);
+                if(!activity.isDestroyed()){
+                    if(handedOff||!error.isEmpty()){showConnection();updateUi.postDelayed(connectionTick,300);}
+                    else{returnToDevice();if(!result.isEmpty())message(result);}
+                    actions.setDiscoveryPaused(false);
+                }}
         });
         admission.start(operation->{
             if(connect)RhStatistics.begin(profile);
@@ -314,12 +354,20 @@ public final class RhHome implements RhActions.Target {
     public org.json.JSONObject state()throws Exception{
         org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(activity,computers.values())){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
         org.json.JSONObject shared=RhShared.read(activity);
-        return RhActions.obj("infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?"probing":"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
+        return RhActions.obj("connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?"probing":"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
         if(id.equals("sync.run")&&args.optBoolean("automatic")&&(!sync.state().optBoolean("automatic")||syncBusy||!infoUuid.isEmpty()||draft!=null||pageId.equals("add")||pairing||admission!=null||RhActions.hasStream()||pendingNavigation!=null||syncDirty()))return RhActions.obj("skipped",true);
         if(id.equals("navigation.resolve"))return resolveNavigation(args);
-        if(id.equals("navigation.back")){if(pageId.equals("add"))return perform("device.add.cancel",RhActions.obj());if(pendingNavigation!=null)return resolveNavigation(RhActions.obj("choice","stay"));if(draft!=null)return perform("device.select",RhActions.obj("uuid",selected.uuid));if(pageId.equals("devices")&&browser.isDetailOpen()){browser.showDetail(false);return RhActions.obj("accepted",true);}return perform("devices.open",RhActions.obj());}
+        if(id.equals("navigation.back")){if(pageId.equals("connection")){if(connectionBusy())return RhActions.dispatch("stream.disconnect",RhActions.obj());return perform("connection.dismiss",RhActions.obj());}if(pageId.equals("add"))return perform("device.add.cancel",RhActions.obj());if(pendingNavigation!=null)return resolveNavigation(RhActions.obj("choice","stay"));if(draft!=null)return perform("device.select",RhActions.obj("uuid",selected.uuid));if(pageId.equals("devices")&&browser.isDetailOpen()){browser.showDetail(false);return RhActions.obj("accepted",true);}return perform("devices.open",RhActions.obj());}
+        if(id.equals("connection.retry")||id.equals("connection.dismiss")){
+            if(!pageId.equals("connection"))throw new IllegalStateException("请先打开连接页");
+            if(connection.uuid.isEmpty())throw new IllegalStateException("没有可操作的连接");
+            if(connectionBusy())throw new IllegalStateException("上一连接尚未结束");
+            if(id.equals("connection.retry"))return perform("device.connect",RhActions.obj("uuid",connection.uuid));
+            returnToDevice();message("");return RhActions.obj("accepted",true);
+        }
+        if(pageId.equals("connection")&&connectionBusy()&&Arrays.asList("devices.open","device.select","device.add.open","device.settings.open","device.info.open","app.settings.open","app.settings.tab","appearance.toggle").contains(id))throw new IllegalStateException("请先取消或断开当前连接");
         if(pendingNavigation!=null&&!Arrays.asList("settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先处理未保存的更改");
         boolean leavingInfo=Arrays.asList("devices.open","device.select","device.settings.open","device.add.open","device.info.open","app.settings.open","app.settings.tab","device.connect","device.pair","appearance.toggle","sync.run","sync.resolve","updates.install").contains(id)||id.equals("updates.primary")&&updates.primaryAction().equals("updates.install");
         if(!infoUuid.isEmpty()&&leavingInfo){

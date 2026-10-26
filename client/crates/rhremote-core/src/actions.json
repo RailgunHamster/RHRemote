@@ -32,6 +32,8 @@
  {"id":"settings.save","label":"保存","args":{"displayName":"string, optional; empty clears alias"}},
  {"id":"settings.cancel","label":"取消设置 / 返回","args":{}},
  {"id":"device.connect","label":"连接","args":{"uuid":"string","testInitialFailure":"optional network / identity / decoder; Windows RHREMOTE_TEST_MODE only"}},
+ {"id":"connection.retry","label":"重试连接原设备","args":{}},
+ {"id":"connection.dismiss","label":"返回原设备","args":{}},
  {"id":"device.pair","label":"配对","args":{"uuid":"string","pin":"four digits, optional"}},
  {"id":"pair.cancel","label":"取消配对","args":{}},
  {"id":"appearance.toggle","label":"深色 / 浅色","args":{}},

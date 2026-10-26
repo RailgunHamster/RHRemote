@@ -211,6 +211,11 @@ export component MainWindow inherits Window {
     in property <string> pair-pin;
     in property <bool> streaming;
     in property <bool> connecting;
+    in property <string> connection-phase;
+    in property <string> connection-title;
+    in property <string> connection-name;
+    in property <string> connection-error;
+    in property <bool> connection-busy;
     in property <bool> controls;
     in property <string> stream-statistics;
     in property <[string]> shortcut-labels;
@@ -263,7 +268,7 @@ export component MainWindow inherits Window {
                         Text {text:"Moonlight";font-size:11px;color:Palette.muted;}
                     }
                 }
-                NavigationItem{text:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices" || root.page=="settings" || root.page=="device-info" || root.page=="pair";compact:root.compact;}
+                NavigationItem{text:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices" || root.page=="settings" || root.page=="device-info" || root.page=="pair" || root.page=="connection";compact:root.compact;}
                 NavigationItem{text:"添加电脑";icon:@image-url("icons/plus.svg");action-id:"device.add.open";chosen:root.page=="add";compact:root.compact;}
                 Rectangle {vertical-stretch:1;}
                 NavigationItem{text:"设置";icon:@image-url("icons/settings.svg");action-id:"app.settings.open";chosen:root.page=="global-settings";compact:root.compact;}
@@ -581,55 +586,42 @@ export component MainWindow inherits Window {
                         }
                         Text{text:"找到设备后会保存到远程设备列表，配对在设备详情中完成。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                     }
+                    if root.page=="connection": VerticalLayout{spacing:22px;vertical-stretch:0;
+                        HorizontalLayout{spacing:14px;
+                            Rectangle{width:48px;height:48px;background:Palette.soft;border-radius:12px;
+                                Image{source:@image-url("icons/monitor.svg");width:26px;height:26px;x:11px;y:11px;}
+                            }
+                            VerticalLayout{spacing:6px;alignment:center;
+                                Text{text:root.connection-name;color:Palette.ink;font-size:24px;font-weight:600;overflow:elide;}
+                                Text{text:root.connection-title;color:root.connection-phase=="failed" ? #b04452 : Palette.muted;font-size:14px;wrap:word-wrap;}
+                            }
+                        }
+                        if root.connection-busy && root.connection-phase!="connected":ProgressIndicator{indeterminate:true;}
+                        Text{text:"1  检查地址与配对";color:root.connection-phase=="resolving" ? Palette.blue : Palette.muted;font-size:14px;}
+                        Text{text:"2  建立串流";color:root.connection-phase=="starting" ? Palette.blue : Palette.muted;font-size:14px;}
+                        Text{text:"3  显示远程画面";color:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? Palette.blue : Palette.muted;font-size:14px;}
+                        if root.connection-error!="":Text{text:root.connection-error;color:#b04452;font-size:14px;wrap:word-wrap;}
+                        if root.connection-phase=="connected":Text{text:"会话控制位于远程画面上方。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
+                    }
                     if root.page=="pair": VerticalLayout {spacing:22px;
                         Text{text:"在 Sunshine 确认配对";color:Palette.ink;font-size:25px;}
                         Text{text:"请在主机管理界面输入：";color:Palette.muted;}
                         Text{text:root.pair-pin;color:Palette.blue;font-size:44px;}
                         ActionButton{text:"取消配对";action-id:"pair.cancel";}
                     }
-                    if root.streaming || root.connecting: VerticalLayout {spacing:12px;
-                        Text{text:(root.connecting ? "连接中 · " : "已连接 · ")+root.selected-name;color:Palette.ink;font-size:20px;}
-                        HorizontalLayout{spacing:8px;ActionButton{text:"控制";action-id:"stream.controls.toggle";}ActionButton{text:"断开";action-id:"stream.disconnect";primary:true;}Rectangle{horizontal-stretch:1;}}
-                        if root.controls: VerticalLayout{spacing:8px;
-                          HorizontalLayout{spacing:6px;
-                            ActionButton{text:"统计";action-id:"stream.stats.toggle";} ActionButton{text:"声音";action-id:"stream.audio.toggle";chosen:root.audio-enabled;} SpinBox{value:root.audio-volume;minimum:0;maximum:100;preferred-width:120px;edited(value)=>{Commands.trigger("stream.audio.volume",value+"");}}
-                            Rectangle{horizontal-stretch:1;}
-                          }
-                          HorizontalLayout{spacing:6px;
-                            ActionButton{text:"Ctrl+Alt+Delete";action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:!root.streaming;}
-                            ActionButton{text:"Ctrl+Alt+←";action-id:"stream.shortcut";argument:"ctrl-alt-left";disabled:!root.streaming;}
-                            ActionButton{text:"Ctrl+Alt+→";action-id:"stream.shortcut";argument:"ctrl-alt-right";disabled:!root.streaming;}
-                            Rectangle{horizontal-stretch:1;}
-                          }
-                          HorizontalLayout{spacing:6px;
-                            shortcuts:=ComboBox{model:root.shortcut-labels;current-index:5;preferred-width:300px;horizontal-stretch:0;}
-                            ActionButton{text:"发送";action-id:"stream.shortcut";argument:root.shortcut-ids[shortcuts.current-index];disabled:!root.streaming;}
-                            Rectangle{horizontal-stretch:1;}
-                          }
-                          HorizontalLayout{spacing:6px;
-                            ActionButton{text:"窗口移到左屏";action-id:"stream.window.move";argument:"left";disabled:!root.streaming;}
-                            ActionButton{text:"窗口移到右屏";action-id:"stream.window.move";argument:"right";disabled:!root.streaming;}
-                            Rectangle{horizontal-stretch:1;}
-                          }
-                          HorizontalLayout{spacing:6px;
-                            ActionButton{text:"自动选屏";action-id:"stream.display.select";argument:"auto";disabled:!root.streaming;}
-                            ActionButton{text:"专用虚拟屏";action-id:"stream.display.select";argument:"virtual";disabled:!root.streaming;}
-                            ActionButton{text:"刷新屏幕";action-id:"stream.displays.refresh";disabled:!root.streaming;}
-                            Rectangle{horizontal-stretch:1;}
-                          }
-                          for display in root.remote-displays: HorizontalLayout{spacing:8px;
-                            Text{text:display.label;color:Palette.ink;vertical-alignment:center;}
-                            Rectangle{horizontal-stretch:1;}
-                            ActionButton{text:display.chosen?"当前屏幕":"切换";chosen:display.chosen;action-id:"stream.display.select";argument:display.id;disabled:!display.available||!root.streaming;}
-                          }
-                          if root.display-error!="":Text{text:root.display-error;color:Palette.muted;wrap:word-wrap;font-size:12px;}
-                        }
-                        if root.statistics: Text{text:root.stream-statistics;color:Palette.muted;wrap:word-wrap;font-size:12px;}
-                    }
-                    if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.page!="device-info" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                    if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.page!="device-info" && root.page!="connection" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     Rectangle {min-height:12px;vertical-stretch:1;}
 
             Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
+                }
+            }
+            if root.page=="connection":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:connection-footer.preferred-height;
+                Rectangle{x:0px;y:0px;width:parent.width;height:1px;background:Palette.line;}
+                connection-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
+                    Rectangle{horizontal-stretch:1;}
+                    if root.connection-busy:ActionButton{text:root.connection-phase=="cancelling" || root.connection-phase=="cleaning" ? "正在清理…" : root.connection-phase=="connected" ? "断开连接" : "取消连接";action-id:"stream.disconnect";disabled:root.connection-phase=="cancelling" || root.connection-phase=="cleaning";}
+                    if !root.connection-busy:ActionButton{text:"返回设备";action-id:"connection.dismiss";}
+                    if !root.connection-busy && root.connection-phase=="failed":ActionButton{text:"重试连接";action-id:"connection.retry";primary:true;}
                 }
             }
             if root.page=="settings": Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:profile-footer.preferred-height;

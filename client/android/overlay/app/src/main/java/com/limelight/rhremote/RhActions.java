@@ -65,7 +65,13 @@ public final class RhActions {
     public static boolean hasStream(){return stream.get()!=null||recovering!=null||admitting!=null;}
     static String lastConnectionError(){return lastConnectionError;}
     static void clearConnectionError(){lastConnectionError="";}
-    static void connectionError(String message){lastConnectionError=message;Target target=home.get();if(target instanceof RhHome)((RhHome)target).message(message);}
+    static void connectionError(String message){lastConnectionError=message;Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionFailure(message);}
+    static JSONObject activeState(){Target target=activeTarget();try{return target==null?new JSONObject():target.state();}catch(Exception ignored){return new JSONObject();}}
+    static void connectionStopping(String uuid){Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionStopping(uuid);}
+    static void connectionFrame(Activity owner){
+        MAIN.post(()->{if(belongsElsewhere(owner))return;String uuid=owner.getIntent().getStringExtra(com.limelight.Game.EXTRA_PC_UUID);
+            Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionFrame(uuid);Target active=stream.get();if(active instanceof RhStreamControls)((RhStreamControls)active).markFirstFrame();});
+    }
     private static Target activeTarget(){return recovering!=null?recovering:admitting!=null?admitting:stream.get();}
     public static JSONObject dispatch(String id,JSONObject args){
         if(Looper.myLooper()==Looper.getMainLooper())return execute(id,args);
@@ -83,7 +89,7 @@ public final class RhActions {
     }
     public static void click(String id,JSONObject args){JSONObject response=dispatch(id,args);if(!response.optBoolean("ok")){Target target=home.get();if(target instanceof RhHome)((RhHome)target).message(response.optString("error"));}}
     private static JSONObject snapshot(){
-        if(Looper.myLooper()==Looper.getMainLooper()){try{JSONObject state=home.get()==null?new JSONObject():home.get().state();Target target=activeTarget();JSONObject active=target==null?new JSONObject():target.state();state.put("streaming",active.optBoolean("connected"));state.put("connecting",target!=null&&!active.optBoolean("connected"));state.put("lastConnectionError",lastConnectionError);if(target!=null)state.put("stream",active);return obj("ok",true,"state",state);}catch(Exception e){return obj("ok",false,"error","state unavailable");}}
+        if(Looper.myLooper()==Looper.getMainLooper()){try{JSONObject state=home.get()==null?new JSONObject():home.get().state();Target target=activeTarget();JSONObject active=target==null?new JSONObject():target.state();state.put("streaming",active.optBoolean("connected"));state.put("connecting",target!=null&&!active.optBoolean("firstFrame",active.optBoolean("connected")));state.put("lastConnectionError",lastConnectionError);if(target!=null)state.put("stream",active);return obj("ok",true,"state",state);}catch(Exception e){return obj("ok",false,"error","state unavailable");}}
         JSONObject[] result=new JSONObject[1];CountDownLatch latch=new CountDownLatch(1);MAIN.post(()->{result[0]=snapshot();latch.countDown();});try{if(latch.await(5,TimeUnit.SECONDS))return result[0];}catch(InterruptedException e){Thread.currentThread().interrupt();}return obj("ok",false,"error","state timeout");
     }
     private static byte[] read(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1){if(out.size()+n>limit)throw new IOException("request too large");out.write(b,0,n);}return out.toByteArray();}

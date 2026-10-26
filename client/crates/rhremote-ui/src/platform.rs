@@ -116,6 +116,7 @@ mod packet_argument_tests {
 #[cfg(all(test, windows))]
 mod recovery_transport_tests {
     use super::*;
+    fn owned_json(body:&str,pid:u32)->String{let mut value:Value=serde_json::from_str(body).unwrap();value["processId"]=json!(pid);value.to_string()}
     fn protocol_budget_fixture(owned_status: bool) {
         let root=std::env::temp_dir().join(format!("rhremote-protocol-budget-{}",rhremote_core::random_token().unwrap()));
         let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -150,6 +151,24 @@ mod recovery_transport_tests {
     fn an_owned_protocol_ready_process_gets_a_separate_frame_budget() {protocol_budget_fixture(true);}
     #[test]
     fn another_process_cannot_extend_the_first_frame_budget() {protocol_budget_fixture(false);}
+    #[test]
+    fn a_previous_status_file_cannot_fail_release_or_connect_the_new_process() {
+        let root=std::env::temp_dir().join(format!("rhremote-state-owner-{}",rhremote_core::random_token().unwrap()));
+        let p=NativePlatform::new(PathBuf::from("unused-state-owner.exe"),"fixture-token".into(),root.clone()).unwrap();
+        let child=Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command","Start-Sleep -Seconds 30"]).creation_flags(0x08000000).spawn().unwrap();
+        let pid=child.id();*p.child.lock().unwrap()=Some(child);let mut recovery=Recovery::new(json!({}));recovery.native_started=Some(Instant::now());*p.recovery.lock().unwrap()=Some(recovery);
+        for value in [
+            json!({"processId":pid+1,"phase":"error","routeFatal":true,"error":"old failure"}),
+            json!({"processId":pid+1,"phase":"connected","streaming":true,"firstFrame":true}),
+            json!({"processId":pid+1,"phase":"transport_closed","transportReleased":true,"retryEligible":true}),
+            json!({"phase":"disconnected","streaming":false,"firstFrame":false}),
+        ] {
+            fs::write(&p.session_status,value.to_string()).unwrap();let state=p.state().unwrap();
+            assert_eq!(state["phase"],"connecting");assert_eq!(state["streaming"],false);assert_eq!(state["firstFrame"],false);assert_eq!(state["error"],"");assert_eq!(state["awaitingOwnedState"],true);
+            assert!(p.child.lock().unwrap().is_some());assert!(!p.recovery.lock().unwrap().as_ref().unwrap().policy.armed());assert!(p.retiring.lock().unwrap().is_empty());
+        }
+        stop_fixture(&p);fs::remove_dir_all(root).unwrap();
+    }
     // These older recovery fixtures use sleeping shells, not a native API.
     // Explicitly finish only those fixtures; real graceful teardown is tested
     // with an authenticated control server in native_cleanup's process tests.
@@ -315,9 +334,11 @@ mod recovery_transport_tests {
         let marker = root.join("cleanup-finished");
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
+        let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
+            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             server.recv().unwrap().respond(tiny_http::Response::from_string(
-                r#"{"streaming":false,"firstFrame":false,"routeFatal":true,"phase":"error","error":"decoder failed"}"#,
+                owned_json(r#"{"streaming":false,"firstFrame":false,"routeFatal":true,"phase":"error","error":"decoder failed"}"#,pid),
             )).unwrap();
         });
         let mut p = NativePlatform::new(
@@ -333,6 +354,7 @@ mod recovery_transport_tests {
             .env("RHREMOTE_TEST_CLEANUP_MARKER", &marker)
             .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
             .creation_flags(0x08000000).spawn().unwrap();
+        pid_tx.send(child.id()).unwrap();
         *p.child.lock().unwrap() = Some(child);
         *p.recovery.lock().unwrap() = Some(Recovery::new(json!({})));
         let state = p.state().unwrap();
@@ -359,9 +381,11 @@ mod recovery_transport_tests {
         ));
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
+        let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
+            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             server.recv().unwrap().respond(tiny_http::Response::from_string(
-                r#"{"streaming":false,"firstFrame":false,"routeRetryEligible":true,"phase":"error","error":"network failed"}"#,
+                owned_json(r#"{"streaming":false,"firstFrame":false,"routeRetryEligible":true,"phase":"error","error":"network failed"}"#,pid),
             )).unwrap();
         });
         let mut p = NativePlatform::new(
@@ -384,6 +408,7 @@ mod recovery_transport_tests {
             .creation_flags(0x08000000)
             .spawn()
             .unwrap();
+        pid_tx.send(child.id()).unwrap();
         *p.child.lock().unwrap() = Some(child);
         *p.recovery.lock().unwrap() = Some(Recovery::new(json!({})));
         let state = p.state().unwrap();
@@ -404,11 +429,13 @@ mod recovery_transport_tests {
         fs::create_dir_all(&root).unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
+        let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
+            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             let request = server.recv().unwrap();
             request
                 .respond(tiny_http::Response::from_string(
-                    r#"{"streaming":true,"firstFrame":true,"retryEligible":true}"#,
+                    owned_json(r#"{"streaming":true,"firstFrame":true,"retryEligible":true}"#,pid),
                 ))
                 .unwrap();
         });
@@ -432,20 +459,22 @@ mod recovery_transport_tests {
             .creation_flags(0x08000000)
             .spawn()
             .unwrap();
+        let pid=child.id();
+        pid_tx.send(pid).unwrap();
         *p.child.lock().unwrap() = Some(child);
         *p.recovery.lock().unwrap() = Some(Recovery::new(json!({"profile":{}})));
         p.state().unwrap();
         worker.join().unwrap();
         fs::write(
             &p.session_status,
-            br#"{"streaming":false,"retryEligible":true,"transportReleased":false}"#,
+            owned_json(r#"{"streaming":false,"retryEligible":true,"transportReleased":false}"#,pid),
         )
         .unwrap();
         p.state().unwrap();
         assert!(p.retiring.lock().unwrap().is_empty());
         fs::write(
             &p.session_status,
-            br#"{"streaming":false,"retryEligible":true,"transportReleased":true,"phase":"transport_closed"}"#,
+            owned_json(r#"{"streaming":false,"retryEligible":true,"transportReleased":true,"phase":"transport_closed"}"#,pid),
         )
         .unwrap();
         p.state().unwrap();
@@ -470,9 +499,11 @@ mod recovery_transport_tests {
         fs::create_dir_all(&root).unwrap();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
+        let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
+            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
             for request in server.incoming_requests().take(2) {
-                request.respond(tiny_http::Response::from_string(r#"{"ok":true,"streaming":true,"firstFrame":true,"phase":"connected","retryEligible":true}"#)).unwrap();
+                request.respond(tiny_http::Response::from_string(owned_json(r#"{"ok":true,"streaming":true,"firstFrame":true,"phase":"connected","retryEligible":true}"#,pid))).unwrap();
             }
         });
         let mut p = NativePlatform::new(
@@ -496,6 +527,7 @@ mod recovery_transport_tests {
             .spawn()
             .unwrap();
         let id = child.id();
+        pid_tx.send(child.id()).unwrap();
         *p.child.lock().unwrap() = Some(child);
         *p.recovery.lock().unwrap() = Some(Recovery::new(json!({"profile":{}})));
         let live = p.state().unwrap();
@@ -1011,6 +1043,11 @@ impl NativePlatform {
         let mut alive = slot
             .as_mut()
             .is_some_and(|c| c.try_wait().ok().flatten().is_none());
+        // HTTP is read before the admission lock, and the fallback file can still
+        // describe the previous process. Neither may end or arm a fresh child.
+        if alive && value["processId"].as_u64()!=slot.as_ref().map(|child|u64::from(child.id())) {
+            value=json!({"streaming":false,"firstFrame":false,"phase":if recovery.as_ref().is_some_and(|r|r.policy.armed()){"reconnecting"}else{"connecting"},"error":"","awaitingOwnedState":true});
+        }
         let mut released = alive
             && http_unavailable
             && value["transportReleased"] == true

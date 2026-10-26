@@ -63,3 +63,17 @@ fn device_identity_has_its_own_editor_and_fixed_completion_controls(){
     }
     ui.hide().unwrap();
 }
+
+#[test]
+fn connection_footer_stays_reachable_and_only_exposes_actions_for_the_current_stage(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("connection".into());ui.set_connection_name("winserver".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_connection_busy(true);ui.set_connection_phase("starting".into());
+        received.borrow_mut().clear();click(&ui,"取消连接");assert_eq!(&*received.borrow(),&["stream.disconnect"]);
+        ui.set_connection_phase("cancelling".into());received.borrow_mut().clear();click(&ui,"正在清理…");assert!(received.borrow().is_empty());
+        ui.set_connection_phase("failed".into());ui.set_connection_busy(false);ui.set_connection_error("连接失败的详细信息。".repeat(40).into());
+        let retry=ElementHandle::find_by_accessible_label(&ui,"重试连接").next().unwrap();let p=retry.absolute_position();let size=retry.size();assert!(p.y>=height-100.&&p.y+size.height<=height&&p.x+size.width<=width);
+        received.borrow_mut().clear();click(&ui,"重试连接");click(&ui,"返回设备");assert_eq!(&*received.borrow(),&["connection.retry","connection.dismiss"]);
+    }ui.hide().unwrap();
+}

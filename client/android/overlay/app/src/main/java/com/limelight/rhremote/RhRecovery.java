@@ -97,7 +97,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         try{return value==null?fallback:RhProfile.fromJson(activity.getIntent().getStringExtra(Game.EXTRA_PC_UUID),parse(value));}
         catch(Exception e){throw new IllegalArgumentException("重连配置无效",e);}
     }
-    public void frame(){if(!cancelled&&!retrying){boolean first=!policy.rendered();policy.frame(SystemClock.elapsedRealtime());if(first)main.removeCallbacks(watchdog);}}
+    public void frame(){if(!cancelled&&!retrying){boolean first=!policy.rendered();policy.frame(SystemClock.elapsedRealtime());if(first){main.removeCallbacks(watchdog);RhActions.connectionFrame(activity);}}}
     public boolean stageFailed(int portFlags,int code){return stageFailed("",portFlags,code);}
     public boolean stageFailed(String stage,int portFlags,int code){return retry(RhRecoveryPolicy.networkStage(stage,portFlags,code),"连接阶段失败 ("+code+")");}
     /** Fatal startup errors return to the device list after scoped cleanup, without a modal connection owner. */
@@ -263,5 +263,5 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     }
     public JSONObject state(){return RhActions.obj("connected",false,"phase",!error.isEmpty()?"error":cancelled?"cancelling":handoff?"starting":"reconnecting","attemptId",id,
         "workerRunning",workerRunning,"cleanupPending",cleanupPending||workerRunning,"error",error,"recovery",policy.state());}
-    public JSONObject perform(String action,JSONObject args){if(!action.equals("stream.disconnect"))throw new IllegalStateException("正在重连，可取消当前连接");cancel();activity.finish();return RhActions.obj("cancelled",true);}
+    public JSONObject perform(String action,JSONObject args){if(!action.equals("stream.disconnect"))throw new IllegalStateException("正在重连，可取消当前连接");RhActions.connectionStopping(uuid);cancel();activity.finish();return RhActions.obj("cancelled",true);}
 }

@@ -15,6 +15,8 @@ public final class RhStreamControls implements RhActions.Target {
     private final Game game;private final RhTouchController touch;private final PreferenceConfiguration preferences;
     private final RhStreamPanel panel;private final RhProfile profile;
     private boolean keyboard,disposed,connected;
+    private boolean firstFrame;
+    public void markFirstFrame(){if(!disposed)firstFrame=true;}
     private boolean shortcutBusy;private JSONObject lastShortcut=RhActions.obj();
     private final RhDisplay display;private boolean displayBusy;private String displayError="";
     public static RhStreamControls install(Game game,RhTouchController touch,PreferenceConfiguration preferences,RhProfile profile,RhDisplay display){RhStreamControls controls=new RhStreamControls(game,touch,preferences,profile,display);return controls.disposed?null:controls;}
@@ -29,7 +31,7 @@ public final class RhStreamControls implements RhActions.Target {
     public void markConnected(){connected=true;try{if(display!=null)display.applyInitial();}catch(Exception e){displayError=e.getMessage()==null?"屏幕切换失败":e.getMessage();}updatePanel();}
     private void click(String id){RhActions.click(id,RhActions.obj());}
     private void updatePanel(){if(!disposed)panel.update(touch.isTrackpad(),touch.isPanMode(),profile.audioEnabled,profile.volume,display==null?RhActions.obj():display.state(),displayBusy,displayError);}
-    public JSONObject state(){TextView overlay=game.findViewById(R.id.performanceOverlay);return RhActions.obj("connected",connected,"audioEnabled",profile.audioEnabled,"volume",profile.volume,"audioPackets",game.rhAudioRenderer==null?0:game.rhAudioRenderer.packets(),"controls",panel.isExpanded(),"controlsTab",panel.tab(),"controlsLayout",panel.layoutState(),"trackpad",touch.isTrackpad(),"pan",touch.isPanMode(),"keyboard",keyboard,"showStats",preferences.enablePerfOverlay,"statistics",overlay==null?"":overlay.getText().toString(),"surface",touch.surfaceSize(),"lastShortcut",lastShortcut,"shortcutBusy",shortcutBusy,"display",display==null?RhActions.obj():display.state(),"displayBusy",displayBusy,"displayError",displayError);}
+    public JSONObject state(){TextView overlay=game.findViewById(R.id.performanceOverlay);return RhActions.obj("connected",connected,"firstFrame",firstFrame,"phase",!connected?"starting":firstFrame?"connected":"first-frame","audioEnabled",profile.audioEnabled,"volume",profile.volume,"audioPackets",game.rhAudioRenderer==null?0:game.rhAudioRenderer.packets(),"controls",panel.isExpanded(),"controlsTab",panel.tab(),"controlsLayout",panel.layoutState(),"trackpad",touch.isTrackpad(),"pan",touch.isPanMode(),"keyboard",keyboard,"showStats",preferences.enablePerfOverlay,"statistics",overlay==null?"":overlay.getText().toString(),"surface",touch.surfaceSize(),"lastShortcut",lastShortcut,"shortcutBusy",shortcutBusy,"display",display==null?RhActions.obj():display.state(),"displayBusy",displayBusy,"displayError",displayError);}
     public JSONObject perform(String id,JSONObject args)throws Exception{
         if(disposed||game.isFinishing())throw new IllegalStateException("no active stream");
         if(!connected && (id.equals("input.gesture")||id.equals("stream.shortcut")||id.equals("stream.window.move")))throw new IllegalStateException("stream is not connected");
@@ -49,7 +51,7 @@ public final class RhStreamControls implements RhActions.Target {
             case "stream.stats.toggle":preferences.enablePerfOverlay=!preferences.enablePerfOverlay;game.findViewById(R.id.performanceOverlay).setVisibility(preferences.enablePerfOverlay?View.VISIBLE:View.GONE);break;
             case "stream.audio.toggle":profile.audioEnabled=!profile.audioEnabled;applyAudio();break;
             case "stream.audio.volume":int volume=args.getInt("volume");if(volume<0||volume>100)throw new IllegalArgumentException("volume must be 0..100");profile.volume=volume;applyAudio();break;
-            case "stream.disconnect":game.rhCancelConnection();dispose();game.finish();break;
+            case "stream.disconnect":RhActions.connectionStopping(game.getIntent().getStringExtra(Game.EXTRA_PC_UUID));game.rhCancelConnection();dispose();game.finish();break;
             case "stream.test.interrupt":if(!connected)throw new IllegalStateException("stream is not connected");game.rhTestInterrupt();break;
             case "input.gesture":touch.inject(args);break;
             default:throw new IllegalArgumentException("unsupported stream action");

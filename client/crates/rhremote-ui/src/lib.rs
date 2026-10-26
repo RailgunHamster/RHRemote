@@ -306,6 +306,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         if next!=revision {
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"]==true);ui.set_trace_path(state["statistics"]["tracing"]["latest"].as_str().unwrap_or("").into());
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_info_name(state["infoDraft"]["displayName"].as_str().unwrap_or("").into());ui.set_info_error(state["infoDraft"]["error"].as_str().unwrap_or("").into());ui.set_info_dirty(state["infoDirty"]==true);ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
+            ui.set_connection_phase(state["connection"]["phase"].as_str().unwrap_or("").into());
+            ui.set_connection_title(state["connection"]["title"].as_str().unwrap_or("").into());
+            ui.set_connection_name(state["connection"]["name"].as_str().unwrap_or("").into());
+            ui.set_connection_error(state["connection"]["error"].as_str().unwrap_or("").into());
+            ui.set_connection_busy(state["connection"]["busy"]==true);
             ui.set_settings_dirty(state["settingsDirty"]==true);ui.set_settings_error(state["settingsError"].as_str().unwrap_or("").into());if !ui.get_navigation_prompt()&&state["navigationPrompt"].is_object(){ui.set_navigation_choice(0);}ui.set_navigation_prompt(state["navigationPrompt"].is_object());ui.set_navigation_message(state["navigationPrompt"]["message"].as_str().unwrap_or("").into());
             let sync_form=if state["syncDraft"].is_object(){&state["syncDraft"]}else{&state["sync"]};ui.set_sync_generation(state["syncGeneration"].as_u64().unwrap_or(0) as i32);ui.set_sync_dirty(state["syncDirty"]==true);ui.set_sync_error(state["syncError"].as_str().unwrap_or("").into());
             ui.set_add_address(state["add"]["address"].as_str().unwrap_or("").into());ui.set_add_phase(state["add"]["phase"].as_str().unwrap_or("editing").into());ui.set_add_error(state["add"]["error"].as_str().unwrap_or("").into());

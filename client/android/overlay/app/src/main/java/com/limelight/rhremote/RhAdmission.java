@@ -141,6 +141,7 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
         "workerRunning",running,"pairing",external,"cleanupPending",cleaning||running||external||gameCleanupPending,"error",failure);}
     public JSONObject perform(String action,JSONObject args){
         if(!action.equals("stream.disconnect")&&!action.equals("pair.cancel"))throw new IllegalStateException("正在连接，可取消当前连接");
+        RhActions.connectionStopping(uuid);
         cancel();return RhActions.obj("cancelled",true,"cleanupPending",!completed);
     }
 }

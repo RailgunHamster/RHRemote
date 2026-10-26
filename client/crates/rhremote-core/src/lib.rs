@@ -11,6 +11,7 @@ mod global_settings;
 mod interaction;
 mod add_device;
 mod device_info;
+mod connection;
 pub mod sync_model;
 pub mod network;
 
@@ -192,6 +193,7 @@ pub struct State {
     pub status: String,
     pub streaming: bool,
     pub connecting: bool,
+    pub connection: connection::Connection,
     pub closing: bool,
     #[serde(skip)]
     connect_in_flight: bool,
@@ -318,6 +320,7 @@ impl Controller {
                 status: String::new(),
                 streaming: false,
                 connecting: false,
+                connection: connection::Connection::default(),
                 closing: false,
                 connect_in_flight: false,
                 stream_epoch: 0,
@@ -366,6 +369,8 @@ impl Controller {
         let mut value = serde_json::to_value(&*s).unwrap();
         value["settingsDirty"]=json!(interaction::dirty(&s));
         value["infoDirty"]=json!(device_info::dirty(&s));
+        value["connection"]["title"]=json!(s.connection.title());
+        value["connection"]["busy"]=json!(s.connection.busy());
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
         value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
         value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
@@ -413,7 +418,7 @@ impl Controller {
     pub fn stream_state_for(&self, epoch: u64, streaming: bool, statistics: Value) {
         let mut s = self.state.lock().unwrap();
         // A poll started before a new connection cannot erase its pending state.
-        if epoch != s.stream_epoch || s.connect_in_flight {
+        if epoch != s.stream_epoch || s.connect_in_flight || statistics.is_null() {
             return;
         }
         let was_connecting = s.connecting;
@@ -437,7 +442,7 @@ impl Controller {
         if streaming && statistics["firstFrame"] == false {
             s.connecting = true;
         }
-        if let Some(error) = statistics["error"].as_str().filter(|e| !e.is_empty()) {
+        if let Some(error) = statistics["error"].as_str().filter(|e| !e.is_empty() && !s.connection.stopping) {
             s.status = error.into();
         } else if s.connecting {
             s.status = if statistics["phase"] == "cancelling" {
@@ -462,6 +467,7 @@ impl Controller {
             s.closing = false;
             s.window_action = "window.close".into();
         }
+        connection::observe(&mut s, streaming, &statistics);
         s.statistics = statistics;
         s.revision += 1;
     }
@@ -512,9 +518,9 @@ impl Controller {
         }
         let result = if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
-            let action=match page.as_str(){"decision"=>"navigation.resolve","add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
+            let action=match page.as_str(){"decision"=>"navigation.resolve","connection"=>if self.state.lock().unwrap().connection.busy(){"stream.disconnect"}else{"connection.dismiss"},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
             let result=self.dispatch(action,if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
-        } else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
+        } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
             self.dispatch_add(id,args)
         } else if id.starts_with("device.info.") {
             self.dispatch_info(id,args)
@@ -639,6 +645,7 @@ impl Controller {
                 let mut s=self.state.lock().unwrap();s.network=result.clone();s.revision+=1;return Ok(result);
             }
             "devices.open" | "settings.cancel" => {
+                if s.page=="connection" {s.status.clear();}
                 s.page = "devices".into();
                 interaction::clear(&mut s);
             }
@@ -883,6 +890,8 @@ impl Controller {
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
                     if id == "device.connect" {
+                        s.connection.begin(&d);
+                        s.page = "connection".into();
                         // An ended stream's firstFrame must not describe this attempt.
                         s.statistics = Value::Null;
                         s.connecting = true;
@@ -907,6 +916,12 @@ impl Controller {
                         s.page = "pair".into();
                     }
                 }
+                if id == "stream.disconnect" && !s.connection.uuid.is_empty() {
+                    s.connection.stopping=true;
+                    s.connection.phase="cancelling".into();
+                    s.connecting=true;
+                    s.revision+=1;
+                }
                 drop(s);
                 if id == "device.connect" {
                     self.platform.connection_requested(timing);
@@ -920,6 +935,7 @@ impl Controller {
                             state.connecting = false;
                             state.stream_epoch += 1;
                             state.status = error.clone();
+                            state.connection.fail(error.clone());
                         }
                         if id == "device.pair" {
                             let mut state = self.state.lock().unwrap();
@@ -958,6 +974,7 @@ impl Controller {
                         s.connect_in_flight = false;
                         s.stream_epoch += 1;
                         s.status = "正在连接…".into();
+                        if !s.connection.stopping {s.connection.phase="starting".into();}
                         s.show_stats = args["profile"]["statistics"].as_bool().unwrap_or(false);
                     }
                     "pair.cancel" => {

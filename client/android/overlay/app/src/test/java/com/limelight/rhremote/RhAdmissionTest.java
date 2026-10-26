@@ -45,6 +45,7 @@ public class RhAdmissionTest {
     AtomicInteger launches=new AtomicInteger(),finishes=new AtomicInteger(),pairCancels=new AtomicInteger();
     boolean discoveryPaused;int discoveryResumes;
     boolean transferred;String result;CountDownLatch release;
+    String launchFailure="";
     RhActions.Target stream=new RhActions.Target(){public JSONObject state(){return RhActions.obj();}public JSONObject perform(String id,JSONObject args){return RhActions.obj();}};
     @Before public void setup(){
         Transport.stops=0;Transport.fail=false;
@@ -144,7 +145,7 @@ public class RhAdmissionTest {
         public void pair(ComputerDetails d,String pin){}public void cancelPair(){pairCancels.incrementAndGet();}public void refresh(){}
         public void setDiscoveryPaused(boolean paused){discoveryPaused=paused;if(!paused){assertFalse("Discovery must wait for reservation cleanup",RhActions.hasStream());discoveryResumes++;}}
         public Runnable prepareConnect(ComputerDetails d,RhAdmission op)throws Exception{
-            try(RhAdmission.Watch request=op.watch(()->{})){entered.countDown();if(!release.await(3,TimeUnit.SECONDS))throw new IOException("test gate timed out");return ()->launches.incrementAndGet();}
+            try(RhAdmission.Watch request=op.watch(()->{})){entered.countDown();if(!release.await(3,TimeUnit.SECONDS))throw new IOException("test gate timed out");if(!launchFailure.isEmpty())throw new IOException(launchFailure);return ()->launches.incrementAndGet();}
         }
     };}
     private Button button(View view,String text){
@@ -155,6 +156,22 @@ public class RhAdmissionTest {
     private void awaitIdle()throws Exception{
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
         do{idle();if(!RhActions.hasStream())return;Thread.sleep(10);}while(System.nanoTime()<end);fail("Admission did not finish");
+    }
+    @Test public void homeFailureHasOneRetryActionAndKeepsDeviceQueryAndProfiles()throws Exception{
+        release=new CountDownLatch(1);CountDownLatch entered=new CountDownLatch(1);launchFailure="certificate mismatch";
+        home=new RhHome(activity,callbacks(entered));home.update(device());
+        RhActions.dispatch("devices.filter",RhActions.obj("query","PC"));RhActions.dispatch("device.select",RhActions.obj("uuid","host"));
+        String before=home.state().getJSONObject("saved").toString();Button connect=button(activity.getWindow().getDecorView(),"连接");assertNotNull(connect);connect.performClick();
+        assertTrue(entered.await(2,TimeUnit.SECONDS));idle();assertEquals("connection",home.state().getString("page"));
+        assertFalse(RhActions.dispatch("app.settings.open",RhActions.obj()).getBoolean("ok"));assertFalse(RhActions.dispatch("device.connect",RhActions.obj("uuid","host")).getBoolean("ok"));
+        release.countDown();awaitIdle();assertEquals("failed",home.state().getJSONObject("connection").getString("phase"));assertTrue(home.state().getJSONObject("connection").getString("error").contains("certificate mismatch"));
+        assertEquals("PC",home.state().getString("deviceQuery"));assertEquals(before,home.state().getJSONObject("saved").toString());
+        launchFailure="";release=new CountDownLatch(1);button(activity.getWindow().getDecorView(),"重试连接").performClick();
+        assertTrue(RhActions.hasStream());assertEquals(2,home.state().getJSONObject("connection").getInt("attempt"));
+        button(activity.getWindow().getDecorView(),"取消连接").performClick();release.countDown();awaitIdle();
+        assertEquals("devices",home.state().getString("page"));assertEquals("host",home.state().getString("selected"));assertEquals("PC",home.state().getString("deviceQuery"));
+        assertEquals("cancelled",home.state().getJSONObject("connection").getString("phase"));assertEquals(0,launches.get());
+        RhActions.dispatch("device.settings.open",RhActions.obj("uuid","host"));assertFalse(RhActions.dispatch("connection.dismiss",RhActions.obj()).getBoolean("ok"));assertEquals("settings",home.state().getString("page"));
     }
     @Test public void homeCancelButtonAndApiUseTheSameReservationWhileAppListIsPending()throws Exception{
         release=new CountDownLatch(1);CountDownLatch entered=new CountDownLatch(1);home=new RhHome(activity,callbacks(entered));home.update(device());
