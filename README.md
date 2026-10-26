@@ -7,7 +7,7 @@ RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 *
 - Windows：Rust + Slint 界面，Moonlight Qt 接收、硬件解码与 SDL 渲染。
 - Android：原生 View + Java，MediaCodec 解码与 Surface 呈现。
 - 每个客户端实例 × 远程设备独立连接参数；设备支持别名、主副键补偿。
-- 画面、音频、输入、高级四类连接设置；支持静音、音量、触控板、直接点击、捏合缩放与双指滚动。
+- 画面、音频、输入、网络、高级五类连接设置；支持静音、音量、触控板、直接点击、捏合缩放与双指滚动。
 - WebDAV 支持 HTTP / HTTPS；自动同步可选 5、15、30、60 分钟。密码及配对密钥留在本机。
 - Windows 使用 Velopack 更新，Android 下载 APK 后由用户确认安装；GitHub 与 Gitee 互为下载源。
 
@@ -17,7 +17,7 @@ RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 *
 
 Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运行。Android 使用 arm64-v8a APK，包名为 `com.rhremote.client`，可与原版 Moonlight 并存。升级保留同一应用身份和签名，不要先卸载。
 
-当前开发版本 v0.2.3 是开发预览版。Android 暂用开发签名；Windows 尚无代码签名证书。连接成功不代表稳定 30 / 60 FPS 验收，首次连接的主机编码检测耗时仍在排查。
+当前客户端版本为 v0.2.10。Windows 使用导航、设备列表和详情分栏；Android 按可用宽度切换分栏或列表／详情页面，设置按钮自动换行并避开系统栏。Android 沿用已有签名，Windows 尚无代码签名证书。此次为界面更新，不能据此宣称首次连接、弱网恢复或持续动态 30 FPS 已完成优化，待验收项见 [TODO](TODO.md)。
 
 开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制栏悬浮在串流窗口顶部，可收起为小开关；Android 顶部固定开关展开“操作 / 屏幕 / 声音”分类面板，按钮按宽度排列为两列或三列，长内容纵向滚动。每个操作都有对应动作接口。
 
@@ -50,4 +50,4 @@ Sunshine 官方更新使用 `tools/update-sunshine.ps1 -Ref <官方 tag 或 comm
 
 基于 Moonlight Qt、Moonlight Android、Sunshine 及其依赖，保留原有版权、NOTICE 和各组件许可证。Sunshine 的官方基准记录在 `server/UPSTREAM.json`，原始许可和 NOTICE 留在 `server/sunshine/`。客户端许可见 [LICENSE](LICENSE)。本项目不代表 Moonlight 或 Sunshine 官方构建。
 
-设备卡片的 ↑ / ↓ 按钮调整显示顺序，立即保存，并随 WebDAV 配置同步到其他客户端。刷新和重启保持顺序；同时修改产生冲突时可选择保留哪一端。
+选中设备后，详情中的“上移 / 下移”调整显示顺序，立即保存，并随 WebDAV 配置同步到其他客户端。刷新和重启保持顺序；同时修改产生冲突时可选择保留哪一端。

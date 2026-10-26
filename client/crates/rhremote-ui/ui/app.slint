@@ -1,14 +1,14 @@
-import { ScrollView, LineEdit, CheckBox, SpinBox, ComboBox } from "std-widgets.slint";
+import { ScrollView, LineEdit, CheckBox, SpinBox, ComboBox, Palette as WidgetPalette } from "std-widgets.slint";
 
 export global Commands { callback trigger(string,string); }
-export struct DeviceRow { uuid:string, name:string, status:string, summary:string, paired:bool, online:bool, is-self:bool }
+export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, status:string, paired:bool, online:bool, is-self:bool }
 export struct ProfileSource { client-id:string, label:string }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
 export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
 export struct RouteRow { key:string,label:string,enabled:bool }
 export global Palette {
     in property <bool> dark;
-    out property <color> page: dark ? #151b29 : #f4f7fc;
+    out property <color> page: dark ? #151b29 : #f6f7fa;
     out property <color> surface: dark ? #1b2232 : #ffffff;
     out property <color> ink: dark ? #e1e8f6 : #34415b;
     out property <color> muted: dark ? #a4b1c8 : #69778e;
@@ -28,7 +28,7 @@ component ActionButton inherits Rectangle {
     preferred-width: label.preferred-width + 32px;
     horizontal-stretch:0;
     height: 38px;
-    border-radius: 19px;
+    border-radius: 8px;
     background: root.primary ? (touch.has-hover ? #4666d6 : Palette.blue) : root.chosen ? Palette.soft : touch.has-hover ? Palette.soft : Palette.surface;
     border-color: root.chosen ? Palette.blue : Palette.line;
     border-width: root.primary ? 0px : 1px;
@@ -39,17 +39,32 @@ component ActionButton inherits Rectangle {
     accessible-label: root.text;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
 }
-component IconActionButton inherits Rectangle {
-    in property <string> action-id;
-    in property <string> label;
+component NavigationItem inherits Rectangle {
+    in property <string> text;
     in property <image> icon;
+    in property <string> action-id;
     in property <bool> chosen;
-    width:36px;height:36px;border-radius:12px;
-    background:root.chosen || touch.has-hover ? Palette.soft : transparent;
-    Image{source:root.icon;width:20px;height:20px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;}
-    touch:=TouchArea{mouse-cursor:pointer;clicked=>{Commands.trigger(root.action-id,"");}}
-    accessible-role:button;accessible-label:root.label;
+    in property <bool> compact;
+    height:42px;border-radius:7px;
+    background:root.chosen ? Palette.soft : touch.has-hover ? Palette.page : transparent;
+    HorizontalLayout {
+        padding-left:12px;padding-right:12px;spacing:12px;
+        Rectangle {width:20px;
+            Image {source:root.icon;width:20px;height:20px;y:(parent.height - self.height)/2;}
+        }
+        if !root.compact: Text {text:root.text;color:root.chosen ? Palette.blue : Palette.ink;font-weight:root.chosen ? 600 : 400;vertical-alignment:center;font-size:13px;}
+        if !root.compact: Rectangle {horizontal-stretch:1;}
+    }
+    touch:=TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger(root.action-id,"");}}
+    accessible-role:button;accessible-label:root.text;
     accessible-action-default=>{Commands.trigger(root.action-id,"");}
+}
+component DetailField inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing:8px;
+    Text {text:root.label;color:Palette.muted;font-size:12px;}
+    Text {text:root.value;color:Palette.ink;font-size:14px;overflow:elide;}
 }
 export component StreamToolbar inherits Window {
     title:"RHRemote-Moonlight · 串流控制";no-frame:true;
@@ -139,10 +154,17 @@ export component StreamPicker inherits Window {
     }
 }
 export component MainWindow inherits Window {
+    init => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
+    changed dark => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     icon:@image-url("../../../shared/icons/rhremote.svg");
     title:"RHRemote-Moonlight";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
     background:Palette.page;default-font-family:"Microsoft YaHei UI";default-font-size:14px;
     in property <[DeviceRow]> devices;
+    in property <DeviceRow> selected-device;
+    in property <string> device-query;
+    in property <int> device-total;
+    in property <int> device-online;
+    in property <int> selected-index;
     in property <string> page:"devices";
     in property <string> app-version;
     in property <string> selected-name;
@@ -167,6 +189,8 @@ export component MainWindow inherits Window {
     in property <int> fps:30;
     in property <int> bitrate:25;
     in property <string> codec:"HEVC";
+    in property <bool> profile-audio-enabled;
+    in property <string> profile-display;
     in property <bool> swapped;
     in property <bool> trackpad;
     in property <bool> statistics;
@@ -199,19 +223,152 @@ export component MainWindow inherits Window {
     in property <string> update-status;
     HorizontalLayout {
         spacing:0px;
-        if !root.compact: Rectangle {
-            width:70px;background:Palette.page;
-            VerticalLayout {padding:18px;spacing:18px;
-                Image {height:32px;width:32px;source:@image-url("../../../shared/icons/rhremote.svg");}
-                IconActionButton{label:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices";}
-                IconActionButton{label:"添加电脑";icon:@image-url("icons/plus.svg");action-id:"device.add.open";}
+        Rectangle {
+            width:root.compact ? 64px : 184px;background:Palette.surface;
+            Rectangle {x:parent.width - 1px;width:1px;background:Palette.line;}
+            VerticalLayout {padding:root.compact ? 10px : 14px;spacing:8px;
+                HorizontalLayout {height:76px;spacing:10px;
+                    Image {height:32px;width:32px;source:@image-url("../../../shared/icons/rhremote.svg");}
+                    if !root.compact: VerticalLayout {alignment:center;spacing:3px;
+                        Text {text:"RHRemote";font-size:19px;font-weight:600;color:Palette.ink;}
+                        Text {text:"Moonlight";font-size:11px;color:Palette.muted;}
+                    }
+                }
+                NavigationItem{text:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices" || root.page=="settings" || root.page=="pair";compact:root.compact;}
+                NavigationItem{text:"添加电脑";icon:@image-url("icons/plus.svg");action-id:"device.add.open";chosen:root.page=="add";compact:root.compact;}
                 Rectangle {vertical-stretch:1;}
-                IconActionButton{label:"切换主题";icon:@image-url("icons/moon.svg");action-id:"appearance.toggle";}
+                NavigationItem{text:"设置";icon:@image-url("icons/settings.svg");action-id:"app.settings.open";chosen:root.page=="global-settings";compact:root.compact;}
+                NavigationItem{text:root.dark ? "浅色模式" : "深色模式";icon:@image-url("icons/moon.svg");action-id:"appearance.toggle";compact:root.compact;}
+                if !root.compact: Rectangle {height:52px;
+                    VerticalLayout {padding-left:12px;alignment:center;spacing:5px;
+                        Text {text:"v"+root.app-version;color:Palette.muted;font-size:11px;}
+                        Text {text:"Moonlight · GPL v3";color:Palette.muted;font-size:10px;}
+                    }
+                }
             }
         }
         VerticalLayout {
             spacing:0px;
-            Rectangle {height:60px;background:Palette.surface;
+            if root.page=="devices" && !root.streaming && !root.connecting: HorizontalLayout {
+                spacing:0px;
+                Rectangle {width:root.compact ? 224px : 276px;background:Palette.surface;
+                    Rectangle {x:parent.width - 1px;width:1px;background:Palette.line;}
+                    VerticalLayout {padding:16px;spacing:16px;
+                        HorizontalLayout {spacing:8px;height:36px;
+                            Text {text:"远程设备";font-size:19px;font-weight:600;color:Palette.ink;vertical-alignment:center;}
+                            Rectangle {horizontal-stretch:1;}
+                            ActionButton {text:"刷新";action-id:"devices.refresh";height:32px;}
+                        }
+                        LineEdit {text:root.device-query;placeholder-text:"搜索名称或地址";height:36px;edited(value)=>{Commands.trigger("devices.filter",value);}}
+                        ScrollView {horizontal-stretch:1;vertical-stretch:1;content-width:self.width;
+                            VerticalLayout {spacing:6px;alignment:start;
+                                for device in root.devices: Rectangle {
+                                    height:86px;border-radius:8px;
+                                    background:device.uuid==root.selected-uuid ? Palette.soft : device-touch.has-hover ? Palette.page : transparent;
+                                    if device.uuid==root.selected-uuid: Rectangle {x:0px;y:18px;width:3px;height:50px;border-radius:2px;background:Palette.blue;}
+                                    HorizontalLayout {padding:12px;spacing:10px;
+                                        Rectangle {width:34px;height:34px;border-radius:8px;background:Palette.page;vertical-stretch:0;
+                                            Image {source:@image-url("icons/monitor.svg");width:21px;height:21px;x:6px;y:6px;}
+                                        }
+                                        VerticalLayout {spacing:5px;alignment:center;
+                                            Text {text:device.name;color:Palette.ink;font-size:14px;font-weight:device.uuid==root.selected-uuid ? 600 : 400;overflow:elide;}
+                                            Text {text:device.address;color:Palette.muted;font-size:11px;overflow:elide;}
+                                            HorizontalLayout {spacing:5px;
+                                                Rectangle {width:6px;height:6px;border-radius:3px;background:device.is-self ? Palette.blue : device.online ? #369c81 : #98a1b2;vertical-stretch:0;}
+                                                Text {text:device.status;color:Palette.muted;font-size:10px;overflow:elide;}
+                                            }
+                                        }
+                                    }
+                                    device-touch:=TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger("device.select",device.uuid);}}
+                                    accessible-role:button;accessible-label:"选择设备 "+device.name;
+                                    accessible-action-default=>{Commands.trigger("device.select",device.uuid);}
+                                }
+                                if root.devices.length==0: Text {text:root.device-query!="" ? "没有匹配的设备" : "尚未添加设备";color:Palette.muted;font-size:12px;height:80px;horizontal-alignment:center;vertical-alignment:center;}
+                            }
+                        }
+                        Rectangle {height:1px;background:Palette.line;}
+                        Text {text:root.device-total+" 台设备  ·  "+root.device-online+" 台在线";font-size:11px;color:Palette.muted;}
+                    }
+                }
+                Rectangle {background:Palette.surface;
+                    if root.selected-uuid!="": VerticalLayout {spacing:0px;
+                        Rectangle {height:112px;background:Palette.page;
+                            VerticalLayout {padding:root.compact ? 20px : 28px;spacing:12px;
+                                HorizontalLayout {spacing:10px;
+                                    Text {text:root.selected-name;font-size:root.compact ? 24px : 28px;font-weight:600;color:Palette.ink;overflow:elide;vertical-alignment:center;}
+                                    Rectangle {horizontal-stretch:1;}
+                                    Rectangle {width:68px;height:26px;border-radius:13px;background:Palette.surface;vertical-stretch:0;
+                                        Text {text:root.selected-device.is-self ? "本机" : root.selected-device.online ? "在线" : "离线";color:root.selected-device.is-self ? Palette.blue : root.selected-device.online ? #369c81 : Palette.muted;font-size:11px;horizontal-alignment:center;vertical-alignment:center;}
+                                    }
+                                }
+                                Text {text:root.selected-device.name==root.selected-device.host-name ? root.network-address : root.selected-device.host-name;color:Palette.muted;font-size:12px;overflow:elide;}
+                                Rectangle {vertical-stretch:1;}
+                            }
+                        }
+                        Rectangle {height:48px;
+                            HorizontalLayout {padding-left:root.compact ? 20px : 28px;padding-right:20px;spacing:18px;
+                                Rectangle {width:40px;
+                                    Text {text:"概览";color:Palette.blue;font-size:13px;font-weight:600;vertical-alignment:center;horizontal-alignment:center;}
+                                    Rectangle {height:2px;y:parent.height - 2px;background:Palette.blue;}
+                                }
+                                ActionButton {text:"连接设置";action-id:"device.settings.open";argument:root.selected-uuid;}
+                                Rectangle {horizontal-stretch:1;}
+                            }
+                            Rectangle {y:parent.height - 1px;height:1px;background:Palette.line;}
+                        }
+                        ScrollView {content-width:self.width;vertical-stretch:1;
+                            VerticalLayout {padding:root.compact ? 20px : 28px;spacing:20px;alignment:start;
+                                Rectangle {height:root.compact ? 132px : 148px;border-radius:10px;border-width:1px;border-color:Palette.line;
+                                    HorizontalLayout {padding:20px;spacing:24px;
+                                        if !root.compact: Rectangle {width:144px;border-radius:8px;background:Palette.page;
+                                            Image {source:@image-url("icons/monitor.svg");width:54px;height:54px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2 - 6px;}
+                                            Text {text:"远程桌面";color:Palette.muted;font-size:11px;height:20px;y:parent.height - 30px;horizontal-alignment:center;}
+                                        }
+                                        VerticalLayout {spacing:10px;alignment:center;
+                                            Text {text:"桌面连接";font-size:16px;font-weight:600;color:Palette.ink;}
+                                            Text {text:root.selected-device.is-self ? "本机不支持连接自身" : root.selected-device.paired ? "已配对" : "连接前需要配对";font-size:12px;color:Palette.muted;}
+                                            HorizontalLayout {ActionButton {text:root.selected-device.is-self ? "本机" : root.selected-device.paired ? "连接" : "配对";action-id:root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-uuid;primary:true;disabled:root.selected-device.is-self;min-width:112px;}Rectangle{horizontal-stretch:1;}}
+                                        }
+                                    }
+                                }
+                                HorizontalLayout {spacing:16px;
+                                    DetailField {label:"分辨率";value:root.profile-width+" × "+root.profile-height;}
+                                    Rectangle {width:1px;background:Palette.line;}
+                                    DetailField {label:"帧率";value:root.fps+" FPS";}
+                                    Rectangle {width:1px;background:Palette.line;}
+                                    DetailField {label:"码率";value:root.bitrate+" Mbps";}
+                                }
+                                Rectangle {height:1px;background:Palette.line;}
+                                Text {text:"设备信息";font-size:14px;font-weight:600;color:Palette.ink;}
+                                HorizontalLayout {spacing:20px;
+                                    DetailField {label:"连接地址";value:root.network-address;}
+                                    DetailField {label:"配对状态";value:root.selected-device.paired ? "已配对" : "未配对";}
+                                }
+                                Text {text:"当前客户端配置";font-size:14px;font-weight:600;color:Palette.ink;}
+                                HorizontalLayout {spacing:20px;
+                                    DetailField {label:"视频编码";value:root.codec;}
+                                    DetailField {label:"声音";value:root.profile-audio-enabled ? "开启" : "关闭";}
+                                    DetailField {label:"屏幕";value:root.profile-display=="virtual" ? "虚拟屏" : "自动";}
+                                }
+                                Rectangle {height:1px;background:Palette.line;}
+                                HorizontalLayout {spacing:8px;
+                                    Text {text:"设备顺序";color:Palette.muted;font-size:12px;vertical-alignment:center;}
+                                    Rectangle {horizontal-stretch:1;}
+                                    ActionButton {text:"上移";action-id:"device.move";argument:root.selected-uuid+"|up";disabled:root.selected-index<=0;}
+                                    ActionButton {text:"下移";action-id:"device.move";argument:root.selected-uuid+"|down";disabled:root.selected-index>=root.device-total - 1;}
+                                }
+                                Text {text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                            }
+                        }
+                    }
+                    if root.selected-uuid=="": VerticalLayout {alignment:center;spacing:20px;padding:32px;
+                        Text {text:"远程设备";font-size:22px;color:Palette.ink;horizontal-alignment:center;}
+                        Text {text:"尚未添加设备";font-size:13px;color:Palette.muted;horizontal-alignment:center;}
+                        HorizontalLayout {Rectangle {horizontal-stretch:1;}ActionButton {text:"添加电脑";action-id:"device.add.open";primary:true;}Rectangle {horizontal-stretch:1;}}
+                    }
+                }
+            }
+            if root.page!="devices" || root.streaming || root.connecting: Rectangle {height:60px;background:Palette.surface;
                 HorizontalLayout {padding-left:24px;padding-right:24px;spacing:14px;
                     Text{text:"RHRemote-Moonlight";font-weight:600;color:Palette.ink;vertical-alignment:center;}
                     Text{text:"v"+root.app-version;font-size:11px;color:Palette.muted;vertical-alignment:center;}
@@ -221,34 +378,10 @@ export component MainWindow inherits Window {
                     ActionButton{text:"＋ 添加电脑";action-id:"device.add.open";}
                 }
             }
-            ScrollView {
+            if root.page!="devices" || root.streaming || root.connecting: ScrollView {
                 content-width:self.width;
                 VerticalLayout {
                     padding:root.compact ? 20px : 34px;spacing:18px;
-                    if root.page=="devices" && !root.streaming && !root.connecting: VerticalLayout {spacing:16px;vertical-stretch:0;
-                        HorizontalLayout {Text{text:"远程设备";font-size:23px;color:Palette.ink;font-weight:600;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}ActionButton{text:"刷新";action-id:"devices.refresh";}}
-                        Rectangle {height:10px;}
-                        if root.devices.length==0: Text {text:"尚未添加设备";color:Palette.muted;height:90px;vertical-alignment:center;horizontal-alignment:center;}
-                        for device[index] in root.devices: Rectangle {
-                            height:root.compact ? 142px : 106px;border-radius:18px;
-                            background:device.name=="winserver" ? Palette.soft : Palette.surface;
-                            border-width:1px;border-color:Palette.line;
-                            VerticalLayout {padding:18px;spacing:12px;
-                                HorizontalLayout {spacing:14px;
-                                    Rectangle {width:44px;height:44px;border-radius:12px;background:Palette.soft;Image{source:@image-url("icons/monitor.svg");width:25px;height:25px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;}}
-                                    VerticalLayout {spacing:5px;horizontal-stretch:1;
-                                        HorizontalLayout {spacing:10px;Text{text:device.name;color:Palette.ink;font-size:16px;font-weight:500;}if !root.compact: Text{text:device.status;color:device.paired ? #2e795f : Palette.muted;font-size:11px;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}}
-                                        Text{text:device.summary;color:Palette.muted;font-size:12px;}
-                                    }
-                                    if !root.compact: ActionButton{text:"设置";action-id:"device.settings.open";argument:device.uuid;}
-                                    if !root.compact: ActionButton{text:"↑";action-id:"device.move";argument:device.uuid+"|up";disabled:index==0;}
-                                    if !root.compact: ActionButton{text:"↓";action-id:"device.move";argument:device.uuid+"|down";disabled:index==root.devices.length - 1;}
-                                    if !root.compact: ActionButton{text:device.is-self ? "本机" : device.paired ? "连接" : "配对";action-id:device.paired ? "device.connect" : "device.pair";argument:device.uuid;primary:device.name=="winserver";disabled:device.is-self;}
-                                }
-                                if root.compact: HorizontalLayout {ActionButton{text:"↑";action-id:"device.move";argument:device.uuid+"|up";disabled:index==0;}ActionButton{text:"↓";action-id:"device.move";argument:device.uuid+"|down";disabled:index==root.devices.length - 1;}Rectangle{horizontal-stretch:1;}ActionButton{text:"连接设置";action-id:"device.settings.open";argument:device.uuid;}ActionButton{text:device.is-self ? "本机" : device.paired ? "连接" : "配对";action-id:device.paired ? "device.connect" : "device.pair";argument:device.uuid;primary:true;disabled:device.is-self;}}
-                            }
-                        }
-                    }
                     if root.page=="settings": VerticalLayout {spacing:16px;vertical-stretch:0;
                         HorizontalLayout{Text{text:"连接设置";color:Palette.muted;font-size:12px;}Rectangle{horizontal-stretch:1;}ActionButton{text:"返回";action-id:"settings.cancel";}}
                         Text{text:root.selected-name;color:Palette.ink;font-size:26px;}
@@ -434,9 +567,7 @@ export component MainWindow inherits Window {
                     Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
                 }
             }
-            if root.compact: Rectangle {height:64px;background:Palette.surface;
-                HorizontalLayout {padding:12px;spacing:12px;Rectangle{horizontal-stretch:1;}ActionButton{text:"设备";action-id:"devices.open";}ActionButton{text:"＋ 添加";action-id:"device.add.open";}ActionButton{text:root.dark ? "浅色" : "深色";action-id:"appearance.toggle";}Rectangle{horizontal-stretch:1;}}
-            }
+
         }
     }
 }

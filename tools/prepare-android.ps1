@@ -1,6 +1,7 @@
 param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',
  [ValidatePattern('^\d+\.\d+\.\d+(-preview\.[1-9]\d*)?$')][string]$Version='0.2.7',
- [ValidateRange(1,2100000000)][int]$VersionCode=209)
+ [ValidateRange(1,2100000000)][int]$VersionCode=209,
+ [ValidateSet('arm64-v8a','x86_64')][string]$Abi='arm64-v8a')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $expected='b48494cb96bff23d8886c4775cc4f39a1075495d'
@@ -26,8 +27,8 @@ Edit-Source 'app/build.gradle' {
     # Stable candidate preparation verifies the expected certificate fingerprint.
     $s=Replace-Once $s '        release {' "        release {`n            signingConfig signingConfigs.debug"
     $s=$s.Replace('"Moonlight (Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight (Root Debug)"','"RHRemote-Moonlight"').Replace('"Moonlight"','"RHRemote-Moonlight"').Replace('"Moonlight (Root)"','"RHRemote-Moonlight"')
-    # Build only the actual OPPO architecture; don't spend time building unused ABIs.
-    $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters 'arm64-v8a' }")
+    # Shipping builds use OPPO's ARM64 ABI. Native x86_64 is available for emulator UI checks.
+    $s=$s.Replace('minSdk 21',"minSdk 26`n        ndk { abiFilters '$Abi' }")
     $s=$s.Replace('targetSdk 36',"targetSdk 36`n        testInstrumentationRunner (project.findProperty('rhremote.instrumentationRunner') ?: 'androidx.test.runner.AndroidJUnitRunner')")
     $s=$s.Replace('    compileOptions {',@'
     testOptions {

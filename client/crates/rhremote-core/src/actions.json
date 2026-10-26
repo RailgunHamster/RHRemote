@@ -1,5 +1,7 @@
 [
  {"id":"devices.open","label":"设备","args":{}},
+ {"id":"device.select","label":"选择设备","args":{"uuid":"string"}},
+ {"id":"devices.filter","label":"搜索设备","args":{"query":"string; up to 128 characters; local view only"}},
  {"id":"statistics.configure","label":"测试模式逐帧统计","args":{"enabled":"boolean; local only; change while disconnected"}},
  {"id":"statistics.state","label":"测试统计文件状态","args":{}},
  {"id":"statistics.complete","label":"确认统计分析完成","platforms":["android"],"args":{"runId":"closed statistics run ID","sha256":"SHA-256 of exported native.jsonl; prune before next recording"}},

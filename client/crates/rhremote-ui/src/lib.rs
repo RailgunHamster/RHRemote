@@ -56,7 +56,8 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "sync.resolve" => json!({"resolution":arg}),
         "settings.copy_from" => json!({"clientId":arg}),
         "settings.save" => json!({"displayName":arg}),
-        "device.connect" | "device.pair" | "device.settings.open" => json!({"uuid":arg}),
+        "device.connect" | "device.pair" | "device.settings.open" | "device.select" => json!({"uuid":arg}),
+        "devices.filter" => json!({"query":arg}),
         "device.add.submit" => json!({"address":arg}),
         "settings.route.move" => {let (route,direction)=arg.split_once('|').unwrap_or(("",""));json!({"route":route,"direction":direction})},
         "settings.route.toggle" => json!({"route":arg}),
@@ -253,14 +254,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut toolbar_display_fingerprint = String::new();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade() else{return};let state=view.state();let next=state["revision"].as_u64().unwrap_or(0);
-        ui.set_compact(ui.window().size().width as f32/ui.window().scale_factor()<760.0);
+        ui.set_compact(ui.window().size().width as f32/ui.window().scale_factor()<980.0);
         if next!=revision {
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"]==true);ui.set_trace_path(state["statistics"]["tracing"]["latest"].as_str().unwrap_or("").into());
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
             ui.set_settings_tab(state["settingsTab"].as_str().unwrap_or("updates").into());ui.set_sync_url(state["sync"]["url"].as_str().unwrap_or("").into());ui.set_sync_username(state["sync"]["username"].as_str().unwrap_or("").into());ui.set_sync_automatic(state["sync"]["automatic"]==true);ui.set_sync_interval_index(match state["sync"]["intervalMinutes"].as_u64().unwrap_or(5){15=>1,30=>2,60=>3,_=>0});ui.set_sync_has_password(state["sync"]["hasPassword"]==true);ui.set_sync_busy(state["syncBusy"]==true);ui.set_sync_conflicts(state["sync"]["conflicts"].as_array().map(|a|a.iter().filter_map(|v|v.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default().into());ui.set_sync_last(if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)>0{"已同步"}else{"尚未同步"}.into());
             ui.set_updates_managed(state["updates"]["managed"]==true);ui.set_updates_busy(state["updatesBusy"]==true);ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());ui.set_updates_pending(state["updates"]["pendingRestart"]==true);ui.set_update_version(state["updates"]["availableVersion"].as_str().unwrap_or("").into());ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
-            let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|{let p:Profile=serde_json::from_value(state["saved"]["profiles"][d["uuid"].as_str().unwrap_or("")].clone()).unwrap_or_default();DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"● 已配对"}else{"待配对"}.into(),summary:format!("{} × {}  ·  {} 帧  ·  {} Mbps",p.width,p.height,p.fps,p.bitrate_mbps).into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}}).collect();
-            ui.set_selected_name(devices.iter().find(|d|d["uuid"]==selected).and_then(|d|d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str())).unwrap_or("").into());ui.set_draft_display_name(state["draftDisplayName"].as_str().unwrap_or("").into());devices::update_devices(&ui,rows);
+            let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),host_name:d["name"].as_str().unwrap_or("").into(),address:d["address"].as_str().unwrap_or("").into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"已配对"}else{"待配对"}.into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}).collect();
+            ui.set_selected_device(rows.iter().find(|d|d.uuid==selected).cloned().unwrap_or_default());
+            ui.set_selected_index(rows.iter().position(|d|d.uuid==selected).map(|i|i as i32).unwrap_or(-1));
+            ui.set_device_total(rows.len() as i32);ui.set_device_online(rows.iter().filter(|d|d.online).count() as i32);
+            let query=state["deviceQuery"].as_str().unwrap_or("");ui.set_device_query(query.into());
+            ui.set_selected_name(devices.iter().find(|d|d["uuid"]==selected).and_then(|d|d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str())).unwrap_or("").into());ui.set_draft_display_name(state["draftDisplayName"].as_str().unwrap_or("").into());devices::update_devices(&ui,devices::filter_devices(rows,query));
             let host=state["saved"]["devices"].as_array().into_iter().flatten().find(|d|d["uuid"]==selected).or_else(||devices.iter().find(|d|d["uuid"]==selected));
             ui.set_selected_uuid(selected.into());
             ui.set_network_address(host.and_then(|d|d["address"].as_str()).unwrap_or("").into());
@@ -296,7 +301,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let suffix=id.chars().rev().take(4).collect::<String>().chars().rev().collect::<String>();
                 ProfileSource{client_id:id.into(),label:format!("{} · {} · {} × {} · {} 帧",name,suffix,p["width"],p["height"],p["fps"]).into()}
             }).collect();ui.set_profile_sources(ModelRc::new(VecModel::from(sources)));
-            let p:Profile=serde_json::from_value(state["draft"].clone()).unwrap_or_else(|_|view.profile(selected));ui.set_profile_width(p.width as i32);ui.set_profile_height(p.height as i32);ui.set_fps(p.fps as i32);ui.set_bitrate(p.bitrate_mbps as i32);ui.set_codec(p.codec.into());ui.set_swapped(p.swap_buttons);ui.set_trackpad(p.trackpad);ui.set_statistics(if state["streaming"]==true{state["showStats"]==true}else{p.statistics});ui.set_pair_pin(state["pairPin"].as_str().unwrap_or("").into());ui.set_streaming(state["streaming"]==true);ui.set_connecting(state["connecting"]==true);ui.set_controls(state["controls"]==true);ui.set_stream_statistics(state["statistics"]["statistics"].as_str().unwrap_or("").into());
+            let p:Profile=serde_json::from_value(state["draft"].clone()).unwrap_or_else(|_|view.profile(selected));ui.set_profile_width(p.width as i32);ui.set_profile_height(p.height as i32);ui.set_fps(p.fps as i32);ui.set_bitrate(p.bitrate_mbps as i32);ui.set_codec(p.codec.into());ui.set_profile_audio_enabled(p.audio_enabled);ui.set_profile_display(p.display_mode.into());ui.set_swapped(p.swap_buttons);ui.set_trackpad(p.trackpad);ui.set_statistics(if state["streaming"]==true{state["showStats"]==true}else{p.statistics});ui.set_pair_pin(state["pairPin"].as_str().unwrap_or("").into());ui.set_streaming(state["streaming"]==true);ui.set_connecting(state["connecting"]==true);ui.set_controls(state["controls"]==true);ui.set_stream_statistics(state["statistics"]["statistics"].as_str().unwrap_or("").into());
         }
         if let Some(toolbar)=toolbar_weak.upgrade(){
             toolbar.set_expanded(state["controls"]==true);
@@ -436,6 +441,9 @@ mod tests {
         for source in [
             include_str!(
                 "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhHome.java"
+            ),
+            include_str!(
+                "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhDeviceBrowser.java"
             ),
             include_str!(
                 "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhStreamControls.java"

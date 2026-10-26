@@ -9,18 +9,28 @@ import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.*;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.PairingManager;
 import java.util.*;
 
-/** Native RHRemote v2 shell. Only actual ComputerManager discoveries become device cards. */
+/** Native RHRemote shell. Device browsing and session admission use the same action dispatcher. */
 public final class RhHome implements RhActions.Target {
     public interface Actions { void connect(ComputerDetails d); void add(String address); void advanced(); void pair(ComputerDetails d,String pin);void cancelPair();void refresh();
         default Runnable prepareConnect(ComputerDetails d,RhAdmission operation)throws Exception{return ()->connect(d);}
         default void setDiscoveryPaused(boolean paused){}
     }
     private long lastSyncAttempt=0;private final Activity activity;private final Actions actions;
-    private final LinearLayout root,content,bar;private final TextView status;
+    private final LinearLayout root,content,bar,body,sidebar,compactHeader;private final TextView status;
+    private final FrameLayout workspace;
+    private final RhDeviceBrowser browser;
+    private final Map<String,View> navigation=new HashMap<>();
+    private String browserUuid="",deviceQuery="";
+    private int shellBucket=-1;
     private final RelativeLayout empty;
     private final ScrollView scroll;
     private final LinkedHashMap<String,ComputerDetails> computers=new LinkedHashMap<>();
@@ -48,23 +58,33 @@ public final class RhHome implements RhActions.Target {
     public RhHome(Activity a,Actions callbacks) {
         activity=a;actions=callbacks;sync=new RhSync(a);updates=new RhUpdates(a);
         boolean dark=RhShared.dark(a);
-        page=c(dark?"#151b29":"#f4f7fc");surface=c(dark?"#1b2232":"#ffffff");soft=c(dark?"#202a3e":"#f8faff");
+        page=c(dark?"#151b29":"#f6f7fa");surface=c(dark?"#1b2232":"#ffffff");soft=c(dark?"#202a3e":"#f8faff");
         ink=c(dark?"#e1e8f6":"#34415b");muted=c(dark?"#a4b1c8":"#69778e");line=c(dark?"#303c53":"#e5eaf4");
         blue=c(dark?"#6f8af1":"#5274e8");blueSoft=c(dark?"#253452":"#edf2ff");purple=c(dark?"#ba9aef":"#8b5be2");purpleSoft=c(dark?"#332845":"#f4efff");green=c(dark?"#8bc7b1":"#2e795f");
+        a.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));
+        a.getWindow().getDecorView().setBackgroundColor(surface);
         a.getWindow().setStatusBarColor(page);a.getWindow().setNavigationBarColor(surface);
-        if(!dark)a.getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
-        root=column();root.setBackgroundColor(page);root.setPadding(dp(26),dp(12),dp(26),0);
-        LinearLayout top=row();TextView brand=text("RHRemote-Moonlight",18,ink,true);top.addView(brand,new LinearLayout.LayoutParams(0,dp(54),1));
-        top.addView(button("设置",false,()->invoke("app.settings.open",RhActions.obj())));top.addView(button("＋ 添加电脑",false,()->invoke("device.add.open",RhActions.obj())));root.addView(top);
+        WindowCompat.getInsetsController(a.getWindow(),a.getWindow().getDecorView()).setAppearanceLightStatusBars(!dark);
+        WindowCompat.getInsetsController(a.getWindow(),a.getWindow().getDecorView()).setAppearanceLightNavigationBars(!dark);
+        root=column();root.setBackgroundColor(surface);
+        WindowCompat.setDecorFitsSystemWindows(a.getWindow(),false);
+        ViewCompat.setOnApplyWindowInsetsListener(root,(v,insets)->{Insets safe=insets.getInsets(WindowInsetsCompat.Type.systemBars()|WindowInsetsCompat.Type.displayCutout()|WindowInsetsCompat.Type.ime());root.setPadding(safe.left,safe.top,safe.right,safe.bottom);return insets;});
+        compactHeader=row();compactHeader.setPadding(dp(16),dp(8),dp(16),dp(8));
+        ImageView logo=new ImageView(a);logo.setImageResource(R.drawable.rh_icon);LinearLayout.LayoutParams logoParams=new LinearLayout.LayoutParams(dp(32),dp(32));logoParams.setMarginEnd(dp(12));compactHeader.addView(logo,logoParams);
+        compactHeader.addView(text("RHRemote",19,ink,true),new LinearLayout.LayoutParams(0,-1,1));compactHeader.addView(text("Moonlight",12,muted,false));root.addView(compactHeader,new LinearLayout.LayoutParams(-1,dp(64)));
+        body=row();body.setGravity(Gravity.TOP);sidebar=column();sidebar.setPadding(dp(12),dp(16),dp(12),dp(16));sidebar.setBackground(bg(surface,line,0));body.addView(sidebar,new LinearLayout.LayoutParams(dp(72),-1));
+        LinearLayout stage=column();workspace=new FrameLayout(a);
         scroll=new ScrollView(a);scroll.setFillViewport(true);scroll.setClipToPadding(false);
-        content=column();content.setPadding(0,dp(20),0,dp(20));scroll.addView(content);
-        root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
-        status=text("",12,muted,false);status.setMinHeight(dp(27));root.addView(status);
-        bar=row();bar.setGravity(Gravity.CENTER);bar.setPadding(0,dp(10),0,dp(10));bar.setBackgroundColor(surface);
-        bar.addView(button("设备",false,()->invoke("devices.open",RhActions.obj())));bar.addView(button("＋ 添加",false,()->invoke("device.add.open",RhActions.obj())));
-        bar.addView(button("设置",false,()->invoke("app.settings.open",RhActions.obj())));root.addView(bar);
+        content=column();content.setPadding(dp(24),dp(24),dp(24),dp(24));scroll.addView(content);
+        workspace.addView(scroll,new FrameLayout.LayoutParams(-1,-1));browser=new RhDeviceBrowser(a,this::invoke);workspace.addView(browser,new FrameLayout.LayoutParams(-1,-1));stage.addView(workspace,new LinearLayout.LayoutParams(-1,0,1));
+        status=text("",12,muted,false);status.setPadding(dp(16),dp(8),dp(16),dp(8));status.setVisibility(View.GONE);stage.addView(status);
+        body.addView(stage,new LinearLayout.LayoutParams(0,-1,1));root.addView(body,new LinearLayout.LayoutParams(-1,0,1));
+        bar=row();bar.setGravity(Gravity.CENTER);bar.setPadding(dp(12),dp(8),dp(12),dp(8));bar.setBackground(bg(surface,line,0));
+        String[] navIds={"devices.open","device.add.open","app.settings.open"},navLabels={"设备","添加","设置"};
+        for(int i=0;i<navIds.length;i++){final String id=navIds[i];Button b=button(navLabels[i],false,()->invoke(id,RhActions.obj()));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);if(i>0)lp.setMarginStart(dp(8));bar.addView(b,lp);}root.addView(bar);
         empty=new RelativeLayout(a); // Compatibility with the upstream activity's discovery placeholder.
-        a.setContentView(root);RhActions.initialize(a,this);restoreSharedDevices();showDevices();root.post(this::resumed);
+        root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->applyShell(r-l-root.getPaddingLeft()-root.getPaddingRight()));
+        a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();root.post(this::resumed);
         final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(lastSyncAttempt,sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){lastSyncAttempt=System.currentTimeMillis();invoke("sync.run",RhActions.obj());}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updatesBusy&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
     }
     public RelativeLayout emptyView(){return empty;}
@@ -73,24 +93,31 @@ public final class RhHome implements RhActions.Target {
     private LinearLayout row(){LinearLayout l=new LinearLayout(activity);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
     private GradientDrawable bg(int color,int border,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));if(border!=0)d.setStroke(dp(1),border);return d;}
     private TextView text(String value,int size,int color,boolean medium){TextView t=new TextView(activity);t.setText(value);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);if(medium)t.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));return t;}
-    private Button button(String title,boolean primary,Runnable action){Button b=new Button(activity);b.setText(title);b.setTextSize(14);b.setAllCaps(false);b.setTypeface(Typeface.create("sans-serif-medium",0));b.setTextColor(primary?Color.WHITE:ink);b.setBackground(bg(primary?blue:surface,primary?0:line,24));b.setMinHeight(dp(46));b.setMinimumHeight(dp(46));b.setPadding(dp(18),dp(8),dp(18),dp(8));b.setOnClickListener(v->action.run());LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,dp(46));lp.setMargins(dp(4),dp(3),dp(4),dp(3));b.setLayoutParams(lp);return b;}
-    private void heading(String title,String sub){TextView h=text(title,26,ink,true);h.setPadding(0,0,0,dp(7));content.addView(h);TextView s=text(sub,13,muted,false);s.setPadding(0,0,0,dp(26));content.addView(s);}
+    private Button button(String title,boolean primary,Runnable action){Button b=new Button(activity);b.setText(title);b.setTextSize(14);b.setAllCaps(false);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(Typeface.create("sans-serif-medium",0));b.setTextColor(primary?Color.WHITE:ink);b.setBackground(bg(primary?blue:surface,primary?0:line,8));b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(16),dp(8),dp(16),dp(8));b.setOnClickListener(v->action.run());b.setLayoutParams(new LinearLayout.LayoutParams(-2,dp(48)));return b;}
+    private RhActionRow actionRow(){RhActionRow row=new RhActionRow(activity);row.setPadding(0,dp(8),0,dp(8));return row;}
+    private void applyShell(int width){int bucket=width>=dp(1180)?2:width>=dp(840)?1:0;if(bucket==shellBucket)return;shellBucket=bucket;boolean wide=bucket>0;sidebar.setVisibility(wide?View.VISIBLE:View.GONE);compactHeader.setVisibility(wide?View.GONE:View.VISIBLE);bar.setVisibility(wide?View.GONE:View.VISIBLE);sidebar.getLayoutParams().width=dp(bucket==2?184:72);sidebar.removeAllViews();navigation.clear();
+        LinearLayout brand=row();ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_icon);brand.addView(icon,new LinearLayout.LayoutParams(dp(32),dp(32)));if(bucket==2){LinearLayout names=column();names.setPadding(dp(10),0,0,0);names.addView(text("RHRemote",18,ink,true));names.addView(text("Moonlight",11,muted,false));brand.addView(names);}sidebar.addView(brand,new LinearLayout.LayoutParams(-1,dp(68)));
+        nav("远程设备",R.drawable.rh_monitor,"devices.open",bucket==2);nav("添加电脑",R.drawable.rh_plus,"device.add.open",bucket==2);sidebar.addView(new View(activity),new LinearLayout.LayoutParams(-1,0,1));nav("设置",R.drawable.rh_settings,"app.settings.open",bucket==2);nav("主题",R.drawable.rh_moon,"appearance.toggle",bucket==2);if(bucket==2){TextView version=text("v"+com.limelight.BuildConfig.VERSION_NAME+"\nMoonlight · GPL v3",11,muted,false);version.setPadding(dp(10),dp(20),0,0);sidebar.addView(version);}content.setPadding(dp(wide?24:16),dp(24),dp(wide?24:16),dp(24));refreshNavigation();}
+    private void nav(String title,int icon,String id,boolean labels){LinearLayout item=row();item.setGravity(labels?Gravity.CENTER_VERTICAL:Gravity.CENTER);item.setPadding(dp(10),0,dp(10),0);ImageView image=new ImageView(activity);image.setImageResource(icon);image.setColorFilter(id.equals("devices.open")?blue:muted);item.addView(image,new LinearLayout.LayoutParams(dp(22),dp(22)));if(labels){TextView label=text(title,14,ink,false);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMarginStart(dp(12));item.addView(label,p);}item.setContentDescription(title);item.setFocusable(true);item.setOnClickListener(v->invoke(id,RhActions.obj()));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));p.bottomMargin=dp(8);sidebar.addView(item,p);navigation.put(id,item);}
+    private void refreshNavigation(){for(Map.Entry<String,View> item:navigation.entrySet()){boolean chosen=item.getKey().equals("devices.open")&&!pageId.equals("global-settings")||item.getKey().equals("app.settings.open")&&pageId.equals("global-settings");item.getValue().setBackground(bg(chosen?blueSoft:surface,0,8));}}
+    private void showContent(){browser.setVisibility(View.GONE);scroll.setVisibility(View.VISIBLE);refreshNavigation();}
+    private void heading(String title,String sub){TextView h=text(title,26,ink,true);h.setPadding(0,0,0,dp(18));content.addView(h);if(!sub.isEmpty()){TextView s=text(sub,13,muted,false);s.setPadding(0,0,0,dp(20));content.addView(s);}}
     public void update(ComputerDetails d){String signature=d.name+"|"+d.state+"|"+d.pairState+"|"+RhProfile.load(activity,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&!signature.equals(old))renderDevices(false);}
-    public void message(String value){status.setText(value==null?"":value);}
-    public boolean goBack(){if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(profileVisible){invoke("devices.open",RhActions.obj());return true;}return false;}
+    public void message(String value){status.setText(value==null?"":value);status.setVisibility(value==null||value.isEmpty()?View.GONE:View.VISIBLE);}
+    public boolean goBack(){if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(profileVisible){invoke("devices.open",RhActions.obj());return true;}if(browser.isDetailOpen()){browser.showDetail(false);return true;}return false;}
     public void dispose(){if(admission!=null)admission.cancel();updateUi.removeCallbacks(updateTick);}
-    public void rebind(){activity.setContentView(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(draft!=null)showProfile(selected,draft);else showDevices();}
+    public void rebind(){activity.setContentView(root);ViewCompat.requestApplyInsets(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(draft!=null)showProfile(selected,draft);else renderDevices(false);}
     public void resumed(){if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))showGlobal();}
     private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
-    public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";renderDevices(true);if(!RhActions.lastConnectionError().isEmpty())message(RhActions.lastConnectionError());}
+    public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";draft=null;selected=null;displayNameEditor=null;numberEditors.clear();draftDisplayName="";browser.showDetail(false);renderDevices(true);if(!RhActions.lastConnectionError().isEmpty())message(RhActions.lastConnectionError());}
     private void showAdmission(RhAdmission operation){
-        pageId="connecting";profileVisible=true;content.removeAllViews();heading("连接","");
+        pageId="connecting";profileVisible=true;showContent();content.removeAllViews();heading("连接","");
         org.json.JSONObject state=operation.state();String phase=state.optString("phase");
         label(phase.equals("cancelling")?"正在取消并清理连接…":phase.equals("cleaning")?"正在清理连接…":phase.equals("starting")?"正在启动串流…":phase.equals("apps")?"正在读取应用列表…":phase.equals("identity")?"正在确认配对状态…":phase.equals("error")?state.optString("error"):"正在检查连接地址…");
         Button cancel=button("取消连接",false,()->invoke("stream.disconnect",RhActions.obj()));cancel.setEnabled(!state.optBoolean("cancelled"));content.addView(cancel);
     }
     private void beginAdmission(ComputerDetails target,boolean connect,String pin){
-        RhActions.clearConnectionError();
+        RhActions.clearConnectionError();browserUuid=target.uuid;
         RhProfile profile=RhProfile.load(activity,target.uuid);networkBusy=true;
         admission=new RhAdmission(activity,target.uuid,CONNECT,new RhAdmission.Listener(){
             public void changed(RhAdmission operation){if(activity.isDestroyed())return;actions.setDiscoveryPaused(true);if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
@@ -106,41 +133,24 @@ public final class RhHome implements RhActions.Target {
         });
     }
     private void renderDevices(boolean resetScroll){
-        profileVisible=false;content.removeAllViews();heading("远程设备","");
+        profileVisible=false;scroll.setVisibility(View.GONE);browser.setVisibility(View.VISIBLE);refreshNavigation();
         List<ComputerDetails> list=RhShared.ordered(activity,computers.values());
-        if(list.isEmpty()){TextView hint=text("正在发现局域网电脑，也可以直接添加地址。",14,muted,false);hint.setPadding(dp(18),dp(36),dp(18),dp(36));content.addView(hint);}
-        for(int i=0;i<list.size();i++)card(list.get(i),i>0,i<list.size()-1);
-        if(resetScroll)scroll.post(()->scroll.scrollTo(0,0));
-    }
-    private void card(ComputerDetails d,boolean canMoveUp,boolean canMoveDown){
-        boolean preferred=d.name!=null&&d.name.equalsIgnoreCase("winserver");boolean online=d.state==ComputerDetails.State.ONLINE;
-        boolean paired=RhNetwork.connectInsteadOfPair(d);
-        LinearLayout card=column();card.setPadding(dp(18),dp(15),dp(18),dp(15));card.setBackground(bg(preferred?blueSoft:surface,preferred?blue:line,18));
-        LinearLayout.LayoutParams margin=new LinearLayout.LayoutParams(-1,-2);margin.setMargins(0,0,0,dp(12));content.addView(card,margin);
-        LinearLayout info=row();TextView monitor=text("▣",25,blue,false);monitor.setGravity(Gravity.CENTER);monitor.setBackground(bg(blueSoft,0,12));info.addView(monitor,new LinearLayout.LayoutParams(dp(44),dp(44)));
-        LinearLayout names=column();names.setPadding(dp(14),0,dp(8),0);TextView name=text(RhShared.displayName(activity,d.uuid,d.name),16,ink,true);names.addView(name);
-        String state=d.state==ComputerDetails.State.UNKNOWN?"正在检查":(!online?"离线":paired?"● 已配对":"待配对");TextView st=text(state,12,paired&&online?green:muted,false);names.addView(st);
-        names.addView(text(RhProfile.load(activity,d.uuid).summary(),12,muted,false));info.addView(names,new LinearLayout.LayoutParams(0,-2,1));card.addView(info);
-        LinearLayout operations=row();operations.setGravity(Gravity.END);operations.setPadding(0,dp(8),0,0);
-        Button up=button("↑",false,()->invoke("device.move",RhActions.obj("uuid",d.uuid,"direction","up")));up.setContentDescription("上移 "+RhShared.displayName(activity,d.uuid,d.name));up.setEnabled(canMoveUp);operations.addView(up);
-        Button down=button("↓",false,()->invoke("device.move",RhActions.obj("uuid",d.uuid,"direction","down")));down.setContentDescription("下移 "+RhShared.displayName(activity,d.uuid,d.name));down.setEnabled(canMoveDown);operations.addView(down);
-        operations.addView(button("连接设置",false,()->invoke("device.settings.open",RhActions.obj("uuid",d.uuid))));
-        Button connect=button(!online?"检查状态":paired?"连接":"配对",preferred,()->invoke(paired?"device.connect":"device.pair",RhActions.obj("uuid",d.uuid)));
-        if(!paired&&online){connect.setBackground(bg(purpleSoft,0,24));connect.setTextColor(purple);}operations.addView(connect);card.addView(operations);
+        if(!computers.containsKey(browserUuid))browserUuid=list.isEmpty()?"":list.get(0).uuid;
+        browser.update(list,browserUuid,deviceQuery);
     }
     private void label(String value){TextView t=text(value,13,muted,false);t.setPadding(0,dp(15),0,dp(7));content.addView(t);}
-    private void choices(String[] values,String selected,java.util.function.Consumer<String> onSelect){LinearLayout r=row();r.setGravity(Gravity.START);for(String value:values){Button b=button(value,value.equals(selected),()->onSelect.accept(value));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,dp(46),1);p.setMargins(0,dp(3),dp(6),dp(3));b.setLayoutParams(p);b.setPadding(dp(6),0,dp(6),0);b.setTextSize(13);r.addView(b);}content.addView(r);}
+    private void choices(String[] values,String selected,java.util.function.Consumer<String> onSelect){RhActionRow group=actionRow();for(String value:values)group.addView(button(value,value.equals(selected),()->onSelect.accept(value)));content.addView(group);}
     private CheckBox check(String label,boolean checked,java.util.function.Consumer<Boolean> change){CheckBox b=new CheckBox(activity);b.setText(label);b.setTextColor(ink);b.setTextSize(14);b.setChecked(checked);b.setMinHeight(dp(48));b.setButtonTintList(android.content.res.ColorStateList.valueOf(blue));b.setOnCheckedChangeListener((v,state)->change.accept(state));content.addView(b);return b;}
-    public void showProfile(ComputerDetails d){pageId="settings";selected=d;draft=RhProfile.load(activity,d.uuid);draftDisplayName=RhShared.alias(activity,d.uuid);profileSourcesExpanded=false;showProfile(d,draft);scroll.post(()->scroll.scrollTo(0,0));}
+    public void showProfile(ComputerDetails d){pageId="settings";browserUuid=d.uuid;selected=d;draft=RhProfile.load(activity,d.uuid);draftDisplayName=RhShared.alias(activity,d.uuid);profileSourcesExpanded=false;showProfile(d,draft);scroll.post(()->scroll.scrollTo(0,0));}
     private void showProfile(ComputerDetails d,RhProfile p){
         numberEditors.clear();
-        profileVisible=true;content.removeAllViews();org.json.JSONObject shared=RhShared.read(activity);String currentClient=RhShared.clientId(activity);
+        profileVisible=true;showContent();content.removeAllViews();org.json.JSONObject shared=RhShared.read(activity);String currentClient=RhShared.clientId(activity);
         heading(RhShared.displayName(activity,d.uuid,d.name),"主机名："+d.name+"\n当前客户端："+RhShared.clientInfo().optString("name")+" · "+currentClient.substring(currentClient.length()-4));
         displayNameEditor=field("设备别名（DisplayName）",draftDisplayName,false);displayNameEditor.setHint("留空使用原始主机名");
         label("画面与输入参数按客户端分别保存。主机的鼠标左右键设置共用。");
         org.json.JSONObject groups=shared.optJSONObject("profiles"),clients=shared.optJSONObject("clients");
         content.addView(button("从其他客户端复制配置",profileSourcesExpanded,()->invoke("settings.sources.toggle",RhActions.obj()))); if(profileSourcesExpanded) for(Iterator<String> it=groups.keys();it.hasNext();){String client=it.next();org.json.JSONObject group=groups.optJSONObject(client);if(client.equals(currentClient)||group==null||!group.has(d.uuid))continue;org.json.JSONObject source=group.optJSONObject(d.uuid),info=clients.optJSONObject(client);String name=info==null?client:info.optString("name");label(name+" · "+client.substring(Math.max(0,client.length()-4))+" · "+source.optInt("width")+" × "+source.optInt("height")+" · "+source.optInt("fps")+" 帧");content.addView(button("复制到当前配置",false,()->invoke("settings.copy_from",RhActions.obj("clientId",client))));}
-        LinearLayout tabs=row();String[] tabIds={"video","audio","input","network","advanced"},titles={"画面","音频","输入","网络","高级"};for(int i=0;i<tabIds.length;i++){final String tab=tabIds[i];tabs.addView(button(titles[i],profileTab.equals(tab),()->invoke("settings.tab",RhActions.obj("tab",tab))));}android.widget.HorizontalScrollView tabScroll=new android.widget.HorizontalScrollView(activity);tabScroll.setHorizontalScrollBarEnabled(false);tabScroll.addView(tabs);content.addView(tabScroll);
+        RhActionRow tabs=actionRow();String[] tabIds={"video","audio","input","network","advanced"},titles={"画面","音频","输入","网络","高级"};for(int i=0;i<tabIds.length;i++){final String tab=tabIds[i];tabs.addView(button(titles[i],profileTab.equals(tab),()->invoke("settings.tab",RhActions.obj("tab",tab))));}content.addView(tabs);
         if(profileTab.equals("network"))try {
             org.json.JSONObject host=RhNetwork.metadata(activity,d);EditText primary=field("首选 IP 或主机名",host.getString("address"),false);
             org.json.JSONArray extra=host.optJSONArray("addresses");List<String> values=new ArrayList<>();if(extra!=null)for(int i=0;i<extra.length();i++)values.add(extra.getString(i));
@@ -148,7 +158,7 @@ public final class RhHome implements RhActions.Target {
             content.addView(button("保存地址",false,()->{org.json.JSONArray addresses=new org.json.JSONArray();for(String a:backup.getText().toString().split("[,;，\n]"))if(!a.trim().isEmpty())addresses.put(a.trim());invoke("device.network.configure",RhActions.obj("uuid",d.uuid,"address",primary.getText().toString().trim(),"addresses",addresses));}));
             content.addView(button("诊断连接",false,()->invoke("device.network.diagnose",RhActions.obj("uuid",d.uuid))));
             label("连接顺序");java.util.ArrayList<String> routes=new java.util.ArrayList<>(p.routeOrder);for(String route:RhProfile.ROUTES)if(!routes.contains(route))routes.add(route);
-            for(String route:routes){boolean enabled=p.routeOrder.contains(route);int index=java.util.Arrays.asList(RhProfile.ROUTES).indexOf(route);label(RhProfile.ROUTE_LABELS[index]);LinearLayout controls=row();controls.addView(button(enabled?"启用":"停用",enabled,()->invoke("settings.route.toggle",RhActions.obj("route",route))));if(enabled){controls.addView(button("↑",false,()->invoke("settings.route.move",RhActions.obj("route",route,"direction","up"))));controls.addView(button("↓",false,()->invoke("settings.route.move",RhActions.obj("route",route,"direction","down"))));}content.addView(controls);}
+            for(String route:routes){boolean enabled=p.routeOrder.contains(route);int index=java.util.Arrays.asList(RhProfile.ROUTES).indexOf(route);label(RhProfile.ROUTE_LABELS[index]);RhActionRow controls=actionRow();controls.addView(button(enabled?"启用":"停用",enabled,()->invoke("settings.route.toggle",RhActions.obj("route",route))));if(enabled){controls.addView(button("↑",false,()->invoke("settings.route.move",RhActions.obj("route",route,"direction","up"))));controls.addView(button("↓",false,()->invoke("settings.route.move",RhActions.obj("route",route,"direction","down"))));}content.addView(controls);}
             content.addView(button("恢复默认顺序",false,()->set("routeOrder",new org.json.JSONArray(java.util.Arrays.asList(RhProfile.ROUTES)))));
             EditText relay=field("中继服务器",p.relayUrl,false);content.addView(button("应用服务器地址",false,()->set("relayUrl",relay.getText().toString().trim())));
             label("按已启用的顺序尝试，失败后自动回退。配置随 WebDAV 同步。");label(d.uuid.equals(RhNetwork.state().optString("uuid"))?RhNetwork.summary(RhNetwork.state()):"尚未诊断");
@@ -162,7 +172,7 @@ public final class RhHome implements RhActions.Target {
             if(!f.optString("help").isEmpty())label(f.optString("help"));
         }}catch(org.json.JSONException e){throw new IllegalStateException("invalid settings catalog",e);}
         if(profileTab.equals("audio"))label("主机 Sunshine 需启用音频捕获。串流中可随时切换声音和音量。");label("保存后用于下次连接。");
-        LinearLayout end=row();end.setGravity(Gravity.END);end.addView(button("取消",false,()->invoke("settings.cancel",RhActions.obj())));end.addView(button("保存",true,()->invoke("settings.save",RhActions.obj())));content.addView(end);
+        RhActionRow end=actionRow();end.addView(button("取消",false,()->invoke("settings.cancel",RhActions.obj())));end.addView(button("保存",true,()->invoke("settings.save",RhActions.obj())));content.addView(end);
     }
     private void addDialog(){EditText input=new EditText(activity);input.setSingleLine(true);input.setTextColor(ink);input.setTextSize(16);input.setHint("例如 192.168.0.104");input.setPadding(dp(20),dp(14),dp(20),dp(14));adding=new AlertDialog.Builder(activity).setTitle("添加电脑").setView(input).setNegativeButton("取消",(d,w)->invoke("device.add.cancel",RhActions.obj())).setPositiveButton("添加",(dialog,w)->invoke("device.add.submit",RhActions.obj("address",input.getText().toString().trim()))).create();adding.show();}
     private void invoke(String id,org.json.JSONObject args){RhActions.click(id,args);}
@@ -170,7 +180,7 @@ public final class RhHome implements RhActions.Target {
     public org.json.JSONObject state()throws Exception{
         org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(activity,computers.values())){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
         org.json.JSONObject shared=RhShared.read(activity);
-        return RhActions.obj("admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?"":selected.uuid,"draftDisplayName",draftDisplayName,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
+        return RhActions.obj("deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"draftDisplayName",draftDisplayName,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
         if(syncBusy&&(id.startsWith("sync.")||id.equals("device.move")||id.equals("device.settings.open")||id.startsWith("settings.")||id.equals("appearance.toggle")||id.equals("device.add.submit")))throw new IllegalStateException("同步进行中，请稍后保存");
@@ -180,6 +190,8 @@ public final class RhHome implements RhActions.Target {
         if(draft!=null&&displayNameEditor!=null&&id.startsWith("settings."))draftDisplayName=displayNameEditor.getText().toString();
         if(draft!=null&&id.startsWith("settings.")&&!id.equals("settings.cancel")){org.json.JSONObject pending=draft.json();for(Map.Entry<String,EditText> entry:numberEditors.entrySet()){try{pending.put(entry.getKey(),Integer.parseInt(entry.getValue().getText().toString()));}catch(NumberFormatException e){throw new IllegalArgumentException("请输入有效的数字");}}draft=RhProfile.fromJson(selected.uuid,pending);}
         switch(id){
+            case "device.select":if(!pageId.equals("devices")||admission!=null||RhActions.hasStream())throw new IllegalStateException("请先返回空闲设备列表");String uuid=args.getString("uuid");if(!computers.containsKey(uuid))throw new IllegalArgumentException("unknown device");browserUuid=uuid;browser.showDetail(true);renderDevices(false);break;
+            case "devices.filter":String query=args.getString("query");if(query.codePointCount(0,query.length())>128)throw new IllegalArgumentException("搜索内容不能超过 128 字符");deviceQuery=query;if(pageId.equals("devices"))renderDevices(false);break;
             case "statistics.state":return RhStatistics.state();
             case "statistics.complete":return RhStatistics.complete(args.getString("runId"),args.getString("sha256"));
             case "statistics.configure":if(!(args.get("enabled") instanceof Boolean))throw new IllegalArgumentException("enabled must be boolean");org.json.JSONObject tracing=RhStatistics.configure(args.getBoolean("enabled"));if(pageId.equals("global-settings"))showGlobal();return tracing;
@@ -226,7 +238,7 @@ public final class RhHome implements RhActions.Target {
             default:throw new IllegalArgumentException("unsupported Android action: "+id);
         }return RhActions.obj("accepted",true);
     }
-    private void showGlobal(){profileVisible=true;content.removeAllViews();heading("设置","");LinearLayout tabs=row();for(String tab:new String[]{"updates","sync","appearance","about"}){String title=tab.equals("appearance")?"外观":tab.equals("sync")?"配置同步":tab.equals("updates")?"更新":"关于";tabs.addView(button(title,settingsTab.equals(tab),()->invoke("app.settings.tab",RhActions.obj("tab",tab))));}android.widget.HorizontalScrollView tabScroll=new android.widget.HorizontalScrollView(activity);tabScroll.setHorizontalScrollBarEnabled(false);tabScroll.addView(tabs);content.addView(tabScroll);if(settingsTab.equals("sync")){showSync();return;}if(settingsTab.equals("updates")){showUpdates();return;}label(settingsTab.equals("about")?"RHRemote-Moonlight · Android 原生 View + Java":"主题");if(settingsTab.equals("about")){content.addView(button(RhStatistics.enabled()?"测试统计：开启":"测试统计：关闭",RhStatistics.enabled(),()->invoke("statistics.configure",RhActions.obj("enabled",!RhStatistics.enabled()))));label("测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。");label(RhStatistics.state().optString("latest"));}if(settingsTab.equals("appearance"))content.addView(button("切换深色 / 浅色",false,()->invoke("appearance.toggle",RhActions.obj())));}
+    private void showGlobal(){profileVisible=true;showContent();content.removeAllViews();heading("设置","");RhActionRow tabs=actionRow();for(String tab:new String[]{"updates","sync","appearance","about"}){String title=tab.equals("appearance")?"外观":tab.equals("sync")?"配置同步":tab.equals("updates")?"更新":"关于";tabs.addView(button(title,settingsTab.equals(tab),()->invoke("app.settings.tab",RhActions.obj("tab",tab))));}content.addView(tabs);if(settingsTab.equals("sync")){showSync();return;}if(settingsTab.equals("updates")){showUpdates();return;}label(settingsTab.equals("about")?"RHRemote-Moonlight · Android 原生 View + Java":"主题");if(settingsTab.equals("about")){content.addView(button(RhStatistics.enabled()?"测试统计：开启":"测试统计：关闭",RhStatistics.enabled(),()->invoke("statistics.configure",RhActions.obj("enabled",!RhStatistics.enabled()))));label("测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。");label(RhStatistics.state().optString("latest"));}if(settingsTab.equals("appearance"))content.addView(button("切换深色 / 浅色",false,()->invoke("appearance.toggle",RhActions.obj())));}
     private void showUpdates(){
         org.json.JSONObject state=updates.state();label("RHRemote-Moonlight "+state.optString("currentVersion"));
         if(!state.isNull("availableVersion"))label("可用版本 "+state.optString("availableVersion"));
@@ -234,7 +246,7 @@ public final class RhHome implements RhActions.Target {
         updateStatus=text("",15,ink,false);updateStatus.setPadding(0,dp(10),0,dp(10));content.addView(updateStatus);
         updateBytes=text("",13,muted,false);content.addView(updateBytes);
         updateProgress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);content.addView(updateProgress,new LinearLayout.LayoutParams(-1,dp(12)));
-        LinearLayout commands=row();updateCheck=button("检查更新",false,()->invoke("updates.check",RhActions.obj()));commands.addView(updateCheck);
+        RhActionRow commands=actionRow();updateCheck=button("检查更新",false,()->invoke("updates.check",RhActions.obj()));commands.addView(updateCheck);
         updateDownload=button("下载 APK",false,()->invoke("updates.download",RhActions.obj()));commands.addView(updateDownload);
         content.addView(commands);updateInstall=button("下载并安装",true,()->invoke("updates.install",RhActions.obj()));content.addView(updateInstall,new LinearLayout.LayoutParams(-1,dp(48)));
         refreshUpdateControls();
@@ -268,10 +280,10 @@ public final class RhHome implements RhActions.Target {
             });
         });
     }
-    private EditText field(String title,String value,boolean password){label(title);EditText edit=new EditText(activity);edit.setTextColor(ink);edit.setTextSize(15);edit.setSingleLine(true);edit.setText(value);if(password)edit.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);content.addView(edit,new LinearLayout.LayoutParams(-1,dp(52)));return edit;}
-    private void showSync(){org.json.JSONObject s=sync.state();EditText url=field("WebDAV 目录地址（HTTP / HTTPS）",s.optString("url"),false),user=field("用户名",s.optString("username"),false),password=field(s.optBoolean("hasPassword")?"密码（留空保留）":"密码","",true);CheckBox automatic=check("自动同步",s.optBoolean("automatic"),v->{});label("同步间隔");Spinner interval=new Spinner(activity);interval.setAdapter(new android.widget.ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,new String[]{"5 分钟","15 分钟","30 分钟","60 分钟"}));interval.setSelection(Math.max(0,Arrays.asList(5,15,30,60).indexOf(s.optInt("intervalMinutes",5))));content.addView(interval);label("同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置，其他端的配置可手动复制。配对密钥及本机凭据不参与同步。");LinearLayout commands=row();commands.addView(button("保存设置",false,()->invoke("sync.configure",RhActions.obj("url",url.getText().toString(),"username",user.getText().toString(),"password",password.getText().toString(),"automatic",automatic.isChecked(),"intervalMinutes",new int[]{5,15,30,60}[interval.getSelectedItemPosition()]))));commands.addView(button(syncBusy?"同步中…":"立即同步",true,()->invoke("sync.run",RhActions.obj())));commands.addView(button("移除设置",false,()->invoke("sync.clear",RhActions.obj())));content.addView(commands);org.json.JSONArray conflicts=s.optJSONArray("conflicts");if(conflicts!=null&&conflicts.length()>0){label("配置冲突："+conflicts.toString());LinearLayout choices=row();choices.addView(button("冲突项保留本机",false,()->invoke("sync.resolve",RhActions.obj("resolution","local"))));choices.addView(button("冲突项保留远端",false,()->invoke("sync.resolve",RhActions.obj("resolution","remote"))));content.addView(choices);}}
+    private EditText field(String title,String value,boolean password){label(title);EditText edit=new EditText(activity);edit.setTextColor(ink);edit.setHintTextColor(muted);edit.setTextSize(15);edit.setSingleLine(true);edit.setPadding(dp(12),0,dp(12),0);edit.setBackground(bg(surface,line,8));edit.setText(value);if(password)edit.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);content.addView(edit,new LinearLayout.LayoutParams(-1,dp(52)));return edit;}
+    private void showSync(){org.json.JSONObject s=sync.state();EditText url=field("WebDAV 目录地址（HTTP / HTTPS）",s.optString("url"),false),user=field("用户名",s.optString("username"),false),password=field(s.optBoolean("hasPassword")?"密码（留空保留）":"密码","",true);CheckBox automatic=check("自动同步",s.optBoolean("automatic"),v->{});label("同步间隔");Spinner interval=new Spinner(activity);interval.setAdapter(new android.widget.ArrayAdapter<String>(activity,android.R.layout.simple_spinner_dropdown_item,new String[]{"5 分钟","15 分钟","30 分钟","60 分钟"}));interval.setSelection(Math.max(0,Arrays.asList(5,15,30,60).indexOf(s.optInt("intervalMinutes",5))));content.addView(interval);label("同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置，其他端的配置可手动复制。配对密钥及本机凭据不参与同步。");RhActionRow commands=actionRow();commands.addView(button("保存设置",false,()->invoke("sync.configure",RhActions.obj("url",url.getText().toString(),"username",user.getText().toString(),"password",password.getText().toString(),"automatic",automatic.isChecked(),"intervalMinutes",new int[]{5,15,30,60}[interval.getSelectedItemPosition()]))));commands.addView(button(syncBusy?"同步中…":"立即同步",true,()->invoke("sync.run",RhActions.obj())));commands.addView(button("移除设置",false,()->invoke("sync.clear",RhActions.obj())));content.addView(commands);org.json.JSONArray conflicts=s.optJSONArray("conflicts");if(conflicts!=null&&conflicts.length()>0){label("配置冲突："+conflicts.toString());RhActionRow choices=actionRow();choices.addView(button("冲突项保留本机",false,()->invoke("sync.resolve",RhActions.obj("resolution","local"))));choices.addView(button("冲突项保留远端",false,()->invoke("sync.resolve",RhActions.obj("resolution","remote"))));content.addView(choices);}}
     private void startSync(String resolution)throws Exception{org.json.JSONObject captured=RhShared.capture(activity,new ArrayList<>(computers.values()));syncBusy=true;message("同步中…");NETWORK.execute(()->{try{org.json.JSONObject result=sync.run(captured,resolution);activity.runOnUiThread(()->{syncBusy=false;try{if(result.has("shared")){boolean before=RhShared.dark(activity);RhShared.apply(activity,result.getJSONObject("shared"));restoreSharedDevices();message("同步完成");if(before!=RhShared.dark(activity)){activity.recreate();return;}}else message("配置冲突，请选择保留哪一端的冲突项");if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("devices"))renderDevices(false);}catch(Exception e){message("应用同步配置失败");}});}catch(Exception e){activity.runOnUiThread(()->{syncBusy=false;message(e instanceof java.io.IOException?e.getMessage():"同步失败，请检查 WebDAV 设置");if(pageId.equals("global-settings"))showGlobal();});}});}
     private void restoreSharedDevices(){try{org.json.JSONArray list=RhShared.read(activity).getJSONArray("devices");for(int i=0;i<list.length();i++){org.json.JSONObject d=list.getJSONObject(i);String uuid=d.getString("uuid");if(!computers.containsKey(uuid)){ComputerDetails added=new ComputerDetails();added.uuid=uuid;added.name=d.getString("name");added.manualAddress=new ComputerDetails.AddressTuple(d.getString("address"),47989);computers.put(uuid,added);}}}catch(Exception e){message("已同步的设备列表读取失败");}}
-    private void showPair(){pageId="pair";profileVisible=true;content.removeAllViews();heading("配对","");label("在 Sunshine 输入配对码");TextView pin=text(pairPin,40,blue,true);content.addView(pin);content.addView(button("取消配对",false,()->invoke("pair.cancel",RhActions.obj())));}
+    private void showPair(){pageId="pair";profileVisible=true;showContent();content.removeAllViews();heading("配对","");label("在 Sunshine 输入配对码");TextView pin=text(pairPin,40,blue,true);content.addView(pin);content.addView(button("取消配对",false,()->invoke("pair.cancel",RhActions.obj())));}
     public void pairFinished(boolean success,String result){if(admission!=null){admission.pairFinished(result);return;}pairing=false;pairPin="";showDevices();message(result);}
 }

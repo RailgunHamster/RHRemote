@@ -170,6 +170,7 @@ pub struct State {
     pub saved: Saved,
     pub page: String,
     pub selected: String,
+    pub device_query: String,
     pub draft: Option<Profile>,
     pub draft_display_name: String,
     pub profile_tab: String,
@@ -276,6 +277,7 @@ impl Controller {
                 saved,
                 page: "devices".into(),
                 selected: String::new(),
+                device_query: String::new(),
                 draft: None,
                 draft_display_name: String::new(),
                 profile_tab: "video".into(),
@@ -347,6 +349,12 @@ impl Controller {
                 .position(|h| h.uuid == d.uuid)
                 .unwrap_or(usize::MAX)
         });
+        if !s.streaming && !s.connecting && s.page == "devices"
+            && !devices.iter().any(|d| d.uuid == s.selected)
+        {
+            s.selected = devices.iter().find(|d| !d.is_self).or_else(|| devices.first())
+                .map(|d| d.uuid.clone()).unwrap_or_default();
+        }
         s.devices = devices;
         s.revision += 1;
     }
@@ -492,6 +500,23 @@ impl Controller {
             return Err("更新操作进行中，请稍后连接".into());
         }
         match id {
+            "device.select" => {
+                if s.page != "devices" || s.streaming || s.connecting {
+                    return Err("请先返回空闲设备列表".into());
+                }
+                let uuid = args["uuid"].as_str().ok_or("uuid required")?;
+                if !s.devices.iter().any(|d| d.uuid == uuid) {
+                    return Err("unknown device".into());
+                }
+                s.selected = uuid.into();
+            }
+            "devices.filter" => {
+                let query = args["query"].as_str().ok_or("query required")?;
+                if query.chars().count() > 128 {
+                    return Err("搜索内容不能超过 128 字符".into());
+                }
+                s.device_query = query.into();
+            }
             "device.move" => {
                 if s.page != "devices" {
                     return Err("请先返回设备列表".into());
@@ -1118,6 +1143,58 @@ mod tests {
             },
         ]);
         c
+    }
+    #[test]
+    fn browsing_devices_is_local_and_cannot_retarget_an_active_session_or_draft() {
+        let c = controller();
+        let saved = c.state()["saved"].clone();
+        assert_eq!(c.dispatch("device.select", json!({"uuid":"b"}))["ok"], true);
+        assert_eq!(c.state()["selected"], "b");
+        assert!(c.state()["draft"].is_null());
+        assert_eq!(c.dispatch("device.select", json!({"uuid":"missing"}))["ok"], false);
+        assert_eq!(c.state()["selected"], "b");
+        for field in ["streaming", "connecting"] {
+            {
+                let mut s = c.state.lock().unwrap();
+                s.streaming = field == "streaming";
+                s.connecting = field == "connecting";
+            }
+            assert_eq!(c.dispatch("device.select", json!({"uuid":"a"}))["ok"], false);
+            assert_eq!(c.state()["selected"], "b");
+        }
+        { let mut s = c.state.lock().unwrap(); s.streaming=false; s.connecting=false; }
+        c.dispatch("device.settings.open", json!({"uuid":"b"}));
+        assert_eq!(c.dispatch("device.select", json!({"uuid":"a"}))["ok"], false);
+        assert_eq!(c.state()["selected"], "b");
+        assert_eq!(c.state()["saved"], saved);
+    }
+    #[test]
+    fn refresh_preserves_selection_and_only_falls_back_when_a_device_disappears() {
+        let c = controller();
+        let rows: Vec<Device> = serde_json::from_value(c.state()["devices"].clone()).unwrap();
+        c.dispatch("device.select", json!({"uuid":"b"}));
+        c.replace_devices(rows.clone());
+        assert_eq!(c.state()["selected"], "b");
+        c.replace_devices(vec![rows[0].clone()]);
+        assert_eq!(c.state()["selected"], "a");
+        c.replace_devices(vec![]);
+        assert_eq!(c.state()["selected"], "");
+        let mut rows = rows;
+        rows[0].is_self = true;
+        c.replace_devices(rows);
+        assert_eq!(c.state()["selected"], "b");
+    }
+    #[test]
+    fn device_search_is_bounded_and_does_not_change_synced_settings() {
+        let c = controller();
+        let saved = c.state()["saved"].clone();
+        let selected = c.state()["selected"].clone();
+        assert_eq!(c.dispatch("devices.filter", json!({"query":"测试"}))["ok"], true);
+        assert_eq!(c.state()["deviceQuery"], "测试");
+        assert_eq!(c.dispatch("devices.filter", json!({"query":"a".repeat(129)}))["ok"], false);
+        assert_eq!(c.state()["deviceQuery"], "测试");
+        assert_eq!(c.state()["saved"], saved);
+        assert_eq!(c.state()["selected"], selected);
     }
     #[test]
     fn discovery_address_change_keeps_saved_primary_for_connect_pair_and_diagnose() {
