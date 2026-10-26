@@ -69,7 +69,8 @@ public final class RhHomeLayoutTest {
         setup();home.perform("device.settings.open",RhActions.obj("uuid","host-0"));
         String before=RhShared.canonical(RhShared.read(activity));
         home.perform("settings.network.edit",RhActions.obj("key","address","value","bad/path"));
-        try{home.perform("settings.save",RhActions.obj());fail("Invalid address saved");}catch(java.io.IOException expected){}
+        try{home.perform("settings.save",RhActions.obj());fail("Invalid address saved");}catch(RhSettingsDraft.Invalid expected){assertEquals("network",expected.tab);assertEquals("address",expected.key);}
+        assertEquals("network",home.state().getString("profileTab"));assertEquals("bad/path",home.state().getString("draftAddress"));
         assertEquals(before,RhShared.canonical(RhShared.read(activity)));
         home.perform("settings.network.edit",RhActions.obj("key","address","value","192.168.0.104"));home.perform("settings.network.edit",RhActions.obj("key","addresses","value","100.73.139.109"));home.perform("settings.save",RhActions.obj());
         assertEquals("100.73.139.109",RhNetwork.host(activity,"host-0").getJSONArray("addresses").getString(0));assertEquals("192.168.0.104",RhNetwork.host(activity,"host-0").getString("address"));

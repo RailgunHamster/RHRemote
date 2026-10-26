@@ -4,7 +4,7 @@ export global Commands { callback trigger(string,string); }
 export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, search-addresses:string, status:string, paired:bool, online:bool, is-self:bool }
 export struct ProfileSource { client-id:string, label:string }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
-export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
+export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,input-text:string,invalid:bool,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
 export struct RouteRow { key:string,label:string,enabled:bool }
 export global Palette {
     in property <bool> dark;
@@ -24,22 +24,25 @@ component ActionButton inherits Rectangle {
     in property <bool> primary:false;
     in property <bool> chosen:false;
     in property <bool> disabled:false;
+    out property <bool> focused:key-focus.has-focus;
     min-width: label.preferred-width + 32px;
     preferred-width: label.preferred-width + 32px;
     horizontal-stretch:0;
     height: 38px;
     border-radius: 8px;
-    background: root.primary ? (touch.has-hover ? #4666d6 : Palette.blue) : root.chosen ? Palette.soft : touch.has-hover ? Palette.soft : Palette.surface;
-    border-color: root.chosen ? Palette.blue : Palette.line;
-    border-width: root.primary ? 0px : 1px;
-    opacity: root.disabled ? 0.45 : 1;
-    label := Text {text:root.text;color:root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
-    touch := TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{Commands.trigger(root.action-id,root.argument);}}
+    background: root.disabled ? Palette.soft : root.primary ? (touch.has-hover ? #4666d6 : Palette.blue) : root.chosen ? Palette.soft : touch.has-hover ? Palette.soft : Palette.surface;
+    forward-focus: key-focus;
+    border-color: key-focus.has-focus || root.chosen ? Palette.blue : Palette.line;
+    border-width: root.primary && !key-focus.has-focus ? 0px : 1px;
+    label := Text {text:root.text;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
+    key-focus := FocusScope {enabled:!root.disabled;key-pressed(event)=>{if(event.text==Key.Return || event.text==" "){Commands.trigger(root.action-id,root.argument);return accept;}return reject;}}
+    touch := TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{key-focus.focus();Commands.trigger(root.action-id,root.argument);}}
     accessible-role: button;
+    accessible-enabled:!root.disabled;
     accessible-label: root.text;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
 }
-component TabButton inherits ActionButton { border-width:0px; }
+component TabButton inherits ActionButton { border-width:root.focused ? 1px : 0px; }
 component NavigationItem inherits Rectangle {
     in property <string> text;
     in property <image> icon;
@@ -47,6 +50,8 @@ component NavigationItem inherits Rectangle {
     in property <bool> chosen;
     in property <bool> compact;
     height:42px;border-radius:7px;
+    forward-focus:nav-focus;
+    border-color:Palette.blue;border-width:nav-focus.has-focus ? 1px : 0px;
     background:root.chosen ? Palette.soft : touch.has-hover ? Palette.page : transparent;
     HorizontalLayout {
         padding-left:12px;padding-right:12px;spacing:12px;
@@ -56,7 +61,8 @@ component NavigationItem inherits Rectangle {
         if !root.compact: Text {text:root.text;color:root.chosen ? Palette.blue : Palette.ink;font-weight:root.chosen ? 600 : 400;vertical-alignment:center;font-size:13px;}
         if !root.compact: Rectangle {horizontal-stretch:1;}
     }
-    touch:=TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger(root.action-id,"");}}
+    nav-focus:=FocusScope{key-pressed(event)=>{if(event.text==Key.Return || event.text==" "){Commands.trigger(root.action-id,"");return accept;}return reject;}}
+    touch:=TouchArea {mouse-cursor:pointer;clicked=>{nav-focus.focus();Commands.trigger(root.action-id,"");}}
     accessible-role:button;accessible-label:root.text;
     accessible-action-default=>{Commands.trigger(root.action-id,"");}
 }
@@ -214,6 +220,11 @@ export component MainWindow inherits Window {
     in property <int> sync-interval-index;
     in property <bool> sync-has-password;
     in property <bool> sync-busy;
+    in property <bool> sync-dirty;
+    in property <int> sync-generation;
+    in property <string> sync-error;
+    in property <string> navigation-message;
+    in-out property <int> navigation-choice;
     in property <string> sync-conflicts;
     in property <string> sync-last;
     in property <bool> updates-managed;
@@ -227,6 +238,11 @@ export component MainWindow inherits Window {
     in property <int> update-progress;
     in property <string> network-summary;
     in property <string> network-current;
+    in property <bool> settings-dirty;
+    in property <string> settings-error;
+    in property <length> form-inset:24px;
+    in property <bool> navigation-prompt;
+
     HorizontalLayout {
         spacing:0px;
         Rectangle {
@@ -270,6 +286,8 @@ export component MainWindow inherits Window {
                             VerticalLayout {spacing:6px;alignment:start;
                                 for device in root.devices: Rectangle {
                                     height:86px;border-radius:8px;
+                                    forward-focus:device-focus;
+                                    border-width:device-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
                                     background:device.uuid==root.selected-uuid ? Palette.soft : device-touch.has-hover ? Palette.page : transparent;
                                     if device.uuid==root.selected-uuid: Rectangle {x:0px;y:18px;width:3px;height:50px;border-radius:2px;background:Palette.blue;}
                                     HorizontalLayout {padding:12px;spacing:10px;
@@ -285,7 +303,8 @@ export component MainWindow inherits Window {
                                             }
                                         }
                                     }
-                                    device-touch:=TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger("device.select",device.uuid);}}
+                                    device-focus:=FocusScope{key-pressed(event)=>{if(event.text==Key.Return || event.text==" "){Commands.trigger("device.select",device.uuid);return accept;}return reject;}}
+                                    device-touch:=TouchArea {mouse-cursor:pointer;clicked=>{device-focus.focus();Commands.trigger("device.select",device.uuid);}}
                                     accessible-role:button;accessible-label:"选择设备 "+device.name;
                                     accessible-action-default=>{Commands.trigger("device.select",device.uuid);}
                                 }
@@ -376,17 +395,40 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+            if root.page=="settings": Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:profile-header.preferred-height;
+                profile-header:=VerticalLayout {padding:20px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:12px;
+                    HorizontalLayout {spacing:12px;
+                        VerticalLayout {spacing:4px;Text{text:"连接设置";color:Palette.ink;font-size:23px;font-weight:600;}Text{text:root.selected-name+" · "+root.client-name;color:Palette.muted;font-size:12px;overflow:elide;}}
+                        Rectangle{horizontal-stretch:1;}ActionButton{text:"返回设备";action-id:"navigation.back";}
+                    }
+                    HorizontalLayout {spacing:8px;
+                        TabButton{text:"画面";action-id:"settings.tab";argument:"video";chosen:root.profile-tab=="video";}
+                        TabButton{text:"音频";action-id:"settings.tab";argument:"audio";chosen:root.profile-tab=="audio";}
+                        TabButton{text:"输入";action-id:"settings.tab";argument:"input";chosen:root.profile-tab=="input";}
+                        TabButton{text:"网络";action-id:"settings.tab";argument:"network";chosen:root.profile-tab=="network";}
+                        TabButton{text:"高级";action-id:"settings.tab";argument:"advanced";chosen:root.profile-tab=="advanced";}
+                        Rectangle{horizontal-stretch:1;}
+                    }
+                }
+            }
+            if root.page=="global-settings": VerticalLayout {padding-left:root.form-inset;padding-right:root.form-inset;padding-top:16px;spacing:12px;vertical-stretch:0;
+                        HorizontalLayout{Text{text:"设置";font-size:26px;font-weight:600;color:Palette.ink;}Rectangle{horizontal-stretch:1;}ActionButton{text:"返回";action-id:"devices.open";}}
+                        HorizontalLayout{spacing:8px;
+                            TabButton{text:"更新";action-id:"app.settings.tab";argument:"updates";chosen:root.settings-tab=="updates";}
+                            TabButton{text:"配置同步";action-id:"app.settings.tab";argument:"sync";chosen:root.settings-tab=="sync";}
+                            TabButton{text:"外观";action-id:"app.settings.tab";argument:"appearance";chosen:root.settings-tab=="appearance";}
+                            TabButton{text:"关于";action-id:"app.settings.tab";argument:"about";chosen:root.settings-tab=="about";}
+                            Rectangle{horizontal-stretch:1;}
+                        }
+            }
             if root.page!="devices" || root.streaming || root.connecting: ScrollView {
                 content-width:self.width;
                 VerticalLayout {
-                    padding:root.compact ? 20px : 34px;spacing:18px;
-                    if root.page=="settings": VerticalLayout {spacing:16px;vertical-stretch:0;
-                        HorizontalLayout{Text{text:"连接设置";color:Palette.muted;font-size:12px;}Rectangle{horizontal-stretch:1;}ActionButton{text:"返回";action-id:"settings.cancel";}}
-                        Text{text:root.selected-name;color:Palette.ink;font-size:26px;}
-                        Text{text:"当前客户端："+root.client-name;color:Palette.muted;font-size:13px;}
-                        Text{text:"画面与输入参数按客户端分别保存。主机的鼠标左右键设置共用。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
+                    padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
+                    if root.page=="settings": VerticalLayout {spacing:18px;vertical-stretch:0;
+                        if root.profile-tab=="advanced": VerticalLayout {spacing:12px;
                         Text{text:"设备别名（DisplayName）";color:Palette.muted;font-size:13px;}
-                        display-name-edit:=LineEdit{text:root.draft-display-name;placeholder-text:"留空使用原始主机名";}
+                        display-name-edit:=LineEdit{text:root.draft-display-name;placeholder-text:"留空使用原始主机名";edited(value)=>{Commands.trigger("settings.input","displayName="+value);}}
                         if root.profile-sources.length>0: HorizontalLayout{ActionButton{text:"从其他客户端复制配置";action-id:"settings.sources.toggle";chosen:root.profile-sources-expanded;}Rectangle{horizontal-stretch:1;}}
                         if root.profile-sources.length>0 && root.profile-sources-expanded: VerticalLayout{spacing:6px;
                             Text{text:"复制其他客户端的配置";color:Palette.muted;font-size:13px;}
@@ -396,13 +438,6 @@ export component MainWindow inherits Window {
                                 ActionButton{text:"复制到当前配置";action-id:"settings.copy_from";argument:source.client-id;}
                             }
                         }
-                        HorizontalLayout{spacing:8px;
-                            TabButton{text:"画面";action-id:"settings.tab";argument:"video";chosen:root.profile-tab=="video";}
-                            TabButton{text:"音频";action-id:"settings.tab";argument:"audio";chosen:root.profile-tab=="audio";}
-                            TabButton{text:"输入";action-id:"settings.tab";argument:"input";chosen:root.profile-tab=="input";}
-                            TabButton{text:"网络";action-id:"settings.tab";argument:"network";chosen:root.profile-tab=="network";}
-                            TabButton{text:"高级";action-id:"settings.tab";argument:"advanced";chosen:root.profile-tab=="advanced";}
-                            Rectangle{horizontal-stretch:1;}
                         }
                         if root.profile-tab=="network": VerticalLayout{spacing:10px;
                             Text{text:"设备地址";color:Palette.ink;}
@@ -440,24 +475,20 @@ export component MainWindow inherits Window {
                                 Text{text:field.label;color:Palette.ink;vertical-alignment:center;}
                                 Rectangle{horizontal-stretch:1;}
                                 if field.kind=="bool": ActionButton{text:field.flag ? "开启" : "关闭";chosen:field.flag;action-id:"settings.set";argument:field.key+"=toggle";}
-                                if field.kind=="number": SpinBox{value:field.number;minimum:field.minimum;maximum:field.maximum;step-size:field.step;width:160px;horizontal-stretch:0;edited(value)=>{Commands.trigger("settings.set",field.key+"="+value);}}
+                                if field.kind=="number": HorizontalLayout {spacing:6px;horizontal-stretch:0;
+                                    ActionButton{text:"−";action-id:"settings.step";argument:field.key+"|down";accessible-label:"减少"+field.label;}
+                                    Rectangle {width:92px;height:38px;border-width:field.invalid ? 2px : 0px;border-radius:6px;border-color:#b04452;
+                                        LineEdit{width:parent.width;height:parent.height;text:field.input-text;accessible-label:field.label;edited(value)=>{Commands.trigger("settings.input",field.key+"="+value);}}
+                                    }
+                                    ActionButton{text:"＋";action-id:"settings.step";argument:field.key+"|up";accessible-label:"增加"+field.label;}
+                                }
                                 if field.kind=="select": field-choice:=ComboBox{model:field.option-labels;current-index:field.selected-index;width:200px;horizontal-stretch:0;selected(value)=>{Commands.trigger("settings.set",field.key+"="+field.option-values[self.current-index]);}}
                             }
                             if field.help!="": Text{text:field.help;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
                         if root.profile-tab=="audio": Text{text:"主机 Sunshine 需启用音频捕获。串流中可随时切换声音和音量。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
-                        Text{text:"保存后用于下次连接；取消会放弃本页改动。";color:Palette.muted;font-size:12px;}
-                        HorizontalLayout{Rectangle{horizontal-stretch:1;}ActionButton{text:"取消";action-id:"settings.cancel";}ActionButton{text:"保存";action-id:"settings.save";argument:display-name-edit.text;primary:true;}}
                     }
                     if root.page=="global-settings": VerticalLayout {spacing:20px;vertical-stretch:0;
-                        HorizontalLayout{Text{text:"设置";font-size:26px;font-weight:600;color:Palette.ink;}Rectangle{horizontal-stretch:1;}ActionButton{text:"返回";action-id:"devices.open";}}
-                        HorizontalLayout{spacing:8px;
-                            TabButton{text:"更新";action-id:"app.settings.tab";argument:"updates";chosen:root.settings-tab=="updates";}
-                            TabButton{text:"配置同步";action-id:"app.settings.tab";argument:"sync";chosen:root.settings-tab=="sync";}
-                            TabButton{text:"外观";action-id:"app.settings.tab";argument:"appearance";chosen:root.settings-tab=="appearance";}
-                            TabButton{text:"关于";action-id:"app.settings.tab";argument:"about";chosen:root.settings-tab=="about";}
-                            Rectangle{horizontal-stretch:1;}
-                        }
                         if root.settings-tab=="appearance": VerticalLayout{spacing:16px;
                             Text{text:"主题";color:Palette.ink;font-size:16px;}
                             HorizontalLayout{ActionButton{text:root.dark ? "切换为浅色" : "切换为深色";action-id:"appearance.toggle";}Rectangle{horizontal-stretch:1;}}
@@ -465,19 +496,18 @@ export component MainWindow inherits Window {
                         if root.settings-tab=="sync": VerticalLayout{spacing:12px;
                             Text{text:"WebDAV";color:Palette.ink;font-size:18px;font-weight:600;}
                             Text{text:"目录地址（HTTP / HTTPS）";color:Palette.muted;}
-                            dav-url:=LineEdit{text:root.sync-url;placeholder-text:"https://example.com/dav/RHRemote/";}
+                            dav-url:=LineEdit{enabled:!root.sync-busy;text:root.sync-url;placeholder-text:"https://example.com/dav/RHRemote/";edited(value)=>{Commands.trigger("sync.edit","url="+value);}}
                             Text{text:"用户名";color:Palette.muted;}
-                            dav-user:=LineEdit{text:root.sync-username;}
+                            dav-user:=LineEdit{enabled:!root.sync-busy;text:root.sync-username;edited(value)=>{Commands.trigger("sync.edit","username="+value);}}
                             Text{text:"密码";color:Palette.muted;}
-                            dav-password:=LineEdit{input-type:password;placeholder-text:root.sync-has-password ? "已保存，留空保留" : "WebDAV 密码";}
+                            dav-password:=LineEdit{enabled:!root.sync-busy;in property <int> generation:root.sync-generation;changed generation=>{self.text="";}input-type:password;placeholder-text:root.sync-has-password ? "已保存，留空保留" : "WebDAV 密码";edited(value)=>{Commands.trigger("sync.edit","password="+value);}}
                             HorizontalLayout{
-                                dav-auto:=CheckBox{text:"自动同步";checked:root.sync-automatic;}
-                                dav-interval:=ComboBox{model:["5 分钟","15 分钟","30 分钟","60 分钟"];current-index:root.sync-interval-index;preferred-width:150px;horizontal-stretch:0;}
+                                dav-auto:=CheckBox{enabled:!root.sync-busy;text:"自动同步";checked:root.sync-automatic;toggled=>{Commands.trigger("sync.edit","automatic="+(self.checked ? "true" : "false"));}}
+                                dav-interval:=ComboBox{enabled:!root.sync-busy;model:["5 分钟","15 分钟","30 分钟","60 分钟"];current-index:root.sync-interval-index;preferred-width:150px;horizontal-stretch:0;selected(value)=>{Commands.trigger("sync.edit","intervalMinutes="+(self.current-index==0?"5":self.current-index==1?"15":self.current-index==2?"30":"60"));}}
                                 Rectangle{horizontal-stretch:1;}
                             }
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                             HorizontalLayout{spacing:10px;
-                                ActionButton{text:"保存设置";primary:true;action-id:"sync.configure";argument:dav-url.text+"\n"+dav-user.text+"\n"+dav-password.text+"\n"+(dav-auto.checked ? "true" : "false")+"\n"+(dav-interval.current-index==0?"5":dav-interval.current-index==1?"15":dav-interval.current-index==2?"30":"60");disabled:root.sync-busy;}
                                 ActionButton{text:root.sync-busy ? "同步中…" : "立即同步";action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
                                 ActionButton{text:"移除设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
                                 Text{text:root.sync-last;color:Palette.muted;vertical-alignment:center;font-size:12px;}
@@ -562,12 +592,51 @@ export component MainWindow inherits Window {
                         }
                         if root.statistics: Text{text:root.stream-statistics;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     }
-                    Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                    if root.page!="settings" && root.page!="global-settings" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     Rectangle {min-height:12px;vertical-stretch:1;}
-                    Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
+
+            Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
+                }
+            }
+            if root.page=="settings": Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:profile-footer.preferred-height;
+                Rectangle{y:0px;x:0px;width:parent.width;height:1px;background:Palette.line;}
+                profile-footer:=VerticalLayout {padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:8px;
+                    if root.settings-error!="": Text{text:root.settings-error;color:#b04452;font-size:13px;wrap:word-wrap;}
+                    HorizontalLayout {spacing:10px;
+                        Text{text:root.settings-dirty ? "有未保存的更改" : "设置已保存";color:Palette.muted;font-size:12px;vertical-alignment:center;}
+                        Rectangle{horizontal-stretch:1;}
+                        ActionButton{text:"取消";action-id:"settings.cancel";}
+                        ActionButton{text:"保存";action-id:"settings.save";primary:true;disabled:!root.settings-dirty;}
+                    }
+                }
+            }
+            if root.page=="global-settings" && root.settings-tab=="sync": Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:sync-footer.preferred-height;
+                Rectangle{y:0px;x:0px;width:parent.width;height:1px;background:Palette.line;}
+                sync-footer:=VerticalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:8px;
+                    if root.sync-error!="":Text{text:root.sync-error;color:#b04452;wrap:word-wrap;font-size:13px;}
+                    HorizontalLayout{spacing:10px;
+                        Text{text:root.sync-dirty ? "有未保存的更改" : root.sync-has-password ? "设置已保存" : "未配置";color:Palette.muted;vertical-alignment:center;font-size:12px;}
+                        Rectangle{horizontal-stretch:1;}
+                        ActionButton{text:"取消";action-id:"sync.cancel";disabled:root.sync-busy || !root.sync-dirty;}
+                        ActionButton{text:"保存";primary:true;action-id:"sync.save";disabled:root.sync-busy || !root.sync-dirty;}
+                    }
                 }
             }
 
         }
     }
+    if root.navigation-prompt: Rectangle {background:#0006;
+        TouchArea{}
+        Rectangle {width:min(parent.width - 32px,480px);height:decision.preferred-height + 48px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;background:Palette.surface;border-radius:12px;
+            in property <int> selected-choice:root.navigation-choice;
+            init=>{continue-choice.focus();}
+            changed selected-choice=>{if(self.selected-choice==0){continue-choice.focus();}else if(self.selected-choice==1){discard-choice.focus();}else{save-choice.focus();}}
+            decision:=VerticalLayout {padding:24px;spacing:18px;
+                Text{text:"保存更改？";color:Palette.ink;font-size:22px;font-weight:600;}
+                Text{text:root.navigation-message;color:Palette.muted;wrap:word-wrap;font-size:14px;}
+                HorizontalLayout {spacing:8px;continue-choice:=ActionButton{text:"继续编辑";action-id:"navigation.resolve";argument:"stay";chosen:root.navigation-choice==0;}Rectangle{horizontal-stretch:1;}discard-choice:=ActionButton{text:"放弃更改";action-id:"navigation.resolve";argument:"discard";chosen:root.navigation-choice==1;}save-choice:=ActionButton{text:"保存并继续";action-id:"navigation.resolve";argument:"save";chosen:root.navigation-choice==2;primary:true;}}
+            }
+        }
+    }
+
 }

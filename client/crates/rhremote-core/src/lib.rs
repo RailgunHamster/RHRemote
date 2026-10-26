@@ -8,6 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 mod global_settings;
+mod interaction;
 pub mod sync_model;
 pub mod network;
 
@@ -176,6 +177,11 @@ pub struct State {
     pub draft_address: String,
     pub draft_addresses: String,
     pub draft_relay: String,
+    pub settings_inputs: BTreeMap<String,String>,
+    pub settings_error: String,
+    pub settings_error_field: String,
+    #[serde(skip)]
+    pending_navigation: Option<interaction::PendingNavigation>,
     pub profile_tab: String,
     pub profile_sources_expanded: bool,
     pub settings_catalog: Value,
@@ -208,6 +214,10 @@ pub struct State {
     pub ui_rendering: Value,
     pub settings_tab: String,
     pub sync: Value,
+    #[serde(skip)]
+    sync_draft: Option<Value>,
+    pub sync_error: String,
+    pub sync_generation: u64,
     pub sync_busy: bool,
     pub updates: Value,
     pub updates_busy: bool,
@@ -287,6 +297,7 @@ impl Controller {
                 draft_address: String::new(),
                 draft_addresses: String::new(),
                 draft_relay: String::new(),
+                settings_inputs:BTreeMap::new(),settings_error:String::new(),settings_error_field:String::new(),pending_navigation:None,
                 profile_tab: "video".into(),
                 profile_sources_expanded: false,
                 settings_catalog: settings_catalog(),
@@ -319,6 +330,9 @@ impl Controller {
                     .execute("sync.state", &json!({}))
                     .unwrap_or(json!({})),
                 sync_busy: false,
+                sync_draft: None,
+                sync_error: String::new(),
+                sync_generation: 0,
                 updates: platform
                     .execute("updates.state", &json!({}))
                     .unwrap_or(json!({})),
@@ -333,7 +347,13 @@ impl Controller {
         Ok(controller)
     }
     pub fn state(&self) -> Value {
-        let mut value = serde_json::to_value(&*self.state.lock().unwrap()).unwrap();
+        let s=self.state.lock().unwrap();
+        let mut value = serde_json::to_value(&*s).unwrap();
+        value["settingsDirty"]=json!(interaction::dirty(&s));
+        value["syncDirty"]=json!(interaction::sync_dirty(&s));
+        value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
+        value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
+        drop(s);
         // Read progress without taking the updater's network/installation lock.
         if let Some(updates) = self.platform.update_state() { value["updates"] = updates; }
         value
@@ -474,7 +494,11 @@ impl Controller {
         if !catalog().as_array().unwrap().iter().any(|a| a["id"] == id) {
             return json!({"ok":false,"error":"unknown action","action":id});
         }
-        let result = if id.starts_with("updates.") {
+        let result = if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
+            let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
+            let action=match page.as_str(){"decision"=>"navigation.resolve","add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
+            let result=self.dispatch(action,if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
+        } else if let Some(result)=self.navigation_gate(id,&args) {result} else if id.starts_with("updates.") {
             self.dispatch_update(id)
         } else if id.starts_with("sync.") || id.starts_with("app.settings.") {
             self.dispatch_global(id, args)
@@ -486,6 +510,7 @@ impl Controller {
             Err(error) => json!({"ok":false,"action":id,"error":error}),
         };
         let mut s = self.state.lock().unwrap();
+        if response["ok"]!=true && id.starts_with("settings."){s.settings_error=response["error"].as_str().unwrap_or("设置修改失败").into();}
         s.last_action = response.clone();
         s.revision += 1;
         response
@@ -593,11 +618,11 @@ impl Controller {
             }
             "devices.open" | "device.add.cancel" | "settings.cancel" => {
                 s.page = "devices".into();
-                s.draft = None;
-                s.draft_display_name.clear();
+                interaction::clear(&mut s);
             }
             "device.add.open" => {
                 s.page = "add".into();
+                s.status.clear();
             }
             "device.settings.open" => {
                 let uuid = args["uuid"]
@@ -608,6 +633,7 @@ impl Controller {
                 if !s.devices.iter().any(|d| d.uuid == uuid) {
                     return Err("unknown device".into());
                 }
+                s.settings_inputs.clear();s.settings_error.clear();s.settings_error_field.clear();
                 s.draft = Some(s.saved.effective_profile(&uuid));
                 let host=s.saved.devices.iter().find(|d|d.uuid==uuid).map(|d|(d.address.clone(),d.addresses.clone())).unwrap_or_else(||{let d=s.devices.iter().find(|d|d.uuid==uuid).unwrap();(d.address.clone(),d.addresses.clone())});
                 s.draft_address=host.0;s.draft_addresses=host.1.join(", ");s.draft_relay=s.draft.as_ref().unwrap().relay_url.clone();
@@ -620,6 +646,7 @@ impl Controller {
                     .unwrap_or_default();
                 s.selected = uuid;
                 s.page = "settings".into();
+                s.status.clear();
                 s.profile_sources_expanded = false;
             }
             "settings.route.move" | "settings.route.toggle" => {
@@ -634,12 +661,27 @@ impl Controller {
                 }
                 next.validate()?;s.draft=Some(next);
             }
+            "settings.input" => {
+                if s.draft.is_none(){return Err("请先打开连接设置".into());}
+                let key=args["key"].as_str().ok_or("key required")?;let value=args["value"].as_str().filter(|v|v.len()<=4096).ok_or("输入内容过长")?;
+                if key=="displayName"{s.draft_display_name=value.into();}else if settings_catalog().as_array().unwrap().iter().any(|f|f["key"]==key&&f["type"]=="number"){s.settings_inputs.insert(key.into(),value.into());}else{return Err("unknown editable field".into());}
+                s.settings_error.clear();s.settings_error_field.clear();
+            }
+            "settings.step" => {
+                if s.draft.is_none(){return Err("请先打开连接设置".into());}
+                let key=args["key"].as_str().ok_or("key required")?;let meta=settings_catalog().as_array().unwrap().iter().find(|f|f["key"]==key&&f["type"]=="number").cloned().ok_or("unknown numeric field")?;
+                let base=serde_json::to_value(s.draft.as_ref().unwrap()).unwrap()[key].as_i64().unwrap();let number=s.settings_inputs.get(key).and_then(|v|v.trim().parse::<i64>().ok()).unwrap_or(base);
+                let sign=match args["direction"].as_str(){Some("up")=>1,Some("down")=>-1,_=>return Err("direction required".into())};
+                let value=(number+sign*meta["step"].as_i64().unwrap_or(1)).clamp(meta["min"].as_i64().unwrap(),meta["max"].as_i64().unwrap());s.settings_inputs.insert(key.into(),value.to_string());s.settings_error.clear();
+            }
             "settings.network.edit" => {
                 if s.draft.is_none(){return Err("open device settings first".into());}
                 let value=args["value"].as_str().filter(|v|v.len()<=4096).ok_or("network field requires bounded text")?;
+                s.settings_error.clear();s.settings_error_field.clear();
                 match args["key"].as_str(){Some("address")=>s.draft_address=value.into(),Some("addresses")=>s.draft_addresses=value.into(),Some("relayUrl")=>s.draft_relay=value.into(),_=>return Err("unknown network field".into())}
             }
             "settings.set" => {
+                s.settings_error.clear();s.settings_error_field.clear();
                 let current = s.draft.as_ref().ok_or("open device settings first")?;
                 let mut value = serde_json::to_value(current).unwrap();
                 let key = args["key"].as_str().ok_or("key required")?;
@@ -659,8 +701,9 @@ impl Controller {
                         .ok_or("resolution requires [width,height]")?;
                     value["width"] = v[0].clone();
                     value["height"] = v[1].clone();
+                    s.settings_inputs.remove("width");s.settings_inputs.remove("height");
                 } else if value.get(key).is_some() {
-                    value[key] = args["value"].clone();
+                    value[key] = args["value"].clone();s.settings_inputs.remove(key);
                 } else {
                     return Err("unknown profile option".into());
                 }
@@ -703,24 +746,15 @@ impl Controller {
                     .to_profile();
                 // Copy quality/input preferences only; the host mouse setting is shared separately.
                 p.swap_buttons = s.draft.as_ref().unwrap().swap_buttons;
-                s.draft_relay=p.relay_url.clone();s.draft = Some(p);
+                s.settings_inputs.clear();s.settings_error.clear();s.draft_relay=p.relay_url.clone();s.draft = Some(p);
             }
             "settings.save" => {
-                let mut p = s.draft.clone().ok_or("no settings draft")?;
-                p.relay_url=s.draft_relay.trim().into();
-                p.validate()?;
+                let p=interaction::validated_profile(&mut s)?;
                 let mut next = s.saved.clone();
                 next.devices = sync_model::from_state(&s).devices;
-                let primary=s.draft_address.trim().to_owned();
-                let extra:Vec<String>=s.draft_addresses.split([',',';','，','\n']).map(str::trim).filter(|s|!s.is_empty()).map(str::to_owned).collect();
-                let all=network::addresses(&primary,&extra)?;
-                let extra:Vec<String>=all.into_iter().filter(|a|!a.eq_ignore_ascii_case(&primary)).collect();
+                let (primary,extra)=interaction::endpoints(&mut s)?;
                 let network_changed=s.devices.iter().find(|d|d.uuid==s.selected).is_none_or(|d|d.address!=primary||d.addresses!=extra);
-                let name = sync_model::display_name(
-                    args.get("displayName")
-                        .and_then(Value::as_str)
-                        .unwrap_or(&s.draft_display_name),
-                )?;
+                let name=match sync_model::display_name(args.get("displayName").and_then(Value::as_str).unwrap_or(&s.draft_display_name)){Ok(v)=>v,Err(e)=>{s.profile_tab="advanced".into();s.settings_error_field="displayName".into();return Err(e);}};
                 if let Some(d) = next.devices.iter_mut().find(|d| d.uuid == s.selected) {
                     d.display_name = name.clone();d.address=primary.clone();d.addresses=extra.clone();
                 }
@@ -731,7 +765,7 @@ impl Controller {
                     d.display_name = name;d.address=primary;d.addresses=extra;
                 }
                 s.saved = next;
-                s.draft = None;
+                interaction::clear(&mut s);
                 s.page = "devices".into();
                 s.status = "连接设置已保存".into();
                 let rows=s.devices.clone();s.revision+=1;drop(s);
@@ -1198,7 +1232,7 @@ mod tests {
         c
     }
     #[test]
-    fn browsing_devices_is_local_and_cannot_retarget_an_active_session_or_draft() {
+    fn browsing_devices_protects_active_sessions_and_leaves_clean_drafts_without_saving() {
         let c = controller();
         let saved = c.state()["saved"].clone();
         assert_eq!(c.dispatch("device.select", json!({"uuid":"b"}))["ok"], true);
@@ -1217,8 +1251,9 @@ mod tests {
         }
         { let mut s = c.state.lock().unwrap(); s.streaming=false; s.connecting=false; }
         c.dispatch("device.settings.open", json!({"uuid":"b"}));
-        assert_eq!(c.dispatch("device.select", json!({"uuid":"a"}))["ok"], false);
-        assert_eq!(c.state()["selected"], "b");
+        assert_eq!(c.dispatch("device.select", json!({"uuid":"a"}))["ok"], true);
+        assert_eq!(c.state()["selected"], "a");
+        assert!(c.state()["draft"].is_null());
         assert_eq!(c.state()["saved"], saved);
     }
     #[test]

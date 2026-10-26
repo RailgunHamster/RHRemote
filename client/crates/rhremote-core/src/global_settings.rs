@@ -51,13 +51,24 @@ impl Controller {
                 s.settings_tab = tab.into();
             }
             s.page = "global-settings".into();
+            s.status.clear();
+            if s.settings_tab=="sync"{crate::interaction::begin_sync(&mut s);}
             s.revision += 1;
             return Ok(json!({"tab":s.settings_tab}));
         }
         let mut s = self.state.lock().unwrap();
+        if id=="sync.state" {return Ok(s.sync.clone());}
         if s.sync_busy {
             return Err("同步操作正在进行".into());
         }
+        if id=="sync.cancel"{s.sync_draft=None;s.sync_error.clear();s.status.clear();crate::interaction::begin_sync(&mut s);s.revision+=1;return Ok(json!({"cancelled":true}));}
+        if id=="sync.edit"{
+            let key=args["key"].as_str().ok_or("key required")?;let value=&args["value"];
+            match key{"url"|"username"|"password"=>{if !value.is_string()||value.as_str().unwrap().len()>4096{return Err("输入过长或类型无效".into());}},"automatic"=>{if !value.is_boolean(){return Err("automatic must be boolean".into());}},"intervalMinutes"=>{if ![json!(5),json!(15),json!(30),json!(60)].contains(value){return Err("自动同步间隔只能为 5、15、30 或 60 分钟".into());}},_=>return Err("unknown sync setting".into())}
+            crate::interaction::begin_sync(&mut s);s.sync_draft.as_mut().unwrap()[key]=value.clone();s.sync_error.clear();s.revision+=1;return Ok(json!({"edited":true}));
+        }
+        let id=if id=="sync.save"{"sync.configure"}else{id};
+        let args=if id=="sync.configure"&&args.as_object().is_none_or(|v|v.is_empty()){s.sync_draft.clone().ok_or("请先编辑 WebDAV 设置")?}else{args};
         let mut input = args;
         if id == "sync.run" || id == "sync.resolve" {
             if s.draft.is_some() {
@@ -66,6 +77,7 @@ impl Controller {
             input["shared"] = serde_json::to_value(sync_model::from_state(&s)).unwrap();
         }
         s.sync_busy = true;
+        s.sync_error.clear();
         s.revision += 1;
         drop(s);
         let result = self.platform.execute(id, &input);
@@ -76,6 +88,7 @@ impl Controller {
             Ok(v) => v,
             Err(e) => {
                 s.status = e.clone();
+                s.sync_error=e.clone();
                 return Err(e);
             }
         };
@@ -84,6 +97,7 @@ impl Controller {
         } else if id == "sync.configure" || id == "sync.state" || id == "sync.clear" {
             s.sync = result.clone();
         }
+        if id=="sync.configure"||id=="sync.clear"{s.sync_draft=None;s.sync_error.clear();if s.page=="global-settings"&&s.settings_tab=="sync"{crate::interaction::begin_sync(&mut s);}}
         if let Some(shared) = result.get("shared") {
             let shared: sync_model::SharedConfig =
                 serde_json::from_value(shared.clone()).map_err(|e| e.to_string())?;

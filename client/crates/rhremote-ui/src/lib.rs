@@ -24,6 +24,8 @@ mod recovery;
 mod statistics;
 mod updates;
 mod ui_rendering;
+#[cfg(test)]
+mod form_tests;
 slint::include_modules!();
 
 fn args_for(id: &str, arg: &str, state: &Value) -> Value {
@@ -38,6 +40,9 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
             json!({"uuid":uuid,"address":primary.trim(),"addresses":extra.split([',',';','\n']).map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})
         }
         "device.network.diagnose" => json!({"uuid":arg}),
+        "navigation.resolve"=>json!({"choice":arg}),
+        "settings.input"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
+        "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},
         "settings.network.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "statistics.configure" => json!({"enabled":arg=="true"}),
         "app.settings.tab" | "settings.tab" => json!({"tab":arg}),
@@ -46,6 +51,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "stream.menu.open" => json!({"menu":arg}),
         "stream.window.move" => json!({"direction":arg}),
         "stream.display.select" => json!({"displayId":arg}),
+        "sync.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":match key{"automatic"=>json!(value=="true"),"intervalMinutes"=>json!(value.parse::<u32>().unwrap_or(0)),_=>json!(value)}})},
         "sync.configure" => {
             let fields: Vec<_> = arg.splitn(5, '\n').collect();
             if fields.len() == 5 {
@@ -56,7 +62,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         }
         "sync.resolve" => json!({"resolution":arg}),
         "settings.copy_from" => json!({"clientId":arg}),
-        "settings.save" => json!({"displayName":arg}),
+        "settings.save" => json!({}),
         "device.connect" | "device.pair" | "device.settings.open" | "device.select" => json!({"uuid":arg}),
         "devices.filter" => json!({"query":arg}),
         "device.add.submit" => json!({"address":arg}),
@@ -240,6 +246,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             queue.message("操作队列已满，请稍后重试".into());
         }
     });
+    {
+        use slint::winit_030::{EventResult,WinitWindowAccessor,winit::{event::{WindowEvent,ElementState},keyboard::{Key,NamedKey}}};
+        let controls=controller.clone();let weak=ui.as_weak();let shift=std::cell::Cell::new(false);
+        ui.window().on_winit_window_event(move |_,event| {
+            if let WindowEvent::ModifiersChanged(value)=event{shift.set(value.state().shift_key());}
+            if let Some(ui)=weak.upgrade(){
+                if let WindowEvent::KeyboardInput{event,..}=event {
+                    if ui.get_navigation_prompt(){
+                        if event.state==ElementState::Pressed&&!event.repeat {
+                            match event.logical_key {
+                                Key::Named(NamedKey::Escape)=>{controls.dispatch("navigation.resolve",json!({"choice":"stay"}));},
+                                Key::Named(NamedKey::Tab)=>ui.set_navigation_choice((ui.get_navigation_choice()+if shift.get(){2}else{1})%3),
+                                Key::Named(NamedKey::Enter)=>{let choice=["stay","discard","save"][ui.get_navigation_choice() as usize];controls.dispatch("navigation.resolve",json!({"choice":choice}));},
+                                _=>{}
+                            }
+                        }
+                        return EventResult::PreventDefault;
+                    }
+                    if event.state==ElementState::Pressed&&!event.repeat&&event.logical_key==Key::Named(NamedKey::Escape)&&ui.get_page()!="devices"{
+                        controls.dispatch("navigation.back",json!({}));return EventResult::PreventDefault;
+                    }
+                }
+            }
+            EventResult::Propagate
+        });
+    }
     let close = controller.clone();
     ui.window().on_close_requested(move || {
         let result = close.dispatch("window.close", json!({}));
@@ -260,7 +292,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut profile_fingerprint = String::new();
     let mut toolbar_display_fingerprint = String::new();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
-        let Some(ui)=weak.upgrade() else{return};let state=view.state();let next=state["revision"].as_u64().unwrap_or(0);
+        let Some(ui)=weak.upgrade() else{return};
+        let logical_width=ui.window().size().width as f32/ui.window().scale_factor();
+        ui.set_form_inset(((logical_width-if logical_width<980.0{64.0}else{184.0}-800.0)/2.0).max(24.0));
+        let state=view.state();let next=state["revision"].as_u64().unwrap_or(0);
         ui.set_compact(ui.window().size().width as f32/ui.window().scale_factor()<980.0);
         ui.set_update_primary_text(updates::primary_label(&state["updates"],state["updatesBusy"]==true).into());
         ui.set_update_phase(state["updates"]["phase"].as_str().unwrap_or("").into());
@@ -269,7 +304,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         if next!=revision {
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"]==true);ui.set_trace_path(state["statistics"]["tracing"]["latest"].as_str().unwrap_or("").into());
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
-            ui.set_settings_tab(state["settingsTab"].as_str().unwrap_or("updates").into());ui.set_sync_url(state["sync"]["url"].as_str().unwrap_or("").into());ui.set_sync_username(state["sync"]["username"].as_str().unwrap_or("").into());ui.set_sync_automatic(state["sync"]["automatic"]==true);ui.set_sync_interval_index(match state["sync"]["intervalMinutes"].as_u64().unwrap_or(5){15=>1,30=>2,60=>3,_=>0});ui.set_sync_has_password(state["sync"]["hasPassword"]==true);ui.set_sync_busy(state["syncBusy"]==true);ui.set_sync_conflicts(state["sync"]["conflicts"].as_array().map(|a|a.iter().filter_map(|v|v.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default().into());ui.set_sync_last(if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)>0{"已同步"}else{"尚未同步"}.into());
+            ui.set_settings_dirty(state["settingsDirty"]==true);ui.set_settings_error(state["settingsError"].as_str().unwrap_or("").into());if !ui.get_navigation_prompt()&&state["navigationPrompt"].is_object(){ui.set_navigation_choice(0);}ui.set_navigation_prompt(state["navigationPrompt"].is_object());ui.set_navigation_message(state["navigationPrompt"]["message"].as_str().unwrap_or("").into());
+            let sync_form=if state["syncDraft"].is_object(){&state["syncDraft"]}else{&state["sync"]};ui.set_sync_generation(state["syncGeneration"].as_u64().unwrap_or(0) as i32);ui.set_sync_dirty(state["syncDirty"]==true);ui.set_sync_error(state["syncError"].as_str().unwrap_or("").into());
+            ui.set_settings_tab(state["settingsTab"].as_str().unwrap_or("updates").into());ui.set_sync_url(sync_form["url"].as_str().unwrap_or("").into());ui.set_sync_username(sync_form["username"].as_str().unwrap_or("").into());ui.set_sync_automatic(sync_form["automatic"]==true);ui.set_sync_interval_index(match sync_form["intervalMinutes"].as_u64().unwrap_or(5){15=>1,30=>2,60=>3,_=>0});ui.set_sync_has_password(state["sync"]["hasPassword"]==true);ui.set_sync_busy(state["syncBusy"]==true);ui.set_sync_conflicts(state["sync"]["conflicts"].as_array().map(|a|a.iter().filter_map(|v|v.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default().into());ui.set_sync_last(if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)>0{"已同步"}else{"尚未同步"}.into());
             ui.set_updates_managed(state["updates"]["managed"]==true);ui.set_updates_busy(state["updatesBusy"]==true);ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());ui.set_updates_pending(state["updates"]["pendingRestart"]==true);ui.set_update_version(state["updates"]["availableVersion"].as_str().unwrap_or("").into());ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
             let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),host_name:d["name"].as_str().unwrap_or("").into(),address:d["address"].as_str().unwrap_or("").into(),search_addresses:devices::address_summary(state["saved"]["devices"].as_array().into_iter().flatten().find(|h|h["uuid"]==d["uuid"]).or(Some(d))).into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"已配对"}else{"待配对"}.into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}).collect();
             ui.set_selected_device(rows.iter().find(|d|d.uuid==selected).cloned().unwrap_or_default());
@@ -296,14 +333,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_audio_enabled(state["audioEnabled"]==true);ui.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
             let remote:Vec<RemoteDisplay>=state["statistics"]["displays"].as_array().into_iter().flatten().map(|d|RemoteDisplay{id:d["id"].as_str().unwrap_or("").into(),label:format!("{} · {}×{}",if d["virtual"]==true{"虚拟屏"}else{d["name"].as_str().filter(|v|!v.is_empty()).unwrap_or("屏幕")},d["width"],d["height"]).into(),chosen:d["id"]==state["statistics"]["selectedDisplay"]["id"],available:d["available"]==true}).collect();
             ui.set_remote_displays(ModelRc::new(VecModel::from(remote)));ui.set_display_error(state["statistics"]["displayError"].as_str().unwrap_or("").into());
-            let fingerprint=format!("{}:{}",state["profileTab"],state["draft"]);
+            let fingerprint=format!("{}:{}:{}:{}",state["profileTab"],state["draft"],state["settingsInputs"],state["settingsErrorField"]);
             if fingerprint!=profile_fingerprint {
                 profile_fingerprint=fingerprint;
                 let rows:Vec<SettingRow>=state["settingsCatalog"].as_array().into_iter().flatten().filter(|f|f["tab"]==state["profileTab"]&&f["platforms"].as_array().is_none_or(|p|p.iter().any(|v|v=="windows"))).map(|f|{
                     let key=f["key"].as_str().unwrap();let value=&state["draft"][key];let opts=f["options"].as_array().cloned().unwrap_or_default();
                     let labels:Vec<slint::SharedString>=opts.iter().map(|v|v[1].as_str().unwrap_or("").into()).collect();
                     let values:Vec<slint::SharedString>=opts.iter().map(|v|v[0].as_str().unwrap_or("").into()).collect();
-                    SettingRow{key:key.into(),label:f["label"].as_str().unwrap_or("").into(),kind:f["type"].as_str().unwrap_or("").into(),help:f["help"].as_str().unwrap_or("").into(),flag:value==true,number:value.as_i64().unwrap_or(0) as i32,minimum:f["min"].as_i64().unwrap_or(0) as i32,maximum:f["max"].as_i64().unwrap_or(100) as i32,step:f["step"].as_i64().unwrap_or(1) as i32,selected_index:opts.iter().position(|o|o[0]==*value).unwrap_or(0) as i32,option_labels:ModelRc::new(VecModel::from(labels)),option_values:ModelRc::new(VecModel::from(values))}
+                    SettingRow{key:key.into(),label:f["label"].as_str().unwrap_or("").into(),kind:f["type"].as_str().unwrap_or("").into(),help:f["help"].as_str().unwrap_or("").into(),flag:value==true,number:value.as_i64().unwrap_or(0) as i32,input_text:state["settingsInputs"][key].as_str().map(str::to_owned).unwrap_or_else(||value.to_string()).into(),invalid:state["settingsErrorField"]==key,minimum:f["min"].as_i64().unwrap_or(0) as i32,maximum:f["max"].as_i64().unwrap_or(100) as i32,step:f["step"].as_i64().unwrap_or(1) as i32,selected_index:opts.iter().position(|o|o[0]==*value).unwrap_or(0) as i32,option_labels:ModelRc::new(VecModel::from(labels)),option_values:ModelRc::new(VecModel::from(values))}
                 }).collect();
                 if profile_model.row_count()==rows.len()&&(rows.is_empty()||profile_model.row_data(0).is_some_and(|r|r.key==rows[0].key)){for(i,row)in rows.into_iter().enumerate(){profile_model.set_row_data(i,row);}}else{profile_model.set_vec(rows);}
             }
@@ -375,6 +412,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if state["sync"]["automatic"] == true
                 && state["syncBusy"] != true
                 && state["draft"].is_null()
+                && state["syncDirty"] != true
+                && state["navigationPrompt"].is_null()
                 && state["sync"]["conflicts"]
                     .as_array()
                     .is_none_or(|a| a.is_empty())
@@ -470,6 +509,7 @@ mod tests {
                     "devices.",
                     "device.",
                     "settings.",
+                    "navigation.",
                     "app.settings.",
                     "appearance.",
                     "sync.",
