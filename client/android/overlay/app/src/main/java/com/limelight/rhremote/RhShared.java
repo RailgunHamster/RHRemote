@@ -189,6 +189,12 @@ public final class RhShared {
             device.put("addresses",extra);validate(shared);write(file(c),shared);return;
         }
     }
+    public static synchronized void saveDisplayName(Context c,ComputerDetails device,String name)throws Exception {
+        name=validateDisplayName(name);JSONObject shared=read(c);JSONArray devices=shared.getJSONArray("devices");JSONObject host=null;
+        for(int i=0;i<devices.length();i++)if(device.uuid.equals(devices.getJSONObject(i).getString("uuid")))host=devices.getJSONObject(i);
+        if(host==null){host=metadata(device,swap(shared,device.uuid),name);if(host==null)throw new IOException("host address unavailable");devices.put(host);}
+        host.put("displayName",name);validate(shared);write(file(c),shared);
+    }
     public static synchronized void saveProfile(Context c,ComputerDetails d,RhProfile p,String displayName)throws Exception {
         saveProfile(c,d,p,displayName,null,null);
     }

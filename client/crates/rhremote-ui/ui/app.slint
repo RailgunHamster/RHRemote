@@ -172,6 +172,9 @@ export component MainWindow inherits Window {
     in property <string> add-address;
     in property <string> add-phase:"editing";
     in property <string> add-error;
+    in property <string> info-name;
+    in property <string> info-error;
+    in property <bool> info-dirty;
     private property <bool> add-busy:root.add-phase=="probing";
     in property <int> device-total;
     in property <int> device-online;
@@ -260,7 +263,7 @@ export component MainWindow inherits Window {
                         Text {text:"Moonlight";font-size:11px;color:Palette.muted;}
                     }
                 }
-                NavigationItem{text:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices" || root.page=="settings" || root.page=="pair";compact:root.compact;}
+                NavigationItem{text:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices" || root.page=="settings" || root.page=="device-info" || root.page=="pair";compact:root.compact;}
                 NavigationItem{text:"添加电脑";icon:@image-url("icons/plus.svg");action-id:"device.add.open";chosen:root.page=="add";compact:root.compact;}
                 Rectangle {vertical-stretch:1;}
                 NavigationItem{text:"设置";icon:@image-url("icons/settings.svg");action-id:"app.settings.open";chosen:root.page=="global-settings";compact:root.compact;}
@@ -368,7 +371,7 @@ export component MainWindow inherits Window {
                                     DetailField {label:"码率";value:root.bitrate+" Mbps";}
                                 }
                                 Rectangle {height:1px;background:Palette.line;}
-                                Text {text:"设备信息";font-size:14px;font-weight:600;color:Palette.ink;}
+                                HorizontalLayout {Text {text:"设备信息";font-size:14px;font-weight:600;color:Palette.ink;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}ActionButton{text:"编辑资料";action-id:"device.info.open";argument:root.selected-uuid;}}
                                 HorizontalLayout {spacing:20px;
                                     DetailField {label:"首选地址";value:root.network-address;}
                                     DetailField {label:"配对状态";value:root.selected-device.paired ? "已配对" : "未配对";}
@@ -425,6 +428,12 @@ export component MainWindow inherits Window {
                             Rectangle{horizontal-stretch:1;}
                         }
             }
+            if root.page=="device-info":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:info-header.preferred-height;
+                info-header:=HorizontalLayout{padding:20px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:12px;
+                    Text{text:"设备资料";font-size:23px;font-weight:600;color:Palette.ink;vertical-alignment:center;}
+                    Rectangle{horizontal-stretch:1;}ActionButton{text:"返回设备";action-id:"navigation.back";}
+                }
+            }
             if root.page=="add":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:add-header.preferred-height;
                 add-header:=HorizontalLayout{padding:20px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:12px;
                     Text{text:"添加电脑";font-size:23px;font-weight:600;color:Palette.ink;vertical-alignment:center;}
@@ -434,11 +443,9 @@ export component MainWindow inherits Window {
             if root.page!="devices" || root.streaming || root.connecting: ScrollView {
                 content-width:self.width;
                 VerticalLayout {
-                    padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" || root.page=="add" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" || root.page=="add" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
+                    padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
                     if root.page=="settings": VerticalLayout {spacing:18px;vertical-stretch:0;
                         if root.profile-tab=="advanced": VerticalLayout {spacing:12px;
-                        Text{text:"设备别名（DisplayName）";color:Palette.muted;font-size:13px;}
-                        display-name-edit:=LineEdit{text:root.draft-display-name;placeholder-text:"留空使用原始主机名";edited(value)=>{Commands.trigger("settings.input","displayName="+value);}}
                         if root.profile-sources.length>0: HorizontalLayout{ActionButton{text:"从其他客户端复制配置";action-id:"settings.sources.toggle";chosen:root.profile-sources-expanded;}Rectangle{horizontal-stretch:1;}}
                         if root.profile-sources.length>0 && root.profile-sources-expanded: VerticalLayout{spacing:6px;
                             Text{text:"复制其他客户端的配置";color:Palette.muted;font-size:13px;}
@@ -551,6 +558,17 @@ export component MainWindow inherits Window {
                             Text{text:root.trace-path;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
                     }
+                    if root.page=="device-info":VerticalLayout{spacing:18px;vertical-stretch:0;
+                        Text{text:"设备名称";color:Palette.ink;font-size:14px;}
+                        info-editor:=LineEdit{init=>{self.focus();}text:root.info-name;placeholder-text:root.selected-device.host-name;accessible-label:"设备名称";enabled:!root.sync-busy;edited(value)=>{Commands.trigger("device.info.input",value);}accepted=>{Commands.trigger("device.info.save","");}}
+                        if root.info-error!="":Text{text:root.info-error;color:#b04452;font-size:13px;wrap:word-wrap;}
+                        Text{text:"留空使用主机名。显示名称随设备配置同步。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
+                        HorizontalLayout{ActionButton{text:"恢复原名";action-id:"device.info.reset";disabled:root.info-name=="";}Rectangle{horizontal-stretch:1;}}
+                        Rectangle{height:1px;background:Palette.line;}
+                        DetailField{label:"主机名";value:root.selected-device.host-name;}
+                        Text{text:"设备标识";color:Palette.muted;font-size:12px;}
+                        Text{text:root.selected-uuid;color:Palette.ink;font-size:13px;wrap:word-wrap;}
+                    }
                     if root.page=="add": VerticalLayout {spacing:18px;vertical-stretch:0;
                         Text{text:"IP 或主机名，支持局域网、Tailscale 和公网地址";color:Palette.muted;wrap:word-wrap;}
                         Text{text:"设备地址";color:Palette.ink;font-size:14px;}
@@ -608,7 +626,7 @@ export component MainWindow inherits Window {
                         }
                         if root.statistics: Text{text:root.stream-statistics;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     }
-                    if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                    if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.page!="device-info" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     Rectangle {min-height:12px;vertical-stretch:1;}
 
             Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
@@ -624,6 +642,14 @@ export component MainWindow inherits Window {
                         ActionButton{text:"取消";action-id:"settings.cancel";}
                         ActionButton{text:"保存";action-id:"settings.save";primary:true;disabled:!root.settings-dirty;}
                     }
+                }
+            }
+            if root.page=="device-info":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:info-footer.preferred-height;
+                Rectangle{y:0px;x:0px;width:parent.width;height:1px;background:Palette.line;}
+                info-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
+                    Text{text:root.info-dirty ? "有未保存的更改" : "";color:Palette.muted;font-size:12px;vertical-alignment:center;}
+                    Rectangle{horizontal-stretch:1;}ActionButton{text:"取消";action-id:"device.info.cancel";}
+                    ActionButton{text:"完成";action-id:"device.info.save";primary:true;disabled:root.sync-busy;}
                 }
             }
             if root.page=="add":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:add-footer.preferred-height;

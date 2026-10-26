@@ -81,7 +81,7 @@ public final class RhDeviceBrowser extends LinearLayout {
         detailBody.addView(hero);space(detailBody,16);
 
         LinearLayout quality=row();metric(quality,"分辨率",0,1.5f);metric(quality,"帧率",1,1);metric(quality,"码率",2,1);detailBody.addView(quality);
-        space(detailBody,16);divider(detailBody);section("设备信息");
+        space(detailBody,16);divider(detailBody);space(detailBody,16);LinearLayout infoHeading=row();infoHeading.addView(text("设备信息",14,ink,true),new LayoutParams(0,dp(48),1));infoHeading.addView(button("编辑资料",false,()->send("device.info.open","uuid",selected)));detailBody.addView(infoHeading);space(detailBody,14);
         LinearLayout host=row();metric(host,"首选地址",3,1.5f);metric(host,"配对状态",4,1);detailBody.addView(host);space(detailBody,12);endpoints=text("",13,muted,false);detailBody.addView(endpoints);space(detailBody,8);lastRoute=text("",13,muted,false);detailBody.addView(lastRoute);
         section("当前客户端配置");LinearLayout profile=row();metric(profile,"视频编码",5,1);metric(profile,"声音",6,1);metric(profile,"屏幕",7,1);detailBody.addView(profile);
         space(detailBody,16);divider(detailBody);space(detailBody,16);detailBody.addView(text("设备顺序",12,muted,false));space(detailBody,12);

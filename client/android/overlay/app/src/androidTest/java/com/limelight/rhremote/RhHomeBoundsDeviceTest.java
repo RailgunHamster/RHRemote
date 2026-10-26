@@ -45,7 +45,7 @@ public final class RhHomeBoundsDeviceTest {
         assertTrue("Configure at least one emulator device before this UI test",state[0].getJSONArray("devices").length()>0);
         String uuid=state[0].getJSONArray("devices").getJSONObject(0).getString("uuid");
         action("devices.open",RhActions.obj());verify();action("device.select",RhActions.obj("uuid",uuid));verify();
-        action("device.add.open",RhActions.obj());verify();action("device.add.cancel",RhActions.obj());
+        action("device.info.open",RhActions.obj("uuid",uuid));verify();action("device.info.cancel",RhActions.obj());action("device.add.open",RhActions.obj());verify();action("device.add.cancel",RhActions.obj());
         for(String tab:new String[]{"updates","sync","appearance","about"}){action("app.settings.tab",RhActions.obj("tab",tab));verify();}
         action("device.settings.open",RhActions.obj("uuid",uuid));for(String tab:new String[]{"video","audio","input","network","advanced"}){action("settings.tab",RhActions.obj("tab",tab));verify();}
         action("settings.cancel",RhActions.obj());action("devices.filter",RhActions.obj("query","no-matching-device"));verify();action("devices.filter",RhActions.obj("query",""));action("device.select",RhActions.obj("uuid",uuid));

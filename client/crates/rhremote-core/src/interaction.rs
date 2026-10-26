@@ -3,7 +3,13 @@ use crate::{Controller, Profile, State, network, settings_catalog};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug)]
-pub(crate) struct PendingNavigation { pub action:String, pub args:Value, pub sync:bool }
+pub(crate) struct PendingNavigation { pub action:String, pub args:Value, pub sync:bool, pub info:bool }
+
+pub(crate) fn automatic_sync_blocked(s:&State)->bool{
+    s.sync_busy || s.streaming || s.connecting || s.closing || s.installing_update
+        || s.draft.is_some() || s.info_draft.is_some() || s.page=="add" || s.page=="pair"
+        || s.pending_navigation.is_some() || sync_dirty(s)
+}
 
 pub(crate) fn begin_sync(s:&mut State){
     if s.sync_draft.is_none(){s.sync_generation+=1;s.sync_draft=Some(json!({"url":s.sync["url"].as_str().unwrap_or(""),"username":s.sync["username"].as_str().unwrap_or(""),"password":"","automatic":s.sync["automatic"].as_bool().unwrap_or(false),"intervalMinutes":s.sync["intervalMinutes"].as_u64().unwrap_or(5)}));s.sync_error.clear();}
@@ -62,20 +68,27 @@ impl Controller {
     /// Return Some when a modal consumed the action; never persist just by navigating.
     pub(crate) fn navigation_gate(&self,id:&str,args:&Value)->Option<Result<Value,String>>{
         let mut s=self.state.lock().unwrap();
+        if id=="sync.run" && args["automatic"]==true && (automatic_sync_blocked(&s)||s.sync["automatic"]!=true){return Some(Ok(json!({"skipped":true})));}
         if s.pending_navigation.is_some() && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {
             return Some(Err("请先处理未保存的更改".into()));
         }
-        let leaving_sync=matches!(id,"devices.open"|"device.settings.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || id=="app.settings.tab"&&args["tab"]!="sync" || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
+        let leaving_info=matches!(id,"devices.open"|"device.select"|"device.settings.open"|"device.info.open"|"device.add.open"|"app.settings.open"|"app.settings.tab"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
+        if leaving_info && s.info_draft.is_some(){
+            if id=="device.info.open" && args["uuid"]==s.selected{return Some(Ok(json!({"reused":true})));}
+            if crate::device_info::dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false,info:true});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
+            s.info_draft=None;s.page="devices".into();
+        }
+        let leaving_sync=matches!(id,"devices.open"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || id=="app.settings.tab"&&args["tab"]!="sync" || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
         if leaving_sync && s.sync_draft.is_some(){
-            if sync_dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:true});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
+            if sync_dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:true,info:false});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
             s.sync_draft=None;s.sync_error.clear();
         }
-        let leaving=matches!(id,"devices.open"|"app.settings.open"|"app.settings.tab"|"device.settings.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"updates.install")
+        let leaving=matches!(id,"devices.open"|"app.settings.open"|"app.settings.tab"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"updates.install")
             || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
         if !leaving || s.draft.is_none(){return None;}
         if id=="device.settings.open"&&args["uuid"]==s.selected{return Some(Ok(json!({"reused":true})));}
         if dirty(&s){
-            s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false});s.revision+=1;
+            s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false,info:false});s.revision+=1;
             return Some(Ok(json!({"pendingNavigation":true})));
         }
         clear(&mut s);
@@ -85,10 +98,10 @@ impl Controller {
     pub(crate) fn resolve_navigation(&self,args:Value)->Result<Value,String>{
         let choice=args["choice"].as_str().ok_or("choice required")?;
         if !["save","discard","stay"].contains(&choice){return Err("unknown navigation choice".into());}
-        let pending={let mut s=self.state.lock().unwrap();let pending=s.pending_navigation.take().ok_or("没有等待处理的更改")?;s.revision+=1;if choice=="discard"{if pending.sync{s.sync_draft=None;s.sync_error.clear();}else{clear(&mut s);s.page="devices".into();}}pending};
+        let pending={let mut s=self.state.lock().unwrap();let pending=s.pending_navigation.take().ok_or("没有等待处理的更改")?;s.revision+=1;if choice=="discard"{if pending.info{s.info_draft=None;s.page="devices".into();}else if pending.sync{s.sync_draft=None;s.sync_error.clear();}else{clear(&mut s);s.page="devices".into();}}pending};
         if choice=="stay"{return Ok(json!({"continuedEditing":true}));}
         if choice=="save"{
-            let result=self.dispatch(if pending.sync{"sync.save"}else{"settings.save"},json!({}));
+            let result=self.dispatch(if pending.info{"device.info.save"}else if pending.sync{"sync.save"}else{"settings.save"},json!({}));
             if result["ok"]!=true{return Err(result["error"].as_str().unwrap_or("保存失败").into());}
         }
         let result=self.dispatch(&pending.action,pending.args);

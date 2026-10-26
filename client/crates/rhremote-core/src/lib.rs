@@ -10,6 +10,7 @@ use std::{
 mod global_settings;
 mod interaction;
 mod add_device;
+mod device_info;
 pub mod sync_model;
 pub mod network;
 
@@ -174,6 +175,7 @@ pub struct State {
     pub selected: String,
     pub device_query: String,
     pub add: add_device::AddState,
+    pub info_draft: Option<device_info::InfoDraft>,
     pub draft: Option<Profile>,
     pub draft_display_name: String,
     pub draft_address: String,
@@ -303,6 +305,7 @@ impl Controller {
                 selected: String::new(),
                 device_query: String::new(),
                 add: add_device::AddState::default(),
+                info_draft: None,
                 draft: None,
                 draft_display_name: String::new(),
                 draft_address: String::new(),
@@ -362,9 +365,10 @@ impl Controller {
         let s=self.state.lock().unwrap();
         let mut value = serde_json::to_value(&*s).unwrap();
         value["settingsDirty"]=json!(interaction::dirty(&s));
+        value["infoDirty"]=json!(device_info::dirty(&s));
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
         value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
-        value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
+        value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
         drop(s);
         // Read progress without taking the updater's network/installation lock.
         if let Some(updates) = self.platform.update_state() { value["updates"] = updates; }
@@ -512,6 +516,8 @@ impl Controller {
             let result=self.dispatch(action,if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
         } else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
             self.dispatch_add(id,args)
+        } else if id.starts_with("device.info.") {
+            self.dispatch_info(id,args)
         } else if id.starts_with("updates.") {
             self.dispatch_update(id)
         } else if id.starts_with("sync.") || id.starts_with("app.settings.") {
@@ -525,6 +531,7 @@ impl Controller {
         };
         let mut s = self.state.lock().unwrap();
         if response["ok"]!=true && id.starts_with("device.add.") && s.page=="add" && !s.add.busy(){s.add.error=response["error"].as_str().unwrap_or("添加设备失败").into();}
+        if response["ok"]!=true && id.starts_with("device.info."){if let Some(d)=s.info_draft.as_mut(){d.error=response["error"].as_str().unwrap_or("设备名称保存失败").into();}}
         if response["ok"]!=true && id.starts_with("settings."){s.settings_error=response["error"].as_str().unwrap_or("设置修改失败").into();}
         s.last_action = response.clone();
         s.revision += 1;

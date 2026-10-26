@@ -64,8 +64,9 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "sync.resolve" => json!({"resolution":arg}),
         "settings.copy_from" => json!({"clientId":arg}),
         "settings.save" => json!({}),
-        "device.connect" | "device.pair" | "device.settings.open" | "device.select" => json!({"uuid":arg}),
+        "device.connect" | "device.pair" | "device.settings.open" | "device.info.open" | "device.select" => json!({"uuid":arg}),
         "devices.filter" => json!({"query":arg}),
+        "device.info.input"=>json!({"displayName":arg}),
         "device.add.submit" | "device.add.input" => json!({"address":arg}),
         "settings.route.move" => {let (route,direction)=arg.split_once('|').unwrap_or(("",""));json!({"route":route,"direction":direction})},
         "settings.route.toggle" => json!({"route":arg}),
@@ -304,7 +305,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
         if next!=revision {
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"]==true);ui.set_trace_path(state["statistics"]["tracing"]["latest"].as_str().unwrap_or("").into());
-            revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
+            revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_info_name(state["infoDraft"]["displayName"].as_str().unwrap_or("").into());ui.set_info_error(state["infoDraft"]["error"].as_str().unwrap_or("").into());ui.set_info_dirty(state["infoDirty"]==true);ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
             ui.set_settings_dirty(state["settingsDirty"]==true);ui.set_settings_error(state["settingsError"].as_str().unwrap_or("").into());if !ui.get_navigation_prompt()&&state["navigationPrompt"].is_object(){ui.set_navigation_choice(0);}ui.set_navigation_prompt(state["navigationPrompt"].is_object());ui.set_navigation_message(state["navigationPrompt"]["message"].as_str().unwrap_or("").into());
             let sync_form=if state["syncDraft"].is_object(){&state["syncDraft"]}else{&state["sync"]};ui.set_sync_generation(state["syncGeneration"].as_u64().unwrap_or(0) as i32);ui.set_sync_dirty(state["syncDirty"]==true);ui.set_sync_error(state["syncError"].as_str().unwrap_or("").into());
             ui.set_add_address(state["add"]["address"].as_str().unwrap_or("").into());ui.set_add_phase(state["add"]["phase"].as_str().unwrap_or("editing").into());ui.set_add_error(state["add"]["error"].as_str().unwrap_or("").into());
@@ -409,22 +410,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(move || {
         let mut last_attempt = 0u64;
         loop {
-            let state = automatic.state();
             let now = rhremote_core::now_ms();
-            if state["sync"]["automatic"] == true
-                && state["syncBusy"] != true
-                && state["draft"].is_null()
-                && state["syncDirty"] != true
-                && state["navigationPrompt"].is_null()
-                && state["sync"]["conflicts"]
-                    .as_array()
-                    .is_none_or(|a| a.is_empty())
-                && now.saturating_sub(
-                    last_attempt.max(state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)),
-                ) >= state["sync"]["intervalMinutes"].as_u64().unwrap_or(5) * 60_000
-            {
-                last_attempt = now;
-                automatic.dispatch("sync.run", json!({}));
+            if automatic.automatic_sync_due(now,last_attempt) {
+                let result=automatic.dispatch("sync.run",json!({"automatic":true}));
+                if result["result"]["skipped"]!=true{last_attempt=now;}
             }
             std::thread::sleep(Duration::from_secs(15));
         }

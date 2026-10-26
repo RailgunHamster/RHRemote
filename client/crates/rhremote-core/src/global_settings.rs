@@ -2,6 +2,12 @@ use crate::{Controller, now_ms, sync_model};
 use serde_json::{Value, json};
 
 impl Controller {
+    pub fn automatic_sync_due(&self,now:u64,last_attempt:u64)->bool{
+        let s=self.state.lock().unwrap();
+        s.sync["automatic"]==true && !crate::interaction::automatic_sync_blocked(&s)
+            && s.sync["conflicts"].as_array().is_none_or(|a|a.is_empty())
+            && now.saturating_sub(last_attempt.max(s.sync["lastSyncMs"].as_u64().unwrap_or(0)))>=s.sync["intervalMinutes"].as_u64().unwrap_or(5)*60_000
+    }
     pub(crate) fn dispatch_update(&self, id: &str) -> Result<Value, String> {
         if id == "updates.state" { return Ok(self.state()["updates"].clone()); }
         let mut s = self.state.lock().unwrap();
@@ -58,6 +64,7 @@ impl Controller {
         }
         let mut s = self.state.lock().unwrap();
         if id=="sync.state" {return Ok(s.sync.clone());}
+        if id=="sync.run" && args["automatic"]==true && (crate::interaction::automatic_sync_blocked(&s)||s.sync["automatic"]!=true){return Ok(json!({"skipped":true}));}
         if s.sync_busy {
             return Err("同步操作正在进行".into());
         }

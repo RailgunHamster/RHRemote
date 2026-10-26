@@ -75,6 +75,7 @@ impl Controller {
                 | "app.settings.open"
                 | "app.settings.tab"
                 | "device.settings.open"
+                | "device.info.open"
                 | "window.close"
         ) {
             s.add.cancel.take().unwrap().store(true, Ordering::SeqCst);

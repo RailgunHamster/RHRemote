@@ -47,3 +47,19 @@ fn add_form_exposes_waiting_and_cancel_states_without_duplicate_submission(){
     }
     ui.hide().unwrap();
 }
+
+#[test]
+fn device_identity_has_its_own_editor_and_fixed_completion_controls(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("device-info".into());ui.set_info_name("工作机".into());ui.set_selected_uuid("host".into());
+    ui.set_selected_device(crate::DeviceRow{host_name:"winserver".into(),..Default::default()});
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_info_error("名称保存失败，请检查后重试".into());
+        let done=ElementHandle::find_by_accessible_label(&ui,"完成").next().unwrap();let p=done.absolute_position();let size=done.size();assert!(p.y>=height-100.&&p.y+size.height<=height&&p.x+size.width<=width);
+        received.borrow_mut().clear();click(&ui,"恢复原名");click(&ui,"取消");click(&ui,"完成");
+        assert_eq!(received.borrow().iter().map(|(id,_)|id.as_str()).collect::<Vec<_>>(),["device.info.reset","device.info.cancel","device.info.save"]);
+        received.borrow_mut().clear();click(&ui,"设备名称");ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
+        assert_eq!(received.borrow().iter().filter(|(id,_)|id=="device.info.save").count(),1);
+    }
+    ui.hide().unwrap();
+}
