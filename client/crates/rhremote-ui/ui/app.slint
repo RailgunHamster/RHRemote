@@ -245,6 +245,7 @@ export component MainWindow inherits Window {
     in property <bool> updates-pending;
     in property <string> update-version;
     in property <string> update-status;
+    in property <bool> update-details;
     in property <string> update-primary-text:"检查更新";
     in property <string> update-phase;
     in property <int> update-progress;
@@ -545,14 +546,12 @@ export component MainWindow inherits Window {
                             Text{text:"RHRemote-Moonlight "+root.app-version;color:Palette.ink;font-size:18px;}
                             Text{text:root.updates-managed ? "自动检查更新 · GitHub / Gitee" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
                             if root.updates-available: Text{text:"可用版本："+root.update-version;color:Palette.ink;}
-                            HorizontalLayout{spacing:10px;
-                                ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || ((root.updates-available || root.updates-pending) && (root.streaming || root.connecting));}
-                                Rectangle{horizontal-stretch:1;}
-                            }
                             if root.updates-busy: Rectangle {height:4px;background:Palette.line;border-radius:2px;
                                 Rectangle {height:parent.height;width:parent.width * (root.update-phase=="downloading" ? root.update-progress / 100 : 0.12);background:Palette.blue;border-radius:2px;}
                             }
-                            Text{text:root.update-status;color:root.update-phase=="error" ? #b04452 : Palette.muted;wrap:word-wrap;font-size:12px;}
+                            Text{text:root.update-phase=="error" ? "更新失败，请重试。" : root.update-status;color:root.update-phase=="error" ? #b04452 : Palette.muted;wrap:word-wrap;font-size:14px;}
+                            if root.update-phase=="error":HorizontalLayout{ActionButton{text:root.update-details ? "收起详情" : "查看详情";action-id:"updates.details.toggle";chosen:root.update-details;}Rectangle{horizontal-stretch:1;}}
+                            if root.update-phase=="error" && root.update-details:Text{text:root.update-status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                             Text{text:root.streaming || root.connecting ? "请先断开远程连接再安装更新。" : "安装时会重启 RHRemote。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
                         if root.settings-tab=="about": VerticalLayout{spacing:14px;
@@ -613,6 +612,13 @@ export component MainWindow inherits Window {
                     Rectangle {min-height:12px;vertical-stretch:1;}
 
             Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
+                }
+            }
+            if root.page=="global-settings" && root.settings-tab=="updates":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:update-footer.preferred-height;
+                Rectangle{x:0px;y:0px;width:parent.width;height:1px;background:Palette.line;}
+                update-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
+                    Rectangle{horizontal-stretch:1;}
+                    ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || ((root.updates-available || root.updates-pending) && (root.streaming || root.connecting));}
                 }
             }
             if root.page=="connection":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:connection-footer.preferred-height;

@@ -38,7 +38,9 @@ public final class RhHomeBoundsDeviceTest {
     private int checkNavigation(View view,String destination){if(view.getVisibility()!=View.VISIBLE)return 0;int selected=0;if(view.getTag() instanceof String&&((String)view.getTag()).startsWith("nav:")){assertEquals("Navigation selection for "+view.getTag(),view.getTag().equals("nav:"+destination),view.isSelected());if(view.isSelected())selected++;}if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)selected+=checkNavigation(((ViewGroup)view).getChildAt(i),destination);return selected;}
     private void verify(){instrumentation.runOnMainSync(()->{View root=activity.findViewById(android.R.id.content);check(root);try{String page=home.state().getString("page");String destination=page.equals("global-settings")?"app.settings.open":page.equals("add")?"device.add.open":"devices.open";assertEquals("Exactly one visible navigation destination",1,checkNavigation(root,destination));}catch(Exception e){throw new RuntimeException(e);}});}
     @Test public void everyHomeAndSettingsButtonStaysInsideItsContainer()throws Exception {
-        Intent launch=new Intent().setClassName(instrumentation.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        // An external update-settings Activity can remain in the task. Force a fresh
+        // test-owned root, instead of waiting for onCreate on a reused Activity.
+        Intent launch=new Intent().setClassName(instrumentation.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TASK);
         activity=instrumentation.startActivitySync(launch);instrumentation.waitForIdleSync();
         Field field=activity.getClass().getDeclaredField("rhHome");field.setAccessible(true);home=(RhHome)field.get(activity);assertNotNull(home);
         JSONObject[] state=new JSONObject[1];instrumentation.runOnMainSync(()->{try{state[0]=home.state();}catch(Exception e){throw new RuntimeException(e);}});

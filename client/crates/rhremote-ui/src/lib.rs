@@ -185,7 +185,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // Network updates must not occupy the navigation/action queue.
             if id.starts_with("updates.") || matches!(id.as_str(),"sync.run"|"sync.resolve") {
                 let actions=actions.clone();
-                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true{actions.message(response["error"].as_str().unwrap_or("操作失败").into());}});
+                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true && !id.starts_with("updates."){actions.message(response["error"].as_str().unwrap_or("操作失败").into());}});
                 continue;
             }
             let response = actions.dispatch_timed(&id, args, Some(rhremote_core::ActionTiming{requested_at_us,queue_wait_us:queued.elapsed().as_micros()}));
@@ -303,6 +303,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_update_phase(state["updates"]["phase"].as_str().unwrap_or("").into());
         ui.set_update_progress(state["updates"]["progress"].as_i64().unwrap_or(0) as i32);
         ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
+        ui.set_update_details(state["updateDetails"]==true);
         if next!=revision {
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"]==true);ui.set_trace_path(state["statistics"]["tracing"]["latest"].as_str().unwrap_or("").into());
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_info_name(state["infoDraft"]["displayName"].as_str().unwrap_or("").into());ui.set_info_error(state["infoDraft"]["error"].as_str().unwrap_or("").into());ui.set_info_dirty(state["infoDirty"]==true);ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));

@@ -35,7 +35,7 @@ public final class RhConnectionFlowDeviceTest {
         List<Socket> held=Collections.synchronizedList(new ArrayList<>());
         try(ServerSocket listener=new ServerSocket(47989,4,InetAddress.getByName("127.0.0.1"))){
             Thread responder=new Thread(()->{try{while(!listener.isClosed())held.add(listener.accept());}catch(java.io.IOException stopped){}});responder.start();
-            activity=instrument.startActivitySync(new Intent().setClassName(instrument.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));instrument.waitForIdleSync();Field field=activity.getClass().getDeclaredField("rhHome");field.setAccessible(true);home=(RhHome)field.get(activity);
+            activity=instrument.startActivitySync(new Intent().setClassName(instrument.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TASK));instrument.waitForIdleSync();Field field=activity.getClass().getDeclaredField("rhHome");field.setAccessible(true);home=(RhHome)field.get(activity);
             JSONObject original=RhShared.read(activity);assertFalse(RhActions.hasStream());
             try{
                 ComputerDetails host=new ComputerDetails();host.uuid="ui-connection-loopback";host.name="连接流程验收";host.manualAddress=new ComputerDetails.AddressTuple("127.0.0.1",47989);host.activeAddress=host.manualAddress;host.state=ComputerDetails.State.ONLINE;

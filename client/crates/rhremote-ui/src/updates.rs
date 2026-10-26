@@ -25,6 +25,15 @@ struct Mirrors {
     live: Snapshot,
     preferred: String,
     selected: Mutex<String>,
+    test_base: Option<String>,
+}
+// Development fixtures cannot redirect the normal updater to a remote server.
+fn local_test_source(mode: &str, address: &str) -> Option<String> {
+    if mode!="1" {return None;}
+    let url=url::Url::parse(address).ok()?;
+    if url.scheme()!="http" || !matches!(url.host_str(),Some("127.0.0.1"|"[::1]")) || url.port().is_none_or(|p|p<=1024)
+        || !url.username().is_empty() || url.password().is_some() || url.path()!="/" || url.query().is_some() || url.fragment().is_some() {return None;}
+    Some(url.to_string())
 }
 impl Mirrors {
     fn providers(&self) -> [&str; 2] {
@@ -41,6 +50,9 @@ impl Mirrors {
             format!("{GITEE}latest/{name}")
         }
     }
+    fn feed_address(&self,provider:&str,name:&str)->String {
+        self.test_base.as_ref().map(|base|format!("{base}{provider}/{name}")).unwrap_or_else(||Self::feed(provider,name))
+    }
     fn asset(provider: &str, asset: &VelopackAsset) -> Result<String, Error> {
         filename(&asset.Version)?;
         filename(&asset.FileName)?;
@@ -53,6 +65,10 @@ impl Mirrors {
         } else {
             format!("{GITEE}v{}/{name}", asset.Version, name = asset.FileName)
         })
+    }
+    fn asset_address(&self,provider:&str,asset:&VelopackAsset)->Result<String,Error> {
+        let normal=Self::asset(provider,asset)?;
+        Ok(self.test_base.as_ref().map(|base|format!("{base}{provider}/{}",asset.FileName)).unwrap_or(normal))
     }
 }
 impl UpdateSource for Mirrors {
@@ -67,7 +83,7 @@ impl UpdateSource for Mirrors {
         for provider in self.providers() {
             { let mut live=self.live.lock().unwrap(); live["provider"]=json!(provider); live["status"]=json!(format!("正在从 {} 检查更新",provider)); }
             let result = (|| {
-                let response = ureq::get(&Self::feed(provider, &name))
+                let response = ureq::get(&self.feed_address(provider, &name))
                     .timeout(Duration::from_secs(15))
                     .call()
                     .map_err(|_| ())?;
@@ -106,7 +122,7 @@ impl UpdateSource for Mirrors {
         };
         for provider in providers {
             self.live.lock().unwrap()["provider"]=json!(provider);
-            let address = Self::asset(provider, asset)?;
+            let address = self.asset_address(provider, asset)?;
             let result = (|| -> Result<(), Error> {
                 let response = ureq::get(&address)
                     .timeout(Duration::from_secs(180))
@@ -148,7 +164,7 @@ impl Updates {
     pub fn new() -> Self {
         let live=Arc::new(Mutex::new(json!({"phase":"idle","status":"尚未检查更新","progress":0,"provider":""})));
         let value=Self {
-            manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new())},None,None).ok(),
+            manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new()),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
             available:None,live,
         };
         value.refresh();value
@@ -221,6 +237,11 @@ pub fn primary_label(state:&Value,busy:bool)->String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn update_fixture_requires_explicit_test_mode_and_a_plain_loopback_origin(){
+        assert_eq!(local_test_source("1","http://127.0.0.1:48766/"),Some("http://127.0.0.1:48766/".into()));
+        for (mode,url) in [("","http://127.0.0.1:48766/"),("1","https://example.com/"),("1","http://192.168.0.104:48766/"),("1","http://127.0.0.1:80/"),("1","http://u:p@127.0.0.1:48766/"),("1","http://127.0.0.1:48766/path"),("1","http://127.0.0.1:48766/?x=y")] {assert!(local_test_source(mode,url).is_none(),"{mode} {url}");}
+    }
     #[test]
     fn primary_label_follows_state_without_exposing_internal_steps(){
         assert_eq!(primary_label(&json!({}),false),"检查更新");

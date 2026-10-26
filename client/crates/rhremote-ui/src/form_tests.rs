@@ -77,3 +77,16 @@ fn connection_footer_stays_reachable_and_only_exposes_actions_for_the_current_st
         received.borrow_mut().clear();click(&ui,"重试连接");click(&ui,"返回设备");assert_eq!(&*received.borrow(),&["connection.retry","connection.dismiss"]);
     }ui.hide().unwrap();
 }
+
+#[test]
+fn the_single_update_action_remains_visible_when_failure_details_are_long(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("updates".into());ui.set_updates_managed(true);ui.set_update_phase("error".into());ui.set_update_status("Gitee / GitHub：请求超时。".repeat(100).into());ui.set_update_primary_text("重新检查".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_update_details(true);
+        let button=ElementHandle::find_by_accessible_label(&ui,"重新检查").next().unwrap();let p=button.absolute_position();let size=button.size();assert!(p.y>=height-100.&&p.y+size.height<=height&&p.x+size.width<=width);
+        received.borrow_mut().clear();click(&ui,"重新检查");assert_eq!(&*received.borrow(),&["updates.primary"]);
+        ui.set_update_details(false);received.borrow_mut().clear();click(&ui,"查看详情");assert_eq!(&*received.borrow(),&["updates.details.toggle"]);
+        ui.set_updates_busy(true);received.borrow_mut().clear();click(&ui,"重新检查");assert!(received.borrow().is_empty());ui.set_updates_busy(false);
+    }ui.hide().unwrap();
+}

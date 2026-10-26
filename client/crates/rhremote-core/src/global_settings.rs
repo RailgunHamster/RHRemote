@@ -11,6 +11,10 @@ impl Controller {
     pub(crate) fn dispatch_update(&self, id: &str) -> Result<Value, String> {
         if id == "updates.state" { return Ok(self.state()["updates"].clone()); }
         let mut s = self.state.lock().unwrap();
+        if id=="updates.details.toggle" {
+            if s.page!="global-settings" || s.settings_tab!="updates" {return Err("请先打开更新页".into());}
+            s.update_details=!s.update_details;s.revision+=1;return Ok(json!({"expanded":s.update_details}));
+        }
         if s.updates_busy {
             return Err("更新操作正在进行".into());
         }
@@ -21,6 +25,7 @@ impl Controller {
             return Err("请先断开远程连接".into());
         }
         s.updates_busy = true;
+        s.update_details = false;
         s.installing_update = id == "updates.install";
         s.updates["phase"] = json!(if id == "updates.check" { "checking" } else { "preparing" });
         s.updates["status"] = json!(if id == "updates.check" { "正在检查更新" } else { "正在准备更新" });
@@ -34,7 +39,6 @@ impl Controller {
         let result = match result {
             Ok(v) => v,
             Err(e) => {
-                s.status = e.clone();
                 s.updates["phase"] = json!("error");
                 s.updates["status"] = json!(e);
                 return Err(e);
@@ -223,6 +227,18 @@ mod interaction_tests {
         assert_eq!(c.dispatch("updates.state",json!({}))["ok"],true);assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],false);
         assert_eq!(c.dispatch("app.settings.tab",json!({"tab":"about"}))["ok"],true);
         let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn update_details_are_a_page_action_and_do_not_start_another_job(){
+        let platform=Arc::new(Updates::default());let c=controller(platform.clone());
+        assert_eq!(c.dispatch("updates.details.toggle",json!({}))["ok"],false);c.dispatch("app.settings.tab",json!({"tab":"updates"}));
+        assert_eq!(c.dispatch("updates.details.toggle",json!({}))["ok"],true);assert_eq!(c.state()["updateDetails"],true);
+        c.state.lock().unwrap().updates_busy=true;assert_eq!(c.dispatch("updates.details.toggle",json!({}))["ok"],true);assert_eq!(c.state()["updateDetails"],false);assert!(platform.calls.lock().unwrap().is_empty());
+        c.state.lock().unwrap().updates_busy=false;c.dispatch("updates.primary",json!({}));assert_eq!(c.state()["updateDetails"],false);assert_eq!(*platform.calls.lock().unwrap(),["updates.check"]);let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn a_background_update_error_does_not_replace_another_pages_message(){
+        let platform=Arc::new(Updates::default());let c=controller(platform.clone());c.dispatch("app.settings.tab",json!({"tab":"about"}));c.message("原页面提示".into());*platform.fail.lock().unwrap()=true;
+        assert_eq!(c.dispatch("updates.check",json!({}))["ok"],false);assert_eq!(c.state()["settingsTab"],"about");assert_eq!(c.state()["status"],"原页面提示");assert_eq!(c.state()["updates"]["phase"],"error");
+        c.dispatch("app.settings.tab",json!({"tab":"updates"}));assert_eq!(c.state()["updates"]["status"],"fixture network unavailable");let _=std::fs::remove_file(&c.storage);
     }
     #[test] fn slow_network_requests_do_not_serialize_state_and_navigation(){
         use std::{io::{Read,Write},net::{TcpListener,TcpStream},sync::mpsc,time::Duration};

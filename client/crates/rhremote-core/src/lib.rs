@@ -226,6 +226,7 @@ pub struct State {
     pub sync_generation: u64,
     pub sync_busy: bool,
     pub updates: Value,
+    pub update_details: bool,
     pub updates_busy: bool,
     #[serde(skip)]
     installing_update: bool,
@@ -354,6 +355,7 @@ impl Controller {
                     .execute("updates.state", &json!({}))
                     .unwrap_or(json!({})),
                 updates_busy: false,
+                update_details: false,
                 installing_update: false,
             }),
             storage,

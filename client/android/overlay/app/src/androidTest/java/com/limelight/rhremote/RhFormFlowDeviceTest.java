@@ -24,7 +24,7 @@ public class RhFormFlowDeviceTest {
     View control(String text,boolean editor){View v=find(activity.findViewById(android.R.id.content),text,editor);assertNotNull(text,v);return v;}
     void visibleOutsideScroll(View v){Rect rect=new Rect();assertTrue(v.getGlobalVisibleRect(rect));assertEquals(v.getHeight(),rect.height());for(android.view.ViewParent p=v.getParent();p instanceof View;p=p.getParent())assertFalse("Save bar must not scroll",p instanceof ScrollView);}
     @Test public void nativeFormsKeepPartialInputProtectNavigationAndKeepSaveReachable()throws Exception{
-        activity=instrument.startActivitySync(new Intent().setClassName(instrument.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));instrument.waitForIdleSync();
+        activity=instrument.startActivitySync(new Intent().setClassName(instrument.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TASK));instrument.waitForIdleSync();
         Field field=activity.getClass().getDeclaredField("rhHome");field.setAccessible(true);home=(RhHome)field.get(activity);
         String uuid=state().getJSONArray("devices").getJSONObject(0).getString("uuid");action("device.settings.open",RhActions.obj("uuid",uuid));
         JSONArray fields=RhSettings.catalog(activity);String label="";for(int i=0;i<fields.length();i++)if(fields.getJSONObject(i).getString("key").equals("width"))label=fields.getJSONObject(i).getString("label");final String widthLabel=label;

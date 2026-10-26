@@ -62,6 +62,7 @@ public class RhUpdatesTest {
         StringBuilder text=new StringBuilder();collect(activity.getWindow().getDecorView(),text);return text.toString();
     }
     private void collect(View view,StringBuilder text) {
+        if(view.getVisibility()!=View.VISIBLE)return;
         if(view instanceof TextView)text.append(((TextView)view).getText()).append('\n');
         if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)collect(((ViewGroup)view).getChildAt(i),text);
     }
@@ -85,6 +86,7 @@ public class RhUpdatesTest {
     }
     @Test public void unavailableFeedsKeepFailureOnTheUpdatePage()throws Exception {
         try{updates.check();fail("Unavailable feeds must fail");}catch(IOException expected){}
-        assertEquals(2,Requests.count);String text=page();assertTrue(text,text.contains("检查更新失败"));assertTrue(text,text.contains("Gitee IOException: HTTP 503"));assertTrue(text,text.contains("GitHub IOException: HTTP 503"));assertFalse(text,text.contains("null"));
+        assertEquals(2,Requests.count);String text=page();assertTrue(text,text.contains("更新失败，请重试。"));assertFalse(text,text.contains("Gitee IOException: HTTP 503"));
+        home.perform("updates.details.toggle",RhActions.obj());text=page();assertTrue(text,text.contains("Gitee IOException: HTTP 503"));assertTrue(text,text.contains("GitHub IOException: HTTP 503"));assertFalse(text,text.contains("null"));
     }
 }

@@ -8,6 +8,7 @@ import android.provider.Settings;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.TextView;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -169,9 +170,20 @@ public class RhUpdateInstallTest {
         assertFalse(RhActions.dispatch("updates.install",RhActions.obj()).getBoolean("ok"));home.rebind();assertTrue(home.state().getBoolean("updatesBusy"));
         Requests.release.countDown();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);assertNotNull(button(activity.getWindow().getDecorView(),"安装更新"));
     }
-    @Test public void updateFailureIsVisibleInThePageAndToast()throws Exception{
+    @Test public void updateFailureHasOneInlineStateAndExpandableDetails()throws Exception{
         page();Requests.corrupt=true;home.perform("updates.install",RhActions.obj());awaitUpdate();
-        JSONObject state=home.state().getJSONObject("updates");assertEquals("error",state.getString("phase"));assertTrue(state.getString("status").contains("校验失败"));assertTrue(ShadowToast.getTextOfLatestToast().contains("校验失败"));assertNull(next());
+        JSONObject state=home.state().getJSONObject("updates");assertEquals("error",state.getString("phase"));assertTrue(state.getString("status").contains("校验失败"));assertNull(ShadowToast.getTextOfLatestToast());assertNull(next());
+        View details=find(activity.getWindow().getDecorView(),"更新错误详情");assertNotNull(details);assertEquals(View.GONE,details.getVisibility());
+        Button primary=button(activity.getWindow().getDecorView(),"重试下载并安装");assertNotNull(primary);button(activity.getWindow().getDecorView(),"查看详情").performClick();assertEquals(View.VISIBLE,details.getVisibility());assertSame(primary,button(activity.getWindow().getDecorView(),"重试下载并安装"));
+        button(activity.getWindow().getDecorView(),"收起详情").performClick();assertEquals(View.GONE,details.getVisibility());assertEquals("",home.state().getString("status"));
+    }
+    private View find(View view,String description){if(description.equals(view.getContentDescription()))return view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){View found=find(((ViewGroup)view).getChildAt(i),description);if(found!=null)return found;}return null;}
+    @Test public void aLateUpdateFailureDoesNotNotifyOrChangeAnotherPage()throws Exception{
+        page();Requests.corrupt=true;Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);
+        button(activity.getWindow().getDecorView(),"下载并安装").performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
+        home.perform("app.settings.tab",RhActions.obj("tab","about"));Requests.release.countDown();awaitUpdate();
+        assertEquals("about",home.state().getString("settingsTab"));assertEquals("",home.state().getString("status"));assertNull(ShadowToast.getTextOfLatestToast());assertEquals("error",home.state().getJSONObject("updates").getString("phase"));
+        home.perform("app.settings.tab",RhActions.obj("tab","updates"));assertNotNull(button(activity.getWindow().getDecorView(),"重试下载并安装"));assertFalse(home.state().getBoolean("updateDetails"));
     }
     @Test public void onePrimaryButtonChecksBeforeOfferingDownloadAndInstall()throws Exception{
         home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
@@ -211,7 +223,8 @@ public class RhUpdateInstallTest {
         Requests.release.countDown();awaitUpdate();assertInstaller(next());
     }
     @Test public void missingInstallerHasAVisibleFailureInsteadOfSilentNoOp()throws Exception{
-        activity=Robolectric.buildActivity(NoInstaller.class).setup().get();page();home.perform("updates.install",RhActions.obj());awaitUpdate();assertTrue(home.state().getJSONObject("updates").getString("status").contains("系统安装界面未能打开"));assertNotNull(ShadowToast.getTextOfLatestToast());
+        activity=Robolectric.buildActivity(NoInstaller.class).setup().get();page();home.perform("updates.install",RhActions.obj());awaitUpdate();assertTrue(home.state().getJSONObject("updates").getString("status").contains("系统安装界面未能打开"));assertNull(ShadowToast.getTextOfLatestToast());
+        assertTrue(button(activity.getWindow().getDecorView(),"重试安装").isEnabled());button(activity.getWindow().getDecorView(),"查看详情").performClick();assertTrue(((TextView)find(activity.getWindow().getDecorView(),"更新错误详情")).getText().toString().contains("系统安装界面未能打开"));
     }
     @Test public void automaticDownloadDoesNotOpenPermissionsOrTheInstaller()throws Exception{
         manager.setCanRequestPackageInstalls(false);home=new RhHome(activity,CALLBACKS);
