@@ -8,6 +8,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.*;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -20,9 +21,12 @@ import java.util.*;
 
 /** Native RHRemote shell. Device browsing and session admission use the same action dispatcher. */
 public final class RhHome implements RhActions.Target {
+    private final RhBackNavigation systemBack;
     public interface Actions { void connect(ComputerDetails d); void add(String address); void advanced(); void pair(ComputerDetails d,String pin);void cancelPair();void refresh();
         default Runnable prepareConnect(ComputerDetails d,RhAdmission operation)throws Exception{return ()->connect(d);}
         default void setDiscoveryPaused(boolean paused){}
+        default ComputerDetails inspectAdd(String address,RhDeviceAdd operation)throws Exception{throw new java.io.IOException("设备查找暂不可用");}
+        default ComputerDetails commitAdd(ComputerDetails verified)throws Exception{return verified;}
     }
     private long lastSyncAttempt=0;private final Activity activity;private final Actions actions;
     private final LinearLayout root,content,bar,body,sidebar,compactHeader,formHeader,formFooter;private final TextView status;
@@ -38,7 +42,9 @@ public final class RhHome implements RhActions.Target {
     private final int page,surface,soft,ink,muted,line,blue,blueSoft,purple,purpleSoft,green;
     private boolean profileVisible;private String statusScope="";
     private String pageId="devices",settingsTab="updates",renderedProfileTab="";
-    private RhProfile draft;private ComputerDetails selected;private AlertDialog adding;
+    private RhProfile draft;private ComputerDetails selected;
+    private RhDeviceAdd addOperation;private String addAddress="",addError="";
+    private EditText addEditor;private Button addSubmit,addCancel;private TextView addFailure,addProgressText;private LinearLayout addProgress;
     private String draftDisplayName="",draftAddress="",draftAddresses="",draftRelay="";private EditText displayNameEditor,primaryEditor,backupEditor,relayEditor;
     private boolean networkBusy=false;
     private RhAdmission admission;
@@ -68,7 +74,7 @@ public final class RhHome implements RhActions.Target {
     private static final java.util.concurrent.ExecutorService NETWORK=java.util.concurrent.Executors.newFixedThreadPool(2);
     private static final java.util.concurrent.ExecutorService CONNECT=java.util.concurrent.Executors.newSingleThreadExecutor(task->new Thread(task,"RHRemote admission"));
     public RhHome(Activity a,Actions callbacks) {
-        activity=a;actions=callbacks;sync=new RhSync(a);updates=new RhUpdates(a);
+        activity=a;actions=callbacks;sync=new RhSync(a);updates=new RhUpdates(a);systemBack=new RhBackNavigation(a,this::goBack);
         boolean dark=RhShared.dark(a);
         page=c(dark?"#151b29":"#f6f7fa");surface=c(dark?"#1b2232":"#ffffff");soft=c(dark?"#202a3e":"#f8faff");
         ink=c(dark?"#e1e8f6":"#34415b");muted=c(dark?"#a4b1c8":"#69778e");line=c(dark?"#303c53":"#e5eaf4");
@@ -86,18 +92,18 @@ public final class RhHome implements RhActions.Target {
         compactHeader.addView(text("RHRemote",19,ink,true),new LinearLayout.LayoutParams(0,-1,1));compactHeader.addView(text("Moonlight",12,muted,false));root.addView(compactHeader,new LinearLayout.LayoutParams(-1,dp(64)));
         body=row();body.setGravity(Gravity.TOP);sidebar=column();sidebar.setPadding(dp(12),dp(16),dp(12),dp(16));sidebar.setBackground(bg(surface,line,0));body.addView(sidebar,new LinearLayout.LayoutParams(dp(72),-1));
         LinearLayout stage=column();formHeader=column();formHeader.setBackgroundColor(surface);formHeader.setVisibility(View.GONE);stage.addView(formHeader);workspace=new FrameLayout(a);
-        scroll=new ScrollView(a);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(pageId.equals("settings")||pageId.equals("global-settings"))formPadding(r-l);});
+        scroll=new ScrollView(a);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(pageId.equals("settings")||pageId.equals("global-settings")||pageId.equals("add"))formPadding(r-l);});
         content=column();content.setPadding(dp(24),dp(24),dp(24),dp(24));scroll.addView(content);
         workspace.addView(scroll,new FrameLayout.LayoutParams(-1,-1));browser=new RhDeviceBrowser(a,this::invoke);workspace.addView(browser,new FrameLayout.LayoutParams(-1,-1));stage.addView(workspace,new LinearLayout.LayoutParams(-1,0,1));formFooter=column();formFooter.setBackgroundColor(surface);formFooter.setVisibility(View.GONE);stage.addView(formFooter);
         status=text("",12,muted,false);status.setPadding(dp(16),dp(8),dp(16),dp(8));status.setVisibility(View.GONE);stage.addView(status);
         body.addView(stage,new LinearLayout.LayoutParams(0,-1,1));root.addView(body,new LinearLayout.LayoutParams(-1,0,1));
         bar=row();bar.setGravity(Gravity.CENTER);bar.setPadding(dp(12),dp(8),dp(12),dp(8));bar.setBackground(bg(surface,line,0));
         String[] navIds={"devices.open","device.add.open","app.settings.open"},navLabels={"设备","添加","设置"};
-        for(int i=0;i<navIds.length;i++){final String id=navIds[i];Button b=button(navLabels[i],false,()->invoke(id,RhActions.obj()));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);if(i>0)lp.setMarginStart(dp(8));bar.addView(b,lp);}root.addView(bar);
+        for(int i=0;i<navIds.length;i++){final String id=navIds[i];Button b=button(navLabels[i],false,()->invoke(id,RhActions.obj()));b.setTag("nav:"+id);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);if(i>0)lp.setMarginStart(dp(8));bar.addView(b,lp);}root.addView(bar);
         empty=new RelativeLayout(a); // Compatibility with the upstream activity's discovery placeholder.
         root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->applyShell(r-l-root.getPaddingLeft()-root.getPaddingRight()));
         a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();root.post(this::resumed);
-        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&!syncDirty()&&pendingNavigation==null&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(lastSyncAttempt,sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){lastSyncAttempt=System.currentTimeMillis();invoke("sync.run",RhActions.obj());}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updatesBusy&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
+        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(lastSyncAttempt,sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){lastSyncAttempt=System.currentTimeMillis();invoke("sync.run",RhActions.obj());}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updatesBusy&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
     }
     public RelativeLayout emptyView(){return empty;}
     private int c(String hex){return Color.parseColor(hex);}private int dp(float v){return Math.round(v*activity.getResources().getDisplayMetrics().density);}
@@ -111,15 +117,23 @@ public final class RhHome implements RhActions.Target {
     private void applyShell(int width){int bucket=width>=dp(1180)?2:width>=dp(840)?1:0;if(bucket==shellBucket)return;shellBucket=bucket;boolean wide=bucket>0;sidebar.setVisibility(wide?View.VISIBLE:View.GONE);compactHeader.setVisibility(wide?View.GONE:View.VISIBLE);bar.setVisibility(wide?View.GONE:View.VISIBLE);sidebar.getLayoutParams().width=dp(bucket==2?184:72);sidebar.removeAllViews();navigation.clear();
         LinearLayout brand=row();ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_icon);brand.addView(icon,new LinearLayout.LayoutParams(dp(32),dp(32)));if(bucket==2){LinearLayout names=column();names.setPadding(dp(10),0,0,0);names.addView(text("RHRemote",18,ink,true));names.addView(text("Moonlight",11,muted,false));brand.addView(names);}sidebar.addView(brand,new LinearLayout.LayoutParams(-1,dp(68)));
         nav("远程设备",R.drawable.rh_monitor,"devices.open",bucket==2);nav("添加电脑",R.drawable.rh_plus,"device.add.open",bucket==2);sidebar.addView(new View(activity),new LinearLayout.LayoutParams(-1,0,1));nav("设置",R.drawable.rh_settings,"app.settings.open",bucket==2);nav("主题",R.drawable.rh_moon,"appearance.toggle",bucket==2);if(bucket==2){TextView version=text("v"+com.limelight.BuildConfig.VERSION_NAME+"\nMoonlight · GPL v3",11,muted,false);version.setPadding(dp(10),dp(20),0,0);sidebar.addView(version);}content.setPadding(dp(wide?24:16),dp(24),dp(wide?24:16),dp(24));refreshNavigation();}
-    private void nav(String title,int icon,String id,boolean labels){LinearLayout item=row();item.setGravity(labels?Gravity.CENTER_VERTICAL:Gravity.CENTER);item.setPadding(dp(10),0,dp(10),0);ImageView image=new ImageView(activity);image.setImageResource(icon);image.setColorFilter(id.equals("devices.open")?blue:muted);item.addView(image,new LinearLayout.LayoutParams(dp(22),dp(22)));if(labels){TextView label=text(title,14,ink,false);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMarginStart(dp(12));item.addView(label,p);}item.setContentDescription(title);item.setFocusable(true);item.setOnClickListener(v->invoke(id,RhActions.obj()));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));p.bottomMargin=dp(8);sidebar.addView(item,p);navigation.put(id,item);}
-    private void refreshNavigation(){if(!statusScope.equals(pageId+(pageId.equals("global-settings")?"/"+settingsTab:"")))status.setVisibility(View.GONE);for(Map.Entry<String,View> item:navigation.entrySet()){boolean chosen=item.getKey().equals("devices.open")&&!pageId.equals("global-settings")||item.getKey().equals("app.settings.open")&&pageId.equals("global-settings");item.getValue().setBackground(bg(chosen?blueSoft:surface,0,8));}}
+    private void nav(String title,int icon,String id,boolean labels){LinearLayout item=row();item.setGravity(labels?Gravity.CENTER_VERTICAL:Gravity.CENTER);item.setPadding(dp(10),0,dp(10),0);ImageView image=new ImageView(activity);image.setImageResource(icon);image.setColorFilter(id.equals("devices.open")?blue:muted);item.addView(image,new LinearLayout.LayoutParams(dp(22),dp(22)));if(labels){TextView label=text(title,14,ink,false);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMarginStart(dp(12));item.addView(label,p);}item.setContentDescription(title);item.setTag("nav:"+id);item.setFocusable(true);item.setOnClickListener(v->invoke(id,RhActions.obj()));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));p.bottomMargin=dp(8);sidebar.addView(item,p);navigation.put(id,item);}
+    private void refreshNavigation(){
+        if(!statusScope.equals(pageId+(pageId.equals("global-settings")?"/"+settingsTab:"")))status.setVisibility(View.GONE);
+        String destination=pageId.equals("global-settings")?"app.settings.open":pageId.equals("add")?"device.add.open":"devices.open";
+        for(Map.Entry<String,View> item:navigation.entrySet()){
+            boolean chosen=item.getKey().equals(destination);View view=item.getValue();view.setSelected(chosen);view.setBackground(bg(chosen?blueSoft:surface,0,8));
+            ViewGroup row=(ViewGroup)view;for(int i=0;i<row.getChildCount();i++){View child=row.getChildAt(i);if(child instanceof ImageView)((ImageView)child).setColorFilter(chosen?blue:muted);else if(child instanceof TextView)((TextView)child).setTextColor(chosen?blue:ink);}
+        }
+        for(int i=0;i<bar.getChildCount();i++){View child=bar.getChildAt(i);if(child instanceof Button){boolean chosen=("nav:"+destination).equals(child.getTag());child.setSelected(chosen);((Button)child).setTextColor(chosen?blue:muted);child.setBackground(bg(chosen?blueSoft:surface,chosen?0:line,8));}}
+    }
     private void showContent(){browser.setVisibility(View.GONE);scroll.setVisibility(View.VISIBLE);formHeader.setVisibility(View.GONE);formFooter.setVisibility(View.GONE);scroll.setBackgroundColor(surface);content.setBackgroundColor(surface);refreshNavigation();}
     private void heading(String title,String sub){TextView h=text(title,26,ink,true);h.setPadding(0,0,0,dp(18));content.addView(h);if(!sub.isEmpty()){TextView s=text(sub,13,muted,false);s.setPadding(0,0,0,dp(20));content.addView(s);}}
     public void update(ComputerDetails d){String signature=d.name+"|"+d.state+"|"+d.pairState+"|"+RhProfile.load(activity,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&!signature.equals(old))renderDevices(false);}
-    public void message(String value){statusScope=pageId+(pageId.equals("global-settings")?"/"+settingsTab:"");if(draft!=null&&!formError.isEmpty()&&formError.equals(value)||syncDraft!=null&&!syncError.isEmpty()&&syncError.equals(value))value="";status.setText(value==null?"":value);status.setVisibility(value==null||value.isEmpty()?View.GONE:View.VISIBLE);}
-    public boolean goBack(){if(pendingNavigation!=null){invoke("navigation.resolve",RhActions.obj("choice","stay"));return true;}if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(profileVisible){invoke("navigation.back",RhActions.obj());return true;}if(browser.isDetailOpen()){browser.showDetail(false);return true;}return false;}
-    public void dispose(){if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();updateUi.removeCallbacks(updateTick);}
-    public void rebind(){activity.setContentView(root);ViewCompat.requestApplyInsets(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(draft!=null)showProfile(selected,draft);else renderDevices(false);if(pendingNavigation!=null)showNavigationPrompt();}
+    public void message(String value){statusScope=pageId+(pageId.equals("global-settings")?"/"+settingsTab:"");if(draft!=null&&!formError.isEmpty()&&formError.equals(value)||syncDraft!=null&&!syncError.isEmpty()&&syncError.equals(value)||pageId.equals("add")&&!addError.isEmpty()&&addError.equals(value))value="";status.setText(value==null?"":value);status.setVisibility(value==null||value.isEmpty()?View.GONE:View.VISIBLE);}
+    public boolean goBack(){if(pendingNavigation!=null){invoke("navigation.resolve",RhActions.obj("choice","stay"));return true;}if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(pageId.equals("add")){invoke("device.add.cancel",RhActions.obj());return true;}if(profileVisible||pageId.equals("global-settings")){invoke("navigation.back",RhActions.obj());return true;}if(browser.isDetailOpen()){browser.showDetail(false);return true;}return false;}
+    public void dispose(){systemBack.close();if(addOperation!=null){RhDeviceAdd retired=addOperation;addOperation=null;retired.cancel();}if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();updateUi.removeCallbacks(updateTick);}
+    public void rebind(){activity.setContentView(root);ViewCompat.requestApplyInsets(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("global-settings"))showGlobal();else if(draft!=null)showProfile(selected,draft);else if(pageId.equals("add"))showAdd();else renderDevices(false);if(pendingNavigation!=null)showNavigationPrompt();}
     public void resumed(){if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();}
     private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
     public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";discardDraft();selected=null;browser.showDetail(false);renderDevices(true);if(!RhActions.lastConnectionError().isEmpty())message(RhActions.lastConnectionError());}
@@ -203,7 +217,7 @@ public final class RhHome implements RhActions.Target {
         formErrorView=text("",13,c("#b04452"),false);formErrorView.setVisibility(View.GONE);formFooter.addView(formErrorView);
         LinearLayout end=row();formNotice=text("",12,muted,false);end.addView(formNotice,new LinearLayout.LayoutParams(0,-2,1));Button cancel=button("取消",false,()->invoke("settings.cancel",RhActions.obj()));end.addView(cancel);formSave=button("保存",true,()->invoke("settings.save",RhActions.obj()));LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(-2,dp(48));saveParams.setMarginStart(dp(8));end.addView(formSave,saveParams);formFooter.addView(end);refreshProfileFooter();
     }
-    private void watch(EditText edit,String action,String key){edit.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){}public void afterTextChanged(android.text.Editable value){if(!bindingProfile)invoke(action,RhActions.obj("key",key,"value",value.toString()));}});}
+    private void watch(EditText edit,String action,String key){edit.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){}public void afterTextChanged(android.text.Editable value){if(!bindingProfile)invoke(action,action.equals("device.add.input")?RhActions.obj("address",value.toString()):RhActions.obj("key",key,"value",value.toString()));}});}
     private String draftSnapshot(){
         if(draft==null)return "";try{
             org.json.JSONObject raw=new org.json.JSONObject(),values=draft.json();for(Map.Entry<String,String> input:numberInputs.entrySet())if(!input.getValue().trim().equals(String.valueOf(values.opt(input.getKey()))))raw.put(input.getKey(),input.getValue());
@@ -245,12 +259,43 @@ public final class RhHome implements RhActions.Target {
         if(choice.equals("save"))perform(next.optBoolean("sync")?"sync.save":"settings.save",RhActions.obj());else if(next.optBoolean("sync")){syncDraft=null;syncError="";}else returnToDevice();
         return perform(next.getString("id"),next.getJSONObject("args"));
     }
-    private void addDialog(){
-        LinearLayout form=column();form.setPadding(dp(20),dp(8),dp(20),dp(8));
-        TextView hint=text("IP 或主机名，支持局域网、Tailscale 和公网地址",13,muted,false);form.addView(hint);
-        EditText input=new EditText(activity);input.setSingleLine(true);input.setTextColor(ink);input.setTextSize(16);input.setHint("例如 192.168.0.104 或 100.x.x.x");input.setMinHeight(dp(52));form.addView(input);
-        adding=new AlertDialog.Builder(activity).setTitle("添加电脑").setView(form).setNegativeButton("取消",(d,w)->invoke("device.add.cancel",RhActions.obj())).setPositiveButton("添加",null).create();adding.show();
-        adding.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{String address=input.getText().toString().trim();try{RhNetwork.validate(address);}catch(java.io.IOException invalid){input.setError(invalid.getMessage());return;}invoke("device.add.submit",RhActions.obj("address",address));});
+    private boolean addingBusy(){return addOperation!=null;}
+    private void cancelAdding(){RhDeviceAdd retired=addOperation;addOperation=null;addAddress="";addError="";if(retired!=null)retired.cancel();}
+    private void showAdd(){
+        pageId="add";profileVisible=true;showContent();content.removeAllViews();formHeader.setVisibility(View.VISIBLE);formHeader.removeAllViews();
+        LinearLayout heading=row();heading.addView(text("添加电脑",24,ink,true),new LinearLayout.LayoutParams(0,dp(48),1));heading.addView(button("返回设备",false,()->invoke("device.add.cancel",RhActions.obj())));formHeader.addView(heading);
+        label("IP 或主机名，支持局域网、Tailscale 和公网地址");addEditor=field("设备地址",addAddress,false);addEditor.setHint("例如 192.168.0.104 或 100.x.x.x");watch(addEditor,"device.add.input","address");addEditor.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);addEditor.setOnEditorActionListener((view,action,event)->{invoke("device.add.submit",RhActions.obj());return true;});
+        addFailure=text(addError,13,Color.rgb(176,68,82),false);content.addView(addFailure);
+        addProgress=row();ProgressBar spinner=new ProgressBar(activity);spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(blue));addProgress.addView(spinner,new LinearLayout.LayoutParams(dp(28),dp(28)));addProgressText=text("",14,muted,false);LinearLayout.LayoutParams progressLabel=new LinearLayout.LayoutParams(-2,dp(48));progressLabel.setMarginStart(dp(12));addProgress.addView(addProgressText,progressLabel);content.addView(addProgress);
+        label("找到设备后会保存到远程设备列表，配对在设备详情中完成。");
+        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout footer=row();footer.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(48),1));addCancel=button("取消",false,()->invoke("device.add.cancel",RhActions.obj()));addSubmit=button("添加",true,()->invoke("device.add.submit",RhActions.obj()));footer.addView(addCancel);LinearLayout.LayoutParams submitLayout=new LinearLayout.LayoutParams(-2,dp(48));submitLayout.setMarginStart(dp(8));footer.addView(addSubmit,submitLayout);formFooter.addView(footer);formPadding(scroll.getWidth());refreshAdd();
+    }
+    private void refreshAdd(){
+        if(!pageId.equals("add")||addEditor==null)return;
+        boolean busy=addingBusy();
+        addEditor.setEnabled(!busy);if(!addEditor.getText().toString().equals(addAddress))addEditor.setText(addAddress);
+        addSubmit.setText(busy?"正在查找…":"添加");submitState(addSubmit,!busy&&!syncBusy&&!addAddress.trim().isEmpty());
+        addCancel.setEnabled(true);addCancel.setText("取消");
+        addFailure.setText(addError);addFailure.setVisibility(addError.isEmpty()?View.GONE:View.VISIBLE);
+        addProgress.setVisibility(busy||syncBusy?View.VISIBLE:View.GONE);addProgressText.setText(syncBusy&&!busy?"配置正在同步，完成后可添加设备。":"正在查找设备…");
+    }
+    private void beginAdd(org.json.JSONObject args)throws Exception{
+        if(!pageId.equals("add"))throw new IllegalStateException("请先打开添加电脑页面");
+        if(args.has("address"))addAddress=args.getString("address");
+        String address=addAddress.trim();try{RhNetwork.validate(address);if(RhNetwork.kind(address).equals("transport"))throw new java.io.IOException("这里填写 IP 或主机名；内置中继地址请在连接设置里配置");}catch(Exception invalid){addError=invalid.getMessage();refreshAdd();throw invalid;}
+        addError="";((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(addEditor.getWindowToken(),0);
+        addOperation=new RhDeviceAdd(activity,NETWORK,new RhDeviceAdd.Listener(){
+            public void changed(RhDeviceAdd operation){if(addOperation==operation)refreshAdd();}
+            public void finished(RhDeviceAdd operation,ComputerDetails found,String error){
+                if(addOperation!=operation)return;addOperation=null;if(activity.isDestroyed()||activity.isFinishing())return;
+                if(operation.cancelled()){addAddress="";addError="";showDevices();return;}
+                if(!error.isEmpty()){addError=error;refreshAdd();return;}
+                try{
+                    for(ComputerDetails known:computers.values())if(known.uuid.equalsIgnoreCase(found.uuid)){found.uuid=known.uuid;break;}
+                    boolean existed=computers.containsKey(found.uuid);ComputerDetails saved=RhShared.addDevice(activity,found,actions::commitAdd);update(saved);selected=null;browserUuid=saved.uuid;deviceQuery="";addAddress="";addError="";showDevices();browserUuid=saved.uuid;browser.showDetail(true);renderDevices(false);message(existed?"设备地址已保存":"设备已添加");
+                }catch(Exception failed){addError=failed.getMessage()==null?"保存设备失败":failed.getMessage();refreshAdd();}
+            }
+        });addOperation.start(operation->actions.inspectAdd(address,operation));
     }
     private static org.json.JSONArray splitAddresses(String text){org.json.JSONArray result=new org.json.JSONArray();for(String address:text.split("[,;，\n]"))if(!address.trim().isEmpty())result.put(address.trim());return result;}
     private void invoke(String id,org.json.JSONObject args){RhActions.click(id,args);}
@@ -258,11 +303,11 @@ public final class RhHome implements RhActions.Target {
     public org.json.JSONObject state()throws Exception{
         org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(activity,computers.values())){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
         org.json.JSONObject shared=RhShared.read(activity);
-        return RhActions.obj("deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
+        return RhActions.obj("deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?"probing":"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
         if(id.equals("navigation.resolve"))return resolveNavigation(args);
-        if(id.equals("navigation.back")){if(pendingNavigation!=null)return resolveNavigation(RhActions.obj("choice","stay"));if(draft!=null)return perform("device.select",RhActions.obj("uuid",selected.uuid));if(pageId.equals("devices")&&browser.isDetailOpen()){browser.showDetail(false);return RhActions.obj("accepted",true);}return perform("devices.open",RhActions.obj());}
+        if(id.equals("navigation.back")){if(pageId.equals("add"))return perform("device.add.cancel",RhActions.obj());if(pendingNavigation!=null)return resolveNavigation(RhActions.obj("choice","stay"));if(draft!=null)return perform("device.select",RhActions.obj("uuid",selected.uuid));if(pageId.equals("devices")&&browser.isDetailOpen()){browser.showDetail(false);return RhActions.obj("accepted",true);}return perform("devices.open",RhActions.obj());}
         if(pendingNavigation!=null&&!Arrays.asList("settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先处理未保存的更改");
         boolean leavingSync=Arrays.asList("devices.open","device.settings.open","device.add.open","device.select","device.connect","device.pair","appearance.toggle","sync.run","sync.resolve","updates.install").contains(id)||id.equals("app.settings.tab")&&!args.optString("tab").equals("sync")||id.equals("updates.primary")&&updates.primaryAction().equals("updates.install");
         if(syncDraft!=null&&leavingSync){
@@ -275,6 +320,13 @@ public final class RhHome implements RhActions.Target {
             returnToDevice();
         }
 
+        if(addingBusy()&&!Arrays.asList("device.add.cancel","settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id)){
+            if(id.equals("device.add.open"))return RhActions.obj("reused",true);
+            if(Arrays.asList("devices.open","device.select","app.settings.open","app.settings.tab","device.settings.open","appearance.toggle").contains(id)){
+                cancelAdding();return perform(id,args);
+            }
+            throw new IllegalStateException("正在查找设备，请先取消当前请求");
+        }
         if(syncBusy&&((id.startsWith("sync.")&&!id.equals("sync.state"))||id.equals("device.move")||id.equals("device.settings.open")||id.startsWith("settings.")||id.equals("appearance.toggle")||id.equals("device.add.submit")))throw new IllegalStateException("同步进行中，请稍后保存");
         if(pairing&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("appearance.toggle")))throw new IllegalStateException("请先取消当前配对");
         if(admission!=null&&id.equals("appearance.toggle"))throw new IllegalStateException("请先取消当前连接");
@@ -289,9 +341,10 @@ public final class RhHome implements RhActions.Target {
             case "settings.cancel":returnToDevice();break;
             case "devices.refresh":actions.refresh();break;
             case "device.move":if(!pageId.equals("devices"))throw new IllegalStateException("请先返回设备列表");RhShared.move(activity,computers.values(),args.getString("uuid"),args.getString("direction"));renderDevices(false);message("设备顺序已保存");break;
-            case "device.add.open":addDialog();break;
-            case "device.add.cancel":if(adding!=null)adding.dismiss();break;
-            case "device.add.submit":String address=args.getString("address");if(address.isEmpty())throw new IllegalArgumentException("address required");actions.add(address);if(adding!=null)adding.dismiss();break;
+            case "device.add.open":if(pairing||admission!=null)throw new IllegalStateException("请先完成或取消当前操作");if(!pageId.equals("add")){addAddress="";addError="";}showAdd();break;
+            case "device.add.cancel":cancelAdding();showDevices();break;
+            case "device.add.input":if(!pageId.equals("add"))throw new IllegalStateException("请先打开添加电脑页面");String addValue=args.getString("address");addAddress=addValue;addError="";message("");refreshAdd();break;
+            case "device.add.submit":beginAdd(args);break;
             case "device.settings.open":ComputerDetails d=computers.get(args.getString("uuid"));if(d==null)throw new IllegalArgumentException("unknown device");showProfile(d);break;
             case "settings.catalog":return RhActions.obj("fields",RhSettings.catalog(activity));
             case "settings.sources.toggle":if(draft==null)throw new IllegalStateException("open device settings first");profileSourcesExpanded=!profileSourcesExpanded;showProfile(selected,draft);break;
@@ -427,7 +480,7 @@ public final class RhHome implements RhActions.Target {
         formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setPadding(dp(20),dp(8),dp(20),dp(12));syncErrorView=text(syncError,13,android.graphics.Color.rgb(176,68,82),false);formFooter.addView(syncErrorView);
         LinearLayout footer=row();syncNotice=text("",12,muted,false);footer.addView(syncNotice,new LinearLayout.LayoutParams(0,dp(48),1));syncCancel=button("取消",false,()->invoke("sync.cancel",RhActions.obj()));syncSave=button("保存",true,()->invoke("sync.save",RhActions.obj()));footer.addView(syncCancel);LinearLayout.LayoutParams saveLayout=new LinearLayout.LayoutParams(-2,dp(48));saveLayout.setMarginStart(dp(8));footer.addView(syncSave,saveLayout);formFooter.addView(footer);formPadding(scroll.getWidth());refreshSyncFooter();
     }
-    private void startSync(String resolution)throws Exception{syncError="";org.json.JSONObject captured=RhShared.capture(activity,new ArrayList<>(computers.values()));syncBusy=true;message("同步中…");if(pageId.equals("global-settings")&&settingsTab.equals("sync"))showGlobal();NETWORK.execute(()->{try{org.json.JSONObject result=sync.run(captured,resolution);activity.runOnUiThread(()->{syncBusy=false;try{if(result.has("shared")){boolean before=RhShared.dark(activity);RhShared.apply(activity,result.getJSONObject("shared"));restoreSharedDevices();if(pageId.equals("devices")||pageId.equals("global-settings")&&settingsTab.equals("sync"))message("同步完成");if(before!=RhShared.dark(activity)){activity.recreate();return;}}else if(pageId.equals("global-settings")&&settingsTab.equals("sync"))message("配置冲突，请选择保留哪一端的冲突项");if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("devices"))renderDevices(false);}catch(Exception e){message("应用同步配置失败");}});}catch(Exception e){activity.runOnUiThread(()->{syncBusy=false;syncError=e instanceof java.io.IOException?e.getMessage():"同步失败，请检查 WebDAV 设置";if(pageId.equals("global-settings")&&settingsTab.equals("sync"))message(syncError);if(pageId.equals("global-settings"))showGlobal();});}});}
+    private void startSync(String resolution)throws Exception{syncError="";org.json.JSONObject captured=RhShared.capture(activity,new ArrayList<>(computers.values()));syncBusy=true;message("同步中…");if(pageId.equals("global-settings")&&settingsTab.equals("sync"))showGlobal();else if(pageId.equals("add"))refreshAdd();NETWORK.execute(()->{try{org.json.JSONObject result=sync.run(captured,resolution);activity.runOnUiThread(()->{syncBusy=false;try{if(result.has("shared")){boolean before=RhShared.dark(activity);RhShared.apply(activity,result.getJSONObject("shared"));restoreSharedDevices();if(pageId.equals("devices")||pageId.equals("global-settings")&&settingsTab.equals("sync"))message("同步完成");if(before!=RhShared.dark(activity)){activity.recreate();return;}}else if(pageId.equals("global-settings")&&settingsTab.equals("sync"))message("配置冲突，请选择保留哪一端的冲突项");if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("devices"))renderDevices(false);else if(pageId.equals("add"))refreshAdd();}catch(Exception e){message("应用同步配置失败");}});}catch(Exception e){activity.runOnUiThread(()->{syncBusy=false;syncError=e instanceof java.io.IOException?e.getMessage():"同步失败，请检查 WebDAV 设置";if(pageId.equals("global-settings")&&settingsTab.equals("sync"))message(syncError);if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("add"))refreshAdd();});}});}
     private void restoreSharedDevices(){try{org.json.JSONArray list=RhShared.read(activity).getJSONArray("devices");for(int i=0;i<list.length();i++){org.json.JSONObject d=list.getJSONObject(i);String uuid=d.getString("uuid");if(!computers.containsKey(uuid)){ComputerDetails added=new ComputerDetails();added.uuid=uuid;added.name=d.getString("name");added.manualAddress=new ComputerDetails.AddressTuple(d.getString("address"),47989);computers.put(uuid,added);}}}catch(Exception e){message("已同步的设备列表读取失败");}}
     private void showPair(){pageId="pair";profileVisible=true;showContent();content.removeAllViews();heading("配对","");label("在 Sunshine 输入配对码");TextView pin=text(pairPin,40,blue,true);content.addView(pin);content.addView(button("取消配对",false,()->invoke("pair.cancel",RhActions.obj())));}
     public void pairFinished(boolean success,String result){if(admission!=null){admission.pairFinished(result);return;}pairing=false;pairPin="";showDevices();message(result);}

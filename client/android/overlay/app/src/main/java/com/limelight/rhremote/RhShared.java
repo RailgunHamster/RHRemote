@@ -142,6 +142,23 @@ public final class RhShared {
         for(Map.Entry<String,JSONObject> d:devices.entrySet()){list.put(d.getValue());group.put(d.getKey(),RhProfile.load(c,d.getKey()).clientJson());}
         shared.put("devices",list);shared.getJSONObject("clients").put(clientId(c),clientInfo());shared.getJSONObject("profiles").put(clientId(c),group);shared.put("dark",dark(c));validate(shared);write(file(c),shared);return shared;
     }
+    public interface AddCommit {ComputerDetails save(ComputerDetails verified)throws Exception;}
+    /** Commit host facts before publishing the manager's local cache. Preserve aliases,
+     * endpoint priority, pairing pins and all client-specific profiles on re-add. */
+    public static synchronized ComputerDetails addDevice(Context c,ComputerDetails verified,AddCommit commit)throws Exception {
+        if(verified.manualAddress==null)throw new IOException("设备地址无效");
+        JSONObject before=read(c),next=new JSONObject(before.toString());JSONArray devices=next.getJSONArray("devices");JSONObject host=null;
+        for(int i=0;i<devices.length();i++)if(verified.uuid.equalsIgnoreCase(devices.getJSONObject(i).getString("uuid"))){host=devices.getJSONObject(i);verified.uuid=host.getString("uuid");break;}
+        if(host==null){host=metadata(verified,false,"");if(host==null)throw new IOException("设备地址无效");devices.put(host);}
+        else{
+            host.put("name",verified.name);java.util.List<String> addresses=RhNetwork.addresses(host);String entered=verified.manualAddress.address;
+            if(addresses.stream().noneMatch(a->a.equalsIgnoreCase(entered)))addresses.add(entered);
+            JSONArray extra=new JSONArray();for(String address:addresses)if(!address.equalsIgnoreCase(host.getString("address")))extra.put(address);host.put("addresses",extra);RhNetwork.addresses(host);
+        }
+        String client=clientId(c);next.getJSONObject("clients").put(client,clientInfo());JSONObject group=next.getJSONObject("profiles").optJSONObject(client);if(group==null){group=new JSONObject();next.getJSONObject("profiles").put(client,group);}if(!group.has(verified.uuid))group.put(verified.uuid,RhProfile.load(c,verified.uuid).clientJson());
+        validate(next);write(file(c),next);
+        try{return commit.save(verified);}catch(Exception failure){try{write(file(c),before);}catch(IOException restore){failure.addSuppressed(restore);}throw failure;}
+    }
     public static synchronized void saveAddresses(Context c,String uuid,String primary,JSONArray extra)throws Exception {
         JSONObject shared=read(c);JSONArray devices=shared.getJSONArray("devices");boolean found=false;
         JSONObject metadata=RhActions.obj("address",primary,"addresses",extra);List<String> all=RhNetwork.addresses(metadata);JSONArray normalized=new JSONArray();for(String address:all)if(!address.equalsIgnoreCase(primary))normalized.put(address);

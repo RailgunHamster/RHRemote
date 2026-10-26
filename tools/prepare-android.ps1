@@ -91,6 +91,18 @@ Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.ja
             }
 '@).Replace("`r`n","`n")
     $s=Replace-Once $s '        public void invalidateStateForComputer(String uuid) {' @'
+        public ComputerDetails saveRhAddedComputer(ComputerDetails verified) throws IOException {
+            if(verified==null||verified.uuid==null)throw new IOException("Missing device identity");
+            if(!getLocalDatabaseReference())throw new IOException("Connection manager unavailable");
+            try{
+                synchronized(pollingTuples){synchronized(rhPairingStoreLock){
+                    if(!com.limelight.rhremote.RhPairingStore.savePoll(dbManager,verified,true))throw new IOException("设备记录保存失败");
+                    addTuple(verified);
+                }}
+                ComputerManagerListener current=listener;if(current!=null)current.notifyComputerUpdated(new ComputerDetails(verified));
+                return new ComputerDetails(verified);
+            }finally{releaseLocalDatabaseReference();}
+        }
         public ComputerDetails saveRhPairing(ComputerDetails verified, java.security.cert.X509Certificate certificate) throws IOException {
             if (verified == null || verified.uuid == null) throw new IOException("Missing pairing identity");
             if (!getLocalDatabaseReference()) throw new IOException("Connection manager unavailable");
@@ -204,7 +216,9 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
             public Runnable prepareConnect(ComputerDetails d,com.limelight.rhremote.RhAdmission operation) throws Exception {
                 return prepareRhDesktop(d,operation);
             }
-            public void add(String address) { addRhComputer(address); }
+            public void add(String address) { throw new UnsupportedOperationException("Use the owned add operation"); }
+            public ComputerDetails inspectAdd(String address,com.limelight.rhremote.RhDeviceAdd operation)throws Exception {return inspectRhComputer(address,operation);}
+            public ComputerDetails commitAdd(ComputerDetails verified)throws Exception {if(managerBinder==null)throw new IOException("连接管理器尚未准备好");return managerBinder.saveRhAddedComputer(verified);}
             public void advanced() { startActivity(new Intent(PcView.this, StreamSettings.class)); }
             public void pair(ComputerDetails d,String pin) { startRhPair(d,pin); }
             public void cancelPair() { RhPairOperation operation=rhPairOperation;if(operation!=null)synchronized(operation){operation.cancelled=true;NvHTTP current=operation.http;if(current!=null)current.cancelRhPairing();} }
@@ -228,19 +242,21 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         if(rhHome != null && rhHome.goBack()) return;
         super.onBackPressed();
     }
-    private void addRhComputer(String address) {
-        if(managerBinder == null) { rhHome.message("连接管理器正在准备，请稍后重试。"); return; }
-        rhHome.message("正在添加 " + address);
-        new Thread(() -> {
-            try {
-                java.net.URI uri = new java.net.URI("http://" + address);
-                if(uri.getHost()==null || uri.getRawUserInfo()!=null || (uri.getPath()!=null && !uri.getPath().isEmpty())) throw new IOException("请输入电脑 IP 或主机名，可选端口。");
-                ComputerDetails d = new ComputerDetails();
-                d.manualAddress = new ComputerDetails.AddressTuple(uri.getHost(), uri.getPort()>0?uri.getPort():NvHTTP.DEFAULT_HTTP_PORT);
-                boolean added = managerBinder.addComputerBlocking(d);
-                runOnUiThread(() -> rhHome.message(added?"已添加电脑":"电脑不可达，请确认 Sunshine 已运行。"));
-            } catch(Exception e) { runOnUiThread(() -> rhHome.message("添加失败："+e.getMessage())); }
-        },"RHRemote Add").start();
+    private ComputerDetails inspectRhComputer(String address,com.limelight.rhremote.RhDeviceAdd operation)throws Exception {
+        final ComputerManagerService.ComputerManagerBinder binder=managerBinder;
+        if(binder==null)throw new IOException("连接管理器尚未准备好，请稍后重试");
+        com.limelight.rhremote.RhNetwork.validate(address);
+        String plain=address.startsWith("[")&&address.endsWith("]")?address.substring(1,address.length()-1):address;
+        ComputerDetails.AddressTuple tuple=new ComputerDetails.AddressTuple(plain,NvHTTP.DEFAULT_HTTP_PORT);
+        NvHTTP http=new NvHTTP(tuple,0,binder.getUniqueId(),null,PlatformBinding.getCryptoProvider(this));
+        try(com.limelight.rhremote.RhCancellation.Watch request=operation.watch(http::cancelRhRequests)){
+            operation.checkpoint();ComputerDetails found=http.getComputerDetails(false);operation.checkpoint();
+            found.manualAddress=tuple;found.activeAddress=tuple;found.state=ComputerDetails.State.ONLINE;
+            ComputerDetails previous=binder.getComputer(found.uuid);
+            found.serverCert=previous==null?null:previous.serverCert;
+            found.pairState=found.serverCert!=null?previous.pairState:PairState.NOT_PAIRED;
+            return found;
+        }
     }
     private static final class RhPairOperation {volatile NvHTTP http;volatile boolean cancelled;}
     private volatile RhPairOperation rhPairOperation;

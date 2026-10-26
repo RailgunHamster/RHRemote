@@ -34,3 +34,16 @@ fn settings_footer_remains_visible_with_long_content_and_disabled_save_cannot_su
     }
     ui.hide().unwrap();
 }
+#[test]
+fn add_form_exposes_waiting_and_cancel_states_without_duplicate_submission(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("add".into());ui.set_add_address("100.73.139.109".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move |id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_add_phase("editing".into());received.borrow_mut().clear();
+        let submit=ElementHandle::find_by_accessible_label(&ui,"添加").next().unwrap();let p=submit.absolute_position();let size=submit.size();assert!(p.y>=height-100.&&p.y+size.height<=height&&p.x+size.width<=width);
+        click(&ui,"添加");assert_eq!(&*received.borrow(),&[("device.add.submit".into(),"100.73.139.109".into())]);
+        ui.set_add_phase("probing".into());received.borrow_mut().clear();click(&ui,"正在查找…");assert!(received.borrow().is_empty());click(&ui,"取消");assert_eq!(received.borrow()[0].0,"device.add.cancel");
+        ui.set_add_phase("editing".into());ui.set_add_address("".into());received.borrow_mut().clear();click(&ui,"添加");assert!(received.borrow().is_empty());ui.set_add_address("100.73.139.109".into());
+    }
+    ui.hide().unwrap();
+}

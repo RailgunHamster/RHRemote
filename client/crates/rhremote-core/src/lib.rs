@@ -9,6 +9,7 @@ use std::{
 };
 mod global_settings;
 mod interaction;
+mod add_device;
 pub mod sync_model;
 pub mod network;
 
@@ -135,7 +136,7 @@ impl Profile {
         Ok(())
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Device {
     pub uuid: String,
@@ -172,6 +173,7 @@ pub struct State {
     pub page: String,
     pub selected: String,
     pub device_query: String,
+    pub add: add_device::AddState,
     pub draft: Option<Profile>,
     pub draft_display_name: String,
     pub draft_address: String,
@@ -245,11 +247,19 @@ pub trait Platform: Send + Sync {
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String>;
     fn connection_requested(&self, _timing: Option<ActionTiming>) {}
     fn update_state(&self) -> Option<Value> { None }
+    fn probe_device(&self,address:&str,cancel:Arc<std::sync::atomic::AtomicBool>)->Result<Device,String>{
+        if cancel.load(std::sync::atomic::Ordering::SeqCst){return Err("已取消添加".into());}
+        let value=self.execute("device.add.probe",&json!({"address":address}))?;
+        serde_json::from_value(value["device"].clone()).map_err(|_|"设备信息无效".into())
+    }
+    /// Local cache publication only; callers have already committed shared host facts.
+    fn added_device(&self,_device:&Device){}
 }
 pub struct Controller {
     state: Mutex<State>,
     storage: PathBuf,
     platform: Arc<dyn Platform>,
+    owner:std::sync::Weak<Controller>,
 }
 impl Controller {
     pub fn new(
@@ -284,7 +294,7 @@ impl Controller {
             });
             saved.device_order_initialized = true;
         }
-        let controller = Arc::new(Self {
+        let controller = Arc::new_cyclic(|owner|Self {
             state: Mutex::new(State {
                 platform: platform_name.into(),
                 devices: vec![],
@@ -292,6 +302,7 @@ impl Controller {
                 page: "devices".into(),
                 selected: String::new(),
                 device_query: String::new(),
+                add: add_device::AddState::default(),
                 draft: None,
                 draft_display_name: String::new(),
                 draft_address: String::new(),
@@ -341,6 +352,7 @@ impl Controller {
             }),
             storage,
             platform,
+            owner:owner.clone(),
         });
         // Persist the installation identity before the first sync, including on a fresh install.
         controller.persist(&controller.state.lock().unwrap().saved)?;
@@ -498,7 +510,9 @@ impl Controller {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
             let action=match page.as_str(){"decision"=>"navigation.resolve","add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
             let result=self.dispatch(action,if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
-        } else if let Some(result)=self.navigation_gate(id,&args) {result} else if id.starts_with("updates.") {
+        } else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
+            self.dispatch_add(id,args)
+        } else if id.starts_with("updates.") {
             self.dispatch_update(id)
         } else if id.starts_with("sync.") || id.starts_with("app.settings.") {
             self.dispatch_global(id, args)
@@ -510,6 +524,7 @@ impl Controller {
             Err(error) => json!({"ok":false,"action":id,"error":error}),
         };
         let mut s = self.state.lock().unwrap();
+        if response["ok"]!=true && id.starts_with("device.add.") && s.page=="add" && !s.add.busy(){s.add.error=response["error"].as_str().unwrap_or("添加设备失败").into();}
         if response["ok"]!=true && id.starts_with("settings."){s.settings_error=response["error"].as_str().unwrap_or("设置修改失败").into();}
         s.last_action = response.clone();
         s.revision += 1;
@@ -616,13 +631,9 @@ impl Controller {
                 drop(s);let result=self.platform.execute(id,&args)?;
                 let mut s=self.state.lock().unwrap();s.network=result.clone();s.revision+=1;return Ok(result);
             }
-            "devices.open" | "device.add.cancel" | "settings.cancel" => {
+            "devices.open" | "settings.cancel" => {
                 s.page = "devices".into();
                 interaction::clear(&mut s);
-            }
-            "device.add.open" => {
-                s.page = "add".into();
-                s.status.clear();
             }
             "device.settings.open" => {
                 let uuid = args["uuid"]
@@ -889,15 +900,6 @@ impl Controller {
                         s.page = "pair".into();
                     }
                 }
-                if id == "device.add.submit" {
-                    let address = args["address"]
-                        .as_str()
-                        .filter(|v| !v.trim().is_empty())
-                        .ok_or("address required")?;
-                    if address.contains(['/', '\\', '@', '\n', '\r']) {
-                        return Err("enter an IP address or hostname".into());
-                    }
-                }
                 drop(s);
                 if id == "device.connect" {
                     self.platform.connection_requested(timing);
@@ -925,7 +927,7 @@ impl Controller {
                 };
                 let mut s = self.state.lock().unwrap();
                 match id {
-                    "device.add.submit" | "devices.refresh" => {
+                    "devices.refresh" => {
                         if let Some(devices) = result.get("devices") {
                             s.devices = serde_json::from_value(devices.clone())
                                 .map_err(|e| e.to_string())?;
@@ -943,15 +945,6 @@ impl Controller {
                                     .position(|h| h.uuid == d.uuid)
                                     .unwrap_or(usize::MAX)
                             });
-                        }
-                        if id == "device.add.submit" {
-                            let mut next = s.saved.clone();
-                            next.devices = sync_model::from_state(&s).devices;
-                            self.persist(&next)?;
-                            s.saved = next;
-                        }
-                        if id == "device.add.submit" {
-                            s.page = "devices".into();
                         }
                     }
                     "device.connect" => {
@@ -1024,6 +1017,7 @@ pub fn start_http(
         .map_err(|e| e.to_string())?;
     Ok(std::thread::spawn(move || {
         let update_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sync_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
         for mut request in server.incoming_requests() {
             let authenticated = request.headers().iter().any(|h| {
                 h.field.equiv("Authorization") && h.value.as_str() == format!("Bearer {token}")
@@ -1057,11 +1051,12 @@ pub fn start_http(
                         Some(v) => {
                             let id = v["id"].as_str().unwrap_or("");
                             // Keep state/navigation HTTP calls responsive while a
-                            // synchronous update request waits on the mirrors.
-                            if matches!(id,"updates.primary"|"updates.check"|"updates.download"|"updates.install") {
+                            // synchronous update or sync request waits on its server.
+                            if matches!(id,"updates.primary"|"updates.check"|"updates.download"|"updates.install"|"sync.run"|"sync.resolve") {
                                 use std::sync::atomic::Ordering;
-                                if !update_request.swap(true,Ordering::AcqRel) {
-                                    let controller=controller.clone();let gate=update_request.clone();
+                                let operation=if id.starts_with("sync."){&sync_request}else{&update_request};
+                                if !operation.swap(true,Ordering::AcqRel) {
+                                    let controller=controller.clone();let gate=operation.clone();
                                     let id=id.to_owned();let args=v.get("args").cloned().unwrap_or(json!({}));
                                     std::thread::spawn(move||{
                                         struct Release(Arc<std::sync::atomic::AtomicBool>);
@@ -1076,7 +1071,7 @@ pub fn start_http(
                                     });
                                     continue;
                                 }
-                                (422,json!({"ok":false,"error":"更新操作正在进行","action":id}))
+                                (422,json!({"ok":false,"error":if id.starts_with("sync."){"同步操作正在进行"}else{"更新操作正在进行"},"action":id}))
                             } else {
                             let response = controller
                                 .dispatch(id, v.get("args").cloned().unwrap_or(json!({})));

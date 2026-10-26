@@ -35,7 +35,8 @@ public final class RhHomeBoundsDeviceTest {
         }
         if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)check(((ViewGroup)view).getChildAt(i));
     }
-    private void verify(){instrumentation.runOnMainSync(()->check(activity.findViewById(android.R.id.content)));}
+    private int checkNavigation(View view,String destination){if(view.getVisibility()!=View.VISIBLE)return 0;int selected=0;if(view.getTag() instanceof String&&((String)view.getTag()).startsWith("nav:")){assertEquals("Navigation selection for "+view.getTag(),view.getTag().equals("nav:"+destination),view.isSelected());if(view.isSelected())selected++;}if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)selected+=checkNavigation(((ViewGroup)view).getChildAt(i),destination);return selected;}
+    private void verify(){instrumentation.runOnMainSync(()->{View root=activity.findViewById(android.R.id.content);check(root);try{String page=home.state().getString("page");String destination=page.equals("global-settings")?"app.settings.open":page.equals("add")?"device.add.open":"devices.open";assertEquals("Exactly one visible navigation destination",1,checkNavigation(root,destination));}catch(Exception e){throw new RuntimeException(e);}});}
     @Test public void everyHomeAndSettingsButtonStaysInsideItsContainer()throws Exception {
         Intent launch=new Intent().setClassName(instrumentation.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         activity=instrumentation.startActivitySync(launch);instrumentation.waitForIdleSync();
@@ -44,6 +45,7 @@ public final class RhHomeBoundsDeviceTest {
         assertTrue("Configure at least one emulator device before this UI test",state[0].getJSONArray("devices").length()>0);
         String uuid=state[0].getJSONArray("devices").getJSONObject(0).getString("uuid");
         action("devices.open",RhActions.obj());verify();action("device.select",RhActions.obj("uuid",uuid));verify();
+        action("device.add.open",RhActions.obj());verify();action("device.add.cancel",RhActions.obj());
         for(String tab:new String[]{"updates","sync","appearance","about"}){action("app.settings.tab",RhActions.obj("tab",tab));verify();}
         action("device.settings.open",RhActions.obj("uuid",uuid));for(String tab:new String[]{"video","audio","input","network","advanced"}){action("settings.tab",RhActions.obj("tab",tab));verify();}
         action("settings.cancel",RhActions.obj());action("devices.filter",RhActions.obj("query","no-matching-device"));verify();action("devices.filter",RhActions.obj("query",""));action("device.select",RhActions.obj("uuid",uuid));

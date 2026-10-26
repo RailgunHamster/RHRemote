@@ -110,6 +110,27 @@ public class RhPairingPersistenceTest {
         }
         fail("Pair completion did not finish");
     }
+    @Test public void acceptedAddIsPersistedWithoutAnotherNetworkPoll()throws Exception{
+        Context context=RuntimeEnvironment.getApplication();ComputerDatabaseManager database=new ComputerDatabaseManager(context);ComputerDetails input=device();
+        try{ComputerManagerService service=service(database);ComputerManagerService.ComputerManagerBinder binder=ReflectionHelpers.getField(service,"binder");
+            binder.saveRhAddedComputer(input);assertNotNull(database.getComputerByUUID(input.uuid));assertNotNull(binder.getComputer(input.uuid));assertNull(database.getComputerByUUID(input.uuid).serverCert);assertEquals(1,((AtomicInteger)ReflectionHelpers.getField(service,"dbRefCount")).get());
+        }finally{database.close();}
+        ComputerDatabaseManager reopened=new ComputerDatabaseManager(context);try{assertEquals(input.name,reopened.getComputerByUUID(input.uuid).name);}finally{reopened.close();}
+    }
+    @Test public void readdingAtANewAddressCannotClearAnExistingPairingPin()throws Exception{
+        Context context=RuntimeEnvironment.getApplication();ComputerDatabaseManager database=new ComputerDatabaseManager(context);ComputerDetails old=device();old.serverCert=certificate("existing-add-pin");
+        try{assertTrue(database.updateComputer(old));ComputerManagerService service=service(database);add(service,old);ComputerManagerService.ComputerManagerBinder binder=ReflectionHelpers.getField(service,"binder");
+            ComputerDetails incoming=device();incoming.manualAddress=new ComputerDetails.AddressTuple("100.73.139.109",47989);binder.saveRhAddedComputer(incoming);
+            sameCertificate(old.serverCert,database.getComputerByUUID(old.uuid).serverCert);sameCertificate(old.serverCert,binder.getComputer(old.uuid).serverCert);assertEquals("100.73.139.109",database.getComputerByUUID(old.uuid).manualAddress.address);
+        }finally{database.close();}
+    }
+    @Test public void rejectedAddWriteDoesNotPublishANativeCacheEntry()throws Exception{
+        Context context=RuntimeEnvironment.getApplication();ComputerDatabaseManager database=new ComputerDatabaseManager(context);ComputerDetails input=device();
+        try{ComputerManagerService service=service(database);ComputerManagerService.ComputerManagerBinder binder=ReflectionHelpers.getField(service,"binder");Db.rejectWrites=true;
+            try{binder.saveRhAddedComputer(input);fail("Rejected write reported success");}catch(java.io.IOException expected){}
+            assertNull(database.getComputerByUUID(input.uuid));assertNull(binder.getComputer(input.uuid));assertEquals(1,((AtomicInteger)ReflectionHelpers.getField(service,"dbRefCount")).get());
+        }finally{Db.rejectWrites=false;database.close();}
+    }
     @Test public void syncedOnlyDeviceIsPersistedBeforeAnyPollAndSurvivesReopeningDatabase()throws Exception{
         Context context=RuntimeEnvironment.getApplication();ComputerDetails input=device();
         RhShared.capture(context,Collections.singletonList(input));String shared=RhShared.canonical(RhShared.read(context));

@@ -24,6 +24,7 @@ mod recovery;
 mod statistics;
 mod updates;
 mod ui_rendering;
+mod device_lookup;
 #[cfg(test)]
 mod form_tests;
 slint::include_modules!();
@@ -65,7 +66,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "settings.save" => json!({}),
         "device.connect" | "device.pair" | "device.settings.open" | "device.select" => json!({"uuid":arg}),
         "devices.filter" => json!({"query":arg}),
-        "device.add.submit" => json!({"address":arg}),
+        "device.add.submit" | "device.add.input" => json!({"address":arg}),
         "settings.route.move" => {let (route,direction)=arg.split_once('|').unwrap_or(("",""));json!({"route":route,"direction":direction})},
         "settings.route.toggle" => json!({"route":arg}),
         "settings.set" => {
@@ -181,9 +182,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         for (id, arg, requested_at_us, queued) in receiver {
             let args = args_for(&id, &arg, &actions.state());
             // Network updates must not occupy the navigation/action queue.
-            if id.starts_with("updates.") {
+            if id.starts_with("updates.") || matches!(id.as_str(),"sync.run"|"sync.resolve") {
                 let actions=actions.clone();
-                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true{actions.message(response["error"].as_str().unwrap_or("更新失败").into());}});
+                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true{actions.message(response["error"].as_str().unwrap_or("操作失败").into());}});
                 continue;
             }
             let response = actions.dispatch_timed(&id, args, Some(rhremote_core::ActionTiming{requested_at_us,queue_wait_us:queued.elapsed().as_micros()}));
@@ -306,6 +307,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
             ui.set_settings_dirty(state["settingsDirty"]==true);ui.set_settings_error(state["settingsError"].as_str().unwrap_or("").into());if !ui.get_navigation_prompt()&&state["navigationPrompt"].is_object(){ui.set_navigation_choice(0);}ui.set_navigation_prompt(state["navigationPrompt"].is_object());ui.set_navigation_message(state["navigationPrompt"]["message"].as_str().unwrap_or("").into());
             let sync_form=if state["syncDraft"].is_object(){&state["syncDraft"]}else{&state["sync"]};ui.set_sync_generation(state["syncGeneration"].as_u64().unwrap_or(0) as i32);ui.set_sync_dirty(state["syncDirty"]==true);ui.set_sync_error(state["syncError"].as_str().unwrap_or("").into());
+            ui.set_add_address(state["add"]["address"].as_str().unwrap_or("").into());ui.set_add_phase(state["add"]["phase"].as_str().unwrap_or("editing").into());ui.set_add_error(state["add"]["error"].as_str().unwrap_or("").into());
             ui.set_settings_tab(state["settingsTab"].as_str().unwrap_or("updates").into());ui.set_sync_url(sync_form["url"].as_str().unwrap_or("").into());ui.set_sync_username(sync_form["username"].as_str().unwrap_or("").into());ui.set_sync_automatic(sync_form["automatic"]==true);ui.set_sync_interval_index(match sync_form["intervalMinutes"].as_u64().unwrap_or(5){15=>1,30=>2,60=>3,_=>0});ui.set_sync_has_password(state["sync"]["hasPassword"]==true);ui.set_sync_busy(state["syncBusy"]==true);ui.set_sync_conflicts(state["sync"]["conflicts"].as_array().map(|a|a.iter().filter_map(|v|v.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default().into());ui.set_sync_last(if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)>0{"已同步"}else{"尚未同步"}.into());
             ui.set_updates_managed(state["updates"]["managed"]==true);ui.set_updates_busy(state["updatesBusy"]==true);ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());ui.set_updates_pending(state["updates"]["pendingRestart"]==true);ui.set_update_version(state["updates"]["availableVersion"].as_str().unwrap_or("").into());ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
             let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),host_name:d["name"].as_str().unwrap_or("").into(),address:d["address"].as_str().unwrap_or("").into(),search_addresses:devices::address_summary(state["saved"]["devices"].as_array().into_iter().flatten().find(|h|h["uuid"]==d["uuid"]).or(Some(d))).into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"已配对"}else{"待配对"}.into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}).collect();

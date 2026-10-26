@@ -217,22 +217,24 @@ mod interaction_tests {
         assert_eq!(c.dispatch("app.settings.tab",json!({"tab":"about"}))["ok"],true);
         let _=std::fs::remove_file(&c.storage);
     }
-    #[test] fn update_http_request_does_not_serialize_state_and_navigation_behind_download(){
+    #[test] fn slow_network_requests_do_not_serialize_state_and_navigation(){
         use std::{io::{Read,Write},net::{TcpListener,TcpStream},sync::mpsc,time::Duration};
-        struct Slow {entered:mpsc::Sender<()>,release:Mutex<mpsc::Receiver<()>>}
-        impl Platform for Slow {fn execute(&self,id:&str,_:&Value)->Result<Value,String>{if id=="updates.check"{self.entered.send(()).unwrap();self.release.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();}Ok(json!({"managed":true,"phase":"current"}))}}
+        struct Slow {kind:&'static str,entered:mpsc::Sender<()>,release:Mutex<mpsc::Receiver<()>>}
+        impl Platform for Slow {fn execute(&self,id:&str,_:&Value)->Result<Value,String>{if id==self.kind{self.entered.send(()).unwrap();self.release.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();}Ok(json!({"managed":true,"phase":"current"}))}}
         fn request(port:u16,token:&str,path:&str,body:Option<&str>)->String {
             let mut socket=TcpStream::connect(("127.0.0.1",port)).unwrap();socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let body=body.unwrap_or("");write!(socket,"{} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",if body.is_empty(){"GET"}else{"POST"},body.len()).unwrap();let mut value=String::new();socket.read_to_string(&mut value).unwrap();value
         }
-        let (entered,wait)=mpsc::channel();let (release,released)=mpsc::channel();let token="fixture-token-012345678901234567890123456789";
-        let c=Controller::new("test",std::env::temp_dir().join(format!("rhremote-http-{}.json",random_token().unwrap())),Arc::new(Slow{entered,release:Mutex::new(released)})).unwrap();
-        let listener=TcpListener::bind(("127.0.0.1",0)).unwrap();let port=listener.local_addr().unwrap().port();drop(listener);crate::start_http(c.clone(),port,token.into()).unwrap();
-        let worker=std::thread::spawn(move||request(port,token,"/v1/action",Some(r#"{"id":"updates.check","args":{}}"#)));
-        wait.recv_timeout(Duration::from_secs(2)).unwrap();
-        let state=request(port,token,"/v1/state",None);assert!(state.contains("\"updatesBusy\":true"),"{state}");
-        let navigation=request(port,token,"/v1/action",Some(r#"{"id":"app.settings.tab","args":{"tab":"about"}}"#));assert!(navigation.contains("\"ok\":true"));
-        release.send(()).unwrap();assert!(worker.join().unwrap().contains("\"ok\":true"));let _=std::fs::remove_file(&c.storage);
+        for (kind,busy) in [("updates.check","updatesBusy"),("sync.run","syncBusy")]{
+            let(entered,wait)=mpsc::channel();let(release,released)=mpsc::channel();let token="fixture-token-012345678901234567890123456789";
+            let c=Controller::new("test",std::env::temp_dir().join(format!("rhremote-http-{}.json",random_token().unwrap())),Arc::new(Slow{kind,entered,release:Mutex::new(released)})).unwrap();
+            let listener=TcpListener::bind(("127.0.0.1",0)).unwrap();let port=listener.local_addr().unwrap().port();drop(listener);crate::start_http(c.clone(),port,token.into()).unwrap();
+            let worker=std::thread::spawn(move||request(port,token,"/v1/action",Some(&json!({"id":kind,"args":{}}).to_string())));wait.recv_timeout(Duration::from_secs(2)).unwrap();
+            let state=request(port,token,"/v1/state",None);assert!(state.contains(&format!("\"{busy}\":true")),"{state}");
+            let duplicate=request(port,token,"/v1/action",Some(&json!({"id":kind,"args":{}}).to_string()));assert!(duplicate.contains("\"ok\":false"));
+            let navigation=request(port,token,"/v1/action",Some(r#"{"id":"app.settings.tab","args":{"tab":"about"}}"#));assert!(navigation.contains("\"ok\":true"));
+            release.send(()).unwrap();assert!(worker.join().unwrap().contains("\"ok\":true"));let _=std::fs::remove_file(&c.storage);
+        }
     }
     #[test] fn device_address_changes_are_drafts_until_one_valid_save(){
         let c=controller(Arc::new(Updates::default()));

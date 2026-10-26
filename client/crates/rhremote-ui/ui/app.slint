@@ -1,4 +1,4 @@
-import { ScrollView, LineEdit, CheckBox, SpinBox, ComboBox, Palette as WidgetPalette } from "std-widgets.slint";
+import { ProgressIndicator, ScrollView, LineEdit, CheckBox, SpinBox, ComboBox, Palette as WidgetPalette } from "std-widgets.slint";
 
 export global Commands { callback trigger(string,string); }
 export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, search-addresses:string, status:string, paired:bool, online:bool, is-self:bool }
@@ -169,6 +169,10 @@ export component MainWindow inherits Window {
     in property <[DeviceRow]> devices;
     in property <DeviceRow> selected-device;
     in property <string> device-query;
+    in property <string> add-address;
+    in property <string> add-phase:"editing";
+    in property <string> add-error;
+    private property <bool> add-busy:root.add-phase=="probing";
     in property <int> device-total;
     in property <int> device-online;
     in property <int> selected-index;
@@ -421,10 +425,16 @@ export component MainWindow inherits Window {
                             Rectangle{horizontal-stretch:1;}
                         }
             }
+            if root.page=="add":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:add-header.preferred-height;
+                add-header:=HorizontalLayout{padding:20px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:12px;
+                    Text{text:"添加电脑";font-size:23px;font-weight:600;color:Palette.ink;vertical-alignment:center;}
+                    Rectangle{horizontal-stretch:1;}ActionButton{text:"返回设备";action-id:"device.add.cancel";}
+                }
+            }
             if root.page!="devices" || root.streaming || root.connecting: ScrollView {
                 content-width:self.width;
                 VerticalLayout {
-                    padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
+                    padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" || root.page=="add" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" || root.page=="add" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
                     if root.page=="settings": VerticalLayout {spacing:18px;vertical-stretch:0;
                         if root.profile-tab=="advanced": VerticalLayout {spacing:12px;
                         Text{text:"设备别名（DisplayName）";color:Palette.muted;font-size:13px;}
@@ -541,11 +551,17 @@ export component MainWindow inherits Window {
                             Text{text:root.trace-path;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
                     }
-                    if root.page=="add": VerticalLayout {spacing:20px;
-                        Text{text:"添加电脑";color:Palette.ink;font-size:26px;}
-                        Text{text:"输入 IP 或主机名，支持局域网、Tailscale 和公网地址";color:Palette.muted;wrap:word-wrap;}
-                        address := LineEdit {placeholder-text:"例如 192.168.0.104 或 100.x.x.x";}
-                        HorizontalLayout{Rectangle{horizontal-stretch:1;}ActionButton{text:"取消";action-id:"device.add.cancel";}ActionButton{text:"添加";action-id:"device.add.submit";argument:address.text;primary:true;}}
+                    if root.page=="add": VerticalLayout {spacing:18px;vertical-stretch:0;
+                        Text{text:"IP 或主机名，支持局域网、Tailscale 和公网地址";color:Palette.muted;wrap:word-wrap;}
+                        Text{text:"设备地址";color:Palette.ink;font-size:14px;}
+                        address:=LineEdit {init=>{self.focus();}text:root.add-address;enabled:!root.add-busy;accessible-label:"设备地址";placeholder-text:"例如 192.168.0.104 或 100.x.x.x";edited(value)=>{Commands.trigger("device.add.input",value);}accepted=>{Commands.trigger("device.add.submit",self.text);}}
+                        if root.sync-busy:Text{text:"配置正在同步，完成后可添加设备。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
+                        if root.add-error!="":Text{text:root.add-error;color:#b04452;wrap:word-wrap;font-size:13px;}
+                        if root.add-busy:VerticalLayout{spacing:12px;
+                            ProgressIndicator{indeterminate:true;}
+                            Text{text:"正在查找设备…";color:Palette.muted;font-size:13px;}
+                        }
+                        Text{text:"找到设备后会保存到远程设备列表，配对在设备详情中完成。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                     }
                     if root.page=="pair": VerticalLayout {spacing:22px;
                         Text{text:"在 Sunshine 确认配对";color:Palette.ink;font-size:25px;}
@@ -592,7 +608,7 @@ export component MainWindow inherits Window {
                         }
                         if root.statistics: Text{text:root.stream-statistics;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     }
-                    if root.page!="settings" && root.page!="global-settings" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                    if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     Rectangle {min-height:12px;vertical-stretch:1;}
 
             Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
@@ -608,6 +624,14 @@ export component MainWindow inherits Window {
                         ActionButton{text:"取消";action-id:"settings.cancel";}
                         ActionButton{text:"保存";action-id:"settings.save";primary:true;disabled:!root.settings-dirty;}
                     }
+                }
+            }
+            if root.page=="add":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:add-footer.preferred-height;
+                Rectangle{y:0px;x:0px;width:parent.width;height:1px;background:Palette.line;}
+                add-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
+                    Rectangle{horizontal-stretch:1;}
+                    ActionButton{text:"取消";action-id:"device.add.cancel";}
+                    ActionButton{text:root.add-busy ? "正在查找…" : "添加";action-id:"device.add.submit";argument:root.add-address;primary:true;disabled:root.add-busy || root.sync-busy || root.add-address=="";}
                 }
             }
             if root.page=="global-settings" && root.settings-tab=="sync": Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:sync-footer.preferred-height;

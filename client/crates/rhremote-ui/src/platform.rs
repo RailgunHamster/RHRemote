@@ -9,10 +9,24 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
+
+fn parse_added_device(address:&str,body:&str)->Result<Device,String>{
+    if body.len()>262144{return Err("设备信息过大".into());}
+    let doc=roxmltree::Document::parse(body).map_err(|_|"设备没有返回有效的 Sunshine 信息".to_string())?;
+    if doc.root_element().tag_name().name()!="root"||doc.root_element().attribute("status_code")!=Some("200"){return Err("设备拒绝了信息请求".into());}
+    let field=|key|doc.descendants().find(|n|n.has_tag_name(key)).and_then(|n|n.text()).map(str::trim).filter(|v|!v.is_empty());
+    Ok(Device{uuid:field("uniqueid").ok_or("设备没有返回标识")?.into(),name:field("hostname").unwrap_or(address).into(),display_name:String::new(),address:address.into(),addresses:Vec::new(),online:true,paired:false,is_self:false})
+}
+
+/// A background poll must not undo an accepted add or address change made after it started.
+fn apply_device_refresh(current:&mut [Device],before:&[Device],probed:Vec<Device>,expected_epoch:u64,current_epoch:u64){
+    if expected_epoch!=current_epoch{return;}
+    for device in probed{if let Some(slot)=current.iter_mut().find(|d|d.uuid==device.uuid){if before.iter().find(|d|d.uuid==device.uuid)==Some(&*slot){*slot=device;}}}
+}
 
 struct PendingPair {
     attempt: u64,
@@ -540,6 +554,7 @@ pub struct NativePlatform {
     native_data: PathBuf,
     session_status: PathBuf,
     pub devices: Mutex<Vec<Device>>,
+    device_epoch: AtomicU64,
     child: Arc<Mutex<Option<Child>>>,
     retiring: Arc<Mutex<Vec<(Child, Instant, bool)>>>,
     state_agent: ureq::Agent,
@@ -622,6 +637,7 @@ impl NativePlatform {
             native_data,
             session_status: data.join("session-status.json"),
             devices: Mutex::new(devices),
+            device_epoch: AtomicU64::new(0),
             child: Arc::new(Mutex::new(None)),
             retiring: Arc::new(Mutex::new(Vec::new())),
             state_agent: ureq::AgentBuilder::new()
@@ -1279,13 +1295,22 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    fn probe_device(&self,address:&str,cancel:Arc<AtomicBool>)->Result<Device,String>{
+        let body=crate::device_lookup::server_info(address,cancel.clone(),Duration::from_secs(3))?;
+        if cancel.load(Ordering::SeqCst){return Err("已取消添加".into());}
+        let mut device=parse_added_device(address,&body)?;
+        let own_uuid=self.devices.lock().unwrap().iter().find(|d|d.is_self).map(|d|d.uuid.clone());
+        let own_uuid=own_uuid.or_else(||crate::device_lookup::server_info("127.0.0.1",cancel.clone(),Duration::from_millis(700)).ok().and_then(|text|parse_added_device("127.0.0.1",&text).ok()).map(|d|d.uuid));
+        device.is_self=own_uuid.is_some_and(|id|id.eq_ignore_ascii_case(&device.uuid));
+        if cancel.load(Ordering::SeqCst){return Err("已取消添加".into());}Ok(device)
+    }
+    fn added_device(&self,device:&Device){let mut devices=self.devices.lock().unwrap();if let Some(existing)=devices.iter_mut().find(|d|d.uuid.eq_ignore_ascii_case(&device.uuid)){*existing=device.clone();}else{devices.push(device.clone());}self.device_epoch.fetch_add(1,Ordering::Release);}
     fn update_state(&self)->Option<Value>{Some(self.update_snapshot.lock().unwrap().clone())}
     fn connection_requested(&self, timing: Option<rhremote_core::ActionTiming>) {
         self.statistics.lock().unwrap().connection_requested(timing);
     }
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String> {
         let _device_guard = if action.starts_with("devices.")
-            || action == "device.add.submit"
             || action == "device.network.diagnose"
         {
             Some(self.device_operation.lock().unwrap())
@@ -1362,42 +1387,11 @@ impl Platform for NativePlatform {
                 Ok(json!({"devices":next}))
             }
             "devices.refresh" => {
-                let old = self.devices.lock().unwrap().clone();
-                let next: Vec<_> = old.iter().map(|d| self.probe(d)).collect();
-                *self.devices.lock().unwrap() = next.clone();
-                Ok(json!({"devices":next}))
-            }
-            "device.add.submit" => {
-                let address = args["address"].as_str().ok_or("address required")?;
-                let response = ureq::get(&format!(
-                    "http://{address}:47989/serverinfo?uniqueid=0123456789ABCDEF"
-                ))
-                .timeout(Duration::from_secs(3))
-                .call()
-                .map_err(|e| e.to_string())?
-                .into_string()
-                .map_err(|e| e.to_string())?;
-                let doc = roxmltree::Document::parse(&response).map_err(|e| e.to_string())?;
-                let field = |key| {
-                    doc.descendants()
-                        .find(|n| n.has_tag_name(key))
-                        .and_then(|n| n.text())
-                        .map(str::to_owned)
-                };
-                let device = self.probe(&Device {
-                    uuid: field("uniqueid").ok_or("host UUID missing")?,
-                    name: field("hostname").unwrap_or(address.into()),
-                    display_name: String::new(),
-                    address: address.into(),
-                    addresses: Vec::new(),
-                    online: true,
-                    paired: false,
-                    is_self: false,
-                });
-                let mut devices = self.devices.lock().unwrap();
-                devices.retain(|d| d.uuid != device.uuid);
-                devices.push(device);
-                Ok(json!({"devices":*devices}))
+                let (old,epoch)={let devices=self.devices.lock().unwrap();(devices.clone(),self.device_epoch.load(Ordering::Acquire))};
+                let probed: Vec<_> = old.iter().map(|d| self.probe(d)).collect();
+                let mut latest=self.devices.lock().unwrap();
+                apply_device_refresh(&mut latest,&old,probed,epoch,self.device_epoch.load(Ordering::Acquire));
+                Ok(json!({"devices":*latest}))
             }
             "device.connect" => {
                 if let Some(failure)=args["testInitialFailure"].as_str(){
@@ -1721,4 +1715,13 @@ impl LaunchContext {
             network,
         })
     }
+}
+
+#[cfg(test)]
+mod add_device_tests{
+    use super::*;
+    fn device()->Device{parse_added_device("192.168.0.104","<root status_code=\"200\"><uniqueid>host-1</uniqueid><hostname>PC</hostname></root>").unwrap()}
+    #[test]fn discovery_does_not_claim_pairing_from_public_metadata(){let d=parse_added_device("100.73.139.109","<root status_code=\"200\"><uniqueid>host-1</uniqueid><hostname>PC</hostname><PairStatus>1</PairStatus></root>").unwrap();assert!(d.online);assert!(!d.paired);assert!(!d.is_self);assert_eq!(d.address,"100.73.139.109");}
+    #[test]fn malformed_or_rejected_server_info_cannot_be_saved(){for text in ["not XML","<root status_code=\"403\"/>","<root status_code=\"200\"><hostname>PC</hostname></root>"]{assert!(parse_added_device("192.168.0.104",text).is_err());}}
+    #[test]fn poll_applies_unchanged_records_but_keeps_concurrent_additions_and_edits(){let original=device();let mut offline=original.clone();offline.online=false;let mut added=original.clone();added.uuid="host-2".into();let mut latest=vec![original.clone(),added.clone()];apply_device_refresh(&mut latest,std::slice::from_ref(&original),vec![offline.clone()],0,0);assert!(!latest[0].online);assert_eq!(latest[1],added);let mut edited=original.clone();edited.addresses.push("100.73.139.109".into());let mut latest=vec![edited.clone()];apply_device_refresh(&mut latest,std::slice::from_ref(&original),vec![offline.clone()],0,0);assert_eq!(latest[0],edited);let mut latest=vec![original.clone()];apply_device_refresh(&mut latest,std::slice::from_ref(&original),vec![offline],0,1);assert_eq!(latest[0],original);}
 }
