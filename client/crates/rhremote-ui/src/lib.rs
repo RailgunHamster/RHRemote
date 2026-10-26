@@ -38,6 +38,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
             json!({"uuid":uuid,"address":primary.trim(),"addresses":extra.split([',',';','\n']).map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})
         }
         "device.network.diagnose" => json!({"uuid":arg}),
+        "settings.network.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "statistics.configure" => json!({"enabled":arg=="true"}),
         "app.settings.tab" | "settings.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
@@ -173,6 +174,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(move || {
         for (id, arg, requested_at_us, queued) in receiver {
             let args = args_for(&id, &arg, &actions.state());
+            // Network updates must not occupy the navigation/action queue.
+            if id.starts_with("updates.") {
+                let actions=actions.clone();
+                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true{actions.message(response["error"].as_str().unwrap_or("更新失败").into());}});
+                continue;
+            }
             let response = actions.dispatch_timed(&id, args, Some(rhremote_core::ActionTiming{requested_at_us,queue_wait_us:queued.elapsed().as_micros()}));
             if response["ok"] != true {
                 actions.message(response["error"].as_str().unwrap_or("操作失败").into());
@@ -255,12 +262,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade() else{return};let state=view.state();let next=state["revision"].as_u64().unwrap_or(0);
         ui.set_compact(ui.window().size().width as f32/ui.window().scale_factor()<980.0);
+        ui.set_update_primary_text(updates::primary_label(&state["updates"],state["updatesBusy"]==true).into());
+        ui.set_update_phase(state["updates"]["phase"].as_str().unwrap_or("").into());
+        ui.set_update_progress(state["updates"]["progress"].as_i64().unwrap_or(0) as i32);
+        ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
         if next!=revision {
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"]==true);ui.set_trace_path(state["statistics"]["tracing"]["latest"].as_str().unwrap_or("").into());
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
             ui.set_settings_tab(state["settingsTab"].as_str().unwrap_or("updates").into());ui.set_sync_url(state["sync"]["url"].as_str().unwrap_or("").into());ui.set_sync_username(state["sync"]["username"].as_str().unwrap_or("").into());ui.set_sync_automatic(state["sync"]["automatic"]==true);ui.set_sync_interval_index(match state["sync"]["intervalMinutes"].as_u64().unwrap_or(5){15=>1,30=>2,60=>3,_=>0});ui.set_sync_has_password(state["sync"]["hasPassword"]==true);ui.set_sync_busy(state["syncBusy"]==true);ui.set_sync_conflicts(state["sync"]["conflicts"].as_array().map(|a|a.iter().filter_map(|v|v.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default().into());ui.set_sync_last(if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)>0{"已同步"}else{"尚未同步"}.into());
             ui.set_updates_managed(state["updates"]["managed"]==true);ui.set_updates_busy(state["updatesBusy"]==true);ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());ui.set_updates_pending(state["updates"]["pendingRestart"]==true);ui.set_update_version(state["updates"]["availableVersion"].as_str().unwrap_or("").into());ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
-            let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),host_name:d["name"].as_str().unwrap_or("").into(),address:d["address"].as_str().unwrap_or("").into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"已配对"}else{"待配对"}.into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}).collect();
+            let devices=state["devices"].as_array().cloned().unwrap_or_default();let selected=state["selected"].as_str().unwrap_or("");let rows:Vec<DeviceRow>=devices.iter().map(|d|DeviceRow{uuid:d["uuid"].as_str().unwrap_or("").into(),name:d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str()).unwrap_or("").into(),host_name:d["name"].as_str().unwrap_or("").into(),address:d["address"].as_str().unwrap_or("").into(),search_addresses:devices::address_summary(state["saved"]["devices"].as_array().into_iter().flatten().find(|h|h["uuid"]==d["uuid"]).or(Some(d))).into(),status:if d["isSelf"]==true{"本机"}else if d["online"]!=true{"离线"}else if d["paired"]==true{"已配对"}else{"待配对"}.into(),paired:d["paired"]==true,online:d["online"]==true,is_self:d["isSelf"]==true}).collect();
             ui.set_selected_device(rows.iter().find(|d|d.uuid==selected).cloned().unwrap_or_default());
             ui.set_selected_index(rows.iter().position(|d|d.uuid==selected).map(|i|i as i32).unwrap_or(-1));
             ui.set_device_total(rows.len() as i32);ui.set_device_online(rows.iter().filter(|d|d.online).count() as i32);
@@ -268,8 +279,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_selected_name(devices.iter().find(|d|d["uuid"]==selected).and_then(|d|d["displayName"].as_str().filter(|n|!n.is_empty()).or_else(||d["name"].as_str())).unwrap_or("").into());ui.set_draft_display_name(state["draftDisplayName"].as_str().unwrap_or("").into());devices::update_devices(&ui,devices::filter_devices(rows,query));
             let host=state["saved"]["devices"].as_array().into_iter().flatten().find(|d|d["uuid"]==selected).or_else(||devices.iter().find(|d|d["uuid"]==selected));
             ui.set_selected_uuid(selected.into());
-            ui.set_network_address(host.and_then(|d|d["address"].as_str()).unwrap_or("").into());
-            ui.set_network_addresses(host.and_then(|d|d["addresses"].as_array()).map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default().into());
+            ui.set_network_summary(devices::address_summary(host).into());
+            ui.set_network_current(devices::last_route(&state["network"],selected).into());
+            ui.set_network_address(if state["draft"].is_object(){state["draftAddress"].as_str().unwrap_or("")}else{host.and_then(|d|d["address"].as_str()).unwrap_or("")}.into());
+            ui.set_network_addresses(if state["draft"].is_object(){state["draftAddresses"].as_str().unwrap_or("").to_owned()}else{host.and_then(|d|d["addresses"].as_array()).map(|a|a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default()}.into());
             ui.set_network_report(if state["network"]["uuid"]==selected{network::report_text(&state["network"])}else{"尚未诊断".into()}.into());
             let client_id=state["saved"]["clientId"].as_str().unwrap_or("");
             ui.set_profile_tab(state["profileTab"].as_str().unwrap_or("video").into());
@@ -278,7 +291,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             for key in &order {if let Some((_,label))=rhremote_core::network::ROUTES.iter().find(|(id,_)|id==key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:true});}}
             for (key,label) in rhremote_core::network::ROUTES {if !order.contains(key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:false});}}
             ui.set_network_routes(ModelRc::new(VecModel::from(route_rows)));
-            ui.set_relay_url(state["draft"]["relayUrl"].as_str().unwrap_or(rhremote_core::network::DEFAULT_RELAY).into());
+            ui.set_relay_url(state["draftRelay"].as_str().unwrap_or(rhremote_core::network::DEFAULT_RELAY).into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);
             ui.set_audio_enabled(state["audioEnabled"]==true);ui.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
             let remote:Vec<RemoteDisplay>=state["statistics"]["displays"].as_array().into_iter().flatten().map(|d|RemoteDisplay{id:d["id"].as_str().unwrap_or("").into(),label:format!("{} · {}×{}",if d["virtual"]==true{"虚拟屏"}else{d["name"].as_str().filter(|v|!v.is_empty()).unwrap_or("屏幕")},d["width"],d["height"]).into(),chosen:d["id"]==state["statistics"]["selectedDisplay"]["id"],available:d["available"]==true}).collect();

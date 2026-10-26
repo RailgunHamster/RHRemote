@@ -65,6 +65,27 @@ public final class RhHomeLayoutTest {
         setup();ViewCompat.dispatchApplyWindowInsets(root,new WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.systemBars(),Insets.of(12,28,16,24)).build());layout(1008,672);
         assertEquals(12,root.getPaddingLeft());assertEquals(28,root.getPaddingTop());assertEquals(16,root.getPaddingRight());assertEquals(24,root.getPaddingBottom());assertButtonsInsideParents();home.dispose();
     }
+    @Test public void deviceNetworkSaveIsAtomicAndCancelKeepsTheSavedEndpoints()throws Exception {
+        setup();home.perform("device.settings.open",RhActions.obj("uuid","host-0"));
+        String before=RhShared.canonical(RhShared.read(activity));
+        home.perform("settings.network.edit",RhActions.obj("key","address","value","bad/path"));
+        try{home.perform("settings.save",RhActions.obj());fail("Invalid address saved");}catch(java.io.IOException expected){}
+        assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+        home.perform("settings.network.edit",RhActions.obj("key","address","value","192.168.0.104"));home.perform("settings.network.edit",RhActions.obj("key","addresses","value","100.73.139.109"));home.perform("settings.save",RhActions.obj());
+        assertEquals("100.73.139.109",RhNetwork.host(activity,"host-0").getJSONArray("addresses").getString(0));assertEquals("192.168.0.104",RhNetwork.host(activity,"host-0").getString("address"));
+        assertEquals("detail",home.state().getJSONObject("homeLayout").getJSONObject("browser").getString("mode"));
+        String saved=RhShared.canonical(RhShared.read(activity));home.perform("device.settings.open",RhActions.obj("uuid","host-0"));home.perform("settings.network.edit",RhActions.obj("key","address","value","10.0.0.9"));home.perform("settings.cancel",RhActions.obj());assertEquals(saved,RhShared.canonical(RhShared.read(activity)));home.dispose();
+    }
+    private void readableSelections(View view){
+        if(view instanceof Spinner){Spinner spinner=(Spinner)view;TextView selected=(TextView)spinner.getAdapter().getView(0,null,spinner);TextView dropdown=(TextView)spinner.getAdapter().getDropDownView(0,null,spinner);assertEquals(android.graphics.Color.parseColor("#e1e8f6"),selected.getCurrentTextColor());assertEquals(selected.getCurrentTextColor(),dropdown.getCurrentTextColor());assertNotNull(dropdown.getBackground());}
+        if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)readableSelections(((ViewGroup)view).getChildAt(i));
+    }
+    @Test public void darkThemeSelectsHaveReadableTextInBothThePageAndPopup()throws Exception {
+        setup();home.dispose();RhShared.theme(activity,true);home=new RhHome(activity,callbacks);root=((ViewGroup)activity.findViewById(android.R.id.content)).getChildAt(0);
+        ComputerDetails d=new ComputerDetails();d.uuid="host-0";d.name="winserver";d.manualAddress=new ComputerDetails.AddressTuple("192.168.0.104",47989);home.update(d);
+        home.perform("app.settings.tab",RhActions.obj("tab","sync"));layout(1008,672);readableSelections(root);
+        home.perform("device.settings.open",RhActions.obj("uuid","host-0"));for(String tab:new String[]{"video","audio","input","network","advanced"}){home.perform("settings.tab",RhActions.obj("tab",tab));layout(1008,672);readableSelections(root);}home.dispose();
+    }
     @Test public void actionGroupsWrapWithoutOverlapAtSmallWidths(){
         activity=Robolectric.buildActivity(Activity.class).setup().get();
         for(int width:new int[]{288,360,640}){RhActionRow row=new RhActionRow(activity);for(String label:new String[]{"保存设置","立即同步","移除设置","冲突项保留本机","冲突项保留远端"}){Button b=new Button(activity);b.setText(label);b.setMinHeight(48);row.addView(b,new ViewGroup.LayoutParams(-2,48));}

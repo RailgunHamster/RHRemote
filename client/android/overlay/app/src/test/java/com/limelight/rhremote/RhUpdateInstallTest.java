@@ -165,7 +165,7 @@ public class RhUpdateInstallTest {
     @Test public void visiblePrimaryButtonDownloadsAndShowsBusyStateThroughTheSameActionApi()throws Exception{
         page();Button install=button(activity.getWindow().getDecorView(),"下载并安装");assertNotNull(install);assertTrue(install.isEnabled());
         Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);install.performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
-        assertTrue(home.state().getBoolean("updatesBusy"));assertFalse(button(activity.getWindow().getDecorView(),"下载并安装").isEnabled());
+        assertTrue(home.state().getBoolean("updatesBusy"));assertFalse(install.isEnabled());
         assertFalse(RhActions.dispatch("updates.install",RhActions.obj()).getBoolean("ok"));home.rebind();assertTrue(home.state().getBoolean("updatesBusy"));
         Requests.release.countDown();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);assertNotNull(button(activity.getWindow().getDecorView(),"安装更新"));
     }
@@ -173,11 +173,11 @@ public class RhUpdateInstallTest {
         page();Requests.corrupt=true;home.perform("updates.install",RhActions.obj());awaitUpdate();
         JSONObject state=home.state().getJSONObject("updates");assertEquals("error",state.getString("phase"));assertTrue(state.getString("status").contains("校验失败"));assertTrue(ShadowToast.getTextOfLatestToast().contains("校验失败"));assertNull(next());
     }
-    @Test public void visibleDownloadButtonChecksFirstAndDoesNotOpenAnInstaller()throws Exception{
+    @Test public void onePrimaryButtonChecksBeforeOfferingDownloadAndInstall()throws Exception{
         home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
-        Button download=button(activity.getWindow().getDecorView(),"下载 APK");assertNotNull(download);assertTrue(download.isEnabled());
-        assertTrue(button(activity.getWindow().getDecorView(),"下载并安装").isEnabled());download.performClick();awaitUpdate();
-        assertTrue(home.state().getJSONObject("updates").getBoolean("downloaded"));assertEquals(1,Requests.checks);assertEquals(1,Requests.downloads);assertNull(next());
+        Button primary=button(activity.getWindow().getDecorView(),"检查更新");assertNotNull(primary);assertNull(button(activity.getWindow().getDecorView(),"下载 APK"));assertNull(button(activity.getWindow().getDecorView(),"下载并安装"));
+        primary.performClick();awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"下载并安装"));assertEquals(0,Requests.downloads);assertNull(next());
+        primary.performClick();awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"安装更新"));assertEquals(1,Requests.checks);assertEquals(1,Requests.downloads);assertInstaller(next());
     }
     @Test public void visibleCheckButtonCompletesThroughTheDispatcher()throws Exception{
         home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
@@ -186,17 +186,29 @@ public class RhUpdateInstallTest {
     }
     @Test public void progressTicksKeepThePressedViewsInsteadOfRebuildingThePage()throws Exception{
         page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);
-        Button download=button(activity.getWindow().getDecorView(),"下载 APK");download.performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
+        Button download=button(activity.getWindow().getDecorView(),"下载并安装");download.performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
         Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(650));
-        assertSame(download,button(activity.getWindow().getDecorView(),"下载 APK"));assertFalse(download.isEnabled());assertEquals(0.45f,download.getAlpha(),0.001f);
-        Requests.release.countDown();awaitUpdate();assertNull(next());
+        assertSame(download,activity.getWindow().getDecorView().findViewWithTag("updates.primary"));assertFalse(download.isEnabled());assertEquals(0.65f,download.getAlpha(),0.001f);assertTrue(home.perform("updates.state",RhActions.obj()).has("phase"));
+        Requests.release.countDown();awaitUpdate();assertInstaller(next());
     }
     @Test public void failedSourcesExposeBothReasonsAndLeaveRetryButtonsEnabled()throws Exception{
         Requests.failMetadata=true;home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
         button(activity.getWindow().getDecorView(),"检查更新").performClick();awaitUpdate();JSONObject state=home.state().getJSONObject("updates");
         assertEquals("error",state.getString("phase"));assertEquals(2,state.getJSONArray("sourceFailures").length());
         assertTrue(state.getString("status").contains("Gitee SocketTimeoutException"));assertTrue(state.getString("status").contains("GitHub SocketTimeoutException"));
-        assertTrue(button(activity.getWindow().getDecorView(),"下载 APK").isEnabled());assertTrue(button(activity.getWindow().getDecorView(),"下载并安装").isEnabled());
+        assertNull(button(activity.getWindow().getDecorView(),"下载 APK"));assertTrue(button(activity.getWindow().getDecorView(),"重新检查").isEnabled());
+    }
+    @Test public void failedDownloadRetriesFromTheSamePrimaryWithoutAnExtraCheck()throws Exception{
+        page();Requests.corrupt=true;button(activity.getWindow().getDecorView(),"下载并安装").performClick();awaitUpdate();
+        Button retry=button(activity.getWindow().getDecorView(),"重试下载并安装");assertNotNull(retry);assertTrue(retry.isEnabled());assertNull(next());
+        Requests.corrupt=false;retry.performClick();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.checks);
+    }
+    @Test public void settingsNavigationRemainsAvailableDuringDownload()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);
+        button(activity.getWindow().getDecorView(),"下载并安装").performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
+        home.perform("app.settings.tab",RhActions.obj("tab","about"));assertEquals("about",home.state().getString("settingsTab"));
+        home.perform("app.settings.tab",RhActions.obj("tab","updates"));assertFalse(((Button)activity.getWindow().getDecorView().findViewWithTag("updates.primary")).isEnabled());
+        Requests.release.countDown();awaitUpdate();assertInstaller(next());
     }
     @Test public void missingInstallerHasAVisibleFailureInsteadOfSilentNoOp()throws Exception{
         activity=Robolectric.buildActivity(NoInstaller.class).setup().get();page();home.perform("updates.install",RhActions.obj());awaitUpdate();assertTrue(home.state().getJSONObject("updates").getString("status").contains("系统安装界面未能打开"));assertNotNull(ShadowToast.getTextOfLatestToast());

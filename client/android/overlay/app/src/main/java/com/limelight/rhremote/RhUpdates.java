@@ -40,6 +40,13 @@ public final class RhUpdates {
     public JSONObject state(){JSONObject candidate=available;return RhActions.obj("managed",true,"currentVersion",currentName(),"availableVersion",candidate==null?JSONObject.NULL:candidate.optString("version"),
         "pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,
         "downloadedBytes",downloadedBytes,"totalBytes",totalBytes,"sourceFailures",sourceFailures,"installPermissionGranted",allowed(),"installPermissionPending",preferences.getBoolean("permission",false));}
+    public String primaryAction(){return available!=null||ready?"updates.install":"updates.check";}
+    public String primaryLabel(boolean busy){
+        if(busy){if(phase.equals("checking"))return "检查中…";if(phase.equals("downloading"))return "下载中 "+(totalBytes>0?Math.min(100,downloadedBytes*100/totalBytes):0)+"%";if(phase.equals("verifying"))return "正在校验…";return "正在准备…";}
+        if(ready)return phase.equals("error")?"重试安装":"安装更新";
+        if(available!=null)return phase.equals("error")?"重试下载并安装":"下载并安装";
+        return phase.equals("error")?"重新检查":"检查更新";
+    }
     private void status(String phase,String text){this.phase=phase;message=text;}
     public void failure(String text){status("error",text==null||text.isEmpty()?"更新操作失败，请重试":text);}
     public void pending(String action){status(action.equals("updates.check")?"checking":"preparing",action.equals("updates.check")?"正在检查更新":action.equals("updates.download")?"正在准备下载 APK":"正在准备安装更新");}
@@ -167,9 +174,9 @@ public final class RhUpdates {
         if(preferences.getBoolean("permission",false)){
             preferences.edit().remove("permission").apply();
             if(allowed()){status("verifying","正在继续安装更新");return true;}
-            status("downloaded","尚未允许 RHRemote 安装应用，可点击安装更新重试");
+            status("downloaded","尚未允许 RHRemote 安装应用，可点击“安装更新”重试");
         }else if(preferences.getBoolean("installer",false)){
-            preferences.edit().remove("installer").apply();status("downloaded","安装尚未完成，可点击安装更新重试");
+            preferences.edit().remove("installer").apply();status("downloaded","安装尚未完成，可点击“安装更新”重试");
         }
         return false;
     }

@@ -56,6 +56,13 @@ public final class RhNetwork {
     public static JSONObject metadata(Context c,ComputerDetails source)throws Exception {
         try{return host(c,source.uuid);}catch(IOException e){ComputerDetails.AddressTuple a=source.manualAddress!=null?source.manualAddress:source.activeAddress!=null?source.activeAddress:source.localAddress;if(a==null)throw e;return RhActions.obj("address",a.address);}
     }
+    public static String savedSummary(Context c,ComputerDetails source){
+        try{List<String> rows=new ArrayList<>();for(String address:addresses(metadata(c,source))){String kind=kind(address);rows.add(kind.equals("transport")?"内置直连 / 中继：已配置":(kind.equals("tailscale")?"Tailscale：":kind.equals("lan")?"局域网：":"公网 / 主机名：")+address);}return android.text.TextUtils.join("\n",rows);}catch(Exception ignored){return "尚未保存地址";}
+    }
+    public static String lastRoute(String uuid){
+        JSONObject state=state();if(!uuid.equals(state.optString("uuid"))||state.isNull("selectedAddress"))return "最近选路：尚无记录";
+        int index=Arrays.asList(RhProfile.ROUTES).indexOf(state.optString("route"));return "最近选路："+(index<0?"未知路径":RhProfile.ROUTE_LABELS[index]);
+    }
     /** Extra direct addresses for the normal UUID/certificate-checked discovery poll.
      * Never opens the shared media tunnel or treats a relay identity as a hostname. */
     public static List<ComputerDetails.AddressTuple> pollingAddresses(Context c,ComputerDetails source) {

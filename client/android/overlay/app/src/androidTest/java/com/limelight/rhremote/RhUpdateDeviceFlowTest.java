@@ -53,7 +53,7 @@ public class RhUpdateDeviceFlowTest {
         Button[] value=new Button[1];main(()->{value[0]=find(activity.getWindow().getDecorView(),title);assertNotNull(title,value[0]);assertTrue(title,value[0].isEnabled());assertTrue(title,value[0].performClick());});return value[0];
     }
     private void proof(JSONObject proof){Bundle result=new Bundle();result.putString("stream","RHREMOTE_UPDATE_DEVICE_PROOF "+proof+"\n");instrumentation.sendStatus(0,result);}
-    @Test public void checkDownloadAndInstallButtonsOnTheRealDevice()throws Exception{
+    @Test public void singlePrimaryChecksDownloadsAndOpensInstallerOnTheRealDevice()throws Exception{
         Intent launch=new Intent().setClassName(instrumentation.getTargetContext(),"com.limelight.PcView").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         activity=instrumentation.startActivitySync(launch);instrumentation.waitForIdleSync();
         Field homeField=activity.getClass().getDeclaredField("rhHome");homeField.setAccessible(true);home=(RhHome)homeField.get(activity);assertNotNull(home);
@@ -74,15 +74,14 @@ public class RhUpdateDeviceFlowTest {
             factory.set(updates,local);main(()->assertTrue(RhActions.dispatch("app.settings.open",RhActions.obj()).optBoolean("ok")));
             click("检查更新");settled();JSONObject failed=state();assertEquals("error",failed.getString("phase"));assertEquals(2,failed.getJSONArray("sourceFailures").length());
             evidence.put("visibleFailure",failed.getString("status"));
-            click("下载 APK");settled();assertEquals("error",state().getString("phase"));
-            click("下载并安装");settled();assertEquals("error",state().getString("phase"));
-            evidence.put("allButtonsExposeNetworkFailure",true);
-            fail.set(false);click("检查更新");settled();JSONObject checked=state();assertEquals("available",checked.getString("phase"));evidence.put("check",checked);
-            Button download=click("下载 APK");long deadline=SystemClock.elapsedRealtime()+15000;JSONObject progress=state();
+            click("重新检查");settled();assertEquals("error",state().getString("phase"));
+            evidence.put("primaryRetryExposesNetworkFailure",true);
+            fail.set(false);click("重新检查");settled();JSONObject checked=state();assertEquals("available",checked.getString("phase"));evidence.put("check",checked);
+            Button download=click("下载并安装");long deadline=SystemClock.elapsedRealtime()+15000;JSONObject progress=state();
             while((progress.optLong("downloadedBytes")==0||!busy())&&SystemClock.elapsedRealtime()<deadline){SystemClock.sleep(100);progress=state();}
             assertTrue(progress.toString(),progress.getLong("downloadedBytes")>0);assertTrue("APK fixture must allow a real progress sample",busy());
-            SystemClock.sleep(700);main(()->{assertSame(download,find(activity.getWindow().getDecorView(),"下载 APK"));assertFalse(download.isEnabled());});
-            evidence.put("progress",progress);settled();JSONObject downloaded=state();assertTrue(downloaded.getBoolean("downloaded"));assertEquals("downloaded",downloaded.getString("phase"));evidence.put("downloadOnly",downloaded);
+            SystemClock.sleep(700);main(()->{assertSame(download,activity.getWindow().getDecorView().findViewWithTag("updates.primary"));assertFalse(download.isEnabled());});
+            evidence.put("progress",progress);settled();JSONObject downloaded=state();assertTrue(downloaded.getBoolean("downloaded"));assertEquals("installer",downloaded.getString("phase"));evidence.put("oneClickDownloadAndInstall",downloaded);
             assertTrue("System install permission must be granted by the user",downloaded.getBoolean("installPermissionGranted"));
             // Restart only this test's downloaded update so the primary button must
             // perform metadata, transfer, verification and installer launch itself.
@@ -90,7 +89,7 @@ public class RhUpdateDeviceFlowTest {
             assertTrue("Owned fixture APK",new File(directory,"RHRemote-update.apk").delete());
             available.set(updates,null);ready.set(updates,false);
             main(home::rebind);
-            click("下载并安装");settled();JSONObject installed=state();assertEquals("installer",installed.getString("phase"));evidence.put("installer",installed);evidence.put("result","PASS_REAL_VIEWS_DOWNLOAD_VERIFY_AND_INSTALLER_LAUNCH");proof(evidence);
+            click("检查更新");settled();click("下载并安装");settled();JSONObject installed=state();assertEquals("installer",installed.getString("phase"));evidence.put("installer",installed);evidence.put("result","PASS_REAL_VIEWS_DOWNLOAD_VERIFY_AND_INSTALLER_LAUNCH");proof(evidence);
         }finally{
             factory.set(updates,original);available.set(updates,oldAvailable);ready.set(updates,oldReady);
             // The fixture receipt must not advertise an unpublished version after a cancelled install.

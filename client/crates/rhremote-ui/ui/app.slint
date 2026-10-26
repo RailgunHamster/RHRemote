@@ -1,7 +1,7 @@
 import { ScrollView, LineEdit, CheckBox, SpinBox, ComboBox, Palette as WidgetPalette } from "std-widgets.slint";
 
 export global Commands { callback trigger(string,string); }
-export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, status:string, paired:bool, online:bool, is-self:bool }
+export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, search-addresses:string, status:string, paired:bool, online:bool, is-self:bool }
 export struct ProfileSource { client-id:string, label:string }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
 export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
@@ -39,6 +39,7 @@ component ActionButton inherits Rectangle {
     accessible-label: root.text;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
 }
+component TabButton inherits ActionButton { border-width:0px; }
 component NavigationItem inherits Rectangle {
     in property <string> text;
     in property <image> icon;
@@ -221,6 +222,11 @@ export component MainWindow inherits Window {
     in property <bool> updates-pending;
     in property <string> update-version;
     in property <string> update-status;
+    in property <string> update-primary-text:"检查更新";
+    in property <string> update-phase;
+    in property <int> update-progress;
+    in property <string> network-summary;
+    in property <string> network-current;
     HorizontalLayout {
         spacing:0px;
         Rectangle {
@@ -341,9 +347,11 @@ export component MainWindow inherits Window {
                                 Rectangle {height:1px;background:Palette.line;}
                                 Text {text:"设备信息";font-size:14px;font-weight:600;color:Palette.ink;}
                                 HorizontalLayout {spacing:20px;
-                                    DetailField {label:"连接地址";value:root.network-address;}
+                                    DetailField {label:"首选地址";value:root.network-address;}
                                     DetailField {label:"配对状态";value:root.selected-device.paired ? "已配对" : "未配对";}
                                 }
+                                Text {text:root.network-summary;color:Palette.muted;font-size:12px;wrap:word-wrap;}
+                                Text {text:root.network-current;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                                 Text {text:"当前客户端配置";font-size:14px;font-weight:600;color:Palette.ink;}
                                 HorizontalLayout {spacing:20px;
                                     DetailField {label:"视频编码";value:root.codec;}
@@ -368,16 +376,6 @@ export component MainWindow inherits Window {
                     }
                 }
             }
-            if root.page!="devices" || root.streaming || root.connecting: Rectangle {height:60px;background:Palette.surface;
-                HorizontalLayout {padding-left:24px;padding-right:24px;spacing:14px;
-                    Text{text:"RHRemote-Moonlight";font-weight:600;color:Palette.ink;vertical-alignment:center;}
-                    Text{text:"v"+root.app-version;font-size:11px;color:Palette.muted;vertical-alignment:center;}
-                    Rectangle {horizontal-stretch:1;}
-                    ActionButton{text:root.dark ? "浅色" : "深色";action-id:"appearance.toggle";}
-                    ActionButton{text:"设置";action-id:"app.settings.open";}
-                    ActionButton{text:"＋ 添加电脑";action-id:"device.add.open";}
-                }
-            }
             if root.page!="devices" || root.streaming || root.connecting: ScrollView {
                 content-width:self.width;
                 VerticalLayout {
@@ -399,19 +397,20 @@ export component MainWindow inherits Window {
                             }
                         }
                         HorizontalLayout{spacing:8px;
-                            ActionButton{text:"画面";action-id:"settings.tab";argument:"video";chosen:root.profile-tab=="video";}
-                            ActionButton{text:"音频";action-id:"settings.tab";argument:"audio";chosen:root.profile-tab=="audio";}
-                            ActionButton{text:"输入";action-id:"settings.tab";argument:"input";chosen:root.profile-tab=="input";}
-                            ActionButton{text:"网络";action-id:"settings.tab";argument:"network";chosen:root.profile-tab=="network";}
-                            ActionButton{text:"高级";action-id:"settings.tab";argument:"advanced";chosen:root.profile-tab=="advanced";}
+                            TabButton{text:"画面";action-id:"settings.tab";argument:"video";chosen:root.profile-tab=="video";}
+                            TabButton{text:"音频";action-id:"settings.tab";argument:"audio";chosen:root.profile-tab=="audio";}
+                            TabButton{text:"输入";action-id:"settings.tab";argument:"input";chosen:root.profile-tab=="input";}
+                            TabButton{text:"网络";action-id:"settings.tab";argument:"network";chosen:root.profile-tab=="network";}
+                            TabButton{text:"高级";action-id:"settings.tab";argument:"advanced";chosen:root.profile-tab=="advanced";}
                             Rectangle{horizontal-stretch:1;}
                         }
                         if root.profile-tab=="network": VerticalLayout{spacing:10px;
-                            Text{text:"设备连接地址（随 WebDAV 同步）";color:Palette.ink;}
-                            network-primary:=LineEdit{text:root.network-address;placeholder-text:"首选 IP 或主机名";}
-                            network-extra:=LineEdit{text:root.network-addresses;placeholder-text:"备用地址，以逗号分隔，例如 100.x.x.x";}
+                            Text{text:"设备地址";color:Palette.ink;}
+                            Text{text:root.network-summary;color:Palette.muted;font-size:12px;wrap:word-wrap;}
+                            Text{text:"连接会按路径顺序尝试所有已保存地址，内网地址不会限制外网连接。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
+                            network-primary:=LineEdit{text:root.network-address;placeholder-text:"首选 IP 或主机名";edited(value)=>{Commands.trigger("settings.network.edit","address="+value);}}
+                            network-extra:=LineEdit{text:root.network-addresses;placeholder-text:"备用地址，以逗号分隔，例如 100.x.x.x";edited(value)=>{Commands.trigger("settings.network.edit","addresses="+value);}}
                             HorizontalLayout{
-                                ActionButton{text:"保存地址";action-id:"device.network.configure";argument:root.selected-uuid+"|"+network-primary.text+"|"+network-extra.text;}
                                 ActionButton{text:"诊断连接";action-id:"device.network.diagnose";argument:root.selected-uuid;}
                                 Rectangle{horizontal-stretch:1;}
                             }
@@ -424,17 +423,16 @@ export component MainWindow inherits Window {
                             }
                             ActionButton{text:"恢复默认顺序";action-id:"settings.set";argument:"routeOrder=default";}
                             Text{text:"中继服务器";color:Palette.ink;}
-                            relay-edit:=LineEdit{text:root.relay-url;placeholder-text:"https://relay.example.com";}
-                            ActionButton{text:"应用服务器地址";action-id:"settings.set";argument:"relayUrl="+relay-edit.text;}
+                            relay-edit:=LineEdit{text:root.relay-url;placeholder-text:"https://relay.example.com";edited(value)=>{Commands.trigger("settings.network.edit","relayUrl="+value);}}
                             Text{text:"按顺序尝试已启用的路径；同类路径按实测质量选择。更改随本设备连接配置同步。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             Text{text:root.network-report;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
                         if root.profile-tab=="video": HorizontalLayout{spacing:6px;
-                            ActionButton{text:"720P";action-id:"settings.set";argument:"resolution=1280x720";}
-                            ActionButton{text:"1080P";action-id:"settings.set";argument:"resolution=1920x1080";}
-                            ActionButton{text:"1440P";action-id:"settings.set";argument:"resolution=2560x1440";}
-                            ActionButton{text:"平板";action-id:"settings.set";argument:"resolution=2520x1680";}
-                            ActionButton{text:"4K";action-id:"settings.set";argument:"resolution=3840x2160";}
+                            ActionButton{text:"720P";chosen:root.profile-width==1280 && root.profile-height==720;action-id:"settings.set";argument:"resolution=1280x720";}
+                            ActionButton{text:"1080P";chosen:root.profile-width==1920 && root.profile-height==1080;action-id:"settings.set";argument:"resolution=1920x1080";}
+                            ActionButton{text:"1440P";chosen:root.profile-width==2560 && root.profile-height==1440;action-id:"settings.set";argument:"resolution=2560x1440";}
+                            ActionButton{text:"平板";chosen:root.profile-width==2520 && root.profile-height==1680;action-id:"settings.set";argument:"resolution=2520x1680";}
+                            ActionButton{text:"4K";chosen:root.profile-width==3840 && root.profile-height==2160;action-id:"settings.set";argument:"resolution=3840x2160";}
                             Rectangle{horizontal-stretch:1;}
                         }
                         for field in root.profile-fields: VerticalLayout{spacing:6px;
@@ -448,16 +446,16 @@ export component MainWindow inherits Window {
                             if field.help!="": Text{text:field.help;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
                         if root.profile-tab=="audio": Text{text:"主机 Sunshine 需启用音频捕获。串流中可随时切换声音和音量。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
-                        Text{text:"保存后用于下次连接。";color:Palette.muted;font-size:12px;}
+                        Text{text:"保存后用于下次连接；取消会放弃本页改动。";color:Palette.muted;font-size:12px;}
                         HorizontalLayout{Rectangle{horizontal-stretch:1;}ActionButton{text:"取消";action-id:"settings.cancel";}ActionButton{text:"保存";action-id:"settings.save";argument:display-name-edit.text;primary:true;}}
                     }
                     if root.page=="global-settings": VerticalLayout {spacing:20px;vertical-stretch:0;
                         HorizontalLayout{Text{text:"设置";font-size:26px;font-weight:600;color:Palette.ink;}Rectangle{horizontal-stretch:1;}ActionButton{text:"返回";action-id:"devices.open";}}
                         HorizontalLayout{spacing:8px;
-                            ActionButton{text:"更新";action-id:"app.settings.tab";argument:"updates";chosen:root.settings-tab=="updates";}
-                            ActionButton{text:"配置同步";action-id:"app.settings.tab";argument:"sync";chosen:root.settings-tab=="sync";}
-                            ActionButton{text:"外观";action-id:"app.settings.tab";argument:"appearance";chosen:root.settings-tab=="appearance";}
-                            ActionButton{text:"关于";action-id:"app.settings.tab";argument:"about";chosen:root.settings-tab=="about";}
+                            TabButton{text:"更新";action-id:"app.settings.tab";argument:"updates";chosen:root.settings-tab=="updates";}
+                            TabButton{text:"配置同步";action-id:"app.settings.tab";argument:"sync";chosen:root.settings-tab=="sync";}
+                            TabButton{text:"外观";action-id:"app.settings.tab";argument:"appearance";chosen:root.settings-tab=="appearance";}
+                            TabButton{text:"关于";action-id:"app.settings.tab";argument:"about";chosen:root.settings-tab=="about";}
                             Rectangle{horizontal-stretch:1;}
                         }
                         if root.settings-tab=="appearance": VerticalLayout{spacing:16px;
@@ -479,8 +477,8 @@ export component MainWindow inherits Window {
                             }
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                             HorizontalLayout{spacing:10px;
-                                ActionButton{text:"保存设置";action-id:"sync.configure";argument:dav-url.text+"\n"+dav-user.text+"\n"+dav-password.text+"\n"+(dav-auto.checked ? "true" : "false")+"\n"+(dav-interval.current-index==0?"5":dav-interval.current-index==1?"15":dav-interval.current-index==2?"30":"60");disabled:root.sync-busy;}
-                                ActionButton{text:root.sync-busy ? "同步中…" : "立即同步";action-id:"sync.run";primary:true;disabled:root.sync-busy || !root.sync-has-password;}
+                                ActionButton{text:"保存设置";primary:true;action-id:"sync.configure";argument:dav-url.text+"\n"+dav-user.text+"\n"+dav-password.text+"\n"+(dav-auto.checked ? "true" : "false")+"\n"+(dav-interval.current-index==0?"5":dav-interval.current-index==1?"15":dav-interval.current-index==2?"30":"60");disabled:root.sync-busy;}
+                                ActionButton{text:root.sync-busy ? "同步中…" : "立即同步";action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
                                 ActionButton{text:"移除设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
                                 Text{text:root.sync-last;color:Palette.muted;vertical-alignment:center;font-size:12px;}
                                 Rectangle{horizontal-stretch:1;}
@@ -493,19 +491,21 @@ export component MainWindow inherits Window {
                         }
                         if root.settings-tab=="updates": VerticalLayout{spacing:14px;
                             Text{text:"RHRemote-Moonlight "+root.app-version;color:Palette.ink;font-size:18px;}
-                            Text{text:root.updates-managed ? "自动检查更新 · GitHub / Gitee" : "开发预览版。安装 Velopack 版本后启用自动更新。";color:Palette.muted;wrap:word-wrap;}
-                            Text{text:root.updates-available ? "可用版本："+root.update-version : "";color:Palette.ink;}
+                            Text{text:root.updates-managed ? "自动检查更新 · GitHub / Gitee" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
+                            if root.updates-available: Text{text:"可用版本："+root.update-version;color:Palette.ink;}
                             HorizontalLayout{spacing:10px;
-                                ActionButton{text:root.updates-busy ? "处理中…" : "检查更新";action-id:"updates.check";disabled:root.updates-busy || !root.updates-managed;}
-                                ActionButton{text:"下载更新";action-id:"updates.download";disabled:root.updates-busy || !root.updates-available;}
-                                ActionButton{text:"重启并安装";action-id:"updates.install";primary:true;disabled:root.updates-busy || !root.updates-pending || root.streaming;}
+                                ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || ((root.updates-available || root.updates-pending) && (root.streaming || root.connecting));}
                                 Rectangle{horizontal-stretch:1;}
                             }
-                            Text{text:root.update-status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                            if root.updates-busy: Rectangle {height:4px;background:Palette.line;border-radius:2px;
+                                Rectangle {height:parent.height;width:parent.width * (root.update-phase=="downloading" ? root.update-progress / 100 : 0.12);background:Palette.blue;border-radius:2px;}
+                            }
+                            Text{text:root.update-status;color:root.update-phase=="error" ? #b04452 : Palette.muted;wrap:word-wrap;font-size:12px;}
+                            Text{text:root.streaming || root.connecting ? "请先断开远程连接再安装更新。" : "安装时会重启 RHRemote。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
                         if root.settings-tab=="about": VerticalLayout{spacing:14px;
                             Text{text:"RHRemote-Moonlight";font-size:22px;color:Palette.ink;}
-                            Text{text:"Windows · Rust + Slint\n串流核心 · Moonlight\n协议服务端 · Sunshine\nGPL v3";color:Palette.muted;}
+                            Text{text:"版本 "+root.app-version+"\n串流核心 · Moonlight\n服务端 · Sunshine\nGPL v3";color:Palette.muted;}
                             ActionButton{text:root.test-mode?"测试统计：开启":"测试统计：关闭";action-id:"statistics.configure";argument:root.test-mode?"false":"true";chosen:root.test-mode;disabled:root.streaming||root.connecting;}
                             Text{text:"测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。";color:Palette.muted;wrap:word-wrap;}
                             Text{text:root.trace-path;color:Palette.muted;wrap:word-wrap;font-size:12px;}
@@ -513,8 +513,8 @@ export component MainWindow inherits Window {
                     }
                     if root.page=="add": VerticalLayout {spacing:20px;
                         Text{text:"添加电脑";color:Palette.ink;font-size:26px;}
-                        Text{text:"输入电脑的局域网地址";color:Palette.muted;}
-                        address := LineEdit {placeholder-text:"例如 192.168.0.104";}
+                        Text{text:"输入 IP 或主机名，支持局域网、Tailscale 和公网地址";color:Palette.muted;wrap:word-wrap;}
+                        address := LineEdit {placeholder-text:"例如 192.168.0.104 或 100.x.x.x";}
                         HorizontalLayout{Rectangle{horizontal-stretch:1;}ActionButton{text:"取消";action-id:"device.add.cancel";}ActionButton{text:"添加";action-id:"device.add.submit";argument:address.text;primary:true;}}
                     }
                     if root.page=="pair": VerticalLayout {spacing:22px;

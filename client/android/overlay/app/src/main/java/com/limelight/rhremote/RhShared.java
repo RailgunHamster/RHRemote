@@ -173,10 +173,20 @@ public final class RhShared {
         }
     }
     public static synchronized void saveProfile(Context c,ComputerDetails d,RhProfile p,String displayName)throws Exception {
+        saveProfile(c,d,p,displayName,null,null);
+    }
+    public static synchronized void saveProfile(Context c,ComputerDetails d,RhProfile p,String displayName,String primary,JSONArray extra)throws Exception {
         displayName=validateDisplayName(displayName);
-        JSONObject shared=capture(c,Collections.singletonList(d));
+        List<String> normalized=primary==null?null:RhNetwork.addresses(RhActions.obj("address",primary,"addresses",extra));
+        // Build one validated shared document before replacing persistent state.
+        JSONObject shared=read(c);
+        JSONObject captured=metadata(d,swap(shared,d.uuid),displayName);
+        JSONArray existing=shared.getJSONArray("devices");boolean known=false;for(int i=0;i<existing.length();i++)if(d.uuid.equals(existing.getJSONObject(i).optString("uuid")))known=true;
+        if(!known&&captured!=null)existing.put(captured);
+        if(!shared.getJSONObject("profiles").has(clientId(c)))shared.getJSONObject("profiles").put(clientId(c),new JSONObject());
+        shared.getJSONObject("clients").put(clientId(c),clientInfo());
         JSONArray devices=shared.getJSONArray("devices");boolean found=false;
-        for(int i=0;i<devices.length();i++)if(d.uuid.equals(devices.getJSONObject(i).getString("uuid"))){devices.getJSONObject(i).put("swapButtons",p.swapButtons).put("displayName",displayName);found=true;}
+        for(int i=0;i<devices.length();i++)if(d.uuid.equals(devices.getJSONObject(i).getString("uuid"))){JSONObject device=devices.getJSONObject(i);device.put("swapButtons",p.swapButtons).put("displayName",displayName);if(normalized!=null){JSONArray addresses=new JSONArray();for(String value:normalized)if(!value.equalsIgnoreCase(primary))addresses.put(value);device.put("address",primary).put("addresses",addresses);}found=true;}
         if(!found)throw new IOException("host address unavailable");
         shared.getJSONObject("profiles").getJSONObject(clientId(c)).put(d.uuid,p.clientJson());validate(shared);write(file(c),shared);
     }

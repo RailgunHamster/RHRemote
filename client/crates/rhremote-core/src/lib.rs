@@ -173,6 +173,9 @@ pub struct State {
     pub device_query: String,
     pub draft: Option<Profile>,
     pub draft_display_name: String,
+    pub draft_address: String,
+    pub draft_addresses: String,
+    pub draft_relay: String,
     pub profile_tab: String,
     pub profile_sources_expanded: bool,
     pub settings_catalog: Value,
@@ -231,6 +234,7 @@ pub struct ActionTiming {
 pub trait Platform: Send + Sync {
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String>;
     fn connection_requested(&self, _timing: Option<ActionTiming>) {}
+    fn update_state(&self) -> Option<Value> { None }
 }
 pub struct Controller {
     state: Mutex<State>,
@@ -280,6 +284,9 @@ impl Controller {
                 device_query: String::new(),
                 draft: None,
                 draft_display_name: String::new(),
+                draft_address: String::new(),
+                draft_addresses: String::new(),
+                draft_relay: String::new(),
                 profile_tab: "video".into(),
                 profile_sources_expanded: false,
                 settings_catalog: settings_catalog(),
@@ -326,7 +333,10 @@ impl Controller {
         Ok(controller)
     }
     pub fn state(&self) -> Value {
-        serde_json::to_value(&*self.state.lock().unwrap()).unwrap()
+        let mut value = serde_json::to_value(&*self.state.lock().unwrap()).unwrap();
+        // Read progress without taking the updater's network/installation lock.
+        if let Some(updates) = self.platform.update_state() { value["updates"] = updates; }
+        value
     }
     pub fn profile(&self, uuid: &str) -> Profile {
         self.state.lock().unwrap().saved.effective_profile(uuid)
@@ -571,10 +581,12 @@ impl Controller {
             "device.network.diagnose" => {
                 let uuid=args["uuid"].as_str().ok_or("uuid required")?;
                 let mut device=connection_device(&s,uuid)?;
+                if s.selected==uuid && s.draft.is_some(){device.address=s.draft_address.trim().into();device.addresses=s.draft_addresses.split([',',';','，','\n']).map(str::trim).filter(|s|!s.is_empty()).map(str::to_owned).collect();}
                 if let Some(primary)=args.get("address").and_then(Value::as_str){device.address=primary.into();}
                 if let Some(extra)=args.get("addresses"){device.addresses=serde_json::from_value(extra.clone()).map_err(|_|"addresses requires an array")?;}
                 network::addresses(&device.address,&device.addresses)?;
-                let profile=if s.selected==uuid{s.draft.clone().unwrap_or_else(||s.saved.effective_profile(uuid))}else{s.saved.effective_profile(uuid)};
+                let mut profile=if s.selected==uuid{s.draft.clone().unwrap_or_else(||s.saved.effective_profile(uuid))}else{s.saved.effective_profile(uuid)};
+                if s.selected==uuid && s.draft.is_some(){profile.relay_url=s.draft_relay.trim().into();profile.validate()?;}
                 args["device"]=json!(device);args["profile"]=json!(profile);
                 drop(s);let result=self.platform.execute(id,&args)?;
                 let mut s=self.state.lock().unwrap();s.network=result.clone();s.revision+=1;return Ok(result);
@@ -597,6 +609,8 @@ impl Controller {
                     return Err("unknown device".into());
                 }
                 s.draft = Some(s.saved.effective_profile(&uuid));
+                let host=s.saved.devices.iter().find(|d|d.uuid==uuid).map(|d|(d.address.clone(),d.addresses.clone())).unwrap_or_else(||{let d=s.devices.iter().find(|d|d.uuid==uuid).unwrap();(d.address.clone(),d.addresses.clone())});
+                s.draft_address=host.0;s.draft_addresses=host.1.join(", ");s.draft_relay=s.draft.as_ref().unwrap().relay_url.clone();
                 s.draft_display_name = s
                     .saved
                     .devices
@@ -619,6 +633,11 @@ impl Controller {
                     next.route_order.swap(index,target);
                 }
                 next.validate()?;s.draft=Some(next);
+            }
+            "settings.network.edit" => {
+                if s.draft.is_none(){return Err("open device settings first".into());}
+                let value=args["value"].as_str().filter(|v|v.len()<=4096).ok_or("network field requires bounded text")?;
+                match args["key"].as_str(){Some("address")=>s.draft_address=value.into(),Some("addresses")=>s.draft_addresses=value.into(),Some("relayUrl")=>s.draft_relay=value.into(),_=>return Err("unknown network field".into())}
             }
             "settings.set" => {
                 let current = s.draft.as_ref().ok_or("open device settings first")?;
@@ -647,6 +666,7 @@ impl Controller {
                 }
                 let next: Profile = serde_json::from_value(value).map_err(|e| e.to_string())?;
                 next.validate()?;
+                if key=="relayUrl"{s.draft_relay=next.relay_url.clone();}
                 s.draft = Some(next);
             }
             "settings.catalog" => return Ok(json!({"fields":settings_catalog()})),
@@ -683,31 +703,40 @@ impl Controller {
                     .to_profile();
                 // Copy quality/input preferences only; the host mouse setting is shared separately.
                 p.swap_buttons = s.draft.as_ref().unwrap().swap_buttons;
-                s.draft = Some(p);
+                s.draft_relay=p.relay_url.clone();s.draft = Some(p);
             }
             "settings.save" => {
-                let p = s.draft.clone().ok_or("no settings draft")?;
+                let mut p = s.draft.clone().ok_or("no settings draft")?;
+                p.relay_url=s.draft_relay.trim().into();
                 p.validate()?;
                 let mut next = s.saved.clone();
                 next.devices = sync_model::from_state(&s).devices;
+                let primary=s.draft_address.trim().to_owned();
+                let extra:Vec<String>=s.draft_addresses.split([',',';','，','\n']).map(str::trim).filter(|s|!s.is_empty()).map(str::to_owned).collect();
+                let all=network::addresses(&primary,&extra)?;
+                let extra:Vec<String>=all.into_iter().filter(|a|!a.eq_ignore_ascii_case(&primary)).collect();
+                let network_changed=s.devices.iter().find(|d|d.uuid==s.selected).is_none_or(|d|d.address!=primary||d.addresses!=extra);
                 let name = sync_model::display_name(
                     args.get("displayName")
                         .and_then(Value::as_str)
                         .unwrap_or(&s.draft_display_name),
                 )?;
                 if let Some(d) = next.devices.iter_mut().find(|d| d.uuid == s.selected) {
-                    d.display_name = name.clone();
+                    d.display_name = name.clone();d.address=primary.clone();d.addresses=extra.clone();
                 }
                 next.save_profile(&s.selected, p);
                 self.persist(&next)?;
                 let selected = s.selected.clone();
                 if let Some(d) = s.devices.iter_mut().find(|d| d.uuid == selected) {
-                    d.display_name = name;
+                    d.display_name = name;d.address=primary;d.addresses=extra;
                 }
                 s.saved = next;
                 s.draft = None;
                 s.page = "devices".into();
-                s.status = "连接偏好已保存".into();
+                s.status = "连接设置已保存".into();
+                let rows=s.devices.clone();s.revision+=1;drop(s);
+                if network_changed{self.platform.execute("devices.restore",&json!({"devices":rows}))?;}
+                return Ok(json!({"saved":true}));
             }
             "appearance.toggle" => {
                 let mut next = s.saved.clone();
@@ -960,6 +989,7 @@ pub fn start_http(
     let server = tiny_http::Server::http((std::net::Ipv4Addr::LOCALHOST, port))
         .map_err(|e| e.to_string())?;
     Ok(std::thread::spawn(move || {
+        let update_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
         for mut request in server.incoming_requests() {
             let authenticated = request.headers().iter().any(|h| {
                 h.field.equiv("Authorization") && h.value.as_str() == format!("Bearer {token}")
@@ -992,9 +1022,32 @@ pub fn start_http(
                     {
                         Some(v) => {
                             let id = v["id"].as_str().unwrap_or("");
+                            // Keep state/navigation HTTP calls responsive while a
+                            // synchronous update request waits on the mirrors.
+                            if matches!(id,"updates.primary"|"updates.check"|"updates.download"|"updates.install") {
+                                use std::sync::atomic::Ordering;
+                                if !update_request.swap(true,Ordering::AcqRel) {
+                                    let controller=controller.clone();let gate=update_request.clone();
+                                    let id=id.to_owned();let args=v.get("args").cloned().unwrap_or(json!({}));
+                                    std::thread::spawn(move||{
+                                        struct Release(Arc<std::sync::atomic::AtomicBool>);
+                                        impl Drop for Release {fn drop(&mut self){self.0.store(false,Ordering::Release);}}
+                                        let _release=Release(gate);
+                                        let value=controller.dispatch(&id,args);
+                                        let status=if value["ok"]==true{200}else{422};
+                                        let response=tiny_http::Response::from_string(value.to_string()).with_status_code(status)
+                                            .with_header(tiny_http::Header::from_bytes("Content-Type","application/json; charset=utf-8").unwrap())
+                                            .with_header(tiny_http::Header::from_bytes("Cache-Control","no-store").unwrap());
+                                        let _=request.respond(response);
+                                    });
+                                    continue;
+                                }
+                                (422,json!({"ok":false,"error":"更新操作正在进行","action":id}))
+                            } else {
                             let response = controller
                                 .dispatch(id, v.get("args").cloned().unwrap_or(json!({})));
                             (if response["ok"] == true { 200 } else { 422 }, response)
+                            }
                         }
                         None => (400, json!({"ok":false,"error":"invalid JSON"})),
                     }

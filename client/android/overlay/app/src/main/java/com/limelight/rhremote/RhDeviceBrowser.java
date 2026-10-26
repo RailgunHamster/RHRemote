@@ -24,7 +24,7 @@ public final class RhDeviceBrowser extends LinearLayout {
     private final LinearLayout listPane,list,detailBody,detailHeader;
     private final ScrollView detail;
     private final EditText search;
-    private final TextView count,title,subtitle,availability;
+    private final TextView count,title,subtitle,availability,endpoints,lastRoute;
     private final Button back,settings,connect,up,down;
     private final Map<String,LinearLayout> rows=new LinkedHashMap<>();
     private final TextView[] values=new TextView[8];
@@ -82,7 +82,7 @@ public final class RhDeviceBrowser extends LinearLayout {
 
         LinearLayout quality=row();metric(quality,"分辨率",0,1.5f);metric(quality,"帧率",1,1);metric(quality,"码率",2,1);detailBody.addView(quality);
         space(detailBody,16);divider(detailBody);section("设备信息");
-        LinearLayout host=row();metric(host,"连接地址",3,1.5f);metric(host,"配对状态",4,1);detailBody.addView(host);
+        LinearLayout host=row();metric(host,"首选地址",3,1.5f);metric(host,"配对状态",4,1);detailBody.addView(host);space(detailBody,12);endpoints=text("",13,muted,false);detailBody.addView(endpoints);space(detailBody,8);lastRoute=text("",13,muted,false);detailBody.addView(lastRoute);
         section("当前客户端配置");LinearLayout profile=row();metric(profile,"视频编码",5,1);metric(profile,"声音",6,1);metric(profile,"屏幕",7,1);detailBody.addView(profile);
         space(detailBody,16);divider(detailBody);space(detailBody,16);detailBody.addView(text("设备顺序",12,muted,false));space(detailBody,12);
         RhActionRow ordering=new RhActionRow(activity);up=button("上移",false,()->send("device.move","uuid",selected,"direction","up"));down=button("下移",false,()->send("device.move","uuid",selected,"direction","down"));ordering.addView(up);ordering.addView(down);detailBody.addView(ordering);
@@ -117,6 +117,7 @@ public final class RhDeviceBrowser extends LinearLayout {
         availability.setVisibility(VISIBLE);boolean online=d.state==ComputerDetails.State.ONLINE,paired=RhNetwork.connectInsteadOfPair(d);
         String name=RhShared.displayName(activity,d.uuid,d.name);title.setText(name);subtitle.setText(name.equals(d.name)?address(d):d.name);
         availability.setText(d.state==ComputerDetails.State.UNKNOWN?"检查中":online?"在线":"离线");availability.setTextColor(online?green:muted);
+        endpoints.setText(RhNetwork.savedSummary(activity,d));lastRoute.setText(RhNetwork.lastRoute(d.uuid));
         connect.setText(paired?"连接":"配对");RhProfile p=RhProfile.load(activity,d.uuid);
         String[] data={p.width+" × "+p.height,p.fps+" FPS",p.bitrateMbps+" Mbps",address(d),paired?"已配对":"未配对",p.codec,p.audioEnabled?"开启":"关闭",p.displayMode.equals("virtual")?"虚拟屏":"自动"};
         for(int i=0;i<values.length;i++)values[i].setText(data[i]);int index=devices.indexOf(d);up.setEnabled(index>0);down.setEnabled(index>=0&&index<devices.size()-1);
@@ -125,7 +126,7 @@ public final class RhDeviceBrowser extends LinearLayout {
     private void renderList(){
         String needle=query.trim().toLowerCase(Locale.ROOT);List<String> visible=new ArrayList<>();int online=0;
         for(ComputerDetails d:devices){if(d.state==ComputerDetails.State.ONLINE)online++;String name=RhShared.displayName(activity,d.uuid,d.name),address=address(d);
-            if(!needle.isEmpty()&&!(name+"\n"+d.name+"\n"+address).toLowerCase(Locale.ROOT).contains(needle))continue;
+            if(!needle.isEmpty()&&!(name+"\n"+d.name+"\n"+address+"\n"+RhNetwork.savedSummary(activity,d)).toLowerCase(Locale.ROOT).contains(needle))continue;
             visible.add(d.uuid);LinearLayout cell=rows.get(d.uuid);
             if(cell==null){cell=row();cell.setPadding(dp(12),dp(12),dp(12),dp(12));cell.setMinimumHeight(dp(92));ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_monitor);icon.setColorFilter(accent);icon.setPadding(dp(7),dp(7),dp(7),dp(7));icon.setBackground(background(page,0,8));LayoutParams iconParams=new LayoutParams(dp(36),dp(36));iconParams.setMarginEnd(dp(12));cell.addView(icon,iconParams);LinearLayout names=column();for(int i=0;i<3;i++){TextView text=text("",i==0?14:12,i==0?ink:muted,i==0);text.setSingleLine(true);text.setEllipsize(TextUtils.TruncateAt.END);text.setPadding(0,dp(2),0,dp(2));names.addView(text);}cell.addView(names,new LayoutParams(0,-2,1));final String uuid=d.uuid;cell.setOnClickListener(v->send("device.select","uuid",uuid));rows.put(d.uuid,cell);}
             cell.setBackground(background(d.uuid.equals(selected)?soft:surface,0,8));cell.setContentDescription("选择设备 "+name);LinearLayout names=(LinearLayout)cell.getChildAt(1);

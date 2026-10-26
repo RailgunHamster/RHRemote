@@ -551,6 +551,7 @@ pub struct NativePlatform {
     device_operation: Mutex<()>,
     network: Arc<crate::network::Network>,
     updates: Mutex<crate::updates::Updates>,
+    update_snapshot: Arc<Mutex<Value>>,
     pub statistics: Arc<Mutex<crate::statistics::Statistics>>,
     retired_launches: Arc<Mutex<Vec<std::thread::JoinHandle<Result<LaunchOutcome, String>>>>>,
     cleanup: crate::native_cleanup::Queue,
@@ -561,6 +562,8 @@ pub struct NativePlatform {
 impl NativePlatform {
     pub fn new(engine: PathBuf, token: String, data: PathBuf) -> Result<Self, String> {
         let statistics = crate::statistics::Statistics::new(&data);
+        let updates=crate::updates::Updates::new();
+        let update_snapshot=updates.snapshot();
         let native_data = data.join("engine-state");
         fs::create_dir_all(&native_data).map_err(|e| e.to_string())?;
         fs::write(native_data.join("portable.dat"), b"").map_err(|e| e.to_string())?;
@@ -639,7 +642,8 @@ impl NativePlatform {
             sync: Mutex::new(crate::config_sync::ConfigSync::new(data)?),
             device_operation: Mutex::new(()),
             network: Arc::new(crate::network::Network::default()),
-            updates: Mutex::new(crate::updates::Updates::new()),
+            updates: Mutex::new(updates),
+            update_snapshot,
             statistics: Arc::new(Mutex::new(statistics)),
             retired_launches: Arc::new(Mutex::new(Vec::new())),
             cleanup: Default::default(),
@@ -1275,6 +1279,7 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    fn update_state(&self)->Option<Value>{Some(self.update_snapshot.lock().unwrap().clone())}
     fn connection_requested(&self, timing: Option<rhremote_core::ActionTiming>) {
         self.statistics.lock().unwrap().connection_requested(timing);
     }

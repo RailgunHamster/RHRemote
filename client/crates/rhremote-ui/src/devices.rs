@@ -1,10 +1,24 @@
 use crate::{DeviceRow, MainWindow};
 use slint::{Model, ModelRc, VecModel};
+use serde_json::Value;
 
 pub fn filter_devices(rows: Vec<DeviceRow>, query: &str) -> Vec<DeviceRow> {
     let query = query.trim().to_lowercase();
-    rows.into_iter().filter(|d| query.is_empty() || [&d.name, &d.host_name, &d.address]
+    rows.into_iter().filter(|d| query.is_empty() || [&d.name, &d.host_name, &d.address, &d.search_addresses]
         .iter().any(|s| s.to_lowercase().contains(&query))).collect()
+}
+
+pub fn address_summary(host:Option<&Value>)->String {
+    let Some(host)=host else{return "尚未保存地址".into()};
+    std::iter::once(host["address"].as_str()).chain(host["addresses"].as_array().into_iter().flatten().map(Value::as_str)).flatten().map(|address|{
+        let kind=rhremote_core::network::kind(address);
+        match kind {"tailscale"=>format!("Tailscale：{address}"),"transport"=>"内置直连 / 中继：已配置".into(),"lan"=>format!("局域网：{address}"),_=>format!("公网 / 主机名：{address}")}
+    }).collect::<Vec<_>>().join("\n")
+}
+pub fn last_route(network:&Value,uuid:&str)->String {
+    if network["uuid"]!=uuid || !network["selectedAddress"].is_string(){return "最近选路：尚无记录".into();}
+    let route=network["route"].as_str().unwrap_or("");let label=rhremote_core::network::ROUTES.iter().find(|(key,_)|*key==route).map(|(_,label)|*label).unwrap_or("未知路径");
+    format!("最近选路：{label}")
 }
 
 pub fn update_devices(ui: &MainWindow, rows: Vec<DeviceRow>) {
@@ -34,6 +48,13 @@ mod tests {
     use slint::{ComponentHandle, LogicalPosition, LogicalSize, platform::{PointerEventButton, WindowEvent}};
     use std::{cell::Cell, rc::Rc, time::Duration};
 
+    #[test]
+    fn search_includes_saved_tailscale_addresses_and_does_not_call_them_active_routes(){
+        let host=serde_json::json!({"address":"192.168.0.104","addresses":["100.73.139.109",format!("rhr:{}","a".repeat(64))]});
+        let summary=address_summary(Some(&host));assert!(summary.contains("Tailscale：100.73.139.109"));assert!(summary.contains("内置直连 / 中继：已配置"));
+        let row=DeviceRow{address:"192.168.0.104".into(),search_addresses:summary.into(),..Default::default()};assert_eq!(filter_devices(vec![row],"100.73.139.109").len(),1);
+        assert_eq!(last_route(&serde_json::json!({"uuid":"another","route":"lan","selectedAddress":"192.168.0.104"}),"host"),"最近选路：尚无记录");
+    }
     #[test]
     fn search_matches_alias_hostname_and_address_without_reordering() {
         let rows = vec![
@@ -72,7 +93,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = MainWindow::new().unwrap();
         ui.window().set_size(LogicalSize::new(1180., 780.));
-        let rows = vec![DeviceRow {uuid:"test-server".into(),name:"winserver".into(),host_name:"winserver".into(),address:"192.168.0.104".into(),status:"已配对".into(),online:true,paired:true,is_self:false}];
+        let rows = vec![DeviceRow {uuid:"test-server".into(),name:"winserver".into(),host_name:"winserver".into(),address:"192.168.0.104".into(),search_addresses:"100.73.139.109".into(),status:"已配对".into(),online:true,paired:true,is_self:false}];
         update_devices(&ui, rows.clone());
         ui.set_selected_uuid(rows[0].uuid.clone());
         ui.set_selected_device(rows[0].clone());
