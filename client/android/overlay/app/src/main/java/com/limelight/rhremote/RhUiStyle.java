@@ -10,8 +10,10 @@ import com.limelight.R;
 /** Native enabled/focus states shared by the browser, forms and session panel. */
 final class RhUiStyle {
     private RhUiStyle(){}
+    static int failure(boolean dark){return android.graphics.Color.parseColor(dark?"#f28b9c":"#b04452");}
+    static void buttonText(Button button,int normalText,int disabledText){button.setTextColor(new ColorStateList(new int[][]{{-android.R.attr.state_enabled},{}},new int[]{disabledText,normalText}));}
     static void button(Button button,int normalText,int disabledText,Drawable normal,Drawable disabled,Drawable focused){
-        button.setTextColor(new ColorStateList(new int[][]{{-android.R.attr.state_enabled},{}},new int[]{disabledText,normalText}));
+        buttonText(button,normalText,disabledText);
         StateListDrawable backgrounds=new StateListDrawable();
         backgrounds.addState(new int[]{-android.R.attr.state_enabled},disabled);
         backgrounds.addState(new int[]{android.R.attr.state_pressed},focused);

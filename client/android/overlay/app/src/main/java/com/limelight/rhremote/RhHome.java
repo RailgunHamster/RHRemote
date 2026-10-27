@@ -40,7 +40,7 @@ public final class RhHome implements RhActions.Target {
     private final ScrollView scroll;
     private final LinkedHashMap<String,ComputerDetails> computers=new LinkedHashMap<>();
     private final HashMap<String,String> signatures=new HashMap<>();
-    private final int page,surface,soft,ink,muted,line,blue,blueSoft,purple,purpleSoft,green;
+    private final int page,surface,soft,ink,muted,line,blue,blueSoft,purple,purpleSoft,green,failureColor;
     private boolean profileVisible;private String statusScope="";
     private String pageId="devices",settingsTab="updates",renderedProfileTab="";
     private RhProfile draft;private ComputerDetails selected;
@@ -88,6 +88,7 @@ public final class RhHome implements RhActions.Target {
         activity=a;actions=callbacks;syncWork=RhSyncWork.shared(a);sync=syncWork.sync;syncBusy=syncWork.busy();syncError=syncWork.error();updateWork=RhUpdateWork.shared(a);updates=updateWork.updates;systemBack=new RhBackNavigation(a,this::goBack);
         boolean dark=RhShared.dark(a);
         renderedDark=dark;
+        failureColor=RhUiStyle.failure(dark);
         page=c(dark?"#151b29":"#f6f7fa");surface=c(dark?"#1b2232":"#ffffff");soft=c(dark?"#202a3e":"#f8faff");
         ink=c(dark?"#e1e8f6":"#34415b");muted=c(dark?"#a4b1c8":"#69778e");line=c(dark?"#303c53":"#e5eaf4");
         blue=c(dark?"#6f8af1":"#5274e8");blueSoft=c(dark?"#253452":"#edf2ff");purple=c(dark?"#ba9aef":"#8b5be2");purpleSoft=c(dark?"#332845":"#f4efff");green=c(dark?"#8bc7b1":"#2e795f");
@@ -240,10 +241,10 @@ public final class RhHome implements RhActions.Target {
     private void showConnection(){
         pageId="connection";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
         boolean pairFlow=connection.operation.equals("pair");TextView title=text(pairFlow?"配对":"连接",23,ink,true);formHeader.addView(title);heading(connection.name,"");
-        TextView stage=text(connection.title(),16,connection.phase.equals("failed")?c("#b04452"):blue,true);stage.setContentDescription(pairFlow?"配对阶段":"连接阶段");content.addView(stage);
+        TextView stage=text(connection.title(),16,connection.phase.equals("failed")?failureColor:blue,true);stage.setContentDescription(pairFlow?"配对阶段":"连接阶段");content.addView(stage);
         if(connectionBusy()&&!connection.phase.equals("connected")){ProgressBar progress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams progressParams=new LinearLayout.LayoutParams(-1,dp(4));progressParams.topMargin=dp(20);content.addView(progress,progressParams);}
         if(!pairFlow){label("1  检查地址与配对");label("2  建立串流");label("3  显示远程画面");}
-        if(!connection.error.isEmpty()){String detail=connection.error.startsWith("连接失败：")?connection.error.substring(5):connection.error;TextView error=text(detail,14,c("#b04452"),false);error.setContentDescription("连接错误");error.setPadding(0,dp(20),0,dp(8));content.addView(error);}
+        if(!connection.error.isEmpty()){String detail=connection.error.startsWith("连接失败：")?connection.error.substring(5):connection.error;TextView error=text(detail,14,failureColor,false);error.setContentDescription("连接错误");error.setPadding(0,dp(20),0,dp(8));content.addView(error);}
         navigationFooter();RhActionRow footer=actionRow();
         if(connectionBusy()){
             boolean cleaning=connection.stopping||connection.phase.equals("cancelling")||connection.phase.equals("cleaning")||connection.phase.equals("failed");
@@ -302,7 +303,7 @@ public final class RhHome implements RhActions.Target {
         org.json.JSONObject groups=shared.optJSONObject("profiles"),clients=shared.optJSONObject("clients");
         int sourceCount=0;for(Iterator<String> it=groups.keys();it.hasNext();){String client=it.next();org.json.JSONObject group=groups.optJSONObject(client);if(!client.equals(currentClient)&&group!=null&&group.has(d.uuid))sourceCount++;}
         Button sources=tab("从其他客户端复制配置",profileSourcesExpanded,()->invoke("settings.sources.toggle",RhActions.obj()));sources.setEnabled(sourceCount>0);sources.setAlpha(sourceCount>0?1f:0.45f);content.addView(sources);if(sourceCount==0)label("此设备还没有其他客户端的配置");if(profileSourcesExpanded) for(Iterator<String> it=groups.keys();it.hasNext();){String client=it.next();org.json.JSONObject group=groups.optJSONObject(client);if(client.equals(currentClient)||group==null||!group.has(d.uuid))continue;org.json.JSONObject source=group.optJSONObject(d.uuid),info=clients.optJSONObject(client);String name=info==null?client:info.optString("name");label(name+" · "+client.substring(Math.max(0,client.length()-4))+" · "+source.optInt("width")+" × "+source.optInt("height")+" · "+source.optInt("fps")+" 帧");Button inspect=button("查看配置",false,()->invoke("settings.copy.preview",RhActions.obj("clientId",client)));inspect.setTag("copy-source:"+client);inspect.setContentDescription("查看 "+name+" 的配置");content.addView(inspect);}
-        copyFailure=text(copyError,13,c("#b04452"),false);copyFailure.setVisibility(copyError.isEmpty()?View.GONE:View.VISIBLE);content.addView(copyFailure);
+        copyFailure=text(copyError,13,failureColor,false);copyFailure.setVisibility(copyError.isEmpty()?View.GONE:View.VISIBLE);content.addView(copyFailure);
         }
         if(profileTab.equals("network"))try {
             label(RhNetwork.savedSummary(activity,d));label("按路径顺序尝试所有已保存地址，内网地址不会限制外网连接。");
@@ -335,7 +336,7 @@ public final class RhHome implements RhActions.Target {
         scroll.setBackgroundColor(page);content.setBackgroundColor(page);formPadding(scroll.getWidth());
         copyDetail("来源客户端",copyPreview.optString("sourceName"));copyDetail("目标设备",copyPreview.optString("targetName"));label("将替换当前草稿的连接参数。设备地址和主机鼠标设置沿用当前值。");
         org.json.JSONArray fields=copyPreview.optJSONArray("fields");for(int i=0;i<fields.length();i++){org.json.JSONObject field=fields.optJSONObject(i);copyDetail(field.optString("label"),field.optString("value"));}
-        copyFailure=text(copyError,13,c("#b04452"),false);copyFailure.setVisibility(copyError.isEmpty()?View.GONE:View.VISIBLE);formFooter.addView(copyFailure);
+        copyFailure=text(copyError,13,failureColor,false);copyFailure.setVisibility(copyError.isEmpty()?View.GONE:View.VISIBLE);formFooter.addView(copyFailure);
         LinearLayout commands=row();commands.setGravity(Gravity.END);commands.addView(button("取消",false,()->invoke("settings.copy.cancel",RhActions.obj())));Button apply=button("复制到草稿",true,()->invoke("settings.copy.apply",RhActions.obj()));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,dp(48));lp.setMarginStart(dp(8));commands.addView(apply,lp);formFooter.addView(commands);scroll.post(()->scroll.scrollTo(0,0));
     }
     private void copyDetail(String title,String value){label(title);TextView detail=text(value,15,ink,false);detail.setTextIsSelectable(true);content.addView(detail,new LinearLayout.LayoutParams(-1,-2));}
@@ -363,7 +364,7 @@ public final class RhHome implements RhActions.Target {
         formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
         LinearLayout heading=row(),titles=column();titles.addView(text("连接设置",22,ink,true));TextView caption=text(RhShared.displayName(activity,device.uuid,device.name)+" · "+RhShared.clientInfo().optString("name"),13,muted,false);caption.setSingleLine(true);caption.setEllipsize(android.text.TextUtils.TruncateAt.END);titles.addView(caption);heading.addView(titles,new LinearLayout.LayoutParams(0,-2,1));heading.addView(button("返回设备",false,()->invoke("navigation.back",RhActions.obj())));formHeader.addView(heading);
         RhActionRow tabs=actionRow();String[] ids={"video","audio","input","network","advanced"},labels={"画面","音频","输入","网络","高级"};for(int i=0;i<ids.length;i++){String id=ids[i];tabs.addView(tab(labels[i],profileTab.equals(id),()->invoke("settings.tab",RhActions.obj("tab",id))));}formHeader.addView(tabs);
-        formErrorView=text("",13,c("#b04452"),false);formErrorView.setVisibility(View.GONE);formFooter.addView(formErrorView);
+        formErrorView=text("",13,failureColor,false);formErrorView.setVisibility(View.GONE);formFooter.addView(formErrorView);
         LinearLayout end=row();formNotice=text("",12,muted,false);formNotice.setSingleLine(true);formNotice.setEllipsize(android.text.TextUtils.TruncateAt.END);end.addView(formNotice,new LinearLayout.LayoutParams(0,-2,1));Button cancel=button("取消",false,()->invoke("settings.cancel",RhActions.obj()));end.addView(cancel);formSave=button("保存",true,()->invoke("settings.save",RhActions.obj()));LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(-2,dp(48));saveParams.setMarginStart(dp(8));end.addView(formSave,saveParams);formFooter.addView(end);refreshProfileFooter();
     }
     private void watch(EditText edit,String action,String key){edit.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){}public void afterTextChanged(android.text.Editable value){if(!bindingProfile)invoke(action,action.equals("device.add.input")?RhActions.obj("address",value.toString()):action.equals("device.info.input")?RhActions.obj("displayName",value.toString()):RhActions.obj("key",key,"value",value.toString()));}});}
@@ -429,7 +430,7 @@ public final class RhHome implements RhActions.Target {
         pageId="device-info";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setVisibility(View.VISIBLE);
         LinearLayout heading=row();heading.addView(text("设备资料",24,ink,true),new LinearLayout.LayoutParams(0,dp(48),1));heading.addView(button("返回设备",false,()->invoke("navigation.back",RhActions.obj())));formHeader.addView(heading);
         ComputerDetails device=computers.get(infoUuid);infoEditor=field("设备名称",infoName,false);infoEditor.setHint(device==null?"":device.name);watch(infoEditor,"device.info.input","");infoEditor.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);infoEditor.setOnEditorActionListener((v,id,event)->{if(id==android.view.inputmethod.EditorInfo.IME_ACTION_DONE){invoke("device.info.save",RhActions.obj());return true;}return false;});
-        infoFailure=text(infoError,13,c("#b04452"),false);content.addView(infoFailure);label("留空使用主机名。显示名称随设备配置同步。");infoReset=button("恢复原名",false,()->invoke("device.info.reset",RhActions.obj()));content.addView(infoReset);
+        infoFailure=text(infoError,13,failureColor,false);content.addView(infoFailure);label("留空使用主机名。显示名称随设备配置同步。");infoReset=button("恢复原名",false,()->invoke("device.info.reset",RhActions.obj()));content.addView(infoReset);
         label("主机名");content.addView(text(device==null?"":device.name,15,ink,false));label("设备标识");content.addView(text(infoUuid,13,ink,false));
         LinearLayout commands=row();infoNotice=text("",12,muted,false);commands.addView(infoNotice,new LinearLayout.LayoutParams(0,dp(48),1));commands.addView(button("取消",false,()->invoke("device.info.cancel",RhActions.obj())));LinearLayout.LayoutParams doneLayout=new LinearLayout.LayoutParams(-2,dp(48));doneLayout.setMarginStart(dp(8));commands.addView(button("完成",true,()->invoke("device.info.save",RhActions.obj())),doneLayout);formFooter.addView(commands);formPadding(scroll.getWidth());refreshInfo();
     }
@@ -439,7 +440,7 @@ public final class RhHome implements RhActions.Target {
         pageId="add";profileVisible=true;showContent();content.removeAllViews();formHeader.setVisibility(View.VISIBLE);formHeader.removeAllViews();
         LinearLayout heading=row();heading.addView(text("添加电脑",24,ink,true),new LinearLayout.LayoutParams(0,dp(48),1));heading.addView(button("返回设备",false,()->invoke("device.add.cancel",RhActions.obj())));formHeader.addView(heading);
         label("IP 或主机名，支持局域网、Tailscale 和公网地址");addEditor=field("设备地址",addAddress,false);addEditor.setHint("例如 192.168.0.104 或 100.x.x.x");watch(addEditor,"device.add.input","address");addEditor.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);addEditor.setOnEditorActionListener((view,action,event)->{invoke("device.add.submit",RhActions.obj());return true;});
-        addFailure=text(addError,13,Color.rgb(176,68,82),false);content.addView(addFailure);
+        addFailure=text(addError,13,failureColor,false);content.addView(addFailure);
         addProgress=row();ProgressBar spinner=new ProgressBar(activity);spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(blue));addProgress.addView(spinner,new LinearLayout.LayoutParams(dp(28),dp(28)));addProgressText=text("",14,muted,false);LinearLayout.LayoutParams progressLabel=new LinearLayout.LayoutParams(-2,dp(48));progressLabel.setMarginStart(dp(12));addProgress.addView(addProgressText,progressLabel);content.addView(addProgress);
         label("找到设备后会保存到远程设备列表，配对在设备详情中完成。");
         formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout footer=row();footer.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(48),1));addCancel=button("取消",false,()->invoke("device.add.cancel",RhActions.obj()));addSubmit=button("添加",true,()->invoke("device.add.submit",RhActions.obj()));footer.addView(addCancel);LinearLayout.LayoutParams submitLayout=new LinearLayout.LayoutParams(-2,dp(48));submitLayout.setMarginStart(dp(8));footer.addView(addSubmit,submitLayout);formFooter.addView(footer);formPadding(scroll.getWidth());refreshAdd();
@@ -658,7 +659,7 @@ public final class RhHome implements RhActions.Target {
     private void refreshUpdateControls(){
         if(updateStatus==null)return;org.json.JSONObject s=updates.state();String phase=s.optString("phase"),provider=s.optString("provider");
         updateVersion.setText(s.isNull("availableVersion")?"":"可用版本 "+s.optString("availableVersion"));updateVersion.setVisibility(s.isNull("availableVersion")?View.GONE:View.VISIBLE);
-        boolean failed=phase.equals("error");updateStatus.setText(failed?"更新失败，请重试。":s.optString("status"));updateStatus.setTextColor(failed?c("#b04452"):ink);
+        boolean failed=phase.equals("error");updateStatus.setText(failed?"更新失败，请重试。":s.optString("status"));updateStatus.setTextColor(failed?failureColor:ink);
         updateDetailsToggle.setVisibility(failed?View.VISIBLE:View.GONE);updateDetailsToggle.setText(updateDetails?"收起详情":"查看详情");updateFailureDetails.setText(s.optString("status"));updateFailureDetails.setVisibility(failed&&updateDetails?View.VISIBLE:View.GONE);
         updateProvider.setText(provider.isEmpty()?"更新源：Gitee / GitHub":"更新源："+provider);
         long total=s.optLong("totalBytes"),bytes=s.optLong("downloadedBytes");boolean downloading=phase.equals("downloading")&&total>0;
@@ -695,7 +696,7 @@ public final class RhHome implements RhActions.Target {
         Spinner interval=new Spinner(activity);interval.setEnabled(!syncBusy);interval.setAdapter(options(new String[]{"5 分钟","15 分钟","30 分钟","60 分钟"}));interval.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));interval.setSelection(Math.max(0,Arrays.asList(5,15,30,60).indexOf(syncDraft.optInt("intervalMinutes",5))));content.addView(interval,new LinearLayout.LayoutParams(-1,dp(48)));
         interval.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){int minutes=new int[]{5,15,30,60}[position];if(syncDraft!=null&&syncDraft.optInt("intervalMinutes",5)!=minutes)invoke("sync.edit",RhActions.obj("key","intervalMinutes","value",minutes));}});
         label("同步设备列表、连接配置和主题。画面参数按客户端分别保存；配对密钥及 WebDAV 凭据不参与同步。");
-        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setPadding(dp(20),dp(8),dp(20),dp(12));syncErrorView=text(syncError,13,android.graphics.Color.rgb(176,68,82),false);formFooter.addView(syncErrorView);
+        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setPadding(dp(20),dp(8),dp(20),dp(12));syncErrorView=text(syncError,13,failureColor,false);formFooter.addView(syncErrorView);
         LinearLayout footer=row();syncNotice=text("",12,muted,false);footer.addView(syncNotice,new LinearLayout.LayoutParams(0,dp(48),1));syncCancel=button("取消",false,()->invoke("sync.cancel",RhActions.obj()));syncSave=button("保存",true,()->invoke("sync.save",RhActions.obj()));footer.addView(syncCancel);LinearLayout.LayoutParams saveLayout=new LinearLayout.LayoutParams(-2,dp(48));saveLayout.setMarginStart(dp(8));footer.addView(syncSave,saveLayout);formFooter.addView(footer);formPadding(scroll.getWidth());refreshSyncFooter();scroll.scrollTo(0,0);
     }
     private void startSync(String resolution)throws Exception{syncWork.start(RhShared.capture(activity,new ArrayList<>(computers.values())),resolution,NETWORK);}

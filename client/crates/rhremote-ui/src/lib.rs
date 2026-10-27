@@ -36,6 +36,8 @@ mod form_tests;
 #[cfg(test)]
 mod sync_ui_tests;
 #[cfg(test)]
+mod appearance_ui_tests;
+#[cfg(test)]
 mod focus_clip_tests;
 slint::include_modules!();
 

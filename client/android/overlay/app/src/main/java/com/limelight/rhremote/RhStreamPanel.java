@@ -25,6 +25,7 @@ public final class RhStreamPanel {
     private final TextView displayStatus, volumeLabel, sessionName, feedback, zoomLabel;
     private final Button feedbackDetails, stats, disconnect;
     private final String surfaceColor,lineColor,inkColor,mutedColor,selectedColor,selectedLine;
+    private final int failureColor;
     private String monitorFingerprint="";private boolean trackingVolume;
     private final SeekBar volume;
     private final LinearLayout monitorList;
@@ -45,6 +46,7 @@ public final class RhStreamPanel {
     public RhStreamPanel(Context context, FrameLayout root, Actions actions) {
         this.context=context;this.root=root;this.actions=actions;
         boolean dark=RhShared.dark(context);surfaceColor=dark?"#1b2232":"#ffffff";lineColor=dark?"#303c53":"#e5eaf4";inkColor=dark?"#e1e8f6":"#34415b";mutedColor=dark?"#a4b1c8":"#69778e";selectedColor=dark?"#253452":"#edf2ff";selectedLine=dark?"#6f8af1":"#c7d4f6";
+        failureColor=RhUiStyle.failure(dark);
         handle=button("控制", "stream.controls.toggle", RhActions.obj());
         handle.setTextColor(Color.WHITE);handle.setBackground(surface("#5274e8",null,18));
         handle.setElevation(dp(4));
@@ -54,7 +56,7 @@ public final class RhStreamPanel {
         panel=new LinearLayout(context);panel.setOrientation(LinearLayout.VERTICAL);panel.setClickable(true);
         panel.setPadding(dp(14),dp(12),dp(14),dp(12));
         panel.setBackground(surface(surfaceColor,lineColor,16));panel.setElevation(dp(10));
-        LinearLayout header=new LinearLayout(context);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0,0,0,dp(8));sessionName=text("远程设备",14);sessionName.setSingleLine(true);sessionName.setEllipsize(android.text.TextUtils.TruncateAt.END);header.addView(sessionName,new LinearLayout.LayoutParams(0,dp(48),1));disconnect=button("断开","stream.disconnect",RhActions.obj());disconnect.setTextColor(Color.parseColor("#b14350"));header.addView(disconnect,new LinearLayout.LayoutParams(-2,dp(48)));panel.addView(header);
+        LinearLayout header=new LinearLayout(context);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0,0,0,dp(8));sessionName=text("远程设备",14);sessionName.setSingleLine(true);sessionName.setEllipsize(android.text.TextUtils.TruncateAt.END);header.addView(sessionName,new LinearLayout.LayoutParams(0,dp(48),1));disconnect=button("断开","stream.disconnect",RhActions.obj());RhUiStyle.buttonText(disconnect,failureColor,Color.parseColor(mutedColor));header.addView(disconnect,new LinearLayout.LayoutParams(-2,dp(48)));panel.addView(header);
         LinearLayout navigation=new LinearLayout(context);navigation.setPadding(0,0,0,dp(10));
         String[] ids={"input","displays","audio"}, labels={"操作","屏幕","声音"};
         for(int i=0;i<ids.length;i++){
@@ -68,7 +70,7 @@ public final class RhStreamPanel {
                 super.onMeasure(widthSpec,MeasureSpec.makeMeasureSpec(Math.max(dp(48),maxBodyHeight),MeasureSpec.AT_MOST));
             }
         };
-        scroll.setFillViewport(false);scroll.setClipToPadding(false);scroll.setPadding(0,0,dp(2),0);
+        scroll.setFillViewport(false);scroll.setClipToPadding(false);scroll.setScrollBarStyle(View.SCROLLBARS_INSIDE_INSET);scroll.setPadding(0,0,dp(6),0);
         LinearLayout pages=new LinearLayout(context);pages.setOrientation(LinearLayout.VERTICAL);
         input=page();screens=page();sound=page();pages.addView(input);pages.addView(screens);pages.addView(sound);
         scroll.addView(pages,new ScrollView.LayoutParams(-1,-2));panel.addView(scroll,new LinearLayout.LayoutParams(-1,-2));
@@ -170,7 +172,7 @@ public final class RhStreamPanel {
         for(int i=0;i<screenGrid.getChildCount();i++)enabled(screenGrid.getChildAt(i),connected&&!busy);
         for(Map.Entry<Button,Boolean> entry:monitorAvailability.entrySet())enabled(entry.getKey(),connected&&!busy&&entry.getValue());
         enabled(audio,connected&&!busy);enabled(volume,connected&&!busy);enabled(refresh,connected&&!busy);
-        boolean visible=tab.equals(group);feedback.setText(visible?(failure.isEmpty()||!message.isEmpty()?message:"操作失败"):"");feedback.setContentDescription(visible?feedback.getText():"");feedback.setTextColor(Color.parseColor(failure.isEmpty()?mutedColor:"#b14350"));feedbackDetails.setVisibility(visible&&!failure.isEmpty()?View.VISIBLE:View.GONE);
+        boolean visible=tab.equals(group);feedback.setText(visible?(failure.isEmpty()||!message.isEmpty()?message:"操作失败"):"");feedback.setContentDescription(visible?feedback.getText():"");feedback.setTextColor(failure.isEmpty()?Color.parseColor(mutedColor):failureColor);feedbackDetails.setVisibility(visible&&!failure.isEmpty()?View.VISIBLE:View.GONE);
     }
     private String monitorName(JSONObject monitor){String name=monitor.optString("name");return monitor.optBoolean("virtual")?"虚拟屏":name.isEmpty()?"物理屏幕":name;}
     public JSONObject layoutState(){Rect h=new Rect(),p=new Rect();handle.getHitRect(h);panel.getHitRect(p);return RhActions.obj("expanded",isExpanded(),"tab",tab,"columns",columns,"handle",RhActions.obj("x",h.left,"y",h.top,"width",h.width(),"height",h.height()),"panel",RhActions.obj("x",p.left,"y",p.top,"width",p.width(),"height",p.height()),"scrollable",scroll.canScrollVertically(1)||scroll.canScrollVertically(-1));}
