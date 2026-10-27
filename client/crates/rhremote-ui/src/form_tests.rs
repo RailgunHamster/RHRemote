@@ -330,6 +330,23 @@ fn closing_an_unsaved_decision_restores_the_existing_editors_focus_without_test_
 }
 
 #[test]
+fn navigation_controls_do_not_replace_the_form_editors_return_focus(){
+    i_slint_backend_testing::init_no_event_loop();
+    for label in ["远程设备","设置","添加电脑","返回设备"]{
+        let ui=MainWindow::new().unwrap();ui.set_page("settings".into());
+        ui.set_profile_fields(ModelRc::new(VecModel::from(vec![SettingRow{key:"width".into(),label:"画面宽度".into(),kind:"number".into(),input_text:"".into(),..Default::default()}])));
+        let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+        let editor=ElementHandle::find_by_accessible_label(&ui,"画面宽度").find(|item|item.accessible_read_only().is_some()).unwrap();let p=editor.absolute_position();let size=editor.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
+        ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:"1".into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:"1".into()});
+        click(&ui,label);ui.set_navigation_prompt(true);
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
+        ui.set_navigation_prompt(false);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:"2".into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:"2".into()});
+        assert_eq!(&*received.borrow(),&[("settings.input".into(),"width=12".into())],"Navigation control {label} replaced the editor focus");ui.hide().unwrap();
+    }
+}
+
+#[test]
 fn dismissing_a_decision_with_an_unavailable_origin_keeps_the_page_keyboard_fallback(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_settings_dirty(true);
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();click(&ui,"保存");

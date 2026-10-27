@@ -131,7 +131,7 @@ component ActionButton inherits Rectangle {
     accessible-enabled:!root.disabled;
     accessible-label: root.text;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
-    UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}}
+    UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve" && root.action-id!="navigation.back";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}}
 }
 component TabButton inherits ActionButton { border-width:root.focused ? 1px : 0px; }
 component NavigationItem inherits Rectangle {
@@ -158,7 +158,7 @@ component NavigationItem inherits Rectangle {
     touch:=TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{nav-focus.focus();Commands.trigger(root.action-id,"");}}
     accessible-role:button;accessible-label:root.text;accessible-enabled:!root.disabled;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,"");}}
-    UiProbe{control-id:"nav|"+root.action-id;kind:"navigation";label:root.text;control-enabled:!root.disabled;focused:nav-focus.has-focus;control-width:root.width;control-height:root.height;focus-requested=>{nav-focus.focus();}}
+    UiProbe{control-id:"nav|"+root.action-id;kind:"navigation";label:root.text;control-enabled:!root.disabled;focused:nav-focus.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;focus-requested=>{nav-focus.focus();}}
 }
 component DetailField inherits VerticalLayout {
     in property <string> label;

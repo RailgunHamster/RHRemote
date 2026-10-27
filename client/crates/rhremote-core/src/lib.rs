@@ -15,6 +15,8 @@ mod device_info;
 mod connection;
 mod profile_copy;
 mod session_ui;
+mod preview;
+pub use preview::PreviewRequest;
 pub use session_ui::is_control_action as is_session_control_action;
 pub mod sync_model;
 pub mod network;
@@ -227,6 +229,8 @@ pub struct State {
     pub last_action: Value,
     pub window_action: String,
     pub preview: Value,
+    #[serde(skip)]
+    preview_request: Option<PreviewRequest>,
     pub toolbar: Value,
     pub ui_rendering: Value,
     pub settings_tab: String,
@@ -358,6 +362,7 @@ impl Controller {
                 last_action: Value::Null,
                 window_action: String::new(),
                 preview: Value::Null,
+                preview_request: None,
                 toolbar: Value::Null,
                 ui_rendering: Value::Null,
                 settings_tab: "updates".into(),
@@ -840,12 +845,13 @@ impl Controller {
             "stream.menu.close" => s.stream_menu.clear(),
             "stream.shortcuts.list" => return Ok(shortcuts()),
             "stream.shortcuts.open" | "stream.displays.open" => {if !s.streaming {return Err("没有可操作的串流".into());}s.controls=true;s.controls_tab=if id=="stream.shortcuts.open"{"input"}else{"displays"}.into();s.stream_menu=if id=="stream.shortcuts.open"{"shortcuts"}else{""}.into();},
+            "view.snapshot" | "view.toolbar.snapshot" | "view.picker.snapshot" => {
+                return preview::request(&mut s,id,&args);
+            }
             "window.minimize"
             | "window.maximize"
             | "window.close"
-            | "view.snapshot"
-            | "view.toolbar.snapshot"
-            | "view.picker.snapshot" => {
+            => {
                 if id == "window.close" {
                     s.stream_epoch += 1;
                     drop(s);
@@ -1026,16 +1032,35 @@ impl Controller {
     }
     pub fn take_window_action(&self) -> String {
         let mut s = self.state.lock().unwrap();
-        std::mem::take(&mut s.window_action)
+        let action=std::mem::take(&mut s.window_action);
+        if action=="window.close" {preview::cancel(&mut s);}
+        action
     }
     pub fn message(&self, text: String) {
         let mut s = self.state.lock().unwrap();
         s.status = text;
         s.revision += 1;
     }
-    pub fn preview_complete(&self, value: Value) {
+    pub fn take_preview_request(&self) -> Option<PreviewRequest> {
+        let mut s=self.state.lock().unwrap();
+        let request=s.preview_request.take()?;
+        s.preview["status"]=json!("running");
+        s.revision+=1;
+        Some(request)
+    }
+    pub fn preview_complete(&self, request: &PreviewRequest, result: Result<Value,String>) {
         let mut s = self.state.lock().unwrap();
-        s.preview = value;
+        if s.preview["id"]!=request.id || s.preview["window"]!=request.window || s.preview["status"]!="running" {return;}
+        match result {
+            Ok(value) => {
+                for field in ["path","width","height","page","settingsTab","profileTab","controlsTab","menu"] {
+                    if let Some(value)=value.get(field) {s.preview[field]=value.clone();}
+                }
+                s.preview["status"]=json!("complete");s.preview["ok"]=json!(true);
+            }
+            Err(error) => {s.preview["status"]=json!("failed");s.preview["ok"]=json!(false);s.preview["error"]=json!(error);}
+        }
+        s.preview["completedAtMs"]=json!(now_ms());
         s.revision += 1;
     }
 }
@@ -1138,6 +1163,19 @@ pub fn start_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn snapshot_request_replaces_old_completion_with_an_identifiable_pending_result() {
+        let file=std::env::temp_dir().join(format!("rhremote-preview-{}.json",random_token().unwrap()));
+        let c=Controller::new("test",file.clone(),Arc::new(Stub)).unwrap();
+        c.state.lock().unwrap().preview=json!({"ok":true,"path":"old-toolbar.png"});
+        let response=c.dispatch("view.snapshot",json!({"requestId":"main-1"}));
+        assert_eq!(response["result"]["id"],"main-1");
+        assert_eq!(response["result"]["status"],"queued");
+        assert_eq!(c.state()["preview"]["window"],"main");
+        assert!(c.state()["preview"]["path"].is_null());
+        assert_ne!(c.state()["preview"]["ok"],true);
+        let _=std::fs::remove_file(file);
+    }
     #[test]
     fn gamepads_are_off_by_default_and_can_be_enabled_per_client() {
         let mut value = serde_json::to_value(Profile::default()).unwrap();

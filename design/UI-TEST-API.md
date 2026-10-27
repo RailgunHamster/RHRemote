@@ -46,6 +46,14 @@ scroll|form
 
 `Test-RHRemoteTabOrder.ps1` 对设备页、连接设置五分类、应用设置四分类、设备资料及添加页执行双向 Tab 遍历。它根据 inspect 结果比较实际可用控件集合，记录漏项并核对正反向顺序；不以显式聚焦每个目标代替 Tab 可达性。传入 `-DeviceUuid`、`-ReportPath` 和对应控制端口，仅对无草稿的隔离预览运行。
 
+## 应用截图请求
+
+`view.snapshot`、`view.toolbar.snapshot`、`view.picker.snapshot` 只导出应用自身的对应窗口。preview.38 返回 `result.id`、`window`、`status`；同一 ID 的状态也在 `/v1/state` 的 `preview` 中。调用方等待自己的 ID 达到 `complete` 且 `ok=true` 后再取文件；`queued`／`running` 不能当作成功。失败及关闭取消为 `failed`／`cancelled`，有具体错误，不复用旧路径，也不覆盖页面提示。
+
+可传 `requestId`（1–80 位字母、数字、横线或下划线），省略则生成。最多一项请求排队或生成；当前 ID 的同窗口重试返回原状态，不重新执行，更换窗口会拒绝。仅保留当前请求结果；其他请求替换后不要重用旧 ID。返回的固定文件路径会在同窗口下次截图时更新，保存证据应复制到独立文件。
+
+`Export-RHRemoteView.ps1` 提供这条完整路径：指定 `-Window`、`-Port` 和新的 `-DestinationPath`，自动等待 ID、核对实际窗口及 PNG 尺寸，再提交证据文件；失败不留下冒充成功的最终文件，也不覆盖已有证据。结果附有实际 UI 页面／分类和文件 SHA-256，可检查取到的是否为预期页面。[原因与运行验证](WINDOWS-APPEARANCE-20261027.md)
+
 ## 证据边界
 
 采样先调用应用窗口自己的渲染器，使条件控件与焦点变更处理完成，再采集新的报告；只等事件队列空闲可能仍读到上一帧。该过程不会截取其他应用或系统桌面。布局复核通过既有 `view.snapshot` 导出应用自身的画面。

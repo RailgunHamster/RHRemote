@@ -8,6 +8,7 @@ mod form_models;
 mod ui_test;
 mod ui_keyboard;
 mod ui_driver;
+mod preview_capture;
 mod network;
 mod native_cleanup;
 #[cfg(windows)]
@@ -413,7 +414,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         match view.take_window_action().as_str(){
             "window.minimize"=>ui.window().set_minimized(true),"window.maximize"=>ui.window().set_maximized(!ui.window().is_maximized()),"window.close"=>{let _=slint::quit_event_loop();},
-            action @ ("view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot")=>{let toolbar=toolbar_weak.upgrade();let picker=picker_weak.upgrade();let snapshot=if action=="view.toolbar.snapshot" {toolbar.as_ref().ok_or(slint::PlatformError::Other("控制栏不可用".into())).and_then(|t|t.window().take_snapshot())}else if action=="view.picker.snapshot" {picker.as_ref().ok_or(slint::PlatformError::Other("选择列表不可用".into())).and_then(|t|t.window().take_snapshot())}else{ui.window().take_snapshot()};let preview=if action=="view.toolbar.snapshot" {preview.with_file_name("toolbar-preview.png")}else if action=="view.picker.snapshot" {preview.with_file_name("picker-preview.png")}else{preview.clone()};match snapshot{Ok(pixels)=>{let pending=preview.with_file_name("preview.pending.png");let result=image::save_buffer(&pending,pixels.as_bytes(),pixels.width(),pixels.height(),image::ColorType::Rgba8).map_err(|e|e.to_string()).and_then(|_|std::fs::rename(&pending,&preview).map_err(|e|e.to_string()));view.preview_complete(match result{Ok(_)=>json!({"ok":true,"path":preview,"completedAtMs":rhremote_core::now_ms()}),Err(e)=>json!({"ok":false,"error":e,"completedAtMs":rhremote_core::now_ms()})});},Err(e)=>view.message(format!("导出失败：{e}"))}},_=>{}
+            _=>{}
+        }
+        if let Some(request)=view.take_preview_request(){
+            let toolbar=toolbar_weak.upgrade();let picker=picker_weak.upgrade();
+            let result=match request.window.as_str(){
+                "main"=>preview_capture::capture(ui.window(),&preview,json!({"page":ui.get_page().as_str(),"settingsTab":ui.get_settings_tab().as_str(),"profileTab":ui.get_profile_tab().as_str()})),
+                "toolbar"=>toolbar.as_ref().ok_or_else(||"控制栏不可用".to_string()).and_then(|t|preview_capture::capture(t.window(),&preview.with_file_name("toolbar-preview.png"),json!({"controlsTab":t.get_controls_tab().as_str()}))),
+                "picker"=>picker.as_ref().ok_or_else(||"选择列表不可用".to_string()).and_then(|p|preview_capture::capture(p.window(),&preview.with_file_name("picker-preview.png"),json!({"menu":p.get_kind().as_str()}))),
+                _=>Err("未知截图窗口".into()),
+            };
+            view.preview_complete(&request,result);
         }
     });
     let poll = controller.clone();
