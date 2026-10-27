@@ -18,7 +18,27 @@ public final class RhSync {
     private JSONObject pendingLocal,pendingRemote;private String pendingEtag;
     private volatile JSONArray conflicts=new JSONArray();
     public RhSync(Context c){context=c.getApplicationContext();file=new File(c.getFilesDir(),"webdav-local.json");try{local=new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8));}catch(Exception e){local=new JSONObject();}}
-    public JSONObject state(){JSONObject l=local;return RhActions.obj("url",l.optString("url"),"username",l.optString("username"),"automatic",l.optBoolean("automatic"),"intervalMinutes",l.optInt("intervalMinutes",5),"hasPassword",l.has("ciphertext"),"lastSyncMs",l.optLong("lastSyncMs"),"conflicts",conflicts);}
+    public JSONObject state(){JSONObject l=local;JSONArray found=conflicts;return RhActions.obj("url",l.optString("url"),"username",l.optString("username"),"automatic",l.optBoolean("automatic"),"intervalMinutes",l.optInt("intervalMinutes",5),"hasPassword",l.has("ciphertext"),"lastSyncMs",l.optLong("lastSyncMs"),"conflicts",found,"conflictItems",review(pendingLocal,pendingRemote,found));}
+    private static String deviceName(JSONObject config,String uuid){if(config!=null){JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject value=rows.optJSONObject(i);if(value!=null&&uuid.equals(value.optString("uuid")))return value.optString("displayName").isEmpty()?value.optString("name","设备"):value.optString("displayName");}}return "设备";}
+    private static JSONObject device(JSONObject config,String uuid){JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++)if(uuid.equals(rows.optJSONObject(i).optString("uuid")))return rows.optJSONObject(i);return new JSONObject();}
+    private static String summary(JSONObject config,String key){
+        if(key.equals("appearance.dark"))return config.optBoolean("dark")?"深色":"浅色";
+        if(key.equals("deviceOrder")){List<String> names=new ArrayList<>();JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++)names.add(deviceName(config,rows.optJSONObject(i).optString("uuid")));return android.text.TextUtils.join(" → ",names);}
+        if(key.startsWith("devices.")){JSONObject value=device(config,key.substring(8));return deviceName(config,key.substring(8))+" · "+value.optString("address")+(value.optBoolean("swapButtons")?" · 左右键交换":"");}
+        if(key.startsWith("clients.")){JSONObject clients=config.optJSONObject("clients"),value=clients==null?null:clients.optJSONObject(key.substring(8));return value==null?"未设置":value.optString("name","客户端")+" · "+value.optString("platform");}
+        JSONObject profiles=config.optJSONObject("profiles");if(profiles!=null)for(Iterator<String> clients=profiles.keys();clients.hasNext();){String client=clients.next();JSONObject group=profiles.optJSONObject(client);if(group!=null)for(Iterator<String> hosts=group.keys();hosts.hasNext();){String host=hosts.next();if(key.equals("profiles."+client+"."+host)){JSONObject p=group.optJSONObject(host);if(p==null)return "未设置";return p.optInt("width")+" × "+p.optInt("height")+" · "+p.optInt("fps")+" FPS · "+p.optInt("bitrateMbps")+" Mbps";}}}
+        return "配置已修改";
+    }
+    static JSONArray review(JSONObject left,JSONObject right,JSONArray keys){
+        JSONArray out=new JSONArray();if(left==null||right==null)return out;
+        for(int i=0;i<keys.length();i++){String key=keys.optString(i),label="其他配置";
+            if(key.equals("deviceOrder"))label="设备顺序";else if(key.equals("appearance.dark"))label="主题";
+            else if(key.startsWith("devices."))label="远程设备："+deviceName(left,key.substring(8));
+            else if(key.startsWith("clients."))label="客户端资料";
+            else if(key.startsWith("profiles.")){JSONObject profiles=left.optJSONObject("profiles"),clients=left.optJSONObject("clients");if(profiles!=null)for(Iterator<String> ids=profiles.keys();ids.hasNext();){String id=ids.next();JSONObject group=profiles.optJSONObject(id);if(group!=null)for(Iterator<String> hosts=group.keys();hosts.hasNext();){String host=hosts.next();if(key.equals("profiles."+id+"."+host)){JSONObject client=clients==null?null:clients.optJSONObject(id);label="连接配置："+(client==null?"客户端":client.optString("name","客户端"))+" → "+deviceName(left,host);}}}}
+            out.put(RhActions.obj("key",key,"label",label,"local",summary(left,key),"remote",summary(right,key)));
+        }return out;
+    }
     static URL endpoint(String text)throws Exception{URI uri=new URI(text.trim());if(!"https".equalsIgnoreCase(uri.getScheme())&&!"http".equalsIgnoreCase(uri.getScheme()))throw new IOException("WebDAV 请使用 HTTP 或 HTTPS 地址");if(uri.getHost()==null||uri.getRawUserInfo()!=null||uri.getRawQuery()!=null||uri.getRawFragment()!=null)throw new IOException("WebDAV 地址无效");return new URL(text.trim().replaceAll("/+$","")+"/rhremote-config-v1.json");}
     static int interval(JSONObject args,int current)throws Exception{if(!args.has("intervalMinutes"))return Arrays.asList(5,15,30,60).contains(current)?current:5;Object v=args.get("intervalMinutes");if(!(v instanceof Number)||((Number)v).doubleValue()!=((Number)v).intValue()||!Arrays.asList(5,15,30,60).contains(((Number)v).intValue()))throw new IOException("自动同步间隔只能为 5、15、30 或 60 分钟");return ((Number)v).intValue();}
     private static javax.crypto.SecretKey key()throws Exception{KeyStore store=KeyStore.getInstance("AndroidKeyStore");store.load(null);if(!store.containsAlias("RHRemote.WebDAV")){KeyGenerator generator=KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore");generator.init(new KeyGenParameterSpec.Builder("RHRemote.WebDAV",KeyProperties.PURPOSE_ENCRYPT|KeyProperties.PURPOSE_DECRYPT).setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build());generator.generateKey();}return (javax.crypto.SecretKey)store.getKey("RHRemote.WebDAV",null);}
@@ -41,6 +61,23 @@ public final class RhSync {
     private void clearPending(){pendingLocal=null;pendingRemote=null;pendingEtag=null;conflicts=new JSONArray();}
     private String password(JSONObject l)throws Exception{Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(l.getString("iv"),Base64.NO_WRAP)));return new String(cipher.doFinal(Base64.decode(l.getString("ciphertext"),Base64.NO_WRAP)),StandardCharsets.UTF_8);}
     private static HttpURLConnection open(URL url,String method,String authorization)throws IOException{HttpURLConnection c=(HttpURLConnection)url.openConnection();c.setConnectTimeout(10000);c.setReadTimeout(15000);c.setInstanceFollowRedirects(false);c.setRequestMethod(method);c.setRequestProperty("Authorization",authorization);return c;}
+    static String failureMessage(Exception failure){
+        for(Throwable cause=failure;cause!=null;cause=cause.getCause()){
+            if(cause instanceof javax.net.ssl.SSLException)return "WebDAV 证书或 TLS 连接验证失败，请检查证书和地址";
+            if(cause instanceof SocketTimeoutException)return "WebDAV 连接超时，请检查网络后重试";
+            if(cause instanceof UnknownHostException)return "无法解析 WebDAV 地址，请检查地址和网络";
+        }
+        String message=failure.getMessage();
+        if(message!=null&&message.startsWith("WebDAV HTTP ")){
+            String code=message.substring("WebDAV HTTP ".length());
+            if(code.equals("401")||code.equals("403"))return "WebDAV 登录失败，请检查账户和权限（HTTP "+code+"）";
+            if(code.equals("412"))return "远端配置已更新，请重新同步后再处理冲突（HTTP 412）";
+            if(code.startsWith("3"))return "WebDAV 地址发生重定向，请使用最终目录地址（HTTP "+code+"）";
+            return "WebDAV 服务器返回错误，请稍后重试（HTTP "+code+"）";
+        }
+        if(failure instanceof IOException&&message!=null&&!message.isEmpty()&&!message.startsWith("failed to connect")&&!message.startsWith("Unable to resolve"))return message;
+        return "同步失败，请检查 WebDAV 设置和网络后重试";
+    }
     private static byte[] read(InputStream in)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>2*1024*1024)throw new IOException("远端配置过大");out.write(b,0,n);}return out.toByteArray();}
     public JSONObject run(JSONObject ours,String resolution)throws Exception{
         ours=RhShared.normalize(ours);JSONObject l=local;URL url=endpoint(l.getString("url"));String auth="Basic "+Base64.encodeToString((l.getString("username")+":"+password(l)).getBytes(StandardCharsets.UTF_8),Base64.NO_WRAP);
