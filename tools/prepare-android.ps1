@@ -231,7 +231,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         });
         noPcFoundLayout = rhHome.emptyView();
         for(int i=0;i<pcGridAdapter.getCount();i++) rhHome.update(((ComputerObject)pcGridAdapter.getItem(i)).details);
-        rhHome.restoreNavigation(rhNavigationState);rhNavigationState=null;
+        rhHome.restoreNavigation(rhNavigationState);rhHome.restoreUiState(getLastNonConfigurationInstance());rhNavigationState=null;
     }
     private void initializeLegacyViews() {
 '@
@@ -244,6 +244,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
     $s=Replace-Once $s '        super.onResume();' "        super.onResume();`n        if(rhHome!=null)rhHome.resumed();"
     $s=Replace-Once $s '    public static class ComputerObject {' @'
     @Override protected void onSaveInstanceState(android.os.Bundle state){if(rhHome!=null)rhHome.saveNavigation(state);super.onSaveInstanceState(state);}
+    @Override public Object onRetainNonConfigurationInstance(){return rhHome==null?null:rhHome.retainUiState();}
     @Override public void onBackPressed() {
         if(rhHome != null && rhHome.goBack()) return;
         super.onBackPressed();

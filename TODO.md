@@ -10,7 +10,7 @@
 - [ ] 更新流程：完成 Windows 实际下载、应用更新／安装取消，以及双端安装成功后的配置保留。[逐项规范](design/UI-FLOW-SPEC.md)
 - [ ] 同步流程：完成 HTTPS 的真实同步、证书失败和其余网络边界；不以地址校验或本机移除测试替代网络验收。
 - [ ] 会话控制：实测屏幕切换、窗口移屏、安全注意序列、快捷键实际送达、声音播放与缩放；补齐 Android 对应操作。Windows 已通过的分类、菜单、静音音量调整、统计和断开不再列为待测。[会话复验](design/WINDOWS-SESSION-UI-20261027.md)
-- [ ] 全局交互：补齐连接／恢复状态和 Android 活动会话菜单的键盘／导航边界，以及设备资料、添加、连接等其余页面与诊断开关的双端主题检查；定位 Windows UIA 焦点，验证主界面长时遮挡和不同 DPI 双屏切换后的重绘。[Tab 验收](design/WINDOWS-TAB-20261027.md)、[会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[主题与确认框](design/WINDOWS-APPEARANCE-20261027.md)、[补画修复](design/WINDOWS-REPAINT-20261027.md)
+- [ ] 全局交互：补齐连接／恢复状态和 Android 活动会话菜单的键盘／导航边界，完成其余 Windows 页面、Android 连接／恢复页和诊断开关的主题检查，以及 Android 配置复制预览的实际 Activity 重建验证；定位 Windows UIA 焦点，验证主界面长时遮挡和不同 DPI 双屏切换后的重绘。[Tab 验收](design/WINDOWS-TAB-20261027.md)、[会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[Windows 主题](design/WINDOWS-APPEARANCE-20261027.md)、[Android 主题](design/ANDROID-THEME-CONTEXT-20261027.md)、[补画修复](design/WINDOWS-REPAINT-20261027.md)
 - [ ] 最终交付：完成两端正式安装 / 升级的配置保留、用户可见预览与全部流程证据，再统一发布。
 
 ## P0 连接与外网

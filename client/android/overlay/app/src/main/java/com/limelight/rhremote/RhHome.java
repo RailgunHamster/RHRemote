@@ -60,6 +60,7 @@ public final class RhHome implements RhActions.Target {
     private boolean bindingProfile;
     private TextView formNotice,formErrorView;private Button formSave;
     private org.json.JSONObject pendingNavigation;private AlertDialog navigationDialog;
+    private AppearanceContext pendingAppearance,resumingAppearance;
     private boolean profileSourcesExpanded;
     private org.json.JSONObject copyPreview;private String copyNotice="",copyError="";private TextView copyFailure;
     private final RhSync sync;private boolean syncBusy;
@@ -114,8 +115,9 @@ public final class RhHome implements RhActions.Target {
     /** Only navigation identifiers are serialized; form data and credentials stay out of the Bundle. */
     public void saveNavigation(android.os.Bundle state){
         android.os.Bundle navigation=new android.os.Bundle();navigation.putInt("version",1);
-        navigation.putString("page",pageId.equals("global-settings")?"global-settings":"devices");
-        navigation.putString("tab",settingsTab);navigation.putString("selected",selected==null?browserUuid:selected.uuid);
+        navigation.putString("page",Arrays.asList("devices","global-settings","settings","device-info","profile-copy","add").contains(pageId)?pageId:"devices");
+        navigation.putString("tab",settingsTab);navigation.putString("selected",!infoUuid.isEmpty()?infoUuid:selected==null?browserUuid:selected.uuid);
+        navigation.putString("profileTab",profileTab);navigation.putString("copyClient",copyPreview==null?"":copyPreview.optString("clientId"));navigation.putBoolean("sourcesExpanded",profileSourcesExpanded);
         navigation.putString("query",deviceQuery);navigation.putBoolean("detail",browser.isDetailOpen());state.putBundle("rhremote.navigation",navigation);
     }
     public void restoreNavigation(android.os.Bundle state){
@@ -125,7 +127,30 @@ public final class RhHome implements RhActions.Target {
         if(computers.containsKey(uuid))browserUuid=uuid;
         if(Arrays.asList("updates","sync","appearance","about").contains(tab))settingsTab=tab;
         renderDevices(false);browser.showDetail(navigation.getBoolean("detail"));
-        if(navigation.getString("page","").equals("global-settings")){pageId="global-settings";showGlobal();}
+        String destination=navigation.getString("page","");
+        try{
+            if(destination.equals("global-settings")){pageId="global-settings";showGlobal();}
+            else if(destination.equals("add"))perform("device.add.open",RhActions.obj());
+            else if(computers.containsKey(uuid)&&destination.equals("device-info"))perform("device.info.open",RhActions.obj("uuid",uuid));
+            else if(computers.containsKey(uuid)&&(destination.equals("settings")||destination.equals("profile-copy"))){
+                perform("device.settings.open",RhActions.obj("uuid",uuid));
+                String category=navigation.getString("profileTab","video");if(!Arrays.asList("video","audio","input","network","advanced").contains(category))category="video";
+                profileSourcesExpanded=navigation.getBoolean("sourcesExpanded");perform("settings.tab",RhActions.obj("tab",category));
+                String client=navigation.getString("copyClient","");
+                if(destination.equals("profile-copy")&&!client.isEmpty()&&client.length()<=256){try{perform("settings.copy.preview",RhActions.obj("clientId",client));}catch(Exception unavailable){copyPreview=null;copyError="";pageId="settings";showProfile(selected,draft);}}
+            }
+        }catch(Exception unavailable){showDevices();}
+    }
+    /** Retained only in-process across recreation; it contains no Activity, View or credential. */
+    public static final class UiState {
+        final String addAddress,addError;
+        UiState(String address,String error){addAddress=address;addError=error;}
+    }
+    public Object retainUiState(){return new UiState(pageId.equals("add")?addAddress:"",pageId.equals("add")?addError:"");}
+    public void restoreUiState(Object saved){if(saved instanceof UiState&&pageId.equals("add")){UiState value=(UiState)saved;boolean previous=bindingProfile;bindingProfile=true;try{addAddress=value.addAddress;addError=value.addError;refreshAdd();}finally{bindingProfile=previous;}}}
+    private static final class AppearanceContext {
+        final android.os.Bundle navigation=new android.os.Bundle();final Object transientState;
+        AppearanceContext(RhHome home){home.saveNavigation(navigation);transientState=home.retainUiState();}
     }
     public RelativeLayout emptyView(){return empty;}
     private int c(String hex){return Color.parseColor(hex);}private int dp(float v){return Math.round(v*activity.getResources().getDisplayMetrics().density);}
@@ -364,11 +389,11 @@ public final class RhHome implements RhActions.Target {
     }
     private org.json.JSONObject resolveNavigation(org.json.JSONObject args)throws Exception {
         String choice=args.getString("choice");if(!Arrays.asList("save","discard","stay").contains(choice))throw new IllegalArgumentException("unknown navigation choice");if(pendingNavigation==null)throw new IllegalStateException("没有等待处理的更改");
-        org.json.JSONObject next=pendingNavigation;pendingNavigation=null;if(navigationDialog!=null){navigationDialog.dismiss();navigationDialog=null;}
+        org.json.JSONObject next=pendingNavigation;AppearanceContext appearance=pendingAppearance;pendingAppearance=null;pendingNavigation=null;if(navigationDialog!=null){navigationDialog.dismiss();navigationDialog=null;}
         if(choice.equals("stay"))return RhActions.obj("continuedEditing",true);
         if(choice.equals("save")&&pageId.equals("profile-copy")){copyPreview=null;copyError="";pageId="settings";showProfile(selected,draft);}
         if(choice.equals("save"))perform(next.optBoolean("info")?"device.info.save":next.optBoolean("sync")?"sync.save":"settings.save",RhActions.obj());else if(next.optBoolean("info")){clearInfo();returnToDevice();}else if(next.optBoolean("sync")){syncDraft=null;syncError="";}else returnToDevice();
-        return perform(next.getString("id"),next.getJSONObject("args"));
+        resumingAppearance=appearance;try{return perform(next.getString("id"),next.getJSONObject("args"));}finally{resumingAppearance=null;}
     }
     private boolean infoDirty(){return !infoUuid.isEmpty()&&!infoName.trim().equals(infoOriginal);}
     private void clearInfo(){infoUuid="";infoName="";infoOriginal="";infoError="";infoEditor=null;infoFailure=null;infoNotice=null;infoReset=null;}
@@ -428,6 +453,14 @@ public final class RhHome implements RhActions.Target {
         return RhActions.obj("navigation",RhActions.obj("locked",navigationLocked(),"reason",navigationHint()),"profileCopy",copyPreview==null?org.json.JSONObject.NULL:new org.json.JSONObject(copyPreview.toString()),"profileCopyNotice",copyNotice,"profileCopyError",copyError,"connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?"probing":"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncClearPrompt",syncClearPending?RhActions.obj("title","移除同步设置？"):org.json.JSONObject.NULL,"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"updateDetails",updateDetails,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
+        if(!id.equals("appearance.toggle"))return performInner(id,args);
+        AppearanceContext context=resumingAppearance==null?new AppearanceContext(this):resumingAppearance;
+        org.json.JSONObject result=performInner(id,args);
+        if(result.optBoolean("pendingNavigation")){pendingAppearance=context;return result;}
+        restoreNavigation(context.navigation);restoreUiState(context.transientState);
+        RhShared.theme(activity,!RhShared.dark(activity));activity.recreate();return result;
+    }
+    private org.json.JSONObject performInner(String id,org.json.JSONObject args)throws Exception{
         if(id.equals("sync.run")&&args.optBoolean("automatic")&&(!sync.state().optBoolean("automatic")||syncBusy||!infoUuid.isEmpty()||draft!=null||pageId.equals("add")||pairing||admission!=null||RhActions.hasStream()||pendingNavigation!=null||syncClearPending||syncDirty()))return RhActions.obj("skipped",true);
         if(id.equals("navigation.back")&&syncClearPending)return perform("sync.clear.resolve",RhActions.obj("choice","cancel"));
         if(syncClearPending&&!Arrays.asList("sync.clear.resolve","sync.clear","settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先确认是否移除同步设置");
@@ -462,7 +495,7 @@ public final class RhHome implements RhActions.Target {
         if(addingBusy()&&!Arrays.asList("device.add.cancel","settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id)){
             if(id.equals("device.add.open"))return RhActions.obj("reused",true);
             if(Arrays.asList("devices.open","device.select","app.settings.open","app.settings.tab","device.settings.open","device.info.open","appearance.toggle").contains(id)){
-                cancelAdding();return perform(id,args);
+                cancelAdding();return id.equals("appearance.toggle")?performInner(id,args):perform(id,args);
             }
             throw new IllegalStateException("正在查找设备，请先取消当前请求");
         }
@@ -545,7 +578,7 @@ public final class RhHome implements RhActions.Target {
                 beginAdmission(target,connect,pin);break;
             }
             case "pair.cancel":if(admission!=null){admission.cancel();break;}if(!pairing)throw new IllegalStateException("no active pairing");actions.cancelPair();message("正在取消配对…");break;
-            case "appearance.toggle":RhShared.theme(activity,!RhShared.dark(activity));activity.recreate();break;
+            case "appearance.toggle":break;
             case "app.settings.open":pageId="global-settings";showGlobal();break;
             case "app.settings.tab":String tab=args.getString("tab");if(!Arrays.asList("appearance","sync","updates","about").contains(tab))throw new IllegalArgumentException("unknown tab");settingsTab=tab;pageId="global-settings";showGlobal();break;
             case "sync.state":return sync.state();

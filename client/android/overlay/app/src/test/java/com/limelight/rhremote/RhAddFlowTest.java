@@ -56,6 +56,11 @@ public class RhAddFlowTest {
     @Test public void navigationCancelsLookupBeforeOpeningAnotherPage()throws Exception{
         start("192.168.0.104");home.perform("app.settings.tab",RhActions.obj("tab","updates"));assertEquals("global-settings",home.state().getString("page"));finish();assertEquals("updates",home.state().getString("settingsTab"));assertEquals("global-settings",home.state().getString("page"));assertEquals(0,commits);
     }
+    @Test public void themeChangeCancelsLookupOnceAndPreservesTheAddressWithoutSavingALateResult()throws Exception{
+        boolean before=RhShared.dark(activity);start("192.168.0.104");home.perform("appearance.toggle",RhActions.obj());
+        assertEquals(!before,RhShared.dark(activity));assertEquals("add",home.state().getString("page"));assertEquals("editing",home.state().getJSONObject("add").getString("phase"));assertEquals("192.168.0.104",home.state().getJSONObject("add").getString("address"));
+        finish();assertEquals(0,commits);assertEquals("add",home.state().getString("page"));assertEquals("192.168.0.104",home.state().getJSONObject("add").getString("address"));assertEquals(0,RhShared.read(activity).getJSONArray("devices").length());
+    }
     @Test public void storageFailureRollsBackSharedMetadataAndPreservesInput()throws Exception{
         String before=RhShared.canonical(RhShared.read(activity));failSave=true;start("192.168.0.104");finish();assertEquals(before,RhShared.canonical(RhShared.read(activity)));assertEquals("add",home.state().getString("page"));assertEquals("192.168.0.104",home.state().getJSONObject("add").getString("address"));assertEquals("存储不可用",home.state().getJSONObject("add").getString("error"));
     }
