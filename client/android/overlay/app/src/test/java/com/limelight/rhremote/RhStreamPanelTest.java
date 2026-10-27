@@ -26,6 +26,26 @@ public class RhStreamPanelTest {
     }
     private void layout(int width,int height){for(int i=0;i<3;i++){root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
     private Button button(View view,String title){if(view instanceof Button&&title.contentEquals(((Button)view).getText()))return (Button)view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){Button b=button(((ViewGroup)view).getChildAt(i),title);if(b!=null)return b;}return null;}
+    private SeekBar volume(View view){if(view instanceof SeekBar)return (SeekBar)view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){SeekBar found=volume(((ViewGroup)view).getChildAt(i));if(found!=null)return found;}return null;}
+    @Test public void keyboardVolumeCommitsThroughTheSameActionWithoutEchoingModelRefresh()throws Exception{
+        setup(840,560);panel.setTab("audio");panel.update(false,false,false,40,RhActions.obj(),false,"");panel.updateControls(true,false,1,false,"","","");layout(840,560);
+        SeekBar slider=volume(root);assertNotNull(slider);slider.setKeyProgressIncrement(5);assertTrue(slider.requestFocusFromTouch());actions.clear();
+        assertTrue(slider.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_RIGHT)));
+        slider.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP,KeyEvent.KEYCODE_DPAD_RIGHT));
+        assertEquals(45,slider.getProgress());assertEquals(Collections.singletonList("stream.audio.volume"),actions);assertEquals(45,arguments.getInt("volume"));
+        panel.update(false,false,false,65,RhActions.obj(),false,"");assertEquals("Refreshing from the model must not submit a second command",1,actions.size());assertEquals(65,slider.getProgress());
+    }
+    @Test public void accessibilityVolumeCommitsWithoutARequireTouchRelease()throws Exception{
+        setup(840,560);panel.setTab("audio");panel.update(false,false,false,40,RhActions.obj(),false,"");panel.updateControls(true,false,1,false,"","","");layout(840,560);SeekBar slider=volume(root);actions.clear();
+        android.os.Bundle value=new android.os.Bundle();value.putFloat(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,55);
+        assertTrue(slider.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId(),value));
+        assertEquals(55,slider.getProgress());assertEquals(Collections.singletonList("stream.audio.volume"),actions);assertEquals(55,arguments.getInt("volume"));
+    }
+    @Test public void touchVolumeStillCommitsOnlyOnceOnRelease()throws Exception{
+        setup(840,560);panel.setTab("audio");panel.update(false,false,false,40,RhActions.obj(),false,"");panel.updateControls(true,false,1,false,"","","");layout(840,560);SeekBar slider=volume(root);actions.clear();long time=android.os.SystemClock.uptimeMillis();
+        for(int action:new int[]{MotionEvent.ACTION_DOWN,MotionEvent.ACTION_MOVE,MotionEvent.ACTION_UP}){MotionEvent event=MotionEvent.obtain(time,time+action*20,action,slider.getWidth()*(action==MotionEvent.ACTION_DOWN?.4f:.7f),slider.getHeight()/2f,0);try{assertTrue(slider.onTouchEvent(event));}finally{event.recycle();}if(action!=MotionEvent.ACTION_UP)assertTrue("Dragging must not commit on every movement",actions.isEmpty());}
+        assertEquals(Collections.singletonList("stream.audio.volume"),actions);assertEquals(slider.getProgress(),arguments.getInt("volume"));assertTrue(slider.getProgress()>40);
+    }
     private void assertInside(JSONObject layout,int width,int height)throws Exception{JSONObject p=layout.getJSONObject("panel");assertTrue(p.getInt("x")>=0);assertTrue(p.getInt("y")>=0);assertTrue(p.getInt("x")+p.getInt("width")<=width);assertTrue(p.getInt("y")+p.getInt("height")<=height);}
     @Test public void narrowPortraitAndLandscapeKeepButtonsAccessibleAndHandleFixed()throws Exception{
         setup(360,800);assertEquals(2,panel.layoutState().getInt("columns"));assertInside(panel.layoutState(),360,800);

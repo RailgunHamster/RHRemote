@@ -5,7 +5,11 @@ import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
+import android.view.FocusFinder;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewParent;
 import android.view.WindowInsets;
 import android.widget.*;
 import org.json.*;
@@ -22,6 +26,7 @@ public final class RhStreamPanel {
     private final ScrollView scroll;
     private final Map<String, Button> tabs=new LinkedHashMap<>();
     private final Map<Button,Boolean> monitorAvailability=new IdentityHashMap<>();
+    private final Map<Long,View> localKeys=new HashMap<>();
     private final TextView displayStatus, volumeLabel, sessionName, feedback, zoomLabel;
     private final Button feedbackDetails, stats, disconnect;
     private final String surfaceColor,lineColor,inkColor,mutedColor,selectedColor,selectedLine;
@@ -35,6 +40,7 @@ public final class RhStreamPanel {
     private String tab="input";
     private int columns=2, maxBodyHeight;
     private boolean disposed;
+    private View returnFocus;
 
     private int dp(int value) { return Math.round(context.getResources().getDisplayMetrics().density*value); }
     private GradientDrawable surface(String fill, String border, int radius) {
@@ -44,7 +50,7 @@ public final class RhStreamPanel {
         return shape;
     }
     public RhStreamPanel(Context context, FrameLayout root, Actions actions) {
-        this.context=context;this.root=root;this.actions=actions;
+        this.context=context;this.root=root;this.actions=actions;returnFocus=root.findFocus();
         boolean dark=RhShared.dark(context);surfaceColor=dark?"#1b2232":"#ffffff";lineColor=dark?"#303c53":"#e5eaf4";inkColor=dark?"#e1e8f6":"#34415b";mutedColor=dark?"#a4b1c8":"#69778e";selectedColor=dark?"#253452":"#edf2ff";selectedLine=dark?"#6f8af1":"#c7d4f6";
         failureColor=RhUiStyle.failure(dark);
         handle=button("控制", "stream.controls.toggle", RhActions.obj());
@@ -53,7 +59,7 @@ public final class RhStreamPanel {
         FrameLayout.LayoutParams handleParams=new FrameLayout.LayoutParams(dp(88),dp(48),Gravity.TOP|Gravity.CENTER_HORIZONTAL);
         handleParams.topMargin=dp(12);root.addView(handle,handleParams);
 
-        panel=new LinearLayout(context);panel.setOrientation(LinearLayout.VERTICAL);panel.setClickable(true);
+        panel=new LinearLayout(context);panel.setOrientation(LinearLayout.VERTICAL);panel.setClickable(true);panel.setFocusable(false);
         panel.setPadding(dp(14),dp(12),dp(14),dp(12));
         panel.setBackground(surface(surfaceColor,lineColor,16));panel.setElevation(dp(10));
         LinearLayout header=new LinearLayout(context);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0,0,0,dp(8));sessionName=text("远程设备",14);sessionName.setSingleLine(true);sessionName.setEllipsize(android.text.TextUtils.TruncateAt.END);header.addView(sessionName,new LinearLayout.LayoutParams(0,dp(48),1));disconnect=button("断开","stream.disconnect",RhActions.obj());RhUiStyle.buttonText(disconnect,failureColor,Color.parseColor(mutedColor));header.addView(disconnect,new LinearLayout.LayoutParams(-2,dp(48)));panel.addView(header);
@@ -97,9 +103,9 @@ public final class RhStreamPanel {
 
         audio=button("声音：关","stream.audio.toggle",RhActions.obj());sound.addView(audio,new LinearLayout.LayoutParams(-1,dp(48)));
         volumeLabel=text("音量 100%",14);volumeLabel.setPadding(dp(4),dp(16),dp(4),dp(4));sound.addView(volumeLabel);
-        volume=new SeekBar(context);volume.setMax(100);volume.setContentDescription("串流音量");sound.addView(volume,new LinearLayout.LayoutParams(-1,dp(52)));
+        volume=new SeekBar(context);volume.setMax(100);volume.setContentDescription("串流音量");volume.setTag("stream.audio.volume");sound.addView(volume,new LinearLayout.LayoutParams(-1,dp(52)));
         volume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-            public void onProgressChanged(SeekBar bar,int value,boolean fromUser){if(fromUser)volumeLabel.setText("音量 "+value+"%");}
+            public void onProgressChanged(SeekBar bar,int value,boolean fromUser){if(fromUser){volumeLabel.setText("音量 "+value+"%");if(!trackingVolume)actions.send("stream.audio.volume",RhActions.obj("volume",value));}}
             public void onStartTrackingTouch(SeekBar bar){trackingVolume=true;}
             public void onStopTrackingTouch(SeekBar bar){trackingVolume=false;actions.send("stream.audio.volume",RhActions.obj("volume",bar.getProgress()));}
         });
@@ -139,12 +145,58 @@ public final class RhStreamPanel {
         if(screenGrid.getColumnCount()!=2)gridColumns(screenGrid,2);
     }
     public boolean isExpanded(){return panel.getVisibility()==View.VISIBLE;}
+    private boolean ownsVisible(View view){
+        for(View current=view;current!=null;){
+            if(current.getVisibility()!=View.VISIBLE||!current.isEnabled())return false;
+            if(current==handle)return true;
+            if(current==panel)return isExpanded();
+            ViewParent parent=current.getParent();current=parent instanceof View?(View)parent:null;
+        }
+        return false;
+    }
+    private ArrayList<View> focusables(){
+        ArrayList<View> result=new ArrayList<>();handle.addFocusables(result,View.FOCUS_FORWARD);
+        if(isExpanded())panel.addFocusables(result,View.FOCUS_FORWARD);
+        result.removeIf(view->!ownsVisible(view)||!(view.getTag() instanceof String));return result;
+    }
+    /** Own a complete key pair only when its down event starts on a local control. */
+    boolean dispatchKeyEvent(KeyEvent event,Runnable escape){
+        if(disposed||!event.isFromSource(InputDevice.SOURCE_KEYBOARD)||event.isSystem()&&event.getKeyCode()!=KeyEvent.KEYCODE_ESCAPE)return false;
+        int action=event.getAction(),key=event.getKeyCode();if(action!=KeyEvent.ACTION_DOWN&&action!=KeyEvent.ACTION_UP)return false;
+        long identity=((long)event.getDeviceId()<<32)|(key&0xffffffffL);View origin=localKeys.get(identity),focused=root.findFocus();
+        if(action==KeyEvent.ACTION_DOWN){
+            if(origin==null){if(!ownsVisible(focused))return false;origin=focused;localKeys.put(identity,origin);}
+        }else{
+            if(origin==null)return false;localKeys.remove(identity);
+        }
+        if(key==KeyEvent.KEYCODE_ESCAPE){if(action==KeyEvent.ACTION_UP&&!event.isCanceled()&&ownsVisible(origin))escape.run();return true;}
+        // The panel may close or change pages before release. Never send that release remotely
+        // or activate a different newly focused button.
+        if(!ownsVisible(origin)||!origin.hasFocus()){origin.setPressed(false);if(action==KeyEvent.ACTION_UP)return true;}
+        else if(origin.dispatchKeyEvent(event))return true;
+        if(action==KeyEvent.ACTION_DOWN&&ownsVisible(focused)&&!event.isCtrlPressed()&&!event.isAltPressed()&&!event.isMetaPressed()){
+            if(key==KeyEvent.KEYCODE_TAB){
+                ArrayList<View> available=focusables();int index=available.indexOf(focused);
+                if(!available.isEmpty()){int next=Math.floorMod(index+(event.isShiftPressed()?-1:1),available.size());available.get(next).requestFocusFromTouch();}
+            }else{
+                int direction=key==KeyEvent.KEYCODE_DPAD_LEFT?View.FOCUS_LEFT:key==KeyEvent.KEYCODE_DPAD_RIGHT?View.FOCUS_RIGHT:key==KeyEvent.KEYCODE_DPAD_UP?View.FOCUS_UP:key==KeyEvent.KEYCODE_DPAD_DOWN?View.FOCUS_DOWN:0;
+                if(direction!=0){View next=FocusFinder.getInstance().findNextFocus(root,focused,direction);if(ownsVisible(next))next.requestFocusFromTouch();}
+            }
+        }
+        return true;
+    }
     public String tab(){return tab;}
-    public void setExpanded(boolean expanded){panel.setVisibility(expanded?View.VISIBLE:View.GONE);handle.setText(expanded?"收起":"控制");updateBounds();}
+    public void setExpanded(boolean expanded){
+        boolean changed=expanded!=isExpanded();View focused=root.findFocus();boolean local=ownsVisible(focused);
+        if(changed&&expanded&&focused!=null&&!local)returnFocus=focused;
+        panel.setVisibility(expanded?View.VISIBLE:View.GONE);handle.setText(expanded?"收起":"控制");updateBounds();
+        if(changed&&expanded)handle.requestFocusFromTouch();
+        else if(changed&&local&&returnFocus!=null&&returnFocus.getVisibility()==View.VISIBLE&&returnFocus.isEnabled())returnFocus.requestFocusFromTouch();
+    }
     public void setTab(String value){
         if(!tabs.containsKey(value))throw new IllegalArgumentException("tab must be input, displays or audio");tab=value;
         input.setVisibility(value.equals("input")?View.VISIBLE:View.GONE);screens.setVisibility(value.equals("displays")?View.VISIBLE:View.GONE);sound.setVisibility(value.equals("audio")?View.VISIBLE:View.GONE);
-        for(Map.Entry<String,Button> entry:tabs.entrySet()){boolean selected=entry.getKey().equals(value);entry.getValue().setSelected(selected);entry.getValue().setTextColor(Color.parseColor(selected?"#5274e8":mutedColor));entry.getValue().setBackground(surface(selected?selectedColor:surfaceColor,selected?selectedLine:null,8));}
+        for(Map.Entry<String,Button> entry:tabs.entrySet()){boolean selected=entry.getKey().equals(value);Button button=entry.getValue();button.setSelected(selected);RhUiStyle.button(button,Color.parseColor(selected?"#5274e8":mutedColor),Color.parseColor(mutedColor),surface(selected?selectedColor:surfaceColor,selected?selectedLine:null,8),surface(surfaceColor,lineColor,8),surface(selectedColor,"#5274e8",8));}
         scroll.scrollTo(0,0);
     }
     public void update(boolean trackpad,boolean panning,boolean audioEnabled,int level,JSONObject display,boolean busy,String failure){
@@ -160,14 +212,14 @@ public final class RhStreamPanel {
             String id=monitor.optString("id");boolean available=monitor.optBoolean("available"),chosen=selected!=null&&id.equals(selected.optString("id"));
             String title=monitorName(monitor)+" · "+monitor.optInt("width")+"×"+monitor.optInt("height")+(available?chosen?"  ✓":"":"  暂不可用");
             Button b=button(title,"stream.display.select",RhActions.obj("displayId",id));b.setEnabled(available&&!busy);monitorAvailability.put(b,available);b.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
-            b.setSelected(chosen);if(chosen)b.setBackground(surface(selectedColor,selectedLine,8));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(56));lp.topMargin=i==0?0:dp(8);monitorList.addView(b,lp);
+            b.setSelected(chosen);RhUiStyle.button(b,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(chosen?selectedColor:surfaceColor,chosen?selectedLine:lineColor,8),surface(surfaceColor,lineColor,8),surface(selectedColor,"#5274e8",8));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(56));lp.topMargin=i==0?0:dp(8);monitorList.addView(b,lp);
         }
         if(count==0){TextView empty=text(error.isEmpty()?"暂无屏幕信息，请刷新":"屏幕列表未加载",13);empty.setPadding(dp(4),dp(8),dp(4),dp(8));monitorList.addView(empty);}
     }
     public void setDeviceName(String name){sessionName.setText(name==null||name.isEmpty()?"远程设备":name);}
     private void enabled(View view,boolean value){view.setEnabled(value);view.setAlpha(value?1f:0.45f);}
     public void updateControls(boolean connected,boolean statistics,float scale,boolean busy,String group,String message,String failure){
-        stats.setText(statistics?"统计：开":"统计：关");stats.setSelected(statistics);stats.setBackground(surface(statistics?selectedColor:surfaceColor,statistics?selectedLine:lineColor,8));mode.setSelected(mode.getText().toString().equals("触控板"));pan.setSelected(pan.getText().toString().equals("移动画面：开"));zoomLabel.setText("缩放 "+Math.round(scale*100)+"%");
+        stats.setText(statistics?"统计：开":"统计：关");stats.setSelected(statistics);RhUiStyle.button(stats,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(statistics?selectedColor:surfaceColor,statistics?selectedLine:lineColor,8),surface(surfaceColor,lineColor,8),surface(selectedColor,"#5274e8",8));mode.setSelected(mode.getText().toString().equals("触控板"));pan.setSelected(pan.getText().toString().equals("移动画面：开"));zoomLabel.setText("缩放 "+Math.round(scale*100)+"%");
         for(int i=0;i<inputGrid.getChildCount();i++)enabled(inputGrid.getChildAt(i),connected&&!busy);
         for(int i=0;i<screenGrid.getChildCount();i++)enabled(screenGrid.getChildAt(i),connected&&!busy);
         for(Map.Entry<Button,Boolean> entry:monitorAvailability.entrySet())enabled(entry.getKey(),connected&&!busy&&entry.getValue());
@@ -176,5 +228,5 @@ public final class RhStreamPanel {
     }
     private String monitorName(JSONObject monitor){String name=monitor.optString("name");return monitor.optBoolean("virtual")?"虚拟屏":name.isEmpty()?"物理屏幕":name;}
     public JSONObject layoutState(){Rect h=new Rect(),p=new Rect();handle.getHitRect(h);panel.getHitRect(p);return RhActions.obj("expanded",isExpanded(),"tab",tab,"columns",columns,"handle",RhActions.obj("x",h.left,"y",h.top,"width",h.width(),"height",h.height()),"panel",RhActions.obj("x",p.left,"y",p.top,"width",p.width(),"height",p.height()),"scrollable",scroll.canScrollVertically(1)||scroll.canScrollVertically(-1));}
-    public void dispose(){disposed=true;root.removeOnLayoutChangeListener(layoutListener);root.removeView(panel);root.removeView(handle);}
+    public void dispose(){disposed=true;for(View view:localKeys.values())view.setPressed(false);localKeys.clear();root.removeOnLayoutChangeListener(layoutListener);root.removeView(panel);root.removeView(handle);}
 }

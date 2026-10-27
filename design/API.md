@@ -108,6 +108,8 @@ Windows 的 `stream.controls.toggle` 展开／收起位于串流窗口顶部的�
 
 Android 的 `stream.controls.toggle` 控制顶部分类面板，开关坐标保持不变。`stream.controls.tab {tab: input / displays / audio}` 选择操作、屏幕、声音页；`stream.displays.open` 直接打开屏幕页。`state.stream.controlsTab` 与 `controlsLayout` 返回当前页、列数、开关/面板位置尺寸及可滚动状态。按钮和音量滑条继续使用既有 action；屏幕刷新在后台进行，保留仍可用显示器的选择，并使用本次清单里的最新 captureIndex。屏幕组件未安装时不生成虚假的显示器条目。
 
+Android 控制面板展开时聚焦固定开关，收起时恢复展开前的画面焦点。控件聚焦后的 Tab／Shift+Tab、方向键、Enter 和 Escape 在本地分发，Tab 只遍历可见、可用的操作控件；本地开始的按键在面板收起后松开也不会转发远端。远程画面聚焦时保留 Moonlight 的输入路径，已发往远端的修饰键松开不被新面板截留。音量的键盘与无障碍改值同样调用 `stream.audio.volume`；触摸拖动仍在松开时只提交一次，模型刷新不触发新动作。应用内与实际串流验证的范围见 [会话导航](ANDROID-SESSION-NAVIGATION-20261028.md)，不等同于外接键盘实机验收。
+
 Windows 意外中断后，`statistics.phase=reconnecting`、`connecting=true`，恢复首帧后回到 `connected`。`statistics.reconnectAttempts` 是当前连续恢复次数；主动 `stream.disconnect` 会取消待执行的恢复。仅有已渲染会话能够自动恢复，首次连接失败不会无限重试。`stream.test.interrupt` 仅在已启用逐帧统计的活动 Windows 会话中可用，注入一次明确标记的模拟中断，走完整的底层终止及恢复路径。
 
 Android 也支持 `stream.test.interrupt`：必须已启用 `statistics.configure` 测试模式、实际提交过首帧且当前没有恢复任务。接口记录 `test_connection_interrupt {synthetic:true}`，进入与意外终止相同的清理／选路／新 Game 交接路径；重复注入或未满足前置条件会被拒绝。Android 的新 Game 使用独立 Activity 实例，admission/recovery 保留继续防止并发连接；不能用上游 `singleTask` 复用即将结束的旧实例。

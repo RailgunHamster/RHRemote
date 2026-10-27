@@ -416,6 +416,7 @@ Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
     $s=Replace-Once $s '    private final TouchContext[] touchContextMap' '    private boolean rhAdmissionRejected;
     private com.limelight.rhremote.RhTouchController rhTouch;
     private com.limelight.rhremote.RhStreamControls rhControls;
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) { if(rhControls != null && rhControls.dispatchKeyEvent(event)) return true; return super.dispatchKeyEvent(event); }
     @Override public void onBackPressed() { if(rhControls != null && rhControls.goBack()) return; super.onBackPressed(); }
     public com.limelight.rhremote.RhAudioRenderer rhAudioRenderer;
     private com.limelight.rhremote.RhProfile rhProfile;
