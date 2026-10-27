@@ -41,7 +41,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
             json!({"uuid":uuid,"address":primary.trim(),"addresses":extra.split([',',';','\n']).map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})
         }
         "device.network.diagnose" => json!({"uuid":arg}),
-        "navigation.resolve"=>json!({"choice":arg}),
+        "navigation.resolve"|"sync.clear.resolve"=>json!({"choice":arg}),
         "settings.input"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},
         "settings.network.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
@@ -255,6 +255,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let WindowEvent::ModifiersChanged(value)=event{shift.set(value.state().shift_key());}
             if let Some(ui)=weak.upgrade(){
                 if let WindowEvent::KeyboardInput{event,..}=event {
+                    if ui.get_sync_clear_prompt(){
+                        if event.state==ElementState::Pressed&&!event.repeat {
+                            match event.logical_key {
+                                Key::Named(NamedKey::Escape)=>{controls.dispatch("sync.clear.resolve",json!({"choice":"cancel"}));},
+                                Key::Named(NamedKey::Tab)=>ui.set_sync_clear_choice(1-ui.get_sync_clear_choice()),
+                                Key::Named(NamedKey::Enter)=>{controls.dispatch("sync.clear.resolve",json!({"choice":if ui.get_sync_clear_choice()==0{"cancel"}else{"remove"}}));},
+                                _=>{}
+                            }
+                        }
+                        return EventResult::PreventDefault;
+                    }
                     if ui.get_navigation_prompt(){
                         if event.state==ElementState::Pressed&&!event.repeat {
                             match event.logical_key {
@@ -314,6 +325,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_connection_error(state["connection"]["error"].as_str().unwrap_or("").into());
             ui.set_connection_busy(state["connection"]["busy"]==true);ui.set_control_requests_pending(state["controlRequests"].as_u64().unwrap_or(0)>0);
             ui.set_settings_dirty(state["settingsDirty"]==true);ui.set_settings_error(state["settingsError"].as_str().unwrap_or("").into());if !ui.get_navigation_prompt()&&state["navigationPrompt"].is_object(){ui.set_navigation_choice(0);}ui.set_navigation_prompt(state["navigationPrompt"].is_object());ui.set_navigation_message(state["navigationPrompt"]["message"].as_str().unwrap_or("").into());
+            if !ui.get_sync_clear_prompt()&&state["syncClearPrompt"].is_object(){ui.set_sync_clear_choice(0);}ui.set_sync_clear_prompt(state["syncClearPrompt"].is_object());
             let sync_form=if state["syncDraft"].is_object(){&state["syncDraft"]}else{&state["sync"]};ui.set_sync_generation(state["syncGeneration"].as_u64().unwrap_or(0) as i32);ui.set_sync_dirty(state["syncDirty"]==true);ui.set_sync_error(state["syncError"].as_str().unwrap_or("").into());
             ui.set_add_address(state["add"]["address"].as_str().unwrap_or("").into());ui.set_add_phase(state["add"]["phase"].as_str().unwrap_or("editing").into());ui.set_add_error(state["add"]["error"].as_str().unwrap_or("").into());
             ui.set_settings_tab(state["settingsTab"].as_str().unwrap_or("updates").into());ui.set_sync_url(sync_form["url"].as_str().unwrap_or("").into());ui.set_sync_username(sync_form["username"].as_str().unwrap_or("").into());ui.set_sync_automatic(sync_form["automatic"]==true);ui.set_sync_interval_index(match sync_form["intervalMinutes"].as_u64().unwrap_or(5){15=>1,30=>2,60=>3,_=>0});ui.set_sync_has_password(state["sync"]["hasPassword"]==true);ui.set_sync_busy(state["syncBusy"]==true);ui.set_sync_conflicts(state["sync"]["conflicts"].as_array().map(|a|a.iter().filter_map(|v|v.as_str()).collect::<Vec<_>>().join("\n")).unwrap_or_default().into());ui.set_sync_last(if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0)>0{"已同步"}else{"尚未同步"}.into());

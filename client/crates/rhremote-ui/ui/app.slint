@@ -314,6 +314,8 @@ export component MainWindow inherits Window {
     in property <string> settings-error;
     in property <length> form-inset:24px;
     in property <bool> navigation-prompt;
+    in property <bool> sync-clear-prompt;
+    in-out property <int> sync-clear-choice;
 
     HorizontalLayout {
         spacing:0px;
@@ -604,7 +606,7 @@ export component MainWindow inherits Window {
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                             HorizontalLayout{spacing:10px;
                                 ActionButton{text:root.sync-busy ? "同步中…" : "立即同步";action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
-                                ActionButton{text:"移除设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
+                                ActionButton{text:"移除同步设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
                                 Text{text:root.sync-last;color:Palette.muted;vertical-alignment:center;font-size:12px;}
                                 Rectangle{horizontal-stretch:1;}
                             }
@@ -751,6 +753,20 @@ export component MainWindow inherits Window {
                 }
             }
 
+        }
+    }
+    if root.sync-clear-prompt: Rectangle {background:#0006;
+        TouchArea{}
+        Rectangle {width:min(parent.width - 32px,480px);height:clear-decision.preferred-height;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;background:Palette.surface;border-radius:12px;
+            in property <int> selected-choice:root.sync-clear-choice;
+            init=>{clear-cancel.focus();}
+            changed selected-choice=>{if(self.selected-choice==0){clear-cancel.focus();}else{clear-confirm.focus();}}
+            clear-decision:=VerticalLayout {padding:24px;spacing:18px;
+                Text{text:"移除同步设置？";color:Palette.ink;font-size:22px;font-weight:600;}
+                Text{text:"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。";color:Palette.muted;wrap:word-wrap;font-size:14px;}
+                if root.sync-error!="":Text{text:root.sync-error;color:#b04452;wrap:word-wrap;font-size:13px;}
+                HorizontalLayout {spacing:8px;Rectangle{horizontal-stretch:1;}clear-cancel:=ActionButton{text:"取消";action-id:"sync.clear.resolve";argument:"cancel";chosen:root.sync-clear-choice==0;disabled:root.sync-busy;}clear-confirm:=ActionButton{text:"移除";action-id:"sync.clear.resolve";argument:"remove";chosen:root.sync-clear-choice==1;disabled:root.sync-busy;}}
+            }
         }
     }
     if root.navigation-prompt: Rectangle {background:#0006;

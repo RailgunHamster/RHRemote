@@ -30,6 +30,6 @@ public class RhIdentitySyncDeviceTest {
         action("app.settings.tab",RhActions.obj("tab","sync"));synchronize();assertFalse(RhActions.hasStream());
     }
     @Test public void pullRestoredNameAndRemoveFixtureCredentials()throws Exception{
-        open();String profile=RhShared.canonical(RhProfile.load(activity,uuid).json());action("app.settings.tab",RhActions.obj("tab","sync"));synchronize();assertEquals("",RhShared.alias(activity,uuid));assertEquals(profile,RhShared.canonical(RhProfile.load(activity,uuid).json()));action("sync.clear",RhActions.obj());assertFalse(state().getJSONObject("sync").optBoolean("hasPassword"));assertFalse(RhActions.hasStream());
+        open();String profile=RhShared.canonical(RhProfile.load(activity,uuid).json());action("app.settings.tab",RhActions.obj("tab","sync"));synchronize();assertEquals("",RhShared.alias(activity,uuid));assertEquals(profile,RhShared.canonical(RhProfile.load(activity,uuid).json()));action("sync.clear",RhActions.obj());action("sync.clear.resolve",RhActions.obj("choice","remove"));assertFalse(state().getJSONObject("sync").optBoolean("hasPassword"));assertFalse(RhActions.hasStream());
     }
 }

@@ -76,9 +76,26 @@ impl Controller {
         if id=="sync.edit"{
             let key=args["key"].as_str().ok_or("key required")?;let value=&args["value"];
             match key{"url"|"username"|"password"=>{if !value.is_string()||value.as_str().unwrap().len()>4096{return Err("输入过长或类型无效".into());}},"automatic"=>{if !value.is_boolean(){return Err("automatic must be boolean".into());}},"intervalMinutes"=>{if ![json!(5),json!(15),json!(30),json!(60)].contains(value){return Err("自动同步间隔只能为 5、15、30 或 60 分钟".into());}},_=>return Err("unknown sync setting".into())}
-            crate::interaction::begin_sync(&mut s);s.sync_draft.as_mut().unwrap()[key]=value.clone();s.sync_error.clear();s.revision+=1;return Ok(json!({"edited":true}));
+            crate::interaction::begin_sync(&mut s);s.sync_draft.as_mut().unwrap()[key]=value.clone();s.sync_error.clear();s.status.clear();s.revision+=1;return Ok(json!({"edited":true}));
         }
-        let id=if id=="sync.save"{"sync.configure"}else{id};
+        if id == "sync.clear" {
+            if s.page != "global-settings" || s.settings_tab != "sync" { return Err("请先打开配置同步页".into()); }
+            if s.sync["hasPassword"] != true && s.sync["url"].as_str().unwrap_or("").is_empty() { return Err("没有已保存的同步设置".into()); }
+            s.sync_clear_pending = true;
+            s.sync_error.clear();
+            s.status.clear();
+            s.revision += 1;
+            return Ok(json!({"confirmationRequired":true}));
+        }
+        if id == "sync.clear.resolve" {
+            if !s.sync_clear_pending { return Err("没有等待确认的移除操作".into()); }
+            match args["choice"].as_str() {
+                Some("cancel") => { s.sync_clear_pending=false;s.sync_error.clear();s.revision+=1;return Ok(json!({"cancelled":true})); }
+                Some("remove") => {}
+                _ => return Err("unknown removal choice".into()),
+            }
+        }
+        let id=if id=="sync.save"{"sync.configure"}else if id=="sync.clear.resolve"{"sync.clear"}else{id};
         let args=if id=="sync.configure"&&args.as_object().is_none_or(|v|v.is_empty()){s.sync_draft.clone().ok_or("请先编辑 WebDAV 设置")?}else{args};
         let mut input = args;
         if id == "sync.run" || id == "sync.resolve" {
@@ -98,7 +115,7 @@ impl Controller {
         let result = match result {
             Ok(v) => v,
             Err(e) => {
-                s.status = e.clone();
+                if id=="sync.clear"{s.status.clear();}else{s.status=e.clone();}
                 s.sync_error=e.clone();
                 return Err(e);
             }
@@ -108,6 +125,7 @@ impl Controller {
         } else if id == "sync.configure" || id == "sync.state" || id == "sync.clear" {
             s.sync = result.clone();
         }
+        if id=="sync.clear"{s.sync_clear_pending=false;}
         if id=="sync.configure"||id=="sync.clear"{s.sync_draft=None;s.sync_error.clear();if s.page=="global-settings"&&s.settings_tab=="sync"{crate::interaction::begin_sync(&mut s);}}
         if let Some(shared) = result.get("shared") {
             let shared: sync_model::SharedConfig =

@@ -190,6 +190,7 @@ pub struct State {
     pub settings_error_field: String,
     #[serde(skip)]
     pending_navigation: Option<interaction::PendingNavigation>,
+    pub sync_clear_pending: bool,
     pub profile_tab: String,
     pub profile_sources_expanded: bool,
     pub profile_copy: Option<profile_copy::Preview>,
@@ -323,7 +324,7 @@ impl Controller {
                 draft_address: String::new(),
                 draft_addresses: String::new(),
                 draft_relay: String::new(),
-                settings_inputs:BTreeMap::new(),settings_error:String::new(),settings_error_field:String::new(),pending_navigation:None,
+                settings_inputs:BTreeMap::new(),settings_error:String::new(),settings_error_field:String::new(),pending_navigation:None,sync_clear_pending:false,
                 profile_tab: "video".into(),
                 profile_sources_expanded: false,
                 profile_copy: None,
@@ -390,6 +391,7 @@ impl Controller {
         value["connection"]["busy"]=json!(s.connection.busy());
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
         value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
+        value["syncClearPrompt"]=if s.sync_clear_pending{json!({"title":"移除同步设置？","message":"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。"})}else{Value::Null};
         value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
         drop(s);
         // Read progress without taking the updater's network/installation lock.
@@ -536,8 +538,9 @@ impl Controller {
         }
         let result = if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
-            let action=match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>if self.state.lock().unwrap().connection.busy(){"stream.disconnect"}else{"connection.dismiss"},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
-            let result=self.dispatch(action,if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
+            let clear_pending=self.state.lock().unwrap().sync_clear_pending;
+            let action=if clear_pending {"sync.clear.resolve"} else {match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>if self.state.lock().unwrap().connection.busy(){"stream.disconnect"}else{"connection.dismiss"},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"}};
+            let result=self.dispatch(action,if clear_pending{json!({"choice":"cancel"})}else if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
         } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if is_session_control_action(id){self.dispatch_session_control(id,args)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.profile_copy_gate(id){result} else if id.starts_with("settings.copy."){self.dispatch_profile_copy(id,args)} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
             self.dispatch_add(id,args)
         } else if id.starts_with("device.info.") {

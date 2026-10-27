@@ -29,7 +29,15 @@ public final class RhSync {
         if(!password.isEmpty()){Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());next.put("iv",Base64.encodeToString(cipher.getIV(),Base64.NO_WRAP));next.put("ciphertext",Base64.encodeToString(cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)),Base64.NO_WRAP));}
         next.put("url",address);next.put("username",user);next.put("automatic",args.optBoolean("automatic"));next.put("intervalMinutes",intervalMinutes);RhShared.write(file,next);local=next;clearPending();
     }
-    public void clear()throws IOException{RhShared.write(file,new JSONObject());local=new JSONObject();clearPending();}
+    public void clear()throws IOException{
+        if(file.exists()&&!file.isFile())throw new IOException("本机同步配置文件不可写");
+        RhShared.write(file,new JSONObject());
+        // AtomicFile.finishWrite can log a rename failure without throwing. Do not report
+        // removal or discard the in-memory account until its persisted state is verified.
+        try{if(new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8)).length()!=0)throw new IOException("同步设置未能移除，请重试");}
+        catch(JSONException invalid){throw new IOException("本机同步配置写入失败",invalid);}
+        local=new JSONObject();clearPending();
+    }
     private void clearPending(){pendingLocal=null;pendingRemote=null;pendingEtag=null;conflicts=new JSONArray();}
     private String password(JSONObject l)throws Exception{Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(l.getString("iv"),Base64.NO_WRAP)));return new String(cipher.doFinal(Base64.decode(l.getString("ciphertext"),Base64.NO_WRAP)),StandardCharsets.UTF_8);}
     private static HttpURLConnection open(URL url,String method,String authorization)throws IOException{HttpURLConnection c=(HttpURLConnection)url.openConnection();c.setConnectTimeout(10000);c.setReadTimeout(15000);c.setInstanceFollowRedirects(false);c.setRequestMethod(method);c.setRequestProperty("Authorization",authorization);return c;}

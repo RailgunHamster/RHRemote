@@ -8,7 +8,7 @@ pub(crate) struct PendingNavigation { pub action:String, pub args:Value, pub syn
 pub(crate) fn automatic_sync_blocked(s:&State)->bool{
     s.sync_busy || s.streaming || s.connecting || s.closing || s.installing_update
         || s.draft.is_some() || s.info_draft.is_some() || s.page=="add" || s.page=="pair"
-        || s.pending_navigation.is_some() || sync_dirty(s)
+        || s.pending_navigation.is_some() || s.sync_clear_pending || sync_dirty(s)
 }
 
 pub(crate) fn begin_sync(s:&mut State){
@@ -70,6 +70,7 @@ impl Controller {
     pub(crate) fn navigation_gate(&self,id:&str,args:&Value)->Option<Result<Value,String>>{
         let mut s=self.state.lock().unwrap();
         if id=="sync.run" && args["automatic"]==true && (automatic_sync_blocked(&s)||s.sync["automatic"]!=true){return Some(Ok(json!({"skipped":true})));}
+        if s.sync_clear_pending && !matches!(id,"sync.clear.resolve"|"sync.clear"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"){return Some(Err("请先确认是否移除同步设置".into()));}
         if s.pending_navigation.is_some() && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {
             return Some(Err("请先处理未保存的更改".into()));
         }
@@ -167,6 +168,7 @@ mod tests {
         if id=="sync.state"{return Ok(self.saved.lock().unwrap().clone());}if id=="updates.state"{return Ok(json!({}));}
         self.calls.lock().unwrap().push((id.into(),args.clone()));
         if self.fail.load(std::sync::atomic::Ordering::SeqCst){return Err("WebDAV 地址无效".into());}
+        if id=="sync.clear"{*self.saved.lock().unwrap()=json!({"url":"","hasPassword":false,"automatic":false});return Ok(self.saved.lock().unwrap().clone());}
         if id=="sync.configure"{let mut saved=args.clone();saved.as_object_mut().unwrap().remove("password");saved["hasPassword"]=json!(true);*self.saved.lock().unwrap()=saved.clone();return Ok(saved);}Ok(json!({}))
     }}
     fn dav()->(Arc<Controller>,Arc<Dav>){let p=Arc::new(Dav::default());let c=Controller::new("test",std::env::temp_dir().join(format!("rhremote-dav-flow-{}.json",random_token().unwrap())),p.clone()).unwrap();c.dispatch("app.settings.tab",json!({"tab":"sync"}));(c,p)}
@@ -186,6 +188,40 @@ mod tests {
     #[test]fn failed_webdav_save_keeps_input_without_persisting_or_leaving(){
         let(c,p)=dav();p.fail.store(true,std::sync::atomic::Ordering::SeqCst);c.dispatch("sync.edit",json!({"key":"url","value":"invalid"}));c.dispatch("devices.open",json!({}));assert_eq!(c.dispatch("navigation.resolve",json!({"choice":"save"}))["ok"],false);
         assert_eq!(c.state()["settingsTab"],"sync");assert_eq!(c.state()["syncDraft"]["url"],"invalid");assert_eq!(c.state()["syncDirty"],true);assert_eq!(c.state()["syncError"],"WebDAV 地址无效");assert!(c.state()["navigationPrompt"].is_null());assert!(p.saved.lock().unwrap().is_null());let _=std::fs::remove_file(&c.storage);
+    }
+
+    fn configured_dav()->(Arc<Controller>,Arc<Dav>){
+        let(c,p)=dav();assert_eq!(c.dispatch("sync.configure",json!({"url":"https://example.test/dav/","username":"fixture","password":"fixture-secret","automatic":true,"intervalMinutes":15}))["ok"],true);(c,p)
+    }
+    #[test]fn sync_removal_requires_confirmation_and_cancel_preserves_unsaved_inputs(){
+        let(c,p)=configured_dav();let before=p.saved.lock().unwrap().clone();let calls=p.calls.lock().unwrap().len();
+        c.dispatch("sync.edit",json!({"key":"username","value":"unfinished edit"}));assert_eq!(c.state()["status"],"");
+        assert_eq!(c.dispatch("sync.clear",json!({}))["result"]["confirmationRequired"],true);
+        assert_eq!(*p.saved.lock().unwrap(),before);assert_eq!(p.calls.lock().unwrap().len(),calls);
+        assert!(c.state()["syncClearPrompt"].is_object());assert!(!c.state().to_string().contains("fixture-secret"));
+        assert_eq!(c.dispatch("sync.save",json!({}))["ok"],false);
+        assert_eq!(c.dispatch("sync.run",json!({"automatic":true}))["result"]["skipped"],true);
+        assert_eq!(c.dispatch("sync.clear",json!({}))["ok"],true);assert_eq!(p.calls.lock().unwrap().len(),calls);
+        let back=c.dispatch("navigation.back",json!({}));assert_eq!(back["ok"],true);assert_eq!(back["action"],"navigation.back");
+        assert!(c.state()["syncClearPrompt"].is_null());assert_eq!(c.state()["syncDraft"]["username"],"unfinished edit");assert_eq!(*p.saved.lock().unwrap(),before);
+        let _=std::fs::remove_file(&c.storage);
+    }
+    #[test]fn confirmed_sync_removal_only_clears_local_sync_account_once(){
+        let(c,p)=configured_dav();let shared=c.state()["saved"].clone();let calls=p.calls.lock().unwrap().len();
+        assert_eq!(c.dispatch("sync.clear.resolve",json!({"choice":"remove"}))["ok"],false);assert_eq!(p.calls.lock().unwrap().len(),calls);
+        c.dispatch("sync.clear",json!({}));assert_eq!(c.dispatch("sync.clear.resolve",json!({"choice":"invalid"}))["ok"],false);assert!(c.state()["syncClearPrompt"].is_object());
+        assert_eq!(c.dispatch("sync.clear.resolve",json!({"choice":"remove"}))["ok"],true);
+        assert_eq!(p.calls.lock().unwrap().last().unwrap().0,"sync.clear");assert_eq!(p.calls.lock().unwrap().len(),calls+1);
+        assert_eq!(c.state()["sync"]["hasPassword"],false);assert_eq!(c.state()["sync"]["automatic"],false);assert_eq!(c.state()["syncDirty"],false);assert_eq!(c.state()["saved"],shared);
+        assert_eq!(c.dispatch("sync.clear.resolve",json!({"choice":"remove"}))["ok"],false);assert_eq!(p.calls.lock().unwrap().len(),calls+1);
+        let _=std::fs::remove_file(&c.storage);
+    }
+    #[test]fn failed_sync_removal_keeps_the_account_and_confirmation_available(){
+        let(c,p)=configured_dav();let before=p.saved.lock().unwrap().clone();c.dispatch("sync.clear",json!({}));p.fail.store(true,std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(c.dispatch("sync.clear.resolve",json!({"choice":"remove"}))["ok"],false);assert_eq!(*p.saved.lock().unwrap(),before);assert!(c.state()["syncClearPrompt"].is_object());assert!(!c.state()["syncError"].as_str().unwrap().is_empty());assert_eq!(c.state()["status"],"");
+        assert_eq!(c.dispatch("sync.clear.resolve",json!({"choice":"cancel"}))["ok"],true);assert_eq!(*p.saved.lock().unwrap(),before);
+        p.fail.store(false,std::sync::atomic::Ordering::SeqCst);c.dispatch("sync.clear",json!({}));assert_eq!(c.dispatch("sync.clear.resolve",json!({"choice":"remove"}))["ok"],true);
+        let _=std::fs::remove_file(&c.storage);
     }
 
 }

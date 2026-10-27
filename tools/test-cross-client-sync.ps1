@@ -78,7 +78,7 @@ try{
  }
  # Refresh cached foreign groups after restoring the real preferences as well.
  try{foreach($side in @('windows','android','windows')){$restored=Sync $side;if(@($restored.sync.conflicts).Count -gt 0){$null=Sync $side local}}}catch{Write-Warning 'Final fixture merge needs inspection'}
- foreach($side in @('windows','android')){try{$null=Call $side 'sync.clear'}catch{Write-Warning "$side test WebDAV credential cleanup needs inspection"}}
+ foreach($side in @('windows','android')){try{$null=Call $side 'sync.clear';$null=Call $side 'sync.clear.resolve' @{choice='remove'}}catch{Write-Warning "$side test WebDAV credential cleanup needs inspection"}}
  & $adb -s 192.168.0.103:5555 reverse --remove tcp:48760|Out-Null
  [IO.File]::WriteAllText((Join-Path $root 'stop'),'')
  if($process -and -not $process.WaitForExit(5000)){Stop-Process -Id $process.Id -Force}
