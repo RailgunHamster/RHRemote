@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod auth;
+mod http_response;
 mod network;
 mod transport;
 #[cfg(windows)]
@@ -16,7 +17,7 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::{
@@ -164,14 +165,7 @@ fn handle(
         Ok(value) => (200, json!({"ok":true,"result":value})),
         Err(error) => (409, json!({"ok":false,"error":error})),
     };
-    let bytes = serde_json::to_vec(&body)?;
-    write!(
-        stream,
-        "HTTP/1.1 {status} Result\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        bytes.len()
-    )?;
-    stream.write_all(&bytes)?;
-    stream.flush()?;
+    http_response::send(&mut stream, status, &body)?;
     Ok(())
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {

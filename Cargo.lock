@@ -5410,6 +5410,7 @@ name = "rhremote-host"
 version = "0.2.3"
 dependencies = [
  "anyhow",
+ "rcgen",
  "rhremote-transport",
  "rustls",
  "rustls-pemfile",

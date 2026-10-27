@@ -6,7 +6,7 @@
 
 ## P0 双端 UI 完整验收
 
-- [ ] Android 当前实会话的全黑样本：核对自动选屏准备的 EOF、没有初始屏幕请求的回退和实际捕获源；补齐有效画面源后再验收。已观察到解码输出及系统呈现回调，不能据此视为画面通过；两轮整条流程均失败。[菜单、返回与失败证据](design/ANDROID-SESSION-UI-20261028.md)
+- [ ] Android 当前实会话的全黑样本：补齐有效画面源、实际捕获源和会话格式的对照后再验收。两轮整条流程均失败；同一模拟器的生成灰色视频已通过缓冲亮度和表面取样。自动选屏 EOF 已复现为实服务正文截断，TLS 正常结束流程已修，仍需部署对照。[菜单、返回与失败证据](design/ANDROID-SESSION-UI-20261028.md)、[接口与视频隔离](design/HOST-API-EOF-20261028.md)
 - [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界，原生视频窗口首帧前的可见反馈、取消和其余错误路径。[逐项规范](design/UI-FLOW-SPEC.md)
 - [ ] 更新流程：完成 Windows 实际下载、应用更新／安装取消，以及双端安装成功后的配置保留。[逐项规范](design/UI-FLOW-SPEC.md)、[Android 页面生命周期证据](design/ANDROID-UPDATE-LIFECYCLE-20261027.md)
 - [ ] 同步流程：完成 Windows 实际窗口中的 HTTPS 流程、真实 WebDAV 服务跨客户端同步和其余网络／文件失败边界；补齐进程被系统终止后的反馈。[Windows 后台与布局证据](design/WINDOWS-SYNC-20261028.md)、[Android 同步与网络证据](design/ANDROID-SYNC-LIFECYCLE-20261028.md)
