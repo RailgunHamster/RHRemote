@@ -389,6 +389,7 @@ impl Controller {
         value["infoDirty"]=json!(device_info::dirty(&s));
         value["connection"]["title"]=json!(s.connection.title());
         value["connection"]["busy"]=json!(s.connection.busy());
+        value["navigation"]=json!({"locked":connection::navigation_locked(&s),"reason":connection::navigation_hint(&s)});
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
         value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
         value["syncClearPrompt"]=if s.sync_clear_pending{json!({"title":"移除同步设置？","message":"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。"})}else{Value::Null};

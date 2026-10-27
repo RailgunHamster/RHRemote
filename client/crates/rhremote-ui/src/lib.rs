@@ -322,6 +322,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_info_name(state["infoDraft"]["displayName"].as_str().unwrap_or("").into());ui.set_info_error(state["infoDraft"]["error"].as_str().unwrap_or("").into());ui.set_info_dirty(state["infoDirty"]==true);ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
             ui.set_connection_phase(state["connection"]["phase"].as_str().unwrap_or("").into());
             ui.set_connection_operation(state["connection"]["operation"].as_str().unwrap_or("").into());
+            ui.set_navigation_locked(state["navigation"]["locked"]==true);ui.set_navigation_hint(state["navigation"]["reason"].as_str().unwrap_or("").into());
             ui.set_connection_title(state["connection"]["title"].as_str().unwrap_or("").into());
             ui.set_connection_name(state["connection"]["name"].as_str().unwrap_or("").into());
             ui.set_connection_error(state["connection"]["error"].as_str().unwrap_or("").into());

@@ -67,6 +67,7 @@ public class RhAdmissionTest {
         });
     }
     private void run(){queued.removeFirst().run();idle();}
+    private void navigationViews(View view,boolean locked){if(view.getTag() instanceof String&&((String)view.getTag()).startsWith("nav:")){assertEquals(!locked,view.isEnabled());assertEquals(!locked,view.isFocusable());assertEquals(locked?.45f:1f,view.getAlpha(),.001f);}if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)navigationViews(((ViewGroup)view).getChildAt(i),locked);}
     private void rejectNew(){
         try{make().start(op->()->{});fail("Previous task must keep its reservation");}catch(IllegalStateException expected){}
     }
@@ -163,8 +164,11 @@ public class RhAdmissionTest {
         RhActions.dispatch("devices.filter",RhActions.obj("query","PC"));RhActions.dispatch("device.select",RhActions.obj("uuid","host"));
         String before=home.state().getJSONObject("saved").toString();Button connect=button(activity.getWindow().getDecorView(),"连接");assertNotNull(connect);connect.performClick();
         assertTrue(entered.await(2,TimeUnit.SECONDS));idle();assertEquals("connection",home.state().getString("page"));
+        assertTrue(home.state().getJSONObject("navigation").getBoolean("locked"));navigationViews(activity.getWindow().getDecorView(),true);
+        assertEquals(home.state().getJSONObject("navigation").getString("reason"),RhActions.dispatch("app.settings.open",RhActions.obj()).getString("error"));
         assertFalse(RhActions.dispatch("app.settings.open",RhActions.obj()).getBoolean("ok"));assertFalse(RhActions.dispatch("device.connect",RhActions.obj("uuid","host")).getBoolean("ok"));
         release.countDown();awaitIdle();assertEquals("failed",home.state().getJSONObject("connection").getString("phase"));assertTrue(home.state().getJSONObject("connection").getString("error").contains("certificate mismatch"));
+        assertFalse(home.state().getJSONObject("navigation").getBoolean("locked"));navigationViews(activity.getWindow().getDecorView(),false);
         assertEquals("PC",home.state().getString("deviceQuery"));assertEquals(before,home.state().getJSONObject("saved").toString());
         launchFailure="";release=new CountDownLatch(1);button(activity.getWindow().getDecorView(),"重试连接").performClick();
         assertTrue(RhActions.hasStream());assertEquals(2,home.state().getJSONObject("connection").getInt("attempt"));

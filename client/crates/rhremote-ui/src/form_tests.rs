@@ -22,6 +22,22 @@ fn real_buttons_and_category_tabs_keep_focus_for_keyboard_activation(){
     ui.hide().unwrap();
 }
 #[test]
+fn blocked_navigation_cannot_dispatch_from_pointer_or_keyboard_and_recovers_after_cleanup(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("connection".into());ui.set_connection_phase("starting".into());ui.set_connection_busy(true);
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_navigation_locked(false);click(&ui,"设置");received.borrow_mut().clear();
+        ui.set_navigation_locked(true);ui.set_navigation_hint("连接期间无法切换页面".into());
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
+        for label in ["远程设备","添加电脑","设置","深色模式"]{click(&ui,label);}assert!(received.borrow().is_empty(),"disabled navigation dispatched: {:?}",received.borrow());
+        click(&ui,"取消连接");assert_eq!(&*received.borrow(),&["stream.disconnect"]);
+        received.borrow_mut().clear();ui.set_connection_phase("cancelling".into());
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});assert!(received.borrow().is_empty(),"disabled cancellation dispatched: {:?}",received.borrow());ui.set_connection_phase("starting".into());
+        ui.set_navigation_locked(false);ui.set_navigation_hint("".into());received.borrow_mut().clear();click(&ui,"设置");
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});assert_eq!(&*received.borrow(),&["app.settings.open","app.settings.open"]);
+    }ui.hide().unwrap();
+}
+#[test]
 fn settings_footer_remains_visible_with_long_content_and_disabled_save_cannot_submit(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_selected_name("winserver".into());
     ui.set_profile_fields(ModelRc::new(VecModel::from((0..30).map(|i|SettingRow{key:format!("field{i}").into(),label:format!("参数 {i}").into(),kind:"number".into(),input_text:"30".into(),..Default::default()}).collect::<Vec<_>>())));

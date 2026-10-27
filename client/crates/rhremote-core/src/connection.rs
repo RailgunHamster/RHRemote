@@ -74,9 +74,9 @@ pub(crate) fn observe(s: &mut State, streaming: bool, data: &Value) {
 impl Controller {
     pub(crate) fn connection_gate(&self, id:&str) -> Option<Result<Value,String>> {
         let s=self.state.lock().unwrap();
-        if matches!(s.page.as_str(),"connection"|"pair") && s.connection.busy() && matches!(id,
+        if navigation_locked(&s) && matches!(id,
             "devices.open"|"device.select"|"device.add.open"|"device.settings.open"|"device.info.open"|"app.settings.open"|"app.settings.tab"|"appearance.toggle") {
-            return Some(Err(if s.connection.operation=="pair" {"请先完成或取消当前配对"}else{"请先取消或断开当前连接"}.into()));
+            return Some(Err(navigation_hint(&s).into()));
         }
         None
     }
@@ -91,6 +91,11 @@ impl Controller {
         };
         if response["ok"]==true {Ok(response["result"].clone())} else {Err(response["error"].as_str().unwrap_or("连接操作失败").into())}
     }
+}
+
+pub(crate) fn navigation_locked(s:&State)->bool {matches!(s.page.as_str(),"connection"|"pair") && s.connection.busy()}
+pub(crate) fn navigation_hint(s:&State)->&str {
+    if !navigation_locked(s) {""} else if matches!(s.connection.phase.as_str(),"cancelling"|"cleaning") {"正在清理，完成后可切换页面"} else if s.connection.operation=="pair" {"配对期间无法切换页面"} else {"连接期间无法切换页面"}
 }
 
 #[cfg(test)]
@@ -119,6 +124,17 @@ mod tests {
         poll(&c,true,"connected",false,"",false);assert_eq!(c.state()["connection"]["phase"],"first-frame");assert_eq!(c.state()["connection"]["firstFrame"],false);
         poll(&c,true,"connected",true,"",false);assert_eq!(c.state()["connection"]["phase"],"connected");assert_eq!(c.state()["connection"]["firstFrame"],true);
         let _=std::fs::remove_file(&c.storage);
+    }
+    #[test]fn navigation_availability_and_api_rejections_share_the_lifecycle_state(){
+        let(c,_)=fixture();let query=c.state()["deviceQuery"].clone();
+        for(phase,streaming,first,cleanup)in[("starting",false,false,false),("connected",true,true,false),("reconnecting",false,false,true)]{
+            poll(&c,streaming,phase,first,"",cleanup);assert_eq!(c.state()["navigation"]["locked"],true);
+            let reason=c.state()["navigation"]["reason"].clone();assert!(!reason.as_str().unwrap().is_empty());
+            for id in ["devices.open","device.select","device.add.open","device.settings.open","device.info.open","app.settings.open","app.settings.tab","appearance.toggle"]{let response=c.dispatch(id,json!({"uuid":"other","tab":"about"}));assert_eq!(response["ok"],false,"{id}");assert_eq!(response["error"],reason,"{id}");}
+        }
+        c.dispatch("stream.disconnect",json!({}));assert_eq!(c.state()["navigation"]["reason"],"正在清理，完成后可切换页面");
+        poll(&c,false,"transport_closed",false,"",false);assert_eq!(c.state()["navigation"],json!({"locked":false,"reason":""}));assert_eq!(c.state()["deviceQuery"],query);
+        assert_eq!(c.dispatch("app.settings.open",json!({}))["ok"],true);assert_eq!(c.state()["page"],"global-settings");let _=std::fs::remove_file(&c.storage);
     }
     #[test]fn unavailable_poll_is_not_evidence_of_a_disconnect(){
         let(c,host)=fixture();let before=c.state();c.stream_state(false,Value::Null);
