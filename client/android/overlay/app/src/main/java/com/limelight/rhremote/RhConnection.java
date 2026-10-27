@@ -24,5 +24,16 @@ final class RhConnection {
         else fail(failure);
     }
     void frame(){if(!uuid.isEmpty()&&!stopping&&busy()){firstFrame=true;phase="connected";error="";}}
+    boolean canRetainResult(){return !uuid.isEmpty()&&!stopping&&java.util.Arrays.asList("failed","ended","paired").contains(phase);}
+    /** Immutable, in-process result only. It never holds a request, PIN, socket or Activity. */
+    static final class Result {
+        final String uuid,name,phase,error,operation;final long attempt;final boolean firstFrame;
+        private Result(RhConnection source){uuid=source.uuid;name=source.name;phase=source.phase;error=source.error;operation=source.operation;attempt=source.attempt;firstFrame=source.firstFrame;}
+    }
+    Result retainResult(){return canRetainResult()?new Result(this):null;}
+    boolean restoreResult(Result result){
+        if(result==null||result.uuid.isEmpty()||!java.util.Arrays.asList("failed","ended","paired").contains(result.phase))return false;
+        uuid=result.uuid;name=result.name;phase=result.phase;error=result.error;operation=result.operation;attempt=result.attempt;firstFrame=result.firstFrame;stopping=false;return true;
+    }
     JSONObject state(){return RhActions.obj("uuid",uuid,"name",name,"operation",operation,"attempt",attempt,"phase",phase,"title",title(),"error",error,"firstFrame",firstFrame,"busy",busy());}
 }

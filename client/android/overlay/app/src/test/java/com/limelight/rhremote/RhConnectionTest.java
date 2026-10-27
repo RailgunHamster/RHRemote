@@ -31,4 +31,10 @@ public class RhConnectionTest {
     @Test public void an_early_frame_is_not_overwritten_by_the_activity_handoff(){
         RhConnection c=new RhConnection();c.begin("host","winserver");c.frame();c.finished(true,"");assertEquals("connected",c.phase);assertTrue(c.firstFrame);
     }
+    @Test public void retained_results_are_immutable_and_never_resume_live_work(){
+        RhConnection source=new RhConnection();source.begin("host","winserver");assertNull(source.retainResult());source.fail("private fixture failure");RhConnection.Result saved=source.retainResult();assertNotNull(saved);
+        source.begin("other","another host");source.fail("new failure");RhConnection restored=new RhConnection();assertTrue(restored.restoreResult(saved));assertEquals("host",restored.uuid);assertEquals("failed",restored.phase);assertEquals("private fixture failure",restored.error);assertEquals(1,restored.attempt);assertFalse(restored.busy());
+        for(String phase:new String[]{"resolving","identity","pairing","starting","first-frame","connected","reconnecting","cancelling","cleaning","cancelled"}){source.phase=phase;assertNull(phase,source.retainResult());}
+        source.phase="failed";source.stopping=true;assertNull(source.retainResult());assertFalse(new RhConnection().restoreResult(null));
+    }
 }

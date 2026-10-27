@@ -3,7 +3,35 @@ use crate::{Controller, Profile, State, network, settings_catalog};
 use serde_json::{Value, json};
 
 #[derive(Clone, Debug)]
-pub(crate) struct PendingNavigation { pub action:String, pub args:Value, pub sync:bool, pub info:bool }
+pub(crate) struct PendingNavigation { pub action:String, pub args:Value, pub sync:bool, pub info:bool, pub appearance:Option<AppearanceContext> }
+
+/// Navigation identifiers and a read-only preview, never unsaved form values or credentials.
+#[derive(Clone, Debug)]
+pub(crate) struct AppearanceContext {
+    page:String,selected:String,profile_tab:String,settings_tab:String,sources_expanded:bool,
+    preview:Option<crate::profile_copy::Preview>,
+}
+impl AppearanceContext {
+    fn capture(s:&State,id:&str)->Option<Self>{(id=="appearance.toggle").then(||Self{page:s.page.clone(),selected:s.selected.clone(),profile_tab:s.profile_tab.clone(),settings_tab:s.settings_tab.clone(),sources_expanded:s.profile_sources_expanded,preview:s.profile_copy.clone()})}
+    fn restore(&self,c:&Controller){
+        let (id,args)=match self.page.as_str(){
+            "device-info"=>("device.info.open",json!({"uuid":self.selected})),
+            "settings"|"profile-copy"=>("device.settings.open",json!({"uuid":self.selected})),
+            "global-settings"=>("app.settings.tab",json!({"tab":self.settings_tab})),
+            _=>return,
+        };
+        if c.dispatch(id,args)["ok"]!=true{return;}
+        if !matches!(self.page.as_str(),"settings"|"profile-copy"){return;}
+        c.dispatch("settings.tab",json!({"tab":self.profile_tab}));
+        let mut s=c.state.lock().unwrap();s.profile_sources_expanded=self.sources_expanded;
+        if let Some(preview)=&self.preview{
+            let available=preview.target_uuid==s.selected&&preview.client_id!=s.saved.client_id&&s.saved.client_profiles.get(&preview.client_id).and_then(|group|group.get(&s.selected)).is_some_and(|profile|profile.to_profile().validate().is_ok());
+            if available{s.profile_copy=Some(preview.clone());s.page="profile-copy".into();}
+            else{s.profile_copy=None;s.profile_copy_error.clear();s.profile_copy_notice="来源配置不可用".into();s.page="settings".into();}
+        }
+        s.revision+=1;
+    }
+}
 
 pub(crate) fn automatic_sync_blocked(s:&State)->bool{
     s.sync_busy || s.streaming || s.connecting || s.closing || s.installing_update
@@ -78,22 +106,23 @@ impl Controller {
         let leaving_info=matches!(id,"devices.open"|"device.select"|"device.settings.open"|"device.info.open"|"device.add.open"|"app.settings.open"|"app.settings.tab"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || primary_installs;
         if leaving_info && s.info_draft.is_some(){
             if id=="device.info.open" && args["uuid"]==s.selected{return Some(Ok(json!({"reused":true})));}
-            if crate::device_info::dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false,info:true});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
-            s.info_draft=None;s.page="devices".into();
+            if crate::device_info::dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false,info:true,appearance:AppearanceContext::capture(&s,id)});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
+            if id!="appearance.toggle"{s.info_draft=None;s.page="devices".into();}
         }
         let leaving_sync=matches!(id,"devices.open"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || id=="app.settings.tab"&&args["tab"]!="sync" || primary_installs;
         if leaving_sync && s.sync_draft.is_some(){
-            if sync_dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:true,info:false});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
-            s.sync_draft=None;s.sync_error.clear();
+            if sync_dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:true,info:false,appearance:AppearanceContext::capture(&s,id)});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
+            if id!="appearance.toggle"{s.sync_draft=None;s.sync_error.clear();}
         }
         let leaving=matches!(id,"devices.open"|"app.settings.open"|"app.settings.tab"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"updates.install")
             || primary_installs;
         if !leaving || s.draft.is_none(){return None;}
         if id=="device.settings.open"&&args["uuid"]==s.selected{return Some(Ok(json!({"reused":true})));}
         if dirty(&s){
-            s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false,info:false});s.revision+=1;
+            s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false,info:false,appearance:AppearanceContext::capture(&s,id)});s.revision+=1;
             return Some(Ok(json!({"pendingNavigation":true})));
         }
+        if id=="appearance.toggle"{return None;}
         clear(&mut s);
         if matches!(id,"device.select"|"appearance.toggle"){s.page="devices".into();}
         None
@@ -108,6 +137,7 @@ impl Controller {
             let result=self.dispatch(if pending.info{"device.info.save"}else if pending.sync{"sync.save"}else{"settings.save"},json!({}));
             if result["ok"]!=true{return Err(result["error"].as_str().unwrap_or("保存失败").into());}
         }
+        if let Some(appearance)=&pending.appearance{appearance.restore(self);}
         let result=self.dispatch(&pending.action,pending.args);
         if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("导航失败").into())}
     }
@@ -128,6 +158,27 @@ mod tests {
     #[test] fn untouched_settings_leave_without_a_hidden_draft(){
         let c=fixture();assert_eq!(c.state()["settingsDirty"],false);
         assert_eq!(c.dispatch("app.settings.open",json!({}))["ok"],true);assert_eq!(c.state()["page"],"global-settings");assert!(c.state()["draft"].is_null());assert!(c.state()["navigationPrompt"].is_null());let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn appearance_keeps_clean_forms_and_their_categories(){
+        for page in ["settings","device-info","global-settings"]{
+            let c=fixture();
+            match page {"settings"=>{c.dispatch("settings.tab",json!({"tab":"audio"}));},"device-info"=>{c.dispatch("device.info.open",json!({"uuid":"host"}));},_=>{c.dispatch("app.settings.tab",json!({"tab":"sync"}));}}
+            let dark=c.state()["saved"]["dark"].clone();assert_eq!(c.dispatch("appearance.toggle",json!({}))["ok"],true);assert_eq!(c.state()["page"],page);assert_ne!(c.state()["saved"]["dark"],dark);
+            if page=="settings"{assert_eq!(c.state()["profileTab"],"audio");assert!(!c.state()["draft"].is_null());}else if page=="device-info"{assert!(!c.state()["infoDraft"].is_null());}else{assert_eq!(c.state()["settingsTab"],"sync");assert!(!c.state()["syncDraft"].is_null());}
+            let _=std::fs::remove_file(&c.storage);
+        }
+    }
+    #[test] fn appearance_decisions_return_to_the_same_form_after_save_or_discard(){
+        for page in ["settings","device-info"]{for choice in ["stay","discard","save"]{
+            let c=fixture();if page=="settings"{c.dispatch("settings.tab",json!({"tab":"audio"}));input(&c,"fps","24");}else{c.dispatch("device.info.open",json!({"uuid":"host"}));c.dispatch("device.info.input",json!({"displayName":"主题测试"}));}
+            let dark=c.state()["saved"]["dark"].clone();assert_eq!(c.dispatch("appearance.toggle",json!({}))["ok"],true);assert!(!c.state()["navigationPrompt"].is_null());assert_eq!(c.state()["saved"]["dark"],dark);assert_eq!(c.dispatch("navigation.resolve",json!({"choice":choice}))["ok"],true);assert_eq!(c.state()["page"],page);assert_eq!(c.state()["selected"],"host");
+            if choice=="stay"{assert_eq!(c.state()["saved"]["dark"],dark);assert_eq!(c.state()[if page=="settings"{"settingsDirty"}else{"infoDirty"}],true);}else{assert_ne!(c.state()["saved"]["dark"],dark);assert_eq!(c.state()[if page=="settings"{"settingsDirty"}else{"infoDirty"}],false);}
+            if page=="settings"{assert_eq!(c.state()["profileTab"],"audio");assert_eq!(c.profile("host").fps,if choice=="save"{24}else{30});}
+            let _=std::fs::remove_file(&c.storage);
+        }}
+    }
+    #[test] fn failed_theme_save_keeps_the_error_input_and_original_theme(){
+        let c=fixture();input(&c,"fps","invalid");let dark=c.state()["saved"]["dark"].clone();c.dispatch("appearance.toggle",json!({}));assert_eq!(c.dispatch("navigation.resolve",json!({"choice":"save"}))["ok"],false);assert_eq!(c.state()["saved"]["dark"],dark);assert_eq!(c.state()["page"],"settings");assert_eq!(c.state()["settingsInputs"]["fps"],"invalid");assert_eq!(c.state()["settingsErrorField"],"fps");assert!(c.state()["navigationPrompt"].is_null());let _=std::fs::remove_file(&c.storage);
     }
     #[test] fn category_switch_retains_partial_input_and_save_locates_the_error(){
         let c=fixture();let before=std::fs::read(&c.storage).unwrap();input(&c,"width","");

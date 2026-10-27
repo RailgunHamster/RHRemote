@@ -500,11 +500,12 @@ mod tests {
         fs::write(&c.storage, bytes).unwrap();
     }
     #[test]
-    fn theme_navigation_cannot_discard_a_preview_or_leave_an_empty_preview_page() {
+    fn theme_navigation_protects_the_draft_and_restores_the_inspected_preview() {
         let f = fixture();
         let c = &f.0;
         let dark = c.state()["saved"]["dark"].clone();
         action(c, "settings.input", json!({"key":"fps","value":"24"}));
+        action(c, "settings.tab", json!({"tab":"advanced"}));
         preview(c);
         action(c, "appearance.toggle", json!({}));
         assert!(!c.state()["navigationPrompt"].is_null());
@@ -513,9 +514,22 @@ mod tests {
         assert_eq!(c.state()["page"], "profile-copy");
         action(c, "appearance.toggle", json!({}));
         action(c, "navigation.resolve", json!({"choice":"discard"}));
-        assert_eq!(c.state()["page"], "devices");
-        assert!(c.state()["profileCopy"].is_null());
+        assert_eq!(c.state()["page"], "profile-copy");
+        assert_eq!(c.state()["profileCopy"]["clientId"], "pad-1234");
+        assert_eq!(c.state()["profileTab"], "advanced");
+        assert_eq!(c.state()["settingsDirty"],false);
         assert_ne!(c.state()["saved"]["dark"], dark);
         assert_eq!(c.profile("host").fps, 30);
+    }
+    #[test]
+    fn clean_theme_change_keeps_the_inspected_snapshot_when_the_source_changes() {
+        let f=fixture();let c=&f.0;preview(c);let inspected=c.state()["profileCopy"].clone();
+        c.state.lock().unwrap().saved.client_profiles.get_mut("pad-1234").unwrap().get_mut("host").unwrap().bitrate_mbps=55;
+        action(c,"appearance.toggle",json!({}));assert_eq!(c.state()["page"],"profile-copy");assert_eq!(c.state()["profileCopy"],inspected);assert_eq!(c.state()["settingsDirty"],false);
+    }
+    #[test]
+    fn theme_discard_returns_to_settings_when_the_source_disappears() {
+        let f=fixture();let c=&f.0;action(c,"settings.input",json!({"key":"fps","value":"24"}));action(c,"settings.tab",json!({"tab":"advanced"}));preview(c);action(c,"appearance.toggle",json!({}));
+        c.state.lock().unwrap().saved.client_profiles.remove("pad-1234");action(c,"navigation.resolve",json!({"choice":"discard"}));assert_eq!(c.state()["page"],"settings");assert_eq!(c.state()["profileTab"],"advanced");assert!(c.state()["profileCopy"].is_null());assert_eq!(c.state()["profileCopyNotice"],"来源配置不可用");assert_eq!(c.state()["settingsDirty"],false);assert_eq!(c.profile("host").fps,30);
     }
 }

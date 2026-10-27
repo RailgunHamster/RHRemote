@@ -50,6 +50,7 @@ public final class RhHome implements RhActions.Target {
     private boolean networkBusy=false;
     private RhAdmission admission;
     private final RhConnection connection=new RhConnection();
+    private String pendingConnectionRestore="";
     private final Runnable connectionTick=this::refreshConnection;
     private String profileTab="video";private final Map<String,EditText> numberEditors=new HashMap<>();
     private final Map<String,String> numberInputs=new LinkedHashMap<>();
@@ -116,12 +117,14 @@ public final class RhHome implements RhActions.Target {
     /** Only navigation identifiers are serialized; form data and credentials stay out of the Bundle. */
     public void saveNavigation(android.os.Bundle state){
         android.os.Bundle navigation=new android.os.Bundle();navigation.putInt("version",1);
-        navigation.putString("page",Arrays.asList("devices","global-settings","settings","device-info","profile-copy","add").contains(pageId)?pageId:"devices");
-        navigation.putString("tab",settingsTab);navigation.putString("selected",!infoUuid.isEmpty()?infoUuid:selected==null?browserUuid:selected.uuid);
+        boolean result=pageId.equals("connection")&&!connectionBusy()&&connection.canRetainResult();
+        navigation.putString("page",result||Arrays.asList("devices","global-settings","settings","device-info","profile-copy","add").contains(pageId)?pageId:"devices");
+        navigation.putString("tab",settingsTab);navigation.putString("selected",!infoUuid.isEmpty()?infoUuid:result?connection.uuid:selected==null?browserUuid:selected.uuid);
         navigation.putString("profileTab",profileTab);navigation.putString("copyClient",copyPreview==null?"":copyPreview.optString("clientId"));navigation.putBoolean("sourcesExpanded",profileSourcesExpanded);
         navigation.putString("query",deviceQuery);navigation.putBoolean("detail",browser.isDetailOpen());state.putBundle("rhremote.navigation",navigation);
     }
     public void restoreNavigation(android.os.Bundle state){
+        pendingConnectionRestore="";
         if(state==null)return;android.os.Bundle navigation=state.getBundle("rhremote.navigation");if(navigation==null||navigation.getInt("version")!=1)return;
         String query=navigation.getString("query",""),uuid=navigation.getString("selected",""),tab=navigation.getString("tab","updates");
         if(query.codePointCount(0,query.length())<=128)deviceQuery=query;
@@ -132,23 +135,41 @@ public final class RhHome implements RhActions.Target {
         try{
             if(destination.equals("global-settings")){pageId="global-settings";showGlobal();}
             else if(destination.equals("add"))perform("device.add.open",RhActions.obj());
+            else if(destination.equals("connection")&&computers.containsKey(uuid)){selected=computers.get(uuid);returnToDevice();pendingConnectionRestore=uuid;message("连接已结束");}
             else if(computers.containsKey(uuid)&&destination.equals("device-info"))perform("device.info.open",RhActions.obj("uuid",uuid));
             else if(computers.containsKey(uuid)&&(destination.equals("settings")||destination.equals("profile-copy"))){
                 perform("device.settings.open",RhActions.obj("uuid",uuid));
                 String category=navigation.getString("profileTab","video");if(!Arrays.asList("video","audio","input","network","advanced").contains(category))category="video";
                 profileSourcesExpanded=navigation.getBoolean("sourcesExpanded");perform("settings.tab",RhActions.obj("tab",category));
                 String client=navigation.getString("copyClient","");
-                if(destination.equals("profile-copy")&&!client.isEmpty()&&client.length()<=256){try{perform("settings.copy.preview",RhActions.obj("clientId",client));}catch(Exception unavailable){copyPreview=null;copyError="";pageId="settings";showProfile(selected,draft);}}
+                if(destination.equals("profile-copy")&&!client.isEmpty()&&client.length()<=256){try{perform("settings.copy.preview",RhActions.obj("clientId",client));}catch(Exception unavailable){copyPreview=null;copyError="";copyNotice="来源配置不可用";pageId="settings";showProfile(selected,draft);}}
             }
         }catch(Exception unavailable){showDevices();}
     }
     /** Retained only in-process across recreation; it contains no Activity, View or credential. */
     public static final class UiState {
-        final String addAddress,addError;final boolean updateDetails;
-        UiState(String address,String error,boolean details){addAddress=address;addError=error;updateDetails=details;}
+        final String addAddress,addError,copySnapshot,copyNotice,copyNoticeUuid;final boolean updateDetails;final RhConnection.Result connectionResult;
+        UiState(String address,String error,boolean details,String copy,String notice,String noticeUuid,RhConnection.Result result){addAddress=address;addError=error;updateDetails=details;copySnapshot=copy;copyNotice=notice;copyNoticeUuid=noticeUuid;connectionResult=result;}
     }
-    public Object retainUiState(){return new UiState(pageId.equals("add")?addAddress:"",pageId.equals("add")?addError:"",updateDetails);}
-    public void restoreUiState(Object saved){if(saved instanceof UiState){UiState value=(UiState)saved;updateDetails=value.updateDetails&&updates.state().optString("phase").equals("error");if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(pageId.equals("add")){boolean previous=bindingProfile;bindingProfile=true;try{addAddress=value.addAddress;addError=value.addError;refreshAdd();}finally{bindingProfile=previous;}}}}
+    public Object retainUiState(){
+        boolean cleanProfile=selected!=null&&draft!=null&&!profileDirty()&&(pageId.equals("settings")||pageId.equals("profile-copy"));
+        return new UiState(pageId.equals("add")?addAddress:"",pageId.equals("add")?addError:"",updateDetails,pageId.equals("profile-copy")&&copyPreview!=null?copyPreview.toString():"",cleanProfile?copyNotice:"",cleanProfile?selected.uuid:"",pageId.equals("connection")&&!connectionBusy()?connection.retainResult():null);
+    }
+    public void restoreUiState(Object saved){
+        String resultUuid=pendingConnectionRestore;pendingConnectionRestore="";
+        if(!(saved instanceof UiState))return;UiState value=(UiState)saved;
+        updateDetails=value.updateDetails&&updates.state().optString("phase").equals("error");
+        if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();
+        if(pageId.equals("add")){boolean previous=bindingProfile;bindingProfile=true;try{addAddress=value.addAddress;addError=value.addError;refreshAdd();}finally{bindingProfile=previous;}}
+        if(pageId.equals("settings")&&selected!=null&&selected.uuid.equals(value.copyNoticeUuid)&&!value.copyNotice.isEmpty()&&!profileDirty()){copyNotice=value.copyNotice;refreshProfileFooter();}
+        if(pageId.equals("profile-copy")&&copyPreview!=null&&!value.copySnapshot.isEmpty()){
+            try{org.json.JSONObject snapshot=new org.json.JSONObject(value.copySnapshot);if(snapshot.optString("clientId").equals(copyPreview.optString("clientId"))&&snapshot.optString("targetUuid").equals(copyPreview.optString("targetUuid"))){copyPreview=snapshot;showCopyPreview();}}
+            catch(org.json.JSONException invalid){/* Keep the freshly validated preview if an in-memory snapshot is invalid. */}
+        }
+        if(!resultUuid.isEmpty()&&pageId.equals("devices")&&browserUuid.equals(resultUuid)&&value.connectionResult!=null&&resultUuid.equals(value.connectionResult.uuid)&&computers.containsKey(resultUuid)&&!connectionBusy()&&connection.restoreResult(value.connectionResult)){
+            selected=computers.get(resultUuid);browserUuid=resultUuid;message("");showConnection();
+        }
+    }
     private static final class AppearanceContext {
         final android.os.Bundle navigation=new android.os.Bundle();final Object transientState;
         AppearanceContext(RhHome home){home.saveNavigation(navigation);transientState=home.retainUiState();}
