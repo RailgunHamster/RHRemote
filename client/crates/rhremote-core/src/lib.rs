@@ -8,6 +8,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 mod global_settings;
+#[cfg(test)]
+mod sync_commit_tests;
 pub use global_settings::update_primary_action;
 mod interaction;
 mod add_device;
@@ -267,6 +269,8 @@ pub trait Platform: Send + Sync {
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String>;
     fn connection_requested(&self, _timing: Option<ActionTiming>) {}
     fn update_state(&self) -> Option<Value> { None }
+    /// Called only after the exact shared configuration has been persisted and read back.
+    fn sync_applied(&self, _shared:&sync_model::SharedConfig, _preferences:&std::path::Path)->Result<Option<Value>,String>{Ok(None)}
     fn probe_device(&self,address:&str,cancel:Arc<std::sync::atomic::AtomicBool>)->Result<Device,String>{
         if cancel.load(std::sync::atomic::Ordering::SeqCst){return Err("已取消添加".into());}
         let value=self.execute("device.add.probe",&json!({"address":address}))?;

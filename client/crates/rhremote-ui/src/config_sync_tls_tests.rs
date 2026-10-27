@@ -249,6 +249,10 @@ fn real_https_validates_certificate_and_name_before_sending_auth() {
         )
         .unwrap();
     assert!(result.get("shared").is_some());
+    assert_eq!(sync.local.last_sync_ms,0);
+    let merged:SharedConfig=serde_json::from_value(result["shared"].clone()).unwrap();
+    let preferences=super::tests::preferences(&sync,&merged);
+    sync.applied(&merged,&preferences).unwrap();
     assert!(sync.local.last_sync_ms > 0);
     let requests = server.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);

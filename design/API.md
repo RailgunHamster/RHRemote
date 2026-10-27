@@ -114,6 +114,8 @@ Android 也支持 `stream.test.interrupt`：必须已启用 `statistics.configur
 
 Android 同步状态增加 `phase=interrupted`、`interrupted` 和 `automaticBlocked`。新进程发现未完成任务记录时，保持 `busy=false`，显示传输结果未确认并暂停自动同步；`sync.run {automatic:true}` 返回 `skipped=true, reason=sync_interrupted`，不创建 worker。表单编辑、取消、保存及主题切换保留该状态；明确手动同步或移除同步设置后处理。记录仅含本机任务编号、时间及 pending，不参与 WebDAV 同步。
 
+Windows 同步的 `phase` 增加 `applying`、`restoring`、`recording`；完成前 `syncBusy=true`。`awaitingLocalApply` 表示本实例待应用结果，私有 `pendingApply` 保留未确认标记；收尾失败或重开待核对时 `automaticBlocked=true`，自动 `sync.run` 返回 `skipped=true, reason=sync_interrupted`。原有单次同步动作负责本机保存、回读、设备状态恢复与平台确认，全部通过才更新基准和 `lastSyncMs`。不增加用户确认按钮或公开低层提交动作。
+
 Android 同步只有在本机配置与主题持久化、完成记录回读均通过后才推进 `lastSyncMs` 和合并基准。`awaitingLocalApply` 表示本实例有待应用的传输结果，工作阶段包含 `applying` 与 `recording`。应用／完成记录失败保留旧基准和 pending，`automaticBlocked=true`；主线程完成回调前仍为忙碌。所有步骤属于原有 `sync.run`／`sync.resolve` 操作，不增加用户确认动作。
 
 Android 自动恢复的 `stream.feedback` 提供 `visible`、`title`、`detail` 和 `cancelAction`，与恢复任务持有的原生提示一致。实际取消按钮以及提示框内的 Back／Escape 均走 `stream.disconnect`；旧提示框回调检查任务归属，不能取消新恢复。提示在交接、离开、失败或取消时关闭，原有清理完成前仍禁止并发连接。

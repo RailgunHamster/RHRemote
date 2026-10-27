@@ -445,6 +445,7 @@ export component MainWindow inherits Window {
     in property <int> sync-interval-index;
     in property <bool> sync-has-password;
     in property <bool> sync-busy;
+    in property <string> sync-progress-text:"同步中…";
     in property <bool> sync-dirty;
     in property <int> sync-generation;
     in property <string> sync-error;
@@ -788,7 +789,7 @@ export component MainWindow inherits Window {
                             Text{text:"WebDAV";color:Palette.ink;font-size:18px;font-weight:600;}
                             Text{text:root.sync-last;color:Palette.muted;font-size:12px;}
                             HorizontalLayout{spacing:10px;
-                                ActionButton{text:root.sync-busy ? "同步中…" : "立即同步";primary:true;action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
+                                ActionButton{text:root.sync-busy ? root.sync-progress-text : "立即同步";primary:true;action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
                                 ActionButton{text:"移除同步设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
                                 Rectangle{horizontal-stretch:1;}
                             }

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::{fs, io::Read, path::PathBuf, time::Duration};
 
 const LIMIT: u64 = 2 * 1024 * 1024;
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Local {
     url: String,
@@ -16,16 +16,19 @@ struct Local {
     interval_minutes: u32,
     last_sync_ms: u64,
     base: Option<SharedConfig>,
+    pending_apply: bool,
 }
 struct Pending {
     local: SharedConfig,
     remote: SharedConfig,
     etag: String,
 }
+struct AwaitingApply { shared:SharedConfig, account:Local }
 pub struct ConfigSync {
     directory: PathBuf,
     local: Local,
     pending: Option<Pending>,
+    awaiting: Option<AwaitingApply>,
 }
 
 fn default_interval() -> u32 {
@@ -204,6 +207,7 @@ impl ConfigSync {
             directory,
             local,
             pending: None,
+            awaiting: None,
         })
     }
     fn credential(id: &str) -> Result<keyring::Entry, String> {
@@ -228,7 +232,8 @@ impl ConfigSync {
             .as_ref()
             .map(|p| conflict_items(&p.local, &p.remote, &conflicts))
             .unwrap_or_default();
-        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":conflicts,"conflictItems":items})
+        let blocked=self.local.pending_apply||self.awaiting.is_some();
+        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":conflicts,"conflictItems":items,"awaitingLocalApply":self.awaiting.is_some(),"automaticBlocked":blocked,"phase":if self.awaiting.is_some(){"applying"}else if blocked{"interrupted"}else if self.local.last_sync_ms>0{"completed"}else{"idle"},"error":if blocked{"上次同步结果尚未确认，自动同步已暂停，请手动同步核对"}else{""}})
     }
     pub fn configure(&mut self, args: &Value) -> Result<Value, String> {
         let address = args["url"].as_str().ok_or("url required")?.trim();
@@ -247,6 +252,7 @@ impl ConfigSync {
         if !same {
             next.base = None;
             next.last_sync_ms = 0;
+            next.pending_apply=false;
         }
         next.url = address.into();
         next.username = user.into();
@@ -267,6 +273,7 @@ impl ConfigSync {
         }
         self.local = next;
         self.pending = None;
+        self.awaiting=None;
         Ok(self.state())
     }
     pub fn clear(&mut self) -> Result<Value, String> {
@@ -278,9 +285,11 @@ impl ConfigSync {
         }
         self.local = Local::default();
         self.pending = None;
+        self.awaiting=None;
         Ok(self.state())
     }
     pub fn run(&mut self, local: SharedConfig, resolution: Resolution) -> Result<Value, String> {
+        self.awaiting=None;
         local.validate()?;
         let address = endpoint(&self.local.url)?;
         let password = Self::credential(&self.local.credential_id)?
@@ -400,13 +409,71 @@ impl ConfigSync {
         if !(200..300).contains(&response.status()) {
             return Err(http_error(ureq::Error::Status(response.status(), response)));
         }
+        self.transferred(merged)
+    }
+    fn transferred(&mut self, merged: SharedConfig) -> Result<Value, String> {
         let mut next = self.local.clone();
-        next.base = Some(merged.clone());
-        next.last_sync_ms = rhremote_core::now_ms();
+        next.pending_apply = true;
+        self.awaiting = Some(AwaitingApply {
+            shared: merged.clone(),
+            account: next.clone(),
+        });
         atomic(&self.directory.join("webdav-local.json"), &next)?;
         self.local = next;
         self.pending = None;
         Ok(json!({"shared":merged,"sync":self.state(),"conflicts":[]}))
+    }
+    #[cfg(test)]
+    pub(super) fn transferred_for_test(&mut self, shared: SharedConfig) -> Result<Value, String> {
+        self.transferred(shared)
+    }
+    #[cfg(test)]
+    pub(super) fn test_configuration() -> SharedConfig {
+        tests::config()
+    }
+    pub fn applied(
+        &mut self,
+        shared: &SharedConfig,
+        preferences: &std::path::Path,
+    ) -> Result<Value, String> {
+        let staged = self
+            .awaiting
+            .as_ref()
+            .ok_or("没有等待应用的同步结果，请重新同步")?;
+        if staged.shared != *shared || staged.account != self.local {
+            return Err("同步结果或账户已变化，请重新同步".into());
+        }
+        let saved: rhremote_core::Saved =
+            serde_json::from_slice(&fs::read(preferences).map_err(|_| "无法核对本机配置，请重试")?)
+                .map_err(|_| "本机配置无法读取，请重试")?;
+        if saved.devices != shared.devices
+            || saved.clients != shared.clients
+            || saved.client_profiles != shared.profiles
+            || saved.dark != shared.dark
+        {
+            return Err("本机配置尚未完整应用，请重新同步".into());
+        }
+        let path = self.directory.join("webdav-local.json");
+        let current: Local =
+            serde_json::from_slice(&fs::read(&path).map_err(|_| "无法核对同步账户，请重试")?)
+                .map_err(|_| "同步账户无法读取，请重试")?;
+        if current != self.local {
+            return Err("同步账户已变化，请重新同步".into());
+        }
+        let mut next = self.local.clone();
+        next.base = Some(shared.clone());
+        next.last_sync_ms = rhremote_core::now_ms();
+        next.pending_apply = false;
+        atomic(&path, &next)?;
+        let persisted: Local =
+            serde_json::from_slice(&fs::read(path).map_err(|_| "同步完成状态无法读取，请重试")?)
+                .map_err(|_| "同步完成状态无效，请重试")?;
+        if persisted != next {
+            return Err("同步完成状态未能保存，请重试".into());
+        }
+        self.local = next;
+        self.awaiting = None;
+        Ok(self.state())
     }
 }
 
@@ -451,6 +518,11 @@ mod tests {
         )))
         .unwrap()
     }
+    pub(super) fn preferences(sync:&ConfigSync,shared:&SharedConfig)->PathBuf{
+        let saved=rhremote_core::Saved{client_id:"pc".into(),devices:shared.devices.clone(),clients:shared.clients.clone(),client_profiles:shared.profiles.clone(),dark:shared.dark,profile_schema_version:2,device_order_initialized:true,relay_defaults_version:1,..Default::default()};
+        let file=sync.directory.join("preferences-apply-test.json");atomic(&file,&saved).unwrap();file
+    }
+    fn cleanup(sync:ConfigSync){let path=sync.directory.canonicalize().unwrap();let temp=std::env::temp_dir().canonicalize().unwrap();assert!(path.starts_with(&temp)&&path!=temp);fs::remove_dir_all(path).unwrap();}
     #[test]
     fn credentials_and_queries_are_not_accepted_in_urls() {
         assert!(endpoint("https://user:secret@example.com/dav").is_err());
@@ -476,6 +548,32 @@ mod tests {
             assert!(interval(&json!({"intervalMinutes":n}), 5).is_err());
         }
         assert_eq!(interval(&json!({}), 30).unwrap(), 30);
+    }
+    #[test]
+    fn commit_transfer_keeps_the_original_base_until_local_application() {
+        let mut sync=fixture();let base=config();sync.local.base=Some(base.clone());sync.local.last_sync_ms=1;atomic(&sync.directory.join("webdav-local.json"),&sync.local).unwrap();let mut remote=base.clone();remote.devices[0].display_name="远端新名".into();
+        sync.transferred(remote).unwrap();assert_eq!(sync.local.base,Some(base));assert_eq!(sync.local.last_sync_ms,1);cleanup(sync);
+    }
+    #[test]
+    fn commit_cold_retry_does_not_treat_the_old_local_name_as_a_new_edit() {
+        let mut sync=fixture();let base=config();sync.local.base=Some(base.clone());sync.local.last_sync_ms=1;atomic(&sync.directory.join("webdav-local.json"),&sync.local).unwrap();let mut remote=base.clone();remote.devices[0].display_name="远端新名".into();
+        sync.transferred(remote.clone()).unwrap();let restarted=ConfigSync::new(sync.directory.clone()).unwrap();let retry=merge(&base,&remote,restarted.local.base.as_ref(),Resolution::Review);assert_eq!(retry.merged.devices[0].display_name,"远端新名");assert_eq!(restarted.state()["automaticBlocked"],true);assert_eq!(restarted.state()["phase"],"interrupted");cleanup(sync);
+    }
+    #[test]
+    fn commit_acknowledgement_requires_the_exact_persisted_configuration(){
+        let mut sync=fixture();let original=config();let mut remote=original.clone();remote.devices[0].display_name="远端新名".into();sync.transferred(remote.clone()).unwrap();let file=preferences(&sync,&original);
+        assert!(sync.applied(&remote,&file).unwrap_err().contains("尚未完整应用"));assert!(sync.local.base.is_none());assert_eq!(sync.local.last_sync_ms,0);assert_eq!(sync.state()["automaticBlocked"],true);
+        let mut changed=remote.clone();changed.devices[0].display_name="更改后的结果".into();let file=preferences(&sync,&changed);assert!(sync.applied(&changed,&file).unwrap_err().contains("结果或账户已变化"));cleanup(sync);
+    }
+    #[test]
+    fn commit_failed_metadata_write_keeps_the_base_and_allows_explicit_retry(){
+        let mut sync=fixture();let merged=config();sync.transferred(merged.clone()).unwrap();let file=preferences(&sync,&merged);let pending=sync.directory.join("webdav-local.pending.json");fs::create_dir(&pending).unwrap();fs::write(pending.join("blocker"),b"test-owned blocker").unwrap();
+        assert!(sync.applied(&merged,&file).is_err());assert!(sync.local.base.is_none());assert_eq!(sync.local.last_sync_ms,0);assert_eq!(sync.state()["automaticBlocked"],true);let saved:Local=serde_json::from_slice(&fs::read(sync.directory.join("webdav-local.json")).unwrap()).unwrap();assert!(saved.base.is_none()&&saved.pending_apply);
+        fs::remove_file(pending.join("blocker")).unwrap();fs::remove_dir(&pending).unwrap();sync.applied(&merged,&file).unwrap();assert_eq!(sync.local.base,Some(merged));assert!(sync.local.last_sync_ms>0);assert_eq!(sync.state()["automaticBlocked"],false);cleanup(sync);
+    }
+    #[test]
+    fn commit_old_result_cannot_recreate_a_removed_account(){
+        let mut sync=fixture();let merged=config();sync.transferred(merged.clone()).unwrap();let file=preferences(&sync,&merged);sync.clear().unwrap();assert!(sync.applied(&merged,&file).unwrap_err().contains("没有等待应用"));assert!(sync.local.base.is_none());cleanup(sync);
     }
     #[test]
     fn windows_vault_roundtrip_never_exposes_password_in_json() {
@@ -532,7 +630,8 @@ mod tests {
             .exchange(&address, "Basic test", config(), Resolution::Review)
             .unwrap();
         assert!(result.get("shared").is_some());
-        assert!(sync.local.base.is_some());
+        assert!(sync.local.base.is_none());
+        let merged:SharedConfig=serde_json::from_value(result["shared"].clone()).unwrap();let file=preferences(&sync,&merged);sync.applied(&merged,&file).unwrap();assert!(sync.local.base.is_some());
         worker.join().unwrap();
         fs::remove_dir_all(sync.directory).unwrap();
     }

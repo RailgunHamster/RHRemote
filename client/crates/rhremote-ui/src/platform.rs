@@ -1336,6 +1336,7 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    fn sync_applied(&self,shared:&rhremote_core::sync_model::SharedConfig,preferences:&std::path::Path)->Result<Option<Value>,String>{self.sync.lock().unwrap().applied(shared,preferences).map(Some)}
     fn probe_device(&self,address:&str,cancel:Arc<AtomicBool>)->Result<Device,String>{
         let body=crate::device_lookup::server_info(address,cancel.clone(),Duration::from_secs(3))?;
         if cancel.load(Ordering::SeqCst){return Err("已取消添加".into());}

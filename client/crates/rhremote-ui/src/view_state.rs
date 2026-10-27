@@ -121,10 +121,11 @@ impl MainView {
             });
             ui.set_sync_has_password(state["sync"]["hasPassword"] == true);
             ui.set_sync_busy(state["syncBusy"] == true);
+            ui.set_sync_progress_text(match state["sync"]["phase"].as_str(){Some("applying")=>"正在应用…",Some("restoring")=>"正在刷新…",Some("recording")=>"正在保存…",_=>"同步中…"}.into());
             form_models::update_sync_conflicts(ui, &state["sync"]["conflictItems"]);
             ui.set_sync_last(
                 if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0) > 0 {
-                    "已同步"
+                    "上次同步已完成"
                 } else {
                     "尚未同步"
                 }

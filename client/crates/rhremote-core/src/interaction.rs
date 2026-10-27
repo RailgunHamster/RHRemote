@@ -34,13 +34,13 @@ impl AppearanceContext {
 }
 
 pub(crate) fn automatic_sync_blocked(s:&State)->bool{
-    s.sync_busy || s.streaming || s.connecting || s.closing || s.installing_update
+    s.sync_busy || s.sync["automaticBlocked"]==true || s.streaming || s.connecting || s.closing || s.installing_update
         || s.draft.is_some() || s.info_draft.is_some() || s.page=="add" || s.page=="pair"
         || s.pending_navigation.is_some() || s.sync_clear_pending || sync_dirty(s)
 }
 
 pub(crate) fn begin_sync(s:&mut State){
-    if s.sync_draft.is_none(){s.sync_generation+=1;s.sync_draft=Some(json!({"url":s.sync["url"].as_str().unwrap_or(""),"username":s.sync["username"].as_str().unwrap_or(""),"password":"","automatic":s.sync["automatic"].as_bool().unwrap_or(false),"intervalMinutes":s.sync["intervalMinutes"].as_u64().unwrap_or(5)}));s.sync_error.clear();}
+    if s.sync_draft.is_none(){s.sync_generation+=1;s.sync_draft=Some(json!({"url":s.sync["url"].as_str().unwrap_or(""),"username":s.sync["username"].as_str().unwrap_or(""),"password":"","automatic":s.sync["automatic"].as_bool().unwrap_or(false),"intervalMinutes":s.sync["intervalMinutes"].as_u64().unwrap_or(5)}));s.sync_error=if s.sync["automaticBlocked"]==true{s.sync["error"].as_str().unwrap_or("同步结果尚未确认，请手动同步核对").into()}else{String::new()};}
 }
 pub(crate) fn sync_dirty(s:&State)->bool{
     let Some(d)=&s.sync_draft else{return false};
@@ -97,6 +97,7 @@ impl Controller {
     /// Return Some when a modal consumed the action; never persist just by navigating.
     pub(crate) fn navigation_gate(&self,id:&str,args:&Value)->Option<Result<Value,String>>{
         let mut s=self.state.lock().unwrap();
+        if id=="sync.run" && args["automatic"]==true && s.sync["automaticBlocked"]==true{return Some(Ok(json!({"skipped":true,"reason":"sync_interrupted"})));}
         if id=="sync.run" && args["automatic"]==true && (automatic_sync_blocked(&s)||s.sync["automatic"]!=true){return Some(Ok(json!({"skipped":true})));}
         if s.sync_clear_pending && !id.starts_with("view.ui.") && !matches!(id,"sync.clear.resolve"|"sync.clear"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"){return Some(Err("请先确认是否移除同步设置".into()));}
         if s.pending_navigation.is_some() && !id.starts_with("view.ui.") && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {

@@ -26,6 +26,6 @@
 
 上述修复覆盖 Android 的提交顺序和文件失败；内存 HTTP 对照不替代真实 WebDAV、真实网络中断和传输后实际结束进程的验收。原有 ETag、条件写入、证书／主机名检查及 URL 规则保留。
 
-检查发现 Windows 仍有相同顺序：`client/crates/rhremote-ui/src/config_sync.rs` 在返回 shared 前推进 base／last_sync_ms，`client/crates/rhremote-core/src/global_settings.rs` 之后才 persist 本机偏好。该项已加入 P0 待修，本轮 Windows preview.47 未改，不能把 Android 修复视为两端通过。
+检查发现 Windows 仍有相同顺序：`client/crates/rhremote-ui/src/config_sync.rs` 在返回 shared 前推进 base／last_sync_ms，`client/crates/rhremote-core/src/global_settings.rs` 之后才 persist 本机偏好。该项已加入 P0 待修，本轮 Windows preview.47 未改，不能把 Android 修复视为两端通过。后续 Windows preview.48 已完成对应修复，见 [Windows 证据与范围](WINDOWS-SYNC-COMMIT-20261028.md)。
 
 本地 Android ARM64 Release 候选为 preview.42，versionCode 266，未公开发布。完整 UI 目标继续保留真实同步、Windows 对应修复和其余逐流程验收。

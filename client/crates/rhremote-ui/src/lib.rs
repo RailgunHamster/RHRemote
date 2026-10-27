@@ -41,6 +41,8 @@ mod appearance_ui_tests;
 #[cfg(test)]
 mod view_flow_tests;
 #[cfg(test)]
+mod sync_commit_ui_tests;
+#[cfg(test)]
 mod focus_clip_tests;
 slint::include_modules!();
 
