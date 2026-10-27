@@ -95,7 +95,7 @@ public class RhUpdateInstallTest {
         assertEquals(1,Requests.downloads);assertInstaller(next());assertEquals("installer",updates.state().getString("phase"));
     }
     @Test public void recheckFailureWithACachedCandidateNeedsAnotherExplicitInstallClick()throws Exception{
-        home=new RhHome(activity,CALLBACKS);updates=org.robolectric.util.ReflectionHelpers.getField(home,"updates");home.perform("app.settings.tab",RhActions.obj("tab","updates"));
+        home=newHome();updates=org.robolectric.util.ReflectionHelpers.getField(home,"updates");home.perform("app.settings.tab",RhActions.obj("tab","updates"));
         Button primary=button(activity.getWindow().getDecorView(),"检查更新");primary.performClick();awaitUpdate();assertEquals(0,Requests.downloads);
         Requests.failMetadata=true;home.perform("updates.check",RhActions.obj());awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"重新检查"));assertEquals("updates.check",updates.state().getString("failedAction"));
         Requests.failMetadata=false;primary.performClick();awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"下载并安装"));assertEquals(0,Requests.downloads);assertNull(next());
@@ -174,7 +174,48 @@ public class RhUpdateInstallTest {
     }
     private Button button(View view,String text){if(view instanceof Button&&((Button)view).getText().toString().equals(text))return(Button)view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){Button b=button(((ViewGroup)view).getChildAt(i),text);if(b!=null)return b;}return null;}
     private void awaitUpdate()throws Exception{long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);do{idle();if(!home.state().getBoolean("updatesBusy"))return;Thread.sleep(10);}while(System.nanoTime()<end);fail(home.state().getJSONObject("updates").toString());}
-    private void page()throws Exception{home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());home.perform("updates.check",RhActions.obj());awaitUpdate();}
+    private RhHome newHome(){RhHome value=new RhHome(activity,CALLBACKS);value.resumed();return value;}
+    private void page()throws Exception{home=newHome();updates=org.robolectric.util.ReflectionHelpers.getField(home,"updates");home.perform("app.settings.open",RhActions.obj());home.perform("updates.check",RhActions.obj());awaitUpdate();}
+    private void recreateHome()throws Exception{
+        android.os.Bundle navigation=new android.os.Bundle();home.saveNavigation(navigation);Object retained=home.retainUiState();home.dispose();
+        activity=Robolectric.buildActivity(Activity.class).setup().get();home=newHome();updates=org.robolectric.util.ReflectionHelpers.getField(home,"updates");home.restoreNavigation(navigation);home.restoreUiState(retained);idle();
+    }
+    @Test public void availableCandidateSurvivesHomeRecreationWithoutAnotherRequest()throws Exception{
+        page();assertEquals("9.0.0",home.state().getJSONObject("updates").getString("availableVersion"));recreateHome();
+        assertEquals("available",home.state().getJSONObject("updates").getString("phase"));assertEquals("9.0.0",home.state().getJSONObject("updates").getString("availableVersion"));assertNotNull(button(activity.getWindow().getDecorView(),"下载并安装"));assertEquals(1,Requests.checks);assertEquals(0,Requests.downloads);
+    }
+    @Test public void aRecreatedHomeKeepsOneDownloadAndItsInstallationHandoff()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
+        long operation=home.state().getJSONObject("updates").getLong("operationId");boolean dark=RhShared.dark(activity);home.perform("appearance.toggle",RhActions.obj());assertEquals(!dark,RhShared.dark(activity));recreateHome();
+        assertTrue(home.state().getBoolean("updatesBusy"));assertEquals(operation,home.state().getJSONObject("updates").getLong("operationId"));assertEquals("downloading",home.state().getJSONObject("updates").getString("phase"));assertFalse(RhActions.dispatch("updates.primary",RhActions.obj()).getBoolean("ok"));assertFalse(button(activity.getWindow().getDecorView(),"下载中 0%").isEnabled());
+        Requests.release.countDown();awaitUpdate();assertInstaller(next());assertNull(next());assertEquals(1,Requests.downloads);assertEquals(1,Requests.checks);
+    }
+    @Test public void backgroundCompletionWaitsForOneRealForegroundEntry()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));home.paused();Requests.release.countDown();
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(!updates.state().optString("phase").equals("ready")){idle();assertTrue("Download did not prepare",System.nanoTime()<end);Thread.sleep(5);}idle();
+        assertTrue(home.state().getBoolean("updatesBusy"));assertTrue(home.state().getJSONObject("updates").getBoolean("awaitingForeground"));assertNull(next());
+        home.resumed();awaitUpdate();assertInstaller(next());home.resumed();idle();assertEquals("installer",updates.state().getString("phase"));assertNull(next());
+        home.paused();home.resumed();idle();assertEquals("downloaded",updates.state().getString("phase"));assertNull(next());assertEquals(1,Requests.downloads);
+    }
+    @Test public void explicitCloseKeepsTheDownloadButDropsItsInstallHandoff()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));activity.finish();home.dispose();Requests.release.countDown();awaitUpdate();assertNull(next());assertEquals("downloaded",updates.state().getString("phase"));
+        activity=Robolectric.buildActivity(Activity.class).setup().get();home=newHome();updates=org.robolectric.util.ReflectionHelpers.getField(home,"updates");home.perform("app.settings.open",RhActions.obj());idle();assertNull(next());assertNotNull(button(activity.getWindow().getDecorView(),"安装更新"));assertEquals(1,Requests.downloads);
+    }
+    @Test public void finishingHomeCannotLaunchTheInstallerBeforeItsDestroyCallback()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));activity.finish();Requests.release.countDown();
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(!home.state().getJSONObject("updates").optBoolean("awaitingForeground")){idle();assertTrue("Finishing page consumed the installer handoff",System.nanoTime()<end);Thread.sleep(5);}assertNull(next());home.dispose();awaitUpdate();assertEquals("downloaded",updates.state().getString("phase"));assertNull(next());
+    }
+    @Test public void expandedFailureAndItsRetryActionSurviveThemeRecreation()throws Exception{
+        page();Requests.failMetadata=true;home.perform("updates.check",RhActions.obj());awaitUpdate();home.perform("updates.details.toggle",RhActions.obj());assertTrue(home.state().getBoolean("updateDetails"));home.perform("appearance.toggle",RhActions.obj());recreateHome();
+        assertEquals("error",updates.state().getString("phase"));assertEquals("updates.check",updates.state().getString("failedAction"));assertEquals(2,updates.state().getJSONArray("sourceFailures").length());assertTrue(home.state().getBoolean("updateDetails"));assertEquals(View.VISIBLE,find(activity.getWindow().getDecorView(),"更新错误详情").getVisibility());assertNotNull(button(activity.getWindow().getDecorView(),"重新检查"));assertEquals(3,Requests.checks);assertEquals(0,Requests.downloads);assertNull(next());
+    }
+    @Test public void installationPermissionReturnUsesTheReplacementHomeWithoutAnotherDownload()throws Exception{
+        page();manager.setCanRequestPackageInstalls(false);home.perform("updates.install",RhActions.obj());awaitUpdate();assertEquals(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,next().getAction());home.paused();manager.setCanRequestPackageInstalls(true);recreateHome();awaitUpdate();assertInstaller(next());assertNull(next());home.resumed();idle();assertEquals("installer",updates.state().getString("phase"));assertEquals(1,Requests.downloads);assertNull(next());
+    }
+    @Test public void retiringTheOldPageCannotDetachItsReplacement()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));RhHome old=home;
+        home=newHome();home.perform("app.settings.open",RhActions.obj());idle();old.dispose();Requests.release.countDown();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);assertEquals("installer",home.state().getJSONObject("updates").getString("phase"));
+    }
     @Test public void visiblePrimaryButtonDownloadsAndShowsBusyStateThroughTheSameActionApi()throws Exception{
         page();Button install=button(activity.getWindow().getDecorView(),"下载并安装");assertNotNull(install);assertTrue(install.isEnabled());
         Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);install.performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
@@ -198,13 +239,13 @@ public class RhUpdateInstallTest {
         home.perform("app.settings.tab",RhActions.obj("tab","updates"));assertNotNull(button(activity.getWindow().getDecorView(),"重试下载并安装"));assertFalse(home.state().getBoolean("updateDetails"));
     }
     @Test public void onePrimaryButtonChecksBeforeOfferingDownloadAndInstall()throws Exception{
-        home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
+        home=newHome();home.perform("app.settings.open",RhActions.obj());
         Button primary=button(activity.getWindow().getDecorView(),"检查更新");assertNotNull(primary);assertNull(button(activity.getWindow().getDecorView(),"下载 APK"));assertNull(button(activity.getWindow().getDecorView(),"下载并安装"));
         primary.performClick();awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"下载并安装"));assertEquals(0,Requests.downloads);assertNull(next());
         primary.performClick();awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"安装更新"));assertEquals(1,Requests.checks);assertEquals(1,Requests.downloads);assertInstaller(next());
     }
     @Test public void visibleCheckButtonCompletesThroughTheDispatcher()throws Exception{
-        home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
+        home=newHome();home.perform("app.settings.open",RhActions.obj());
         Button check=button(activity.getWindow().getDecorView(),"检查更新");assertTrue(check.isEnabled());check.performClick();awaitUpdate();
         assertEquals(1,Requests.checks);assertEquals("available",home.state().getJSONObject("updates").getString("phase"));assertEquals(0,Requests.downloads);
     }
@@ -216,7 +257,7 @@ public class RhUpdateInstallTest {
         Requests.release.countDown();awaitUpdate();assertInstaller(next());
     }
     @Test public void failedSourcesExposeBothReasonsAndLeaveRetryButtonsEnabled()throws Exception{
-        Requests.failMetadata=true;home=new RhHome(activity,CALLBACKS);home.perform("app.settings.open",RhActions.obj());
+        Requests.failMetadata=true;home=newHome();home.perform("app.settings.open",RhActions.obj());
         button(activity.getWindow().getDecorView(),"检查更新").performClick();awaitUpdate();JSONObject state=home.state().getJSONObject("updates");
         assertEquals("error",state.getString("phase"));assertEquals(2,state.getJSONArray("sourceFailures").length());
         assertTrue(state.getString("status").contains("Gitee SocketTimeoutException"));assertTrue(state.getString("status").contains("GitHub SocketTimeoutException"));
@@ -239,7 +280,7 @@ public class RhUpdateInstallTest {
         assertTrue(button(activity.getWindow().getDecorView(),"重试安装").isEnabled());button(activity.getWindow().getDecorView(),"查看详情").performClick();assertTrue(((TextView)find(activity.getWindow().getDecorView(),"更新错误详情")).getText().toString().contains("系统安装界面未能打开"));
     }
     @Test public void automaticDownloadDoesNotOpenPermissionsOrTheInstaller()throws Exception{
-        manager.setCanRequestPackageInstalls(false);home=new RhHome(activity,CALLBACKS);
+        manager.setCanRequestPackageInstalls(false);home=newHome();
         java.lang.reflect.Method method=RhHome.class.getDeclaredMethod("startUpdate",String.class,boolean.class);method.setAccessible(true);method.invoke(home,"updates.check",true);awaitUpdate();assertTrue(home.state().getJSONObject("updates").getBoolean("downloaded"));assertNull(next());
     }
 }

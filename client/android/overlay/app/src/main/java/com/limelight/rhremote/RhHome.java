@@ -68,8 +68,9 @@ public final class RhHome implements RhActions.Target {
     private org.json.JSONObject syncDraft;private String syncError="";
     private TextView syncNotice,syncErrorView;private Button syncSave,syncCancel;
 
-    private final RhUpdates updates;private boolean updatesBusy;
-    private boolean resumeInstall;
+    private final RhUpdates updates;private final RhUpdateWork updateWork;
+    private final RhUpdateWork.Listener updateListener=this::updateChanged;
+    private boolean disposed,foreground;
     private TextView updateStatus,updateProvider,updateBytes,updateFailureDetails;
     private boolean updateDetails;private Button updateDetailsToggle;
     private ProgressBar updateProgress;
@@ -81,7 +82,7 @@ public final class RhHome implements RhActions.Target {
     private static final java.util.concurrent.ExecutorService NETWORK=java.util.concurrent.Executors.newFixedThreadPool(2);
     private static final java.util.concurrent.ExecutorService CONNECT=java.util.concurrent.Executors.newSingleThreadExecutor(task->new Thread(task,"RHRemote admission"));
     public RhHome(Activity a,Actions callbacks) {
-        activity=a;actions=callbacks;sync=new RhSync(a);updates=new RhUpdates(a);systemBack=new RhBackNavigation(a,this::goBack);
+        activity=a;actions=callbacks;sync=new RhSync(a);updateWork=RhUpdateWork.shared(a);updates=updateWork.updates;systemBack=new RhBackNavigation(a,this::goBack);
         boolean dark=RhShared.dark(a);
         page=c(dark?"#151b29":"#f6f7fa");surface=c(dark?"#1b2232":"#ffffff");soft=c(dark?"#202a3e":"#f8faff");
         ink=c(dark?"#e1e8f6":"#34415b");muted=c(dark?"#a4b1c8":"#69778e");line=c(dark?"#303c53":"#e5eaf4");
@@ -109,8 +110,8 @@ public final class RhHome implements RhActions.Target {
         for(int i=0;i<navIds.length;i++){final String id=navIds[i];Button b=button(navLabels[i],false,()->invoke(id,RhActions.obj()));b.setTag("nav:"+id);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);if(i>0)lp.setMarginStart(dp(8));bar.addView(b,lp);}root.addView(bar);
         empty=new RelativeLayout(a); // Compatibility with the upstream activity's discovery placeholder.
         root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->applyShell(r-l-root.getPaddingLeft()-root.getPaddingRight()));
-        a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();root.post(this::resumed);
-        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&infoUuid.isEmpty()&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&!syncClearPending&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(lastSyncAttempt,sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){lastSyncAttempt=System.currentTimeMillis();invoke("sync.run",RhActions.obj("automatic",true));}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updatesBusy&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
+        a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();updateWork.attach(updateListener);
+        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(disposed||activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&infoUuid.isEmpty()&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&!syncClearPending&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(lastSyncAttempt,sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){lastSyncAttempt=System.currentTimeMillis();invoke("sync.run",RhActions.obj("automatic",true));}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updateWork.busy()&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
     }
     /** Only navigation identifiers are serialized; form data and credentials stay out of the Bundle. */
     public void saveNavigation(android.os.Bundle state){
@@ -143,11 +144,11 @@ public final class RhHome implements RhActions.Target {
     }
     /** Retained only in-process across recreation; it contains no Activity, View or credential. */
     public static final class UiState {
-        final String addAddress,addError;
-        UiState(String address,String error){addAddress=address;addError=error;}
+        final String addAddress,addError;final boolean updateDetails;
+        UiState(String address,String error,boolean details){addAddress=address;addError=error;updateDetails=details;}
     }
-    public Object retainUiState(){return new UiState(pageId.equals("add")?addAddress:"",pageId.equals("add")?addError:"");}
-    public void restoreUiState(Object saved){if(saved instanceof UiState&&pageId.equals("add")){UiState value=(UiState)saved;boolean previous=bindingProfile;bindingProfile=true;try{addAddress=value.addAddress;addError=value.addError;refreshAdd();}finally{bindingProfile=previous;}}}
+    public Object retainUiState(){return new UiState(pageId.equals("add")?addAddress:"",pageId.equals("add")?addError:"",updateDetails);}
+    public void restoreUiState(Object saved){if(saved instanceof UiState){UiState value=(UiState)saved;updateDetails=value.updateDetails&&updates.state().optString("phase").equals("error");if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(pageId.equals("add")){boolean previous=bindingProfile;bindingProfile=true;try{addAddress=value.addAddress;addError=value.addError;refreshAdd();}finally{bindingProfile=previous;}}}}
     private static final class AppearanceContext {
         final android.os.Bundle navigation=new android.os.Bundle();final Object transientState;
         AppearanceContext(RhHome home){home.saveNavigation(navigation);transientState=home.retainUiState();}
@@ -180,10 +181,12 @@ public final class RhHome implements RhActions.Target {
     public void update(ComputerDetails d){String signature=d.name+"|"+d.state+"|"+d.pairState+"|"+RhProfile.load(activity,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&!signature.equals(old))renderDevices(false);}
     public void message(String value){statusScope=pageId+(pageId.equals("global-settings")?"/"+settingsTab:"");if(!copyError.isEmpty()&&copyError.equals(value)||pageId.equals("device-info")&&!infoError.isEmpty()&&infoError.equals(value)||draft!=null&&!formError.isEmpty()&&formError.equals(value)||syncDraft!=null&&!syncError.isEmpty()&&syncError.equals(value)||pageId.equals("add")&&!addError.isEmpty()&&addError.equals(value))value="";status.setText(value==null?"":value);status.setVisibility(value==null||value.isEmpty()?View.GONE:View.VISIBLE);}
     public boolean goBack(){if(syncClearPending){invoke("sync.clear.resolve",RhActions.obj("choice","cancel"));return true;}if(pendingNavigation!=null){invoke("navigation.resolve",RhActions.obj("choice","stay"));return true;}if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(pageId.equals("add")){invoke("device.add.cancel",RhActions.obj());return true;}if(profileVisible||pageId.equals("global-settings")){invoke("navigation.back",RhActions.obj());return true;}if(browser.isDetailOpen()){invoke("navigation.back",RhActions.obj());return true;}return false;}
-    public void dispose(){systemBack.close();if(addOperation!=null){RhDeviceAdd retired=addOperation;addOperation=null;retired.cancel();}if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();if(syncClearDialog!=null)syncClearDialog.dismiss();updateUi.removeCallbacks(updateTick);updateUi.removeCallbacks(connectionTick);}
+    public void dispose(){disposed=true;foreground=false;if(updateWork.detach(updateListener)&&activity.isFinishing())updateWork.abandonInstall();systemBack.close();if(addOperation!=null){RhDeviceAdd retired=addOperation;addOperation=null;retired.cancel();}if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();if(syncClearDialog!=null)syncClearDialog.dismiss();updateUi.removeCallbacks(updateTick);updateUi.removeCallbacks(connectionTick);}
     public void rebind(){activity.setContentView(root);ViewCompat.requestApplyInsets(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("connection"))showConnection();else if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("device-info"))showInfo();else if(pageId.equals("profile-copy"))showCopyPreview();else if(draft!=null)showProfile(selected,draft);else if(pageId.equals("add"))showAdd();else renderDevices(false);if(pendingNavigation!=null)showNavigationPrompt();}
-    public void resumed(){if(pageId.equals("connection"))refreshConnection();if(updates.resumeInstallRequest())resumeInstall=true;if(resumeInstall&&!updatesBusy){resumeInstall=false;startUpdate("updates.install");}else if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();}
-    private void refreshUpdateUi(){if(activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(updatesBusy)updateUi.postDelayed(updateTick,300);}
+    public void paused(){foreground=false;updateUi.removeCallbacks(updateTick);}
+    public void resumed(){if(disposed)return;boolean entering=!foreground;foreground=true;if(pageId.equals("connection"))refreshConnection();if(entering)updateWork.returned();updateChanged();}
+    private void updateChanged(){if(disposed||activity.isDestroyed())return;if(foreground&&!activity.isFinishing())updateWork.continueInstall(activity,NETWORK);updateUi.removeCallbacks(updateTick);refreshUpdateUi();}
+    private void refreshUpdateUi(){if(disposed||activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(foreground&&updateWork.busy())updateUi.postDelayed(updateTick,300);}
     public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";discardDraft();selected=null;browser.showDetail(false);renderDevices(true);message("");}
     private void returnToDevice(){String uuid=selected==null?browserUuid:selected.uuid;showDevices();browserUuid=uuid;browser.showDetail(true);renderDevices(false);}
     private boolean connectionBusy(){return connection.busy()||RhActions.hasStream();}
@@ -450,7 +453,7 @@ public final class RhHome implements RhActions.Target {
     public org.json.JSONObject state()throws Exception{
         org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(activity,computers.values())){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"canConnect",RhNetwork.connectInsteadOfPair(d),"pairingStatus",RhNetwork.pairingStatus(d),"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
         org.json.JSONObject shared=RhShared.read(activity);
-        return RhActions.obj("navigation",RhActions.obj("locked",navigationLocked(),"reason",navigationHint()),"profileCopy",copyPreview==null?org.json.JSONObject.NULL:new org.json.JSONObject(copyPreview.toString()),"profileCopyNotice",copyNotice,"profileCopyError",copyError,"connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?"probing":"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncClearPrompt",syncClearPending?RhActions.obj("title","移除同步设置？"):org.json.JSONObject.NULL,"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updates.state(),"updatesBusy",updatesBusy,"updateDetails",updateDetails,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
+        return RhActions.obj("navigation",RhActions.obj("locked",navigationLocked(),"reason",navigationHint()),"profileCopy",copyPreview==null?org.json.JSONObject.NULL:new org.json.JSONObject(copyPreview.toString()),"profileCopyNotice",copyNotice,"profileCopyError",copyError,"connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?"probing":"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy,"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncClearPrompt",syncClearPending?RhActions.obj("title","移除同步设置？"):org.json.JSONObject.NULL,"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",sync.state(),"syncBusy",syncBusy,"updates",updateWork.state(),"updatesBusy",updateWork.busy(),"updateDetails",updateDetails,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
         if(!id.equals("appearance.toggle"))return performInner(id,args);
@@ -502,7 +505,6 @@ public final class RhHome implements RhActions.Target {
         if(syncBusy&&((id.startsWith("sync.")&&!id.equals("sync.state"))||id.equals("device.move")||id.equals("device.settings.open")||id.startsWith("settings.")||id.equals("appearance.toggle")||id.equals("device.add.submit")))throw new IllegalStateException("同步进行中，请稍后保存");
         if(pairing&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("appearance.toggle")))throw new IllegalStateException("请先取消当前配对");
         if(admission!=null&&id.equals("appearance.toggle"))throw new IllegalStateException("请先取消当前连接");
-        if(updatesBusy&&id.equals("appearance.toggle"))throw new IllegalStateException("更新操作正在进行，请稍后切换外观");
         if(pageId.equals("profile-copy")&&Arrays.asList("settings.input","settings.set","settings.step","settings.network.edit","settings.route.move","settings.route.toggle","settings.sources.toggle","settings.tab","settings.save","settings.cancel","settings.copy_from").contains(id))throw new IllegalStateException("请先完成或取消配置预览");
         if(id.startsWith("settings.copy.")||id.equals("settings.copy_from"))return performCopy(id,args);
         if(Arrays.asList("settings.input","settings.set","settings.step","settings.network.edit","settings.route.move","settings.route.toggle").contains(id))copyNotice="";
@@ -607,10 +609,10 @@ public final class RhHome implements RhActions.Target {
                 return RhActions.obj(choice.equals("remove")?"removed":"cancelled",true);
             }
             case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"));break;
-            case "updates.state":return updates.state();
+            case "updates.state":return updateWork.state();
             case "updates.details.toggle":if(!pageId.equals("global-settings")||!settingsTab.equals("updates"))throw new IllegalStateException("请先打开更新页");updateDetails=!updateDetails;refreshUpdateControls();break;
-            case "updates.primary":if(updatesBusy)throw new IllegalStateException("更新操作正在进行");String primaryAction=updates.primaryAction();if(primaryAction.equals("updates.install")&&RhActions.hasStream())throw new IllegalStateException("请先断开当前连接再安装更新");startUpdate(primaryAction);break;
-            case "updates.check":case "updates.download":case "updates.install":if(updatesBusy)throw new IllegalStateException("更新操作正在进行");startUpdate(id);break;
+            case "updates.primary":if(updateWork.busy())throw new IllegalStateException("更新操作正在进行");String primaryAction=updates.primaryAction();if(primaryAction.equals("updates.install")&&RhActions.hasStream())throw new IllegalStateException("请先断开当前连接再安装更新");startUpdate(primaryAction);break;
+            case "updates.check":case "updates.download":case "updates.install":if(updateWork.busy())throw new IllegalStateException("更新操作正在进行");startUpdate(id);break;
             default:throw new IllegalArgumentException("unsupported Android action: "+id);
         }return RhActions.obj("accepted",true);
     }
@@ -637,26 +639,12 @@ public final class RhHome implements RhActions.Target {
         updateProvider.setText(provider.isEmpty()?"更新源：Gitee / GitHub":"更新源："+provider);
         long total=s.optLong("totalBytes"),bytes=s.optLong("downloadedBytes");boolean downloading=phase.equals("downloading")&&total>0;
         updateBytes.setVisibility(total>0&&(bytes>0||phase.equals("downloading"))?View.VISIBLE:View.GONE);updateBytes.setText(String.format(Locale.ROOT,"%.1f / %.1f MB",bytes/1048576.0,total/1048576.0));
-        updateProgress.setVisibility(updatesBusy?View.VISIBLE:View.GONE);updateProgress.setIndeterminate(!downloading);if(downloading)updateProgress.setProgress((int)(bytes*100/total));
-        updatePrimary.setText(updates.primaryLabel(updatesBusy));updatePrimary.setEnabled(!updatesBusy);updatePrimary.setAlpha(updatesBusy?0.65f:1f);
+        updateProgress.setVisibility(updateWork.busy()?View.VISIBLE:View.GONE);updateProgress.setIndeterminate(!downloading);if(downloading)updateProgress.setProgress((int)(bytes*100/total));
+        updatePrimary.setText(updates.primaryLabel(updateWork.busy()));updatePrimary.setEnabled(!updateWork.busy());updatePrimary.setAlpha(updateWork.busy()?0.65f:1f);
     }
     private void startUpdate(String id){startUpdate(id,false);}
     private void startUpdate(String id,boolean automatic){
-        updatesBusy=true;updateDetails=false;updates.pending(id);if(pageId.equals("global-settings")&&settingsTab.equals("updates"))message("");updateUi.removeCallbacks(updateTick);refreshUpdateUi();
-        NETWORK.execute(()->{
-            String error=null;boolean installReady=false;
-            try{if(id.equals("updates.check")){updates.check();if(automatic&&!updates.state().isNull("availableVersion"))updates.download();}else if(id.equals("updates.install")){installReady=updates.prepareInstall();}else updates.download();}
-            catch(Exception e){error=e.getMessage()==null?"更新操作失败，请重试":e.getMessage();updates.failure(error);}
-            final String failure=error;final boolean launch=installReady;
-            activity.runOnUiThread(()->{
-                updatesBusy=false;updateUi.removeCallbacks(updateTick);if(activity.isDestroyed())return;
-                String problem=failure;
-                if(problem==null&&launch)try{updates.install(activity);}catch(Exception e){problem=e.getMessage()==null?"系统安装界面未能打开":e.getMessage();updates.failure(problem);}
-                // Failure remains owned by the update page; another page must not receive a stale banner or Toast.
-                if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();
-                if(resumeInstall){resumeInstall=false;startUpdate("updates.install");}
-            });
-        });
+        updateDetails=false;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))message("");updateWork.start(id,automatic,NETWORK);
     }
     private EditText field(String title,String value,boolean password){label(title);EditText edit=new EditText(activity);edit.setContentDescription(title);edit.setTextColor(ink);edit.setHintTextColor(muted);edit.setTextSize(15);edit.setSingleLine(true);edit.setPadding(dp(12),0,dp(12),0);edit.setBackground(bg(surface,line,8));edit.setText(value);if(password)edit.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);content.addView(edit,new LinearLayout.LayoutParams(-1,dp(52)));return edit;}
     private void globalChrome(){

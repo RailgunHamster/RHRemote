@@ -73,6 +73,10 @@ Windows 使用 Velopack，启动前执行 Velopack 生命周期钩子。安装�
 
 Android 自动检查并下载；用户发起下载后打开系统 APK 安装界面，由用户完成确认。自动下载在设置页提示已就绪。校验包名、版本、长度、SHA-256 和与已安装应用一致的签名。新版本必须维持签名与递增 versionCode。
 
+Android 的 `updates.primary` 与页面主按钮使用同一进程内更新任务。`updates.state` 和 `state.updates` 另返回 `operationId`（本进程内递增）、`busy`、`awaitingForeground`；`state.updatesBusy` 来自同一任务。页面或主题重建不重复检查、下载，不清空候选版本、进度和错误。任务完成与控件刷新在主线程提交；重复动作在忙碌时返回错误。
+
+用户发起的安装准备若在后台完成，等待实际回到前台再打开系统界面；同一次前台状态的重复回调不消费安装返回标记。明确关闭页面会放弃未发送的安装意图，下载仍可完成并保留，重新打开后由用户点击“安装更新”。进程退出后只恢复已下载包的校验记录，不持久化自动打开安装界面的意图。
+
 GitHub 和 Gitee 作为互备下载源，不把发布令牌放到客户端。Windows 使用 `releases.win.json`；Android 使用 schemaVersion 为 1、android 字段含 version/versionCode/packageName/tag/fileName/size/sha256 的 `releases.android.json`。包下载固定指向不可变版本 tag，先验证产物，再更新 latest 路由。
 
 GitHub 和 Gitee 仓库均已公开，v0.2.1 安装包及 APK 已发布。开发分支的新功能不覆盖已有版本的安装包或更新索引；客户端不携带个人发布令牌。

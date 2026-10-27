@@ -157,6 +157,7 @@ public final class RhUpdates {
         try{verifyFile(apk,available);installationFile=snapshotForInstaller(available);}catch(Exception invalid){ready=false;receipt.delete();failure(invalid.getMessage());throw invalid;}
         prepared=true;status("ready","安装包校验完成");return true;
     }
+    void deferInstall(){prepared=false;installationFile=null;if(ready)status("downloaded","APK 已下载，可安装更新");}
     /** UI thread: no APK parsing or hashing. Android still requires manual confirmation. */
     public void install(Activity activity)throws Exception{
         if(!prepared||!ready||available==null||installationFile==null)throw new IOException("请先下载并校验更新");prepared=false;

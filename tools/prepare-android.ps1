@@ -207,7 +207,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
                                 throw persistenceFailure;
                             }
 '@
-    $s=Replace-Once $s 'private RelativeLayout noPcFoundLayout;' "private RelativeLayout noPcFoundLayout;`n    private com.limelight.rhremote.RhHome rhHome;`n    private android.os.Bundle rhNavigationState;"
+    $s=Replace-Once $s 'private RelativeLayout noPcFoundLayout;' "private RelativeLayout noPcFoundLayout;`n    private com.limelight.rhremote.RhHome rhHome;`n    private boolean rhResumed;`n    private android.os.Bundle rhNavigationState;"
     $s=Replace-Once $s '        super.onCreate(savedInstanceState);' "        super.onCreate(savedInstanceState);`n        rhNavigationState=savedInstanceState;"
     $s=Replace-Once $s '    private void initializeViews() {' @'
     private void initializeViews() {
@@ -232,6 +232,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         noPcFoundLayout = rhHome.emptyView();
         for(int i=0;i<pcGridAdapter.getCount();i++) rhHome.update(((ComputerObject)pcGridAdapter.getItem(i)).details);
         rhHome.restoreNavigation(rhNavigationState);rhHome.restoreUiState(getLastNonConfigurationInstance());rhNavigationState=null;
+        if(rhResumed)rhHome.resumed();
     }
     private void initializeLegacyViews() {
 '@
@@ -241,7 +242,8 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         if(!showHiddenGames) { launchRhDesktop(computer); return; }
 '@
     $s=Replace-Once $s '        super.onDestroy();' "        super.onDestroy();`n        if(rhHome!=null)rhHome.dispose();"
-    $s=Replace-Once $s '        super.onResume();' "        super.onResume();`n        if(rhHome!=null)rhHome.resumed();"
+    $s=Replace-Once $s '        super.onResume();' "        super.onResume();`n        rhResumed=true;if(rhHome!=null)rhHome.resumed();"
+    $s=Replace-Once $s '        super.onPause();' "        super.onPause();`n        rhResumed=false;if(rhHome!=null)rhHome.paused();"
     $s=Replace-Once $s '    public static class ComputerObject {' @'
     @Override protected void onSaveInstanceState(android.os.Bundle state){if(rhHome!=null)rhHome.saveNavigation(state);super.onSaveInstanceState(state);}
     @Override public Object onRetainNonConfigurationInstance(){return rhHome==null?null:rhHome.retainUiState();}
