@@ -12,6 +12,7 @@ mod interaction;
 mod add_device;
 mod device_info;
 mod connection;
+mod profile_copy;
 pub mod sync_model;
 pub mod network;
 
@@ -189,6 +190,9 @@ pub struct State {
     pending_navigation: Option<interaction::PendingNavigation>,
     pub profile_tab: String,
     pub profile_sources_expanded: bool,
+    pub profile_copy: Option<profile_copy::Preview>,
+    pub profile_copy_notice: String,
+    pub profile_copy_error: String,
     pub settings_catalog: Value,
     pub status: String,
     pub streaming: bool,
@@ -317,6 +321,9 @@ impl Controller {
                 settings_inputs:BTreeMap::new(),settings_error:String::new(),settings_error_field:String::new(),pending_navigation:None,
                 profile_tab: "video".into(),
                 profile_sources_expanded: false,
+                profile_copy: None,
+                profile_copy_notice: String::new(),
+                profile_copy_error: String::new(),
                 settings_catalog: settings_catalog(),
                 status: String::new(),
                 streaming: false,
@@ -520,9 +527,9 @@ impl Controller {
         }
         let result = if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
-            let action=match page.as_str(){"decision"=>"navigation.resolve","connection"=>if self.state.lock().unwrap().connection.busy(){"stream.disconnect"}else{"connection.dismiss"},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
+            let action=match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>if self.state.lock().unwrap().connection.busy(){"stream.disconnect"}else{"connection.dismiss"},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
             let result=self.dispatch(action,if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
-        } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
+        } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.profile_copy_gate(id){result} else if id.starts_with("settings.copy."){self.dispatch_profile_copy(id,args)} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
             self.dispatch_add(id,args)
         } else if id.starts_with("device.info.") {
             self.dispatch_info(id,args)
@@ -540,7 +547,7 @@ impl Controller {
         let mut s = self.state.lock().unwrap();
         if response["ok"]!=true && id.starts_with("device.add.") && s.page=="add" && !s.add.busy(){s.add.error=response["error"].as_str().unwrap_or("添加设备失败").into();}
         if response["ok"]!=true && id.starts_with("device.info."){if let Some(d)=s.info_draft.as_mut(){d.error=response["error"].as_str().unwrap_or("设备名称保存失败").into();}}
-        if response["ok"]!=true && id.starts_with("settings."){s.settings_error=response["error"].as_str().unwrap_or("设置修改失败").into();}
+        if response["ok"]!=true && id.starts_with("settings."){if id.starts_with("settings.copy.")||id=="settings.copy_from"||s.page=="profile-copy"{s.profile_copy_error=response["error"].as_str().unwrap_or("复制配置失败").into();}else{s.settings_error=response["error"].as_str().unwrap_or("设置修改失败").into();}}
         s.last_action = response.clone();
         s.revision += 1;
         response
@@ -564,6 +571,7 @@ impl Controller {
         if s.installing_update && id == "device.connect" {
             return Err("更新操作进行中，请稍后连接".into());
         }
+        if matches!(id,"settings.input"|"settings.set"|"settings.step"|"settings.network.edit"|"settings.route.move"|"settings.route.toggle"){s.profile_copy_notice.clear();}
         match id {
             "device.select" => {
                 if s.page != "devices" || s.streaming || s.connecting {
@@ -757,23 +765,7 @@ impl Controller {
                 s.profile_tab = tab.into();
             }
             "settings.copy_from" => {
-                if s.draft.is_none() {
-                    return Err("open device settings first".into());
-                }
-                let client = args["clientId"].as_str().ok_or("clientId required")?;
-                if client == s.saved.client_id {
-                    return Err("select another client".into());
-                }
-                let mut p = s
-                    .saved
-                    .client_profiles
-                    .get(client)
-                    .and_then(|profiles| profiles.get(&s.selected))
-                    .ok_or("no profile for this client and device")?
-                    .to_profile();
-                // Copy quality/input preferences only; the host mouse setting is shared separately.
-                p.swap_buttons = s.draft.as_ref().unwrap().swap_buttons;
-                s.settings_inputs.clear();s.settings_error.clear();s.draft_relay=p.relay_url.clone();s.draft = Some(p);
+                let client=args["clientId"].as_str().ok_or("clientId required")?;profile_copy::copy_from(&mut s,client)?;
             }
             "settings.save" => {
                 let p=interaction::validated_profile(&mut s)?;

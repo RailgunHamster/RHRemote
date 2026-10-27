@@ -62,7 +62,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
             }
         }
         "sync.resolve" => json!({"resolution":arg}),
-        "settings.copy_from" => json!({"clientId":arg}),
+        "settings.copy_from" | "settings.copy.preview" => json!({"clientId":arg}),
         "settings.save" => json!({}),
         "device.connect" | "device.pair" | "device.settings.open" | "device.info.open" | "device.select" => json!({"uuid":arg}),
         "devices.filter" => json!({"query":arg}),
@@ -339,6 +339,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_network_routes(ModelRc::new(VecModel::from(route_rows)));
             ui.set_relay_url(state["draftRelay"].as_str().unwrap_or(rhremote_core::network::DEFAULT_RELAY).into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);
+            ui.set_copy_source(state["profileCopy"]["sourceName"].as_str().unwrap_or("").into());ui.set_copy_target(state["profileCopy"]["targetName"].as_str().unwrap_or("").into());ui.set_copy_notice(state["profileCopyNotice"].as_str().unwrap_or("").into());ui.set_copy_error(state["profileCopyError"].as_str().unwrap_or("").into());
+            ui.set_copy_fields(ModelRc::new(VecModel::from(state["profileCopy"]["fields"].as_array().into_iter().flatten().map(|field|CopyField{label:field["label"].as_str().unwrap_or("").into(),value:field["value"].as_str().unwrap_or("").into()}).collect::<Vec<_>>())));
+
             ui.set_audio_enabled(state["audioEnabled"]==true);ui.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
             let remote:Vec<RemoteDisplay>=state["statistics"]["displays"].as_array().into_iter().flatten().map(|d|RemoteDisplay{id:d["id"].as_str().unwrap_or("").into(),label:format!("{} · {}×{}",if d["virtual"]==true{"虚拟屏"}else{d["name"].as_str().filter(|v|!v.is_empty()).unwrap_or("屏幕")},d["width"],d["height"]).into(),chosen:d["id"]==state["statistics"]["selectedDisplay"]["id"],available:d["available"]==true}).collect();
             ui.set_remote_displays(ModelRc::new(VecModel::from(remote)));ui.set_display_error(state["statistics"]["displayError"].as_str().unwrap_or("").into());
@@ -359,7 +362,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let p=&profiles[selected];let name=state["saved"]["clients"][id]["name"].as_str().unwrap_or(id);
                 let suffix=id.chars().rev().take(4).collect::<String>().chars().rev().collect::<String>();
                 ProfileSource{client_id:id.into(),label:format!("{} · {} · {} × {} · {} 帧",name,suffix,p["width"],p["height"],p["fps"]).into()}
-            }).collect();ui.set_profile_sources(ModelRc::new(VecModel::from(sources)));
+            }).collect();let existing=ui.get_profile_sources();let same=existing.row_count()==sources.len()&&sources.iter().enumerate().all(|(index,row)|existing.row_data(index).is_some_and(|old|old.client_id==row.client_id&&old.label==row.label));if !same{ui.set_profile_sources(ModelRc::new(VecModel::from(sources)));}
             let p:Profile=serde_json::from_value(state["draft"].clone()).unwrap_or_else(|_|view.profile(selected));ui.set_profile_width(p.width as i32);ui.set_profile_height(p.height as i32);ui.set_fps(p.fps as i32);ui.set_bitrate(p.bitrate_mbps as i32);ui.set_codec(p.codec.into());ui.set_profile_audio_enabled(p.audio_enabled);ui.set_profile_display(p.display_mode.into());ui.set_swapped(p.swap_buttons);ui.set_trackpad(p.trackpad);ui.set_statistics(if state["streaming"]==true{state["showStats"]==true}else{p.statistics});ui.set_pair_pin(state["pairPin"].as_str().unwrap_or("").into());ui.set_streaming(state["streaming"]==true);ui.set_connecting(state["connecting"]==true);ui.set_controls(state["controls"]==true);ui.set_stream_statistics(state["statistics"]["statistics"].as_str().unwrap_or("").into());
         }
         if let Some(toolbar)=toolbar_weak.upgrade(){

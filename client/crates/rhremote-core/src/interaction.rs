@@ -33,6 +33,7 @@ pub(crate) fn dirty(s:&State)->bool {
     s.settings_inputs.iter().any(|(key,value)|value.trim()!=profile[key].to_string())
 }
 pub(crate) fn clear(s:&mut State) {
+    s.profile_copy=None;s.profile_copy_notice.clear();s.profile_copy_error.clear();
     s.draft=None;s.settings_inputs.clear();s.settings_error.clear();s.settings_error_field.clear();
     s.draft_display_name.clear();s.draft_address.clear();s.draft_addresses.clear();s.draft_relay.clear();
 }
@@ -83,7 +84,7 @@ impl Controller {
             if sync_dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:true,info:false});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
             s.sync_draft=None;s.sync_error.clear();
         }
-        let leaving=matches!(id,"devices.open"|"app.settings.open"|"app.settings.tab"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"updates.install")
+        let leaving=matches!(id,"devices.open"|"app.settings.open"|"app.settings.tab"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"updates.install")
             || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
         if !leaving || s.draft.is_none(){return None;}
         if id=="device.settings.open"&&args["uuid"]==s.selected{return Some(Ok(json!({"reused":true})));}
@@ -92,7 +93,7 @@ impl Controller {
             return Some(Ok(json!({"pendingNavigation":true})));
         }
         clear(&mut s);
-        if id=="device.select"{s.page="devices".into();}
+        if matches!(id,"device.select"|"appearance.toggle"){s.page="devices".into();}
         None
     }
     pub(crate) fn resolve_navigation(&self,args:Value)->Result<Value,String>{
@@ -101,6 +102,7 @@ impl Controller {
         let pending={let mut s=self.state.lock().unwrap();let pending=s.pending_navigation.take().ok_or("没有等待处理的更改")?;s.revision+=1;if choice=="discard"{if pending.info{s.info_draft=None;s.page="devices".into();}else if pending.sync{s.sync_draft=None;s.sync_error.clear();}else{clear(&mut s);s.page="devices".into();}}pending};
         if choice=="stay"{return Ok(json!({"continuedEditing":true}));}
         if choice=="save"{
+            {let mut s=self.state.lock().unwrap();if s.page=="profile-copy"{s.profile_copy=None;s.page="settings".into();}}
             let result=self.dispatch(if pending.info{"device.info.save"}else if pending.sync{"sync.save"}else{"settings.save"},json!({}));
             if result["ok"]!=true{return Err(result["error"].as_str().unwrap_or("保存失败").into());}
         }

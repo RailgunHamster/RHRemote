@@ -90,3 +90,25 @@ fn the_single_update_action_remains_visible_when_failure_details_are_long(){
         ui.set_updates_busy(true);received.borrow_mut().clear();click(&ui,"重新检查");assert!(received.borrow().is_empty());ui.set_updates_busy(false);
     }ui.hide().unwrap();
 }
+
+#[test]
+fn copy_preview_keeps_its_commands_fixed_and_dispatches_one_explicit_accept_action(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("profile-copy".into());ui.set_copy_source("OPPO 平板 · 1234".into());ui.set_copy_target("工作机".into());
+    ui.set_copy_fields(ModelRc::new(VecModel::from((0..40).map(|i|crate::CopyField{label:format!("配置参数 {i}").into(),value:"较长的配置内容 ".repeat(10).into()}).collect::<Vec<_>>())));
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));
+        let apply=ElementHandle::find_by_accessible_label(&ui,"复制到草稿").next().unwrap();let p=apply.absolute_position();let size=apply.size();assert!(p.y>=height-100.&&p.y+size.height<=height&&p.x+size.width<=width);
+        received.borrow_mut().clear();click(&ui,"复制到草稿");assert_eq!(&*received.borrow(),&["settings.copy.apply"]);received.borrow_mut().clear();click(&ui,"取消");assert_eq!(&*received.borrow(),&["settings.copy.cancel"]);
+        ui.set_copy_source("".into());received.borrow_mut().clear();click(&ui,"复制到草稿");assert!(received.borrow().is_empty());ui.set_copy_source("OPPO 平板 · 1234".into());
+    }ui.hide().unwrap();
+}
+
+#[test]
+fn long_source_names_cannot_push_the_preview_button_out_of_the_form(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("advanced".into());ui.set_compact(true);ui.set_profile_sources_expanded(true);
+    ui.set_profile_sources(ModelRc::new(VecModel::from(vec![crate::ProfileSource{client_id:"pad-1234".into(),label:"很长的客户端名称 ".repeat(50).into()}])));
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();ui.window().set_size(LogicalSize::new(720.,560.));
+    let inspect=ElementHandle::find_by_accessible_label(&ui,"查看配置").next().unwrap();let p=inspect.absolute_position();let size=inspect.size();assert!(p.x>=0.&&p.x+size.width<=720.);click(&ui,"查看配置");assert_eq!(&*received.borrow(),&[("settings.copy.preview".into(),"pad-1234".into())]);
+    ui.set_profile_sources(Default::default());received.borrow_mut().clear();click(&ui,"从其他客户端复制配置");assert!(received.borrow().is_empty());ui.hide().unwrap();
+}
