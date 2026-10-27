@@ -119,7 +119,7 @@ public final class RhHome implements RhActions.Target {
         empty=new RelativeLayout(a); // Compatibility with the upstream activity's discovery placeholder.
         root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->applyShell(r-l-root.getPaddingLeft()-root.getPaddingRight()));
         a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();updateWork.attach(updateListener);syncWork.attach(syncListener);diagnostics.attach(diagnosticListener);
-        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(disposed||activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&infoUuid.isEmpty()&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&!syncClearPending&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(syncWork.lastAttempt(),sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){invoke("sync.run",RhActions.obj("automatic",true));}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updateWork.busy()&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
+        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(disposed||activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&syncWork.canAutomaticallySync()&&!syncBusy&&draft==null&&infoUuid.isEmpty()&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&!syncClearPending&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(syncWork.lastAttempt(),sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){invoke("sync.run",RhActions.obj("automatic",true));}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updateWork.busy()&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
     }
     /** Only navigation identifiers are serialized; form data and credentials stay out of the Bundle. */
     public void saveNavigation(android.os.Bundle state){
@@ -505,6 +505,7 @@ public final class RhHome implements RhActions.Target {
         RhShared.theme(activity,!RhShared.dark(activity));activity.recreate();return result;
     }
     private org.json.JSONObject performInner(String id,org.json.JSONObject args)throws Exception{
+        if(id.equals("sync.run")&&args.optBoolean("automatic")&&syncWork.state().optBoolean("automaticBlocked"))return RhActions.obj("skipped",true,"reason","sync_interrupted");
         if(id.equals("sync.run")&&args.optBoolean("automatic")&&(!sync.state().optBoolean("automatic")||syncBusy||!infoUuid.isEmpty()||draft!=null||pageId.equals("add")||pairing||admission!=null||RhActions.hasStream()||pendingNavigation!=null||syncClearPending||syncDirty()))return RhActions.obj("skipped",true);
         if(id.equals("navigation.back")&&syncClearPending)return perform("sync.clear.resolve",RhActions.obj("choice","cancel"));
         if(syncClearPending&&!Arrays.asList("sync.clear.resolve","sync.clear","settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先确认是否移除同步设置");
@@ -630,9 +631,9 @@ public final class RhHome implements RhActions.Target {
                 if(Arrays.asList("url","username","password").contains(syncKey)){if(!(value instanceof String)||((String)value).length()>4096)throw new IllegalArgumentException("输入过长或类型无效");}
                 else if(syncKey.equals("automatic")){if(!(value instanceof Boolean))throw new IllegalArgumentException("automatic must be boolean");}
                 else if(syncKey.equals("intervalMinutes"))RhSync.interval(args,RhSync.interval(syncDraft,5));else throw new IllegalArgumentException("unknown sync setting");
-                syncDraft.put(syncKey,value);syncError="";syncWork.dismissError();syncRevision=syncWork.revision();message("");refreshSyncFooter();break;
+                syncDraft.put(syncKey,value);syncWork.dismissError();syncError=syncWork.error();syncRevision=syncWork.revision();message("");refreshSyncFooter();break;
             }
-            case "sync.cancel":syncDraft=null;syncError="";syncWork.dismissError();syncRevision=syncWork.revision();showGlobal();break;
+            case "sync.cancel":syncDraft=null;syncWork.dismissError();syncError=syncWork.error();syncRevision=syncWork.revision();showGlobal();break;
             case "sync.save":case "sync.configure":{
                 ensureSyncDraft();try{sync.configure(id.equals("sync.save")?syncDraft:args);syncDraft=null;syncError="";syncWork.configured();message("同步设置已保存");showGlobal();}
                 catch(Exception invalid){syncError=invalid.getMessage()==null?"同步设置保存失败":invalid.getMessage();refreshSyncFooter();throw invalid;}break;
@@ -644,12 +645,12 @@ public final class RhHome implements RhActions.Target {
             case "sync.clear.resolve":{
                 if(!syncClearPending)throw new IllegalStateException("没有等待确认的移除操作");
                 String choice=args.getString("choice");if(!Arrays.asList("cancel","remove").contains(choice))throw new IllegalArgumentException("unknown removal choice");
-                if(choice.equals("remove")){try{sync.clear();}catch(Exception failure){syncError=failure.getMessage()==null?"同步设置移除失败":failure.getMessage();showSyncClearPrompt();throw failure;}}
+                if(choice.equals("remove")){try{sync.clear();syncWork.removed();}catch(Exception failure){syncError=failure.getMessage()==null?"同步设置移除失败":failure.getMessage();showSyncClearPrompt();throw failure;}}
                 syncClearPending=false;if(syncClearDialog!=null){syncClearDialog.dismiss();syncClearDialog=null;}
-                if(choice.equals("remove")){syncDraft=null;syncError="";syncWork.configured();showGlobal();message("同步设置已移除");}else{syncError="";refreshSyncFooter();}
+                if(choice.equals("remove")){syncDraft=null;syncError="";showGlobal();message("同步设置已移除");}else{syncError=syncWork.error();refreshSyncFooter();}
                 return RhActions.obj(choice.equals("remove")?"removed":"cancelled",true);
             }
-            case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"));break;
+            case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"),id.equals("sync.run")&&args.optBoolean("automatic"));break;
             case "updates.state":return updateWork.state();
             case "updates.details.toggle":if(!pageId.equals("global-settings")||!settingsTab.equals("updates"))throw new IllegalStateException("请先打开更新页");updateDetails=!updateDetails;refreshUpdateControls();break;
             case "updates.primary":if(updateWork.busy())throw new IllegalStateException("更新操作正在进行");String primaryAction=updates.primaryAction();if(primaryAction.equals("updates.install")&&RhActions.hasStream())throw new IllegalStateException("请先断开当前连接再安装更新");startUpdate(primaryAction);break;
@@ -712,10 +713,10 @@ public final class RhHome implements RhActions.Target {
         Spinner interval=new Spinner(activity);interval.setEnabled(!syncBusy);interval.setAdapter(options(new String[]{"5 分钟","15 分钟","30 分钟","60 分钟"}));interval.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));interval.setSelection(Math.max(0,Arrays.asList(5,15,30,60).indexOf(syncDraft.optInt("intervalMinutes",5))));content.addView(interval,new LinearLayout.LayoutParams(-1,dp(48)));
         interval.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){int minutes=new int[]{5,15,30,60}[position];if(syncDraft!=null&&syncDraft.optInt("intervalMinutes",5)!=minutes)invoke("sync.edit",RhActions.obj("key","intervalMinutes","value",minutes));}});
         label("同步设备列表、连接配置和主题。画面参数按客户端分别保存；配对密钥及 WebDAV 凭据不参与同步。");
-        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setPadding(dp(20),dp(8),dp(20),dp(12));syncErrorView=text(syncError,13,failureColor,false);formFooter.addView(syncErrorView);
+        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setPadding(dp(20),dp(8),dp(20),dp(12));syncErrorView=text(syncError,13,failureColor,false);syncErrorView.setContentDescription("配置同步错误");formFooter.addView(syncErrorView);
         LinearLayout footer=row();syncNotice=text("",12,muted,false);footer.addView(syncNotice,new LinearLayout.LayoutParams(0,dp(48),1));syncCancel=button("取消",false,()->invoke("sync.cancel",RhActions.obj()));syncSave=button("保存",true,()->invoke("sync.save",RhActions.obj()));footer.addView(syncCancel);LinearLayout.LayoutParams saveLayout=new LinearLayout.LayoutParams(-2,dp(48));saveLayout.setMarginStart(dp(8));footer.addView(syncSave,saveLayout);formFooter.addView(footer);formPadding(scroll.getWidth());refreshSyncFooter();scroll.scrollTo(0,0);
     }
-    private void startSync(String resolution)throws Exception{syncWork.start(RhShared.capture(activity,new ArrayList<>(computers.values())),resolution,NETWORK);}
+    private void startSync(String resolution,boolean automatic)throws Exception{syncWork.start(RhShared.capture(activity,new ArrayList<>(computers.values())),resolution,automatic,NETWORK);}
     private void syncChanged(){
         if(disposed||activity.isDestroyed())return;
         if(renderedDark!=RhShared.dark(activity)){if(foreground&&!activity.isFinishing())activity.recreate();return;}

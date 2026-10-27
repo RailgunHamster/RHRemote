@@ -29,6 +29,47 @@ public class RhSyncWorkTest {
         Network.result=RhActions.obj("conflicts",new JSONArray().put("deviceOrder"));Network.captured=null;Network.failure=null;Network.runs=0;
     }
     void complete(){queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    RhSyncWork coldOwner()throws Exception{java.lang.reflect.Field shared=RhSyncWork.class.getDeclaredField("shared");shared.setAccessible(true);shared.set(null,null);return RhSyncWork.shared(activity);}
+    @Test public void aColdOwnerReportsTheInterruptedOperationWithoutReplayingIt()throws Exception{
+        work.start(RhShared.read(activity),"review",queued::add);long attempted=work.lastAttempt(),operation=work.state().getLong("operationId");
+        RhSyncWork restored=coldOwner();assertFalse(restored.busy());assertEquals("interrupted",restored.phase());
+        assertTrue(restored.error().contains("结果未确认"));assertTrue(restored.state().optBoolean("automaticBlocked"));assertEquals(operation,restored.state().getLong("operationId"));assertEquals(attempted,restored.lastAttempt());assertEquals(0,Network.runs);
+    }
+    @Test public void interruptedFeedbackSurvivesAnotherColdStartAndUnrelatedFormEdits()throws Exception{
+        work.start(RhShared.read(activity),"review",queued::add);RhSyncWork restored=coldOwner();String warning=restored.error();assertFalse(warning.isEmpty());
+        restored.dismissError();restored.configured();assertEquals("interrupted",restored.phase());assertEquals(warning,restored.error());
+        RhSyncWork again=coldOwner();assertEquals(warning,again.error());assertTrue(again.state().optBoolean("automaticBlocked"));assertEquals(0,Network.runs);
+    }
+    @Test public void onlyAnExplicitRetryCanClearTheInterruptedBarrier()throws Exception{
+        work.start(RhShared.read(activity),"review",queued::add);work=coldOwner();List<Runnable> retry=new ArrayList<>();
+        try{work.start(RhShared.read(activity),"review",true,retry::add);fail("Automatic replay accepted");}catch(IllegalStateException expected){assertTrue(expected.getMessage().contains("结果未确认"));}
+        assertFalse(work.canAutomaticallySync());assertTrue(retry.isEmpty());assertEquals(0,Network.runs);
+        work.start(RhShared.read(activity),"review",retry::add);assertTrue(work.busy());retry.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals("conflict",work.phase());assertEquals(1,Network.runs);assertTrue(work.canAutomaticallySync());assertEquals("idle",coldOwner().phase());
+    }
+    @Test public void invalidJournalTypesBecomeActionableFeedbackInsteadOfCrashingStartup()throws Exception{
+        activity.getSharedPreferences("rhremote.sync.operations",0).edit().putString("pending","invalid").commit();work=coldOwner();
+        assertEquals("interrupted",work.phase());assertTrue(work.error().contains("状态无法读取"));assertFalse(work.canAutomaticallySync());
+        work.removed();assertTrue(work.canAutomaticallySync());assertEquals("idle",coldOwner().phase());
+    }
+    void rejectJournalCommit()throws Exception{
+        java.lang.reflect.Field field=RhSyncWork.class.getDeclaredField("journal");field.setAccessible(true);android.content.SharedPreferences original=(android.content.SharedPreferences)field.get(work);
+        Object editor=java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{android.content.SharedPreferences.Editor.class},(proxy,method,args)->{
+            if(method.getName().equals("commit"))return false;
+            if(method.getReturnType()==android.content.SharedPreferences.Editor.class)return proxy;
+            throw new UnsupportedOperationException(method.getName());
+        });
+        field.set(work,java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),new Class[]{android.content.SharedPreferences.class},(proxy,method,args)->method.getName().equals("edit")?editor:method.invoke(original,args)));
+    }
+    @Test public void aFailedJournalWriteDoesNotQueueOrTransmitAnOperation()throws Exception{
+        rejectJournalCommit();try{work.start(RhShared.read(activity),"review",queued::add);fail("Storage failure hidden");}catch(IOException expected){assertTrue(expected.getMessage().contains("存储空间"));}
+        assertFalse(work.busy());assertTrue(queued.isEmpty());assertEquals(0,Network.runs);assertEquals("error",work.phase());
+    }
+    @Test public void anUnrecordedCompletionKeepsTheBarrierAndTheNextColdStartWarning()throws Exception{
+        work.start(RhShared.read(activity),"review",queued::add);rejectJournalCommit();complete();
+        assertFalse(work.busy());assertEquals("interrupted",work.phase());assertFalse(work.canAutomaticallySync());assertEquals(1,Network.runs);
+        assertEquals("interrupted",coldOwner().phase());
+    }
     @Test public void recreationSharesTheSingleOperationAndOldDetachCannotRetireTheNewListener()throws Exception{
         int[] oldCalls={0},newCalls={0};RhSyncWork.Listener old=()->oldCalls[0]++,next=()->newCalls[0]++;work.attach(old);
         work.start(RhShared.read(activity),"review",queued::add);assertTrue(work.busy());assertEquals(1,oldCalls[0]);long operation=work.state().getLong("operationId");

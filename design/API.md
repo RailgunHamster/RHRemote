@@ -112,6 +112,8 @@ Windows 意外中断后，`statistics.phase=reconnecting`、`connecting=true`，
 
 Android 也支持 `stream.test.interrupt`：必须已启用 `statistics.configure` 测试模式、实际提交过首帧且当前没有恢复任务。接口记录 `test_connection_interrupt {synthetic:true}`，进入与意外终止相同的清理／选路／新 Game 交接路径；重复注入或未满足前置条件会被拒绝。Android 的新 Game 使用独立 Activity 实例，admission/recovery 保留继续防止并发连接；不能用上游 `singleTask` 复用即将结束的旧实例。
 
+Android 同步状态增加 `phase=interrupted`、`interrupted` 和 `automaticBlocked`。新进程发现未完成任务记录时，保持 `busy=false`，显示传输结果未确认并暂停自动同步；`sync.run {automatic:true}` 返回 `skipped=true, reason=sync_interrupted`，不创建 worker。表单编辑、取消、保存及主题切换保留该状态；明确手动同步或移除同步设置后处理。记录仅含本机任务编号、时间及 pending，不参与 WebDAV 同步。
+
 Android 自动恢复的 `stream.feedback` 提供 `visible`、`title`、`detail` 和 `cancelAction`，与恢复任务持有的原生提示一致。实际取消按钮以及提示框内的 Back／Escape 均走 `stream.disconnect`；旧提示框回调检查任务归属，不能取消新恢复。提示在交接、离开、失败或取消时关闭，原有清理完成前仍禁止并发连接。
 
 设备网络接口及参数见 [NETWORK.md](NETWORK.md)：`device.network.configure`、`device.network.diagnose`、`network.state`。设置分类新增 `network`；设备的多地址参与同步，诊断和当前路径保留在本机。
