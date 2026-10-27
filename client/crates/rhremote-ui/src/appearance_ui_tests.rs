@@ -61,7 +61,7 @@ fn main_scene(
     ui.set_dark(dark);
     ui.global::<Palette>().set_dark(dark);
     ui.set_compact(compact);
-    ui.set_app_version("0.2.11-preview.46".into());
+    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     let first = DeviceRow {
         uuid: "fixture-winserver".into(),
         name: "工作电脑".into(),

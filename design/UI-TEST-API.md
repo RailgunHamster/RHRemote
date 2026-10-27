@@ -60,6 +60,8 @@ scroll|form
 
 ## 证据边界
 
+无窗口流程也复用正式状态绑定：`view_flow_tests` 将真实 Controller 状态送入应用同一个 `MainView`，点击实际 Slint 控件后核对唯一 `Commands` 动作，并通过正式 `args_for` 与 Controller 检查结果及临时偏好文件。运行 `cargo test -p rhremote-ui --lib view_flow_tests --locked` 即可，不创建 Win32 窗口。外部平台边界使用明确替身，不能把这些流程当作真实 WebDAV、更新安装或串流验收。[流程与滚动修复](UI-CONTROLLER-FLOWS-20261028.md)
+
 采样先调用应用窗口自己的渲染器，使条件控件与焦点变更处理完成，再采集新的报告；只等事件队列空闲可能仍读到上一帧。该过程不会截取其他应用或系统桌面。布局复核通过既有 `view.snapshot` 导出应用自身的画面。
 
 这些接口证明当前程序的实际控件、应用内键盘处理和业务动作的一致性。它们不能单独证明 Windows 系统按键分发、无障碍 UIA 焦点、物理显示输出或真实网络串流。`windowActive` 与 `systemInputInjected` 明确记录执行条件，不能把应用内事件写成系统输入测试。用户要求停止 computer use 后，不以此接口为由恢复桌面控制。

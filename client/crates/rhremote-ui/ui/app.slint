@@ -701,6 +701,10 @@ export component MainWindow inherits Window {
                 }
             }
             if root.page!="devices" || root.streaming || root.connecting: form-scroll:=ScrollView {test-id:"scroll|form";
+                // A different page/category has different content. Ordinary draft and
+                // background-state updates keep this key, so they retain the position.
+                in property <string> content-context:root.page+"|"+(root.page=="settings" ? root.selected-uuid+"|"+root.profile-tab : root.page=="global-settings" ? root.settings-tab : "");
+                changed content-context=>{self.content-y=0px;}
                 in property <bool> syncing:root.sync-busy;
                 changed syncing=>{if(!self.syncing && root.page=="global-settings" && root.settings-tab=="sync"){self.content-y=0px;}}
                 content-width:self.width;
