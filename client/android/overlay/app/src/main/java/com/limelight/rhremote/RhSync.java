@@ -16,9 +16,10 @@ import javax.crypto.spec.GCMParameterSpec;
 public final class RhSync {
     private final Context context;private final File file;private volatile JSONObject local;
     private JSONObject pendingLocal,pendingRemote;private String pendingEtag;
+    private volatile JSONObject awaitingApply,appliedAccount;
     private volatile JSONArray conflicts=new JSONArray();
     public RhSync(Context c){context=c.getApplicationContext();file=new File(c.getFilesDir(),"webdav-local.json");try{local=new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8));}catch(Exception e){local=new JSONObject();}}
-    public JSONObject state(){JSONObject l=local;JSONArray found=conflicts;return RhActions.obj("url",l.optString("url"),"username",l.optString("username"),"automatic",l.optBoolean("automatic"),"intervalMinutes",l.optInt("intervalMinutes",5),"hasPassword",l.has("ciphertext"),"lastSyncMs",l.optLong("lastSyncMs"),"conflicts",found,"conflictItems",review(pendingLocal,pendingRemote,found));}
+    public JSONObject state(){JSONObject l=local;JSONArray found=conflicts;return RhActions.obj("url",l.optString("url"),"username",l.optString("username"),"automatic",l.optBoolean("automatic"),"intervalMinutes",l.optInt("intervalMinutes",5),"hasPassword",l.has("ciphertext"),"lastSyncMs",l.optLong("lastSyncMs"),"conflicts",found,"conflictItems",review(pendingLocal,pendingRemote,found),"awaitingLocalApply",awaitingApply!=null);}
     private static String deviceName(JSONObject config,String uuid){if(config!=null){JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject value=rows.optJSONObject(i);if(value!=null&&uuid.equals(value.optString("uuid")))return value.optString("displayName").isEmpty()?value.optString("name","设备"):value.optString("displayName");}}return "设备";}
     private static JSONObject device(JSONObject config,String uuid){JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++)if(uuid.equals(rows.optJSONObject(i).optString("uuid")))return rows.optJSONObject(i);return new JSONObject();}
     private static String summary(JSONObject config,String key){
@@ -47,7 +48,7 @@ public final class RhSync {
         JSONObject next=new JSONObject(local.toString());boolean same=address.equals(next.optString("url"))&&user.equals(next.optString("username"));if(password.isEmpty()&&(!same||!next.has("ciphertext")))throw new IOException("请填写 WebDAV 密码");
         if(!same){next.remove("base");next.remove("lastSyncMs");}
         if(!password.isEmpty()){Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());next.put("iv",Base64.encodeToString(cipher.getIV(),Base64.NO_WRAP));next.put("ciphertext",Base64.encodeToString(cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)),Base64.NO_WRAP));}
-        next.put("url",address);next.put("username",user);next.put("automatic",args.optBoolean("automatic"));next.put("intervalMinutes",intervalMinutes);RhShared.write(file,next);local=next;clearPending();
+        next.put("url",address);next.put("username",user);next.put("automatic",args.optBoolean("automatic"));next.put("intervalMinutes",intervalMinutes);RhShared.write(file,next);local=next;clearPending();clearApplied();
     }
     public void clear()throws IOException{
         if(file.exists()&&!file.isFile())throw new IOException("本机同步配置文件不可写");
@@ -56,7 +57,7 @@ public final class RhSync {
         // removal or discard the in-memory account until its persisted state is verified.
         try{if(new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8)).length()!=0)throw new IOException("同步设置未能移除，请重试");}
         catch(JSONException invalid){throw new IOException("本机同步配置写入失败",invalid);}
-        local=new JSONObject();clearPending();
+        local=new JSONObject();clearPending();clearApplied();
     }
     private void clearPending(){pendingLocal=null;pendingRemote=null;pendingEtag=null;conflicts=new JSONArray();}
     private String password(JSONObject l)throws Exception{Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(l.getString("iv"),Base64.NO_WRAP)));return new String(cipher.doFinal(Base64.decode(l.getString("ciphertext"),Base64.NO_WRAP)),StandardCharsets.UTF_8);}
@@ -80,6 +81,7 @@ public final class RhSync {
     }
     private static byte[] read(InputStream in)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>2*1024*1024)throw new IOException("远端配置过大");out.write(b,0,n);}return out.toByteArray();}
     public JSONObject run(JSONObject ours,String resolution)throws Exception{
+        clearApplied();
         ours=RhShared.normalize(ours);JSONObject l=local;URL url=endpoint(l.getString("url"));String auth="Basic "+Base64.encodeToString((l.getString("username")+":"+password(l)).getBytes(StandardCharsets.UTF_8),Base64.NO_WRAP);
         JSONObject remote=null;String etag=null;HttpURLConnection get=open(url,"GET",auth);
         try{int code=get.getResponseCode();if(code==200){etag=get.getHeaderField("ETag");if(etag==null||etag.startsWith("W/"))throw new IOException("WebDAV 服务器未提供强 ETag");try(InputStream in=get.getInputStream()){remote=RhShared.normalize(new JSONObject(new String(read(in),StandardCharsets.UTF_8)));}}else if(code!=404)throw new IOException("WebDAV HTTP "+code);}finally{get.disconnect();}
@@ -89,7 +91,20 @@ public final class RhSync {
         RhShared.validate(merged);
         if(remote!=null){File dir=new File(context.getFilesDir(),"sync-backups");if(!dir.exists()&&!dir.mkdirs())throw new IOException("backup directory unavailable");RhShared.write(new File(dir,"remote-"+System.currentTimeMillis()+".json"),remote);File[] files=dir.listFiles((d,n)->n.startsWith("remote-"));if(files!=null){Arrays.sort(files,Comparator.comparing(File::getName));for(int i=0;i<files.length-20;i++)files[i].delete();}}
         byte[] bytes=merged.toString().getBytes(StandardCharsets.UTF_8);HttpURLConnection put=open(url,"PUT",auth);try{put.setRequestProperty("Content-Type","application/json");put.setRequestProperty(etag==null?"If-None-Match":"If-Match",etag==null?"*":etag);put.setDoOutput(true);put.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=put.getOutputStream()){out.write(bytes);}int code=put.getResponseCode();if(code<200||code>=300)throw new IOException("WebDAV HTTP "+code);}finally{put.disconnect();}
-        JSONObject next=new JSONObject(l.toString());next.put("base",merged);next.put("lastSyncMs",System.currentTimeMillis());RhShared.write(file,next);local=next;clearPending();return RhActions.obj("shared",merged,"conflicts",new JSONArray());
+        appliedAccount=new JSONObject(l.toString());awaitingApply=new JSONObject(merged.toString());clearPending();return RhActions.obj("shared",merged,"conflicts",new JSONArray());
+    }
+    private void clearApplied(){awaitingApply=null;appliedAccount=null;}
+    /** A confirmed PUT is not a local merge base until its exact configuration is durable. */
+    void applied(JSONObject shared)throws Exception{
+        JSONObject expected=awaitingApply,account=appliedAccount;
+        if(expected==null||account==null)throw new IOException("没有等待应用的同步结果，请重新同步");
+        if(!RhShared.canonical(expected).equals(RhShared.canonical(RhShared.normalize(shared)))||!RhShared.canonical(account).equals(RhShared.canonical(local)))throw new IOException("同步结果或账户已变化，请重新同步");
+        if(!RhShared.canonical(expected).equals(RhShared.canonical(RhShared.read(context))))throw new IOException("本机配置尚未完整应用，请重新同步");
+        if(!context.getSharedPreferences("rhremote.global",0).edit().putBoolean("dark",expected.getBoolean("dark")).commit())throw new IOException("同步主题未能保存，请重试");
+        JSONObject next=new JSONObject(account.toString());next.put("base",expected);next.put("lastSyncMs",System.currentTimeMillis());RhShared.write(file,next);
+        JSONObject persisted=new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8));
+        if(!RhShared.canonical(next).equals(RhShared.canonical(persisted)))throw new IOException("同步完成状态未能保存，请重试");
+        local=next;clearApplied();
     }
     private static Map<String,JSONObject> devices(JSONObject config)throws JSONException{Map<String,JSONObject> map=new TreeMap<>();if(config!=null){JSONArray list=config.getJSONArray("devices");for(int i=0;i<list.length();i++){JSONObject d=list.getJSONObject(i);map.put(d.getString("uuid"),d);}}return map;}
     private static Object choose(Object left,Object right,Object base,String key,String resolution,JSONArray conflicts)throws JSONException{

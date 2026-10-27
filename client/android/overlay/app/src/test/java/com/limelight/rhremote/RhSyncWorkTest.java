@@ -22,6 +22,7 @@ public class RhSyncWorkTest {
     public static class Network {
         static JSONObject result,captured;static Exception failure;static int runs;
         @Implementation protected JSONObject run(JSONObject local,String resolution)throws Exception{runs++;captured=new JSONObject(local.toString());if(failure!=null)throw failure;return result;}
+        @Implementation protected void applied(JSONObject shared){}
     }
     Activity activity;RhSyncWork work;List<Runnable> queued;
     @Before public void setup()throws Exception{

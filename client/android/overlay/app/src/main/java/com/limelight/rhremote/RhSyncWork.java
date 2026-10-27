@@ -72,27 +72,38 @@ final class RhSyncWork {
         changed();
         if(!recorded)throw new java.io.IOException(error());
         try{worker.execute(()->{
-            JSONObject result=null;String failure="";
+            JSONObject result=null;String failure="",nextPhase="completed";boolean uncertain=false;
             try{result=sync.run(captured,resolution);}catch(Exception invalid){failure=RhSync.failureMessage(invalid);}
-            JSONObject completed=result;String networkError=failure;
-            main.post(()->{
-                String nextError=networkError,nextPhase="completed";
-                if(nextError.isEmpty())try{
-                    if(completed.has("shared"))RhShared.apply(context,completed.getJSONObject("shared"));
-                    else nextPhase="conflict";
-                }catch(Exception invalid){nextError="同步已传输，但本机配置应用失败，请重试";}
-                finish(nextError,nextPhase);
-                changed();
-            });
+            if(failure.isEmpty()&&result!=null){
+                if(result.has("shared")){
+                    try{progress("applying");RhShared.apply(context,result.getJSONObject("shared"));}
+                    catch(Exception invalid){failure="同步已传输，但本机配置应用失败。自动同步已暂停，请检查存储后重试";uncertain=true;}
+                    if(failure.isEmpty())try{progress("recording");sync.applied(result.getJSONObject("shared"));}
+                    catch(Exception invalid){failure="配置已应用，但同步完成状态保存失败。自动同步已暂停，请检查存储后重试";uncertain=true;}
+                }else nextPhase="conflict";
+            }
+            finish(failure,nextPhase,uncertain);
         });}catch(RuntimeException rejected){
             finish("同步任务未能启动，请重试","error");
-            changed();throw rejected;
+            throw rejected;
         }
     }
-    private synchronized void finish(String failure,String completedPhase){
-        running=false;
-        if(!journal.edit().putBoolean("pending",false).commit()){interrupted=true;error="同步结果的状态未能保存，自动同步已暂停，请手动同步核对";phase="interrupted";}
-        else{interrupted=false;error=failure;phase=error.isEmpty()?completedPhase:"error";}
-        revision++;
+    private void progress(String stage){synchronized(this){phase=stage;revision++;}changed();}
+    private void finish(String failure,String completedPhase){
+        finish(failure,completedPhase,false);
+    }
+    private void finish(String failure,String completedPhase,boolean uncertain){
+        boolean recorded=uncertain||journal.edit().putBoolean("pending",false).commit();
+        Runnable completed=()->{
+            synchronized(this){
+                running=false;
+                if(uncertain){interrupted=true;error=failure;phase="error";}
+                else if(!recorded){interrupted=true;error="同步结果的状态未能保存，自动同步已暂停，请手动同步核对";phase="interrupted";}
+                else{interrupted=false;error=failure;phase=error.isEmpty()?completedPhase:"error";}
+                revision++;
+            }
+            changed();
+        };
+        if(Looper.myLooper()==Looper.getMainLooper())completed.run();else main.post(completed);
     }
 }

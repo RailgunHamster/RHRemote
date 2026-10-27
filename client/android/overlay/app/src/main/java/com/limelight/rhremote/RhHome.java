@@ -699,10 +699,11 @@ public final class RhHome implements RhActions.Target {
     private boolean syncDirty(){if(syncDraft==null)return false;org.json.JSONObject s=sync.state();return !syncDraft.optString("url").trim().equals(s.optString("url"))||!syncDraft.optString("username").trim().equals(s.optString("username"))||!syncDraft.optString("password").isEmpty()||syncDraft.optBoolean("automatic")!=s.optBoolean("automatic")||syncDraft.optInt("intervalMinutes",5)!=s.optInt("intervalMinutes",5);}
     private void submitState(Button button,boolean enabled){button.setEnabled(enabled);button.setAlpha(1f);}
     private void refreshSyncFooter(){if(syncSave==null||!pageId.equals("global-settings")||!settingsTab.equals("sync"))return;boolean dirty=syncDirty();submitState(syncSave,dirty&&!syncBusy);syncCancel.setEnabled(dirty&&!syncBusy);syncCancel.setAlpha(dirty&&!syncBusy?1f:0.45f);syncNotice.setText(dirty?"有未保存的更改":sync.state().optBoolean("hasPassword")?"设置已保存":"未配置");syncErrorView.setText(syncError);syncErrorView.setVisibility(syncError.isEmpty()?View.GONE:View.VISIBLE);}
+    private String syncProgressText(boolean compact){String phase=syncWork.phase();return phase.equals("applying")?(compact?"正在应用…":"正在应用本机配置…"):phase.equals("recording")?(compact?"正在保存…":"正在保存同步状态…"):"同步中…";}
     private void showSync(){
         ensureSyncDraft();org.json.JSONObject s=sync.state();
         label(!s.optBoolean("hasPassword")?"请先保存 WebDAV 设置。":s.optLong("lastSyncMs")>0?"上次同步："+android.text.format.DateFormat.format("yyyy-MM-dd HH:mm",s.optLong("lastSyncMs")):"尚未同步");
-        RhActionRow commands=actionRow();Button run=button(syncBusy?"同步中…":"立即同步",true,()->invoke("sync.run",RhActions.obj())),clear=button("移除同步设置",false,()->invoke("sync.clear",RhActions.obj()));run.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));clear.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));commands.addView(run);commands.addView(clear);content.addView(commands);
+        RhActionRow commands=actionRow();Button run=button(syncBusy?syncProgressText(true):"立即同步",true,()->invoke("sync.run",RhActions.obj())),clear=button("移除同步设置",false,()->invoke("sync.clear",RhActions.obj()));run.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));clear.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));commands.addView(run);commands.addView(clear);content.addView(commands);
         org.json.JSONArray conflicts=s.optJSONArray("conflicts");if(conflicts!=null&&conflicts.length()>0){
             label(conflicts.length()+" 项配置存在冲突。选择保留哪一端的冲突项，其余改动会合并。");RhActionRow choices=actionRow();Button keepLocal=button("冲突项保留本机",false,()->invoke("sync.resolve",RhActions.obj("resolution","local"))),keepRemote=button("冲突项保留远端",false,()->invoke("sync.resolve",RhActions.obj("resolution","remote")));keepLocal.setEnabled(!syncBusy);keepRemote.setEnabled(!syncBusy);choices.addView(keepLocal);choices.addView(keepRemote);content.addView(choices);
             org.json.JSONArray review=s.optJSONArray("conflictItems");if(review!=null)for(int i=0;i<review.length();i++){org.json.JSONObject item=review.optJSONObject(i);LinearLayout card=column();card.setPadding(dp(14),dp(12),dp(14),dp(12));card.setBackground(bg(soft,line,12));card.addView(text(item.optString("label"),14,ink,true));card.addView(text("本机："+item.optString("local"),13,muted,false));card.addView(text("远端："+item.optString("remote"),13,muted,false));LinearLayout.LayoutParams cardLayout=new LinearLayout.LayoutParams(-1,-2);cardLayout.topMargin=dp(12);cardLayout.bottomMargin=dp(12);content.addView(card,cardLayout);}
@@ -724,7 +725,7 @@ public final class RhHome implements RhActions.Target {
         syncBusy=syncWork.busy();syncError=syncWork.error();String phase=syncWork.phase();
         if(!syncBusy&&phase.equals("completed"))restoreSharedDevices();
         if(pageId.equals("global-settings")&&settingsTab.equals("sync")){
-            showGlobal();message(syncBusy?"同步中…":phase.equals("completed")?"同步完成":phase.equals("conflict")?"配置冲突，请选择保留哪一端的冲突项":syncError);
+            showGlobal();message(syncBusy?syncProgressText(false):phase.equals("completed")?"同步完成":phase.equals("conflict")?"配置冲突，请选择保留哪一端的冲突项":syncError);
         }else if(pageId.equals("devices")){renderDevices(false);if(phase.equals("completed"))message("同步完成");}
         else if(pageId.equals("add"))refreshAdd();
     }
