@@ -16,6 +16,7 @@ pub(crate) struct Request {
     pub key: String,
     pub shift: bool,
     pub repeat: bool,
+    pub activate_window: bool,
     pub pixels: f64,
 }
 impl Request {
@@ -35,10 +36,13 @@ impl Request {
         if operation == "key" && !KEYS.contains(&key) {
             return Err("不支持该测试按键".into());
         }
-        for flag in ["shift", "repeat"] {
+        for flag in ["shift", "repeat", "activateWindow"] {
             if !args[flag].is_null() && !args[flag].is_boolean() {
                 return Err(format!("{flag} 须为布尔值"));
             }
+        }
+        if args["activateWindow"]==true && (operation!="focus" || window!="main") {
+            return Err("窗口激活只支持 main 窗口的显式 focus 请求".into());
         }
         let pixels = args["pixels"].as_f64().unwrap_or(0.);
         if operation == "scroll"
@@ -54,11 +58,12 @@ impl Request {
             key: key.into(),
             shift: args["shift"] == true,
             repeat: args["repeat"] == true,
+            activate_window: args["activateWindow"] == true,
             pixels,
         })
     }
     fn signature(&self) -> Value {
-        json!({"operation":self.operation,"window":self.window,"control":self.control,"key":self.key,"shift":self.shift,"repeat":self.repeat,"pixels":self.pixels})
+        json!({"operation":self.operation,"window":self.window,"control":self.control,"key":self.key,"shift":self.shift,"repeat":self.repeat,"activateWindow":self.activate_window,"pixels":self.pixels})
     }
 }
 struct Record {
@@ -217,6 +222,18 @@ pub(crate) fn isolated(data: &Path, default: &Path, mode: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn activation_is_explicit_main_focus_only_and_part_of_the_request_identity() {
+        let passive=Request::parse("focus",&json!({"control":"page"})).unwrap();assert!(!passive.activate_window);
+        let active=Request::parse("focus",&json!({"control":"page","activateWindow":true})).unwrap();assert!(active.activate_window);
+        assert_ne!(passive.signature(),active.signature());
+        for (operation,args) in [("inspect",json!({"activateWindow":true})),("key",json!({"key":"Tab","activateWindow":true})),("focus",json!({"window":"toolbar","control":"x","activateWindow":true})),("focus",json!({"control":"x","activateWindow":"true"}))] {
+            assert!(Request::parse(operation,&args).is_err());
+        }
+        let bridge=Bridge::new(true);
+        bridge.execute("view.ui.focus",&json!({"requestId":"focus","control":"page"})).unwrap();
+        assert!(bridge.execute("view.ui.focus",&json!({"requestId":"focus","control":"page","activateWindow":true})).is_err());
+    }
     #[test]
     fn disabled_interfaces_cannot_queue_or_read_requests() {
         let b = Bridge::new(false);

@@ -18,6 +18,10 @@
 
 ## 请求与结果
 
+Windows 隔离预览通过 `Start-RHRemoteUiPreview.ps1` 启动到指定实体副屏，保持不激活；程序要求 `RHREMOTE_TEST_MONITOR` 和 `RHREMOTE_TEST_WINDOW_ORIGIN`，不能默认开到主屏。启动器根据 QueryDisplayConfig 的物理像素坐标设置位置。当前目标是左侧 `\\.\DISPLAY2`（C3273IUY）。历史启动脚本没有这些参数，不应继续使用。
+
+`focus` 可显式请求 `activateWindow=true`，只允许隔离预览的 main 窗口，并等待恢复与布局就绪；默认关闭。结果新增 `nativeWindowHandle`、`monitor`、`physicalPosition`，供只读核对准确窗口。用户要求避免屏幕干扰后，不自动使用激活选项。UIA 焦点工具默认拒绝执行，不能把这个开关作为继续反复激活的许可。[副屏规则及未通过范围](WINDOWS-UIA-20261027.md)
+
 动作提交后返回 `queued`；UI 线程依次执行，状态变为 `running`，最后为 `complete` 或 `failed`。最多等待 8 个请求，保留最近 64 条记录。可传入 1–80 位字母、数字、横线或下划线组成的 `requestId`；在保留窗口内，相同 ID 和参数返回原请求，不重复执行。相同 ID 改参数会拒绝。超时后按返回的 ID 查询结果，避免重新创建一次动作。
 
 成功结果包含控件 `id`、`kind`、`label`、可用 / 焦点 / 勾选 / 展开状态、逻辑尺寸，以及滚动区的当前位置与范围。输入框的文字和密码不出现在控件结果中。`commandIds` 只记录本次 UI 请求期间触发的动作名称，不包含参数。`blockedByModal` 标明当前确认框对背景控件的限制；缺失、重复标识或禁用控件不会获得焦点。

@@ -12,6 +12,7 @@ use std::{
 
 enum Phase {
     Prepare,
+    Activating,
     Before,
     Applied,
     After,
@@ -20,6 +21,7 @@ struct Pending {
     request: Request,
     phase: Phase,
     started: Instant,
+    activated: bool,
 }
 pub(crate) struct Driver {
     bridge: Arc<Bridge>,
@@ -151,9 +153,6 @@ impl Driver {
             .filter(|item| item["expanded"] == true)
             .map(|item| item["id"].clone())
             .collect();
-        if request.operation == "focus" && !focused.iter().any(|id| id == &request.control) {
-            return Err("控件未获得焦点，请检查当前页面及弹出菜单".into());
-        }
         use slint::winit_030::WinitWindowAccessor;
         let window = match request.window.as_str() {
             "toolbar" => toolbar.window(),
@@ -161,8 +160,21 @@ impl Driver {
             _ => ui.window(),
         };
         let active = window.with_winit_window(|window| window.has_focus());
+        let monitor=window.with_winit_window(|window|window.current_monitor().and_then(|m|m.name())).flatten();
+        let position=window.with_winit_window(|window|window.outer_position().ok().map(|p|json!({"x":p.x,"y":p.y}))).flatten();
+        let native_handle=window.with_winit_window(|window|{
+            use raw_window_handle::{HasWindowHandle,RawWindowHandle};
+            match window.window_handle().map(|h|h.as_raw()) {
+                Ok(RawWindowHandle::Win32(handle))=>Some(handle.hwnd.get().to_string()),
+                _=>None,
+            }
+        }).flatten();
+        if request.activate_window && active!=Some(true) {return Err("系统未激活测试窗口，不能据此验证 UIA 焦点".into());}
+        if request.operation == "focus" && !focused.iter().any(|id| id == &request.control) {
+            return Err("控件未获得焦点，请检查当前页面及弹出菜单".into());
+        }
         Ok(
-            json!({"delivered":true,"controls":controls,"focused":focused,"expanded":expanded,"modal":if request.window=="main"{Self::context(ui)}else{""},"eventTarget":"application widgets","systemInputInjected":false,"windowActive":active}),
+            json!({"delivered":true,"controls":controls,"focused":focused,"expanded":expanded,"modal":if request.window=="main"{Self::context(ui)}else{""},"eventTarget":"application widgets","systemInputInjected":false,"windowActive":active,"nativeWindowHandle":native_handle,"monitor":monitor,"physicalPosition":position,"windowActivationRequested":request.activate_window}),
         )
     }
     pub fn tick(
@@ -178,10 +190,19 @@ impl Driver {
         if let Some(mut pending) = self.pending.take() {
             if pending.started.elapsed() > Duration::from_secs(5) {
                 self.bridge
-                    .finish(&pending.request.id, Err("界面测试等待控件状态超时".into()));
+                    .finish(&pending.request.id, Err(if pending.request.activate_window && !pending.activated {"系统未激活测试窗口，不能据此验证 UIA 焦点"}else{"界面测试等待控件状态超时"}.into()));
                 return;
             }
             match pending.phase {
+                Phase::Activating => {
+                    use slint::winit_030::WinitWindowAccessor;
+                    let ready=ui.window().with_winit_window(|window|{
+                        let size=window.inner_size();
+                        window.has_focus() && window.is_minimized()!=Some(true) && size.width>0 && size.height>0
+                    })==Some(true);
+                    if ready {pending.activated=true;pending.phase=Phase::Prepare;}
+                    self.pending=Some(pending);
+                }
                 // Property change handlers and conditional controls settle after the
                 // current event-loop turn. Never sample in the turn that changed them.
                 Phase::Prepare => {
@@ -222,6 +243,16 @@ impl Driver {
                     };
                     if let Some(error) = error {
                         self.bridge.finish(&pending.request.id, Err(error));
+                        return;
+                    }
+                    if pending.request.activate_window && !pending.activated {
+                        use slint::winit_030::WinitWindowAccessor;
+                        ui.window().with_winit_window(|window|{
+                            if window.is_minimized()==Some(true){window.set_minimized(false);}
+                            window.focus_window();
+                        });
+                        pending.phase=Phase::Activating;
+                        self.pending=Some(pending);
                         return;
                     }
                     self.issue(
@@ -296,6 +327,7 @@ impl Driver {
             request,
             phase,
             started: Instant::now(),
+            activated: false,
         });
     }
 }

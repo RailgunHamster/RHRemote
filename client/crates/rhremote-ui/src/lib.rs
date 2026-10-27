@@ -9,6 +9,7 @@ mod ui_test;
 mod ui_keyboard;
 mod ui_driver;
 mod preview_capture;
+mod preview_placement;
 mod network;
 mod native_cleanup;
 #[cfg(windows)]
@@ -148,6 +149,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         rhremote_core::start_http(controller.clone(), port.parse()?, token)?;
     }
     let passive_preview=native.ui_test.enabled;
+    let monitor=std::env::var("RHREMOTE_TEST_MONITOR").ok();
+    let coordinates=std::env::var("RHREMOTE_TEST_WINDOW_ORIGIN").ok();
+    let preview_origin=preview_placement::origin(passive_preview,monitor.as_deref(),coordinates.as_deref())?;
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name(ui_rendering::renderer().into())
@@ -160,6 +164,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let ui = MainWindow::new()?;
+    if let Some((x,y))=preview_origin {ui.window().set_position(slint::PhysicalPosition::new(x,y));}
     ui.set_isolated_preview(std::env::var("RHREMOTE_TEST_MODE").as_deref()==Ok("1") && std::env::var_os("RHREMOTE_DATA_DIR").is_some_and(|v|!v.is_empty()));
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     controller.ui_rendering(ui_rendering::metadata());

@@ -52,6 +52,7 @@ component UiProbe inherits Rectangle {
 component LineEdit inherits BaseLineEdit {
     property <string> test-label:root.accessible-label!="" ? root.accessible-label : root.placeholder-text;
     property <string> test-id:"input|"+root.test-label;
+    accessible-id:root.test-id;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
@@ -60,6 +61,7 @@ component LineEdit inherits BaseLineEdit {
 }
 component ComboBox inherits BaseComboBox {
     property <string> test-id:"choice|"+root.accessible-label;
+    accessible-id:root.test-id;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
@@ -68,6 +70,7 @@ component ComboBox inherits BaseComboBox {
 }
 component CheckBox inherits BaseCheckBox {
     property <string> test-id:"check|"+root.accessible-label;
+    accessible-id:root.test-id;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
@@ -76,6 +79,7 @@ component CheckBox inherits BaseCheckBox {
 }
 component SpinBox inherits BaseSpinBox {
     property <string> test-id:"spin|"+root.accessible-label;
+    accessible-id:root.test-id;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
@@ -130,6 +134,7 @@ component ActionButton inherits Rectangle {
     accessible-role: button;
     accessible-enabled:!root.disabled;
     accessible-label: root.text;
+    accessible-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
     UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve" && root.action-id!="navigation.back";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}}
 }
@@ -157,6 +162,7 @@ component NavigationItem inherits Rectangle {
     nav-focus:=FocusScope{focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,"");return accept;}return reject;}}
     touch:=TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{nav-focus.focus();Commands.trigger(root.action-id,"");}}
     accessible-role:button;accessible-label:root.text;accessible-enabled:!root.disabled;
+    accessible-id:"nav|"+root.action-id;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,"");}}
     UiProbe{control-id:"nav|"+root.action-id;kind:"navigation";label:root.text;control-enabled:!root.disabled;focused:nav-focus.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;focus-requested=>{nav-focus.focus();}}
 }
@@ -339,6 +345,7 @@ export component StreamPicker inherits Window {
                             row-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
                             touch:=TouchArea{enabled:parent.available;mouse-cursor:pointer;clicked=>{row-focus.focus();Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
                             accessible-role:button;accessible-enabled:self.available;accessible-label:item-label;
+                            accessible-id:"picker|"+root.kind+"|"+root.values[index];
                             accessible-action-default=>{if(self.available){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
                             UiProbe{control-id:"picker|"+root.kind+"|"+root.values[index];kind:"menu-item";label:item-label;control-enabled:parent.available;focused:row-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{row-focus.focus();}}
                         }
@@ -519,7 +526,7 @@ export component MainWindow inherits Window {
                             Rectangle {horizontal-stretch:1;}
                             ActionButton {text:"刷新";action-id:"devices.refresh";height:32px;}
                         }
-                        LineEdit {text:root.device-query;placeholder-text:"搜索名称或地址";height:36px;edited(value)=>{Commands.trigger("devices.filter",value);}}
+                        LineEdit {text:root.device-query;accessible-label:"搜索名称或地址";placeholder-text:"搜索名称或地址";height:36px;edited(value)=>{Commands.trigger("devices.filter",value);}}
                         ScrollView {test-id:"scroll|devices";horizontal-stretch:1;vertical-stretch:1;content-width:self.width;
                             VerticalLayout {spacing:6px;alignment:start;
                                 for device in root.devices: Rectangle {
@@ -545,6 +552,7 @@ export component MainWindow inherits Window {
                                     UiProbe{control-id:"device|"+device.uuid;kind:"device";label:"选择设备 "+device.name;focused:device-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{device-focus.focus();}}
                                     device-touch:=TouchArea {mouse-cursor:pointer;clicked=>{device-focus.focus();Commands.trigger("device.select",device.uuid);}}
                                     accessible-role:button;accessible-label:"选择设备 "+device.name;
+                                    accessible-id:"device|"+device.uuid;
                                     accessible-action-default=>{Commands.trigger("device.select",device.uuid);}
                                 }
                                 if root.devices.length==0: Text {text:root.device-query!="" ? "没有匹配的设备" : "尚未添加设备";color:Palette.muted;font-size:12px;height:80px;horizontal-alignment:center;vertical-alignment:center;}

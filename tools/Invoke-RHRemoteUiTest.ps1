@@ -5,6 +5,7 @@ param(
  [ValidateSet('Tab','Enter','Escape','Space','Up','Down','Left','Right','Home','End')][string]$Key,
  [switch]$Shift,
  [switch]$Repeat,
+ [switch]$ActivateWindow,
  [double]$Pixels=0,
  [string]$RequestId,
  [string]$Id,
@@ -24,6 +25,7 @@ if ($Operation -eq 'result') {
  return
 }
 $arguments=@{window=$Window;requestId=$(if($RequestId){$RequestId}else{'ui-'+[guid]::NewGuid().ToString('N')})}
+if($ActivateWindow){if($Operation -ne 'focus' -or $Window -ne 'main'){throw 'ActivateWindow is restricted to an explicit main-window focus request'};$arguments.activateWindow=$true}
 switch ($Operation) {
  'focus' { if (-not $Control) { throw 'Control is required for focus' }; $arguments.control=$Control }
  'key' { if (-not $Key) { throw 'Key is required' }; $arguments.key=$Key; $arguments.shift=[bool]$Shift; $arguments.repeat=[bool]$Repeat }

@@ -347,6 +347,13 @@ fn navigation_controls_do_not_replace_the_form_editors_return_focus(){
 }
 
 #[test]
+fn device_search_has_a_name_on_the_actual_accessible_editor(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.show().unwrap();
+    let editors=ElementHandle::find_by_accessible_label(&ui,"搜索名称或地址").filter(|item|item.accessible_read_only().is_some()).count();
+    assert_eq!(editors,1,"The API test label must also name the actual accessible editor");ui.hide().unwrap();
+}
+
+#[test]
 fn dismissing_a_decision_with_an_unavailable_origin_keeps_the_page_keyboard_fallback(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_settings_dirty(true);
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();click(&ui,"保存");
