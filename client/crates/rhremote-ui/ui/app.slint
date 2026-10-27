@@ -171,6 +171,9 @@ export component StreamToolbar inherits Window {
     title:"RHRemote-Moonlight · 串流控制";no-frame:true;
     background:transparent;default-font-family:"Microsoft YaHei UI";default-font-size:12px;
     in property <bool> expanded:true;
+    in property <bool> pending;
+    in property <bool> canceling;
+    in property <string> pending-cancel-label:"取消连接";
     in property <bool> audio-enabled;
     in property <int> audio-volume:100;
     in property <bool> stats-enabled;
@@ -185,14 +188,46 @@ export component StreamToolbar inherits Window {
     in property <[string]> shortcut-ids;
     in-out property <int> display-index:0;
     property <bool> narrow:self.width<400px;
-    preferred-width:expanded ? 560px : 72px;
-    preferred-height:expanded ? 292px : 28px;
+    preferred-width:expanded || pending ? 560px : 72px;
+    preferred-height:expanded ? 292px : pending ? (narrow ? 160px : 116px) : 28px;
     min-width:1px;min-height:1px;
-    max-width:expanded ? 560px : 72px;max-height:expanded ? 292px : 28px;
+    max-width:expanded || pending ? 560px : 72px;max-height:expanded ? 292px : pending ? (narrow ? 160px : 116px) : 28px;
+    forward-focus:toolbar-focus;
+    toolbar-focus:=FocusScope{
+        focus-on-click:false;focus-on-tab-navigation:false;
+        init=>{self.focus();}
+        property <bool> body-visible:root.expanded || root.pending;
+        changed body-visible=>{self.focus();}
+        key-pressed(event)=>{
+            if(event.text==Key.Escape){
+                if(!event.repeat){
+                    if(root.expanded){Commands.trigger("stream.controls.toggle","");}
+                    else if(root.pending && !root.canceling){Commands.trigger("stream.disconnect","");}
+                }
+                return accept;
+            }
+            return reject;
+        }
+        UiProbe{control-id:"scope|toolbar";kind:"scope";focused:toolbar-focus.has-focus;remember-focus:false;focus-requested=>{toolbar-focus.focus();}}
     // The same handle remains at the center of the native stream's top edge.
     ActionButton {
         x:(parent.width - self.width)/2;y:0px;width:72px;height:28px;min-width:1px;border-radius:10px;
         text:root.expanded ? "收起" : "控制";action-id:"stream.controls.toggle";
+    }
+    if root.pending && !root.expanded:Rectangle{
+        y:28px;height:parent.height - 28px;
+        background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
+        VerticalLayout{padding:12px;spacing:8px;
+            Text{text:root.device-name;color:Palette.ink;font-size:13px;overflow:elide;}
+            if !root.narrow:HorizontalLayout{spacing:12px;
+                Text{text:root.status;color:Palette.muted;vertical-alignment:center;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;accessible-label:root.status;}
+                ActionButton{text:root.pending-cancel-label;action-id:"stream.disconnect";disabled:root.canceling;}
+            }
+            if root.narrow:VerticalLayout{spacing:8px;
+                Text{text:root.status;color:Palette.muted;wrap:word-wrap;vertical-stretch:1;accessible-label:root.status;}
+                ActionButton{text:root.pending-cancel-label;action-id:"stream.disconnect";disabled:root.canceling;}
+            }
+        }
     }
     if root.expanded: Rectangle {
         y:28px;height:parent.height - 28px;
@@ -201,7 +236,7 @@ export component StreamToolbar inherits Window {
             padding:12px;spacing:8px;
             HorizontalLayout {spacing:8px;
                 Text{text:root.device-name;color:Palette.ink;font-size:13px;vertical-alignment:center;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
-                ActionButton{text:"断开";action-id:"stream.disconnect";}
+                ActionButton{text:root.pending ? root.pending-cancel-label : "断开";action-id:"stream.disconnect";disabled:root.canceling;}
             }
             HorizontalLayout {spacing:6px;
                 TabButton{text:"操作";action-id:"stream.controls.tab";argument:"input";chosen:root.controls-tab=="input";horizontal-stretch:1;}
@@ -260,6 +295,7 @@ export component StreamToolbar inherits Window {
             }
         }
     }
+    }
 }
 export component StreamPicker inherits Window {
     title:"RHRemote-Moonlight · 选择";no-frame:true;
@@ -275,7 +311,12 @@ export component StreamPicker inherits Window {
     callback dismiss();
     forward-focus:focus;
     focus:=FocusScope{
+        focus-on-click:false;focus-on-tab-navigation:false;
+        init=>{self.focus();}
+        property <string> active-kind:root.kind;
+        changed active-kind=>{if(root.kind!=""){self.focus();}}
         key-pressed(event)=>{if(event.text==Key.Escape){root.dismiss();return accept;}return reject;}
+        UiProbe{control-id:"scope|picker";kind:"scope";focused:focus.has-focus;remember-focus:false;focus-requested=>{focus.focus();}}
         VerticalLayout{padding:8px;spacing:6px;
             HorizontalLayout{
                 Text{text:root.kind=="shortcuts" ? "快捷键" : root.kind=="feedback" ? "操作失败" : "屏幕";color:Palette.ink;vertical-alignment:center;}

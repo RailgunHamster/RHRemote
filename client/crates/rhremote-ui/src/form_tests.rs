@@ -390,3 +390,38 @@ fn tab_reaches_the_offscreen_relay_editor_after_the_route_buttons(){
     }
     assert!(found,"Tab skipped the relay editor while its internal clip was outside the scroll viewport");ui.hide().unwrap();
 }
+
+#[test]
+fn toolbar_escape_collapses_the_panel_without_disconnecting_or_repeating(){
+    i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamToolbar::new().unwrap();ui.set_expanded(true);
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();click(&ui,"快捷键 ▾");received.borrow_mut().clear();
+    ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});
+    assert_eq!(&*received.borrow(),&[("stream.controls.toggle".into(),"".into())]);
+    ui.set_expanded(false);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressRepeated{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert!(received.borrow().is_empty());ui.hide().unwrap();
+}
+
+#[test]
+fn picker_tab_does_not_stop_on_an_invisible_parent_scope(){
+    i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamPicker::new().unwrap();ui.set_kind("shortcuts".into());ui.set_labels(ModelRc::new(VecModel::from(vec!["A".into(),"B".into()])));ui.set_values(ModelRc::new(VecModel::from(vec!["a".into(),"b".into()])));ui.show().unwrap();
+    let focused=Rc::new(RefCell::new(Vec::new()));let reports=focused.clone();let probe=ui.global::<crate::UiTest>();probe.set_enabled(true);probe.on_report(move|id,_,_,_,active,_,_,_,_,_,_|{if active{reports.borrow_mut().push(id.to_string());}});probe.set_operation("focus".into());probe.set_target("action|stream.menu.close||关闭".into());probe.set_generation(1);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    probe.set_operation("inspect".into());
+    for(index,expected)in["picker|shortcuts|a","picker|shortcuts|b","action|stream.menu.close||关闭"].iter().enumerate(){
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Tab.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Tab.into()});focused.borrow_mut().clear();probe.set_generation(index as i32+2);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));assert_eq!(&*focused.borrow(),&[expected.to_string()]);
+    }ui.hide().unwrap();
+}
+
+#[test]
+fn pending_toolbar_exposes_status_and_cancel_without_expanding_controls(){
+    i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamToolbar::new().unwrap();ui.set_expanded(false);ui.set_pending(true);ui.set_device_name("winserver".into());ui.set_status("等待远程画面".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height)in[(560.,116.),(355.,160.)]{
+        ui.window().set_size(LogicalSize::new(width,height));
+        let cancel=ElementHandle::find_by_accessible_label(&ui,"取消连接").next().expect("visible pending cancel");let p=cancel.absolute_position();let size=cancel.size();assert!(p.x>=0.&&p.y>=28.&&p.x+size.width<=width&&p.y+size.height<=height,"pending cancel outside toolbar: {p:?}, {size:?}");
+        let status=ElementHandle::find_by_accessible_label(&ui,"等待远程画面").next().expect("visible stage");let p=status.absolute_position();let size=status.size();assert!(size.width>0.&&size.height>0.&&p.y+size.height<=height);
+        received.borrow_mut().clear();click(&ui,"取消连接");assert_eq!(&*received.borrow(),&[("stream.disconnect".into(),"".into())]);
+        ui.set_canceling(true);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});click(&ui,"取消连接");assert!(received.borrow().is_empty(),"canceling must disable stale focused button");ui.set_canceling(false);
+    }
+    ui.set_expanded(true);click(&ui,"收起");received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert_eq!(&*received.borrow(),&[("stream.controls.toggle".into(),"".into())]);
+    ui.set_expanded(false);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert_eq!(&*received.borrow(),&[("stream.disconnect".into(),"".into())]);
+    ui.set_canceling(true);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert!(received.borrow().is_empty());ui.hide().unwrap();
+}

@@ -233,7 +233,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let dismiss = controller.clone();
+    let dismiss_timing = native.clone();
     picker.on_dismiss(move || {
+        dismiss_timing.ui_test.observe_action("stream.menu.close");
         dismiss.dispatch("stream.menu.close", json!({}));
     });
     let dismiss = controller.clone();
@@ -372,10 +374,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(toolbar)=toolbar_weak.upgrade(){
             toolbar.set_expanded(state["controls"]==true);
+            let pending=state["connecting"]==true;
+            let canceling=matches!(state["connection"]["phase"].as_str(),Some("cancelling"|"cleaning"));
+            toolbar.set_pending(pending);toolbar.set_canceling(canceling);
+            toolbar.set_pending_cancel_label(if canceling {"正在断开…"}else if state["connection"]["phase"]=="reconnecting" {"取消恢复"}else{"取消连接"}.into());
             toolbar.set_audio_enabled(state["audioEnabled"]==true);toolbar.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
             toolbar.set_device_name(ui.get_selected_name());toolbar.set_stats_enabled(state["showStats"]==true);
             let controls_tab=state["controlsTab"].as_str().unwrap_or("input");let feedback=&state["controlAction"];let feedback_visible=feedback["group"]==controls_tab;
-            toolbar.set_controls_tab(controls_tab.into());toolbar.set_busy(feedback["busy"]==true);toolbar.set_failed(feedback_visible && feedback["error"].as_str().is_some_and(|s|!s.is_empty()));
+            toolbar.set_controls_tab(controls_tab.into());toolbar.set_busy(feedback["busy"]==true || state["streaming"]!=true || canceling);toolbar.set_failed(feedback_visible && feedback["error"].as_str().is_some_and(|s|!s.is_empty()));
             toolbar.set_status(if state["connecting"]==true {state["status"].as_str().unwrap_or("")}else if feedback_visible {feedback["message"].as_str().unwrap_or("")}else{""}.into());
             toolbar.global::<Palette>().set_dark(state["saved"]["dark"]==true);
             let display_fingerprint=format!("{}:{}",state["statistics"]["displays"],state["statistics"]["selectedDisplay"]["id"]);

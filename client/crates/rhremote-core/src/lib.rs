@@ -1053,6 +1053,7 @@ pub fn start_http(
     Ok(std::thread::spawn(move || {
         let update_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let sync_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let session_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
         for mut request in server.incoming_requests() {
             let authenticated = request.headers().iter().any(|h| {
                 h.field.equiv("Authorization") && h.value.as_str() == format!("Bearer {token}")
@@ -1086,10 +1087,10 @@ pub fn start_http(
                         Some(v) => {
                             let id = v["id"].as_str().unwrap_or("");
                             // Keep state/navigation HTTP calls responsive while a
-                            // synchronous update or sync request waits on its server.
-                            if matches!(id,"updates.primary"|"updates.check"|"updates.download"|"updates.install"|"sync.run"|"sync.resolve") {
+                            // synchronous network operation waits on its server.
+                            if matches!(id,"updates.primary"|"updates.check"|"updates.download"|"updates.install"|"sync.run"|"sync.resolve") || is_session_control_action(id) {
                                 use std::sync::atomic::Ordering;
-                                let operation=if id.starts_with("sync."){&sync_request}else{&update_request};
+                                let operation=if id.starts_with("sync."){&sync_request}else if is_session_control_action(id){&session_request}else{&update_request};
                                 if !operation.swap(true,Ordering::AcqRel) {
                                     let controller=controller.clone();let gate=operation.clone();
                                     let id=id.to_owned();let args=v.get("args").cloned().unwrap_or(json!({}));
@@ -1106,7 +1107,7 @@ pub fn start_http(
                                     });
                                     continue;
                                 }
-                                (422,json!({"ok":false,"error":if id.starts_with("sync."){"同步操作正在进行"}else{"更新操作正在进行"},"action":id}))
+                                (422,json!({"ok":false,"error":if id.starts_with("sync."){"同步操作正在进行"}else if is_session_control_action(id){"上一项会话操作尚未完成"}else{"更新操作正在进行"},"action":id}))
                             } else {
                             let response = controller
                                 .dispatch(id, v.get("args").cloned().unwrap_or(json!({})));

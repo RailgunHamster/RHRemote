@@ -201,6 +201,38 @@ mod tests {
         assert_eq!(c.state()["streamMenu"], "");
         let _ = std::fs::remove_file(&c.storage);
     }
+
+    #[test]
+    fn slow_session_http_control_keeps_state_tabs_and_disconnect_responsive() {
+        use std::{io::{Read,Write},net::{TcpListener,TcpStream}};
+        fn request(port:u16,token:&str,body:Option<&str>,timeout:Duration)->std::io::Result<String>{
+            let mut socket=TcpStream::connect(("127.0.0.1",port))?;socket.set_read_timeout(Some(timeout))?;
+            let (method,path)=if body.is_some(){("POST","/v1/action")}else{("GET","/v1/state")};let body=body.unwrap_or("");
+            write!(socket,"{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len())?;
+            let mut response=String::new();socket.read_to_string(&mut response)?;Ok(response)
+        }
+        struct Release(Option<mpsc::Sender<()>>);impl Drop for Release{fn drop(&mut self){if let Some(tx)=self.0.take(){let _=tx.send(());}}}
+        let (entered,wait)=mpsc::channel();let (release,released)=mpsc::channel();let mut release=Release(Some(release));
+        let c=fixture(Arc::new(Host{pending:Some((entered,Mutex::new(released))),fail:std::sync::atomic::AtomicBool::new(false)}));
+        let listener=TcpListener::bind(("127.0.0.1",0)).unwrap();let port=listener.local_addr().unwrap().port();drop(listener);
+        let token=crate::random_token().unwrap();crate::start_http(c.clone(),port,token.clone()).unwrap();
+        let caller_token=token.clone();let worker=std::thread::spawn(move||request(port,&caller_token,Some(r#"{"id":"stream.audio.volume","args":{"volume":37}}"#),Duration::from_secs(5)));
+        wait.recv_timeout(Duration::from_secs(2)).unwrap();
+        let state=request(port,&token,None,Duration::from_secs(1)).expect("state HTTP blocked behind the pending session control");
+        assert!(state.contains("\"busy\":true"),"{state}");
+        let duplicate=request(port,&token,Some(r#"{"id":"stream.stats.toggle","args":{}}"#),Duration::from_secs(1)).unwrap();
+        assert!(duplicate.contains("422")&&duplicate.contains("上一项会话操作尚未完成"),"{duplicate}");
+        let tab=request(port,&token,Some(r#"{"id":"stream.controls.tab","args":{"tab":"displays"}}"#),Duration::from_secs(1)).unwrap();
+        assert!(tab.contains("\"ok\":true"),"{tab}");assert_eq!(c.state()["controlsTab"],"displays");
+        let stopped=request(port,&token,Some(r#"{"id":"stream.disconnect","args":{}}"#),Duration::from_secs(1)).unwrap();
+        assert!(stopped.contains("\"ok\":true"),"{stopped}");
+        c.stream_state(false,json!({"phase":"disconnected","nativeCleanupPending":false}));assert_eq!(c.state()["controlRequests"],1);
+        assert_eq!(c.dispatch("device.connect",json!({"uuid":"host"}))["ok"],false);
+        release.0.take().unwrap().send(()).unwrap();let response=worker.join().unwrap().unwrap();
+        assert!(response.contains("422")&&response.contains("会话已改变，操作结果已忽略"),"{response}");
+        assert_eq!(c.state()["controlRequests"],0);assert_eq!(c.state()["volume"],100);
+        let _=std::fs::remove_file(&c.storage);
+    }
 }
 
 pub fn is_control_action(id: &str) -> bool {

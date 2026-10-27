@@ -35,10 +35,11 @@ fn placement(
     client_width: i32,
     scale: f32,
     expanded: bool,
+    pending: bool,
 ) -> (i32, i32, i32, i32) {
-    let width = ((if expanded { 560.0 } else { 72.0 }) * scale) as i32;
+    let width = ((if expanded || pending { 560.0 } else { 72.0 }) * scale) as i32;
     let width = width.min((client_width - 16).max(1));
-    let height = ((if expanded { 292.0 } else { 28.0 }) * scale) as i32;
+    let height = ((if expanded { 292.0 } else if pending { if (width as f32)/scale < 400.0 {160.0} else {116.0} } else { 28.0 }) * scale) as i32;
     (left + (client_width - width) / 2, top + 4, width, height)
 }
 
@@ -76,6 +77,7 @@ pub fn follow(toolbar: &crate::StreamToolbar, state: &Value) -> Value {
             rect.right - rect.left,
             toolbar.window().scale_factor(),
             toolbar.get_expanded(),
+            toolbar.get_pending(),
         );
         toolbar
             .window()
@@ -111,12 +113,12 @@ pub fn follow(toolbar: &crate::StreamToolbar, state: &Value) -> Value {
                                 SWP_NOZORDER
                             },
                     );
-                    shape=crate::ui_rendering::toolbar_shape(hwnd,toolbar.window().scale_factor(),toolbar.get_expanded(),&state["toolbar"]["shape"]);
+                    shape=crate::ui_rendering::toolbar_shape(hwnd,toolbar.window().scale_factor(),toolbar.get_expanded() || toolbar.get_pending(),&state["toolbar"]["shape"]);
                 }
             }
         });
         let toggle_width = (72.0 * toolbar.window().scale_factor()) as i32;
-        return json!({"visible":true,"expanded":toolbar.get_expanded(),"x":x,"y":y,"width":width,"height":height,"shape":shape,"toggle":{"x":x+(width-toggle_width)/2,"y":y,"width":toggle_width,"height":(28.0*toolbar.window().scale_factor()) as i32},"owner":format!("{}",owner.0 as usize)});
+        return json!({"visible":true,"expanded":toolbar.get_expanded(),"pending":toolbar.get_pending(),"bodyVisible":toolbar.get_expanded() || toolbar.get_pending(),"x":x,"y":y,"width":width,"height":height,"shape":shape,"toggle":{"x":x+(width-toggle_width)/2,"y":y,"width":toggle_width,"height":(28.0*toolbar.window().scale_factor()) as i32},"owner":format!("{}",owner.0 as usize)});
     }
     #[cfg(not(windows))]
     {
@@ -250,23 +252,36 @@ mod tests {
     #[test]
     fn placement_stays_on_negative_secondary_and_collapses_in_place() {
         assert_eq!(
-            super::placement(-3840, 0, 1920, 1.0, true),
+            super::placement(-3840, 0, 1920, 1.0, true, false),
             (-3160, 4, 560, 292)
         );
         assert_eq!(
-            super::placement(-3840, 0, 1920, 1.0, false),
+            super::placement(-3840, 0, 1920, 1.0, false, false),
             (-2916, 4, 72, 28)
         );
-        let p = super::placement(0, 20, 800, 1.5, true);
+        let p = super::placement(0, 20, 800, 1.5, true, false);
         assert!(p.0 >= 0 && p.0 + p.2 <= 800);
         for scale in [1.0, 1.5, 2.25] {
             for client_width in [800, 1920, 3840] {
-                let open = super::placement(-3840, 20, client_width, scale, true);
-                let closed = super::placement(-3840, 20, client_width, scale, false);
+                let open = super::placement(-3840, 20, client_width, scale, true, false);
+                let closed = super::placement(-3840, 20, client_width, scale, false, false);
                 // Rounding may shift the centered hit target by at most one physical pixel.
                 let toggle_x = open.0 + (open.2 - closed.2) / 2;
                 assert!((toggle_x - closed.0).abs() <= 1);
                 assert_eq!(open.1, closed.1);
+            }
+        }
+    }
+    #[test]
+    fn pending_card_keeps_the_handle_anchored_and_wraps_at_small_widths() {
+        for scale in [1.0, 1.5, 2.25] {
+            for client_width in [800, 1920, 3840] {
+                let card=super::placement(-3840,20,client_width,scale,false,true);
+                let collapsed=super::placement(-3840,20,client_width,scale,false,false);
+                assert!((card.0+(card.2-collapsed.2)/2-collapsed.0).abs()<=1);
+                assert_eq!(card.1,collapsed.1);
+                let logical_height=if (card.2 as f32)/scale<400.0 {160.0}else{116.0};
+                assert_eq!(card.3,(logical_height*scale) as i32);
             }
         }
     }
