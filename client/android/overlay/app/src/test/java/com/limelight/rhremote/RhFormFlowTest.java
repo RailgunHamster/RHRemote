@@ -46,6 +46,17 @@ public class RhFormFlowTest {
     @Test public void untouchedSettingsCanSelectADeviceWithoutLeavingAHiddenDraft()throws Exception{
         profile();home.perform("device.select",RhActions.obj("uuid","host"));assertEquals("devices",home.state().getString("page"));assertTrue(home.state().isNull("draft"));assertTrue(home.state().isNull("navigationPrompt"));
     }
+    View described(String description){for(View v:views(root))if(v.getContentDescription()!=null&&description.contentEquals(v.getContentDescription()))return v;throw new AssertionError("Missing control "+description);}
+    @Test public void routeCheckboxesKeepOnePathAndReorderingHasVisibleBoundaries()throws Exception{
+        profile();String before=RhShared.canonical(RhShared.read(activity));
+        home.perform("settings.set",RhActions.obj("key","routeOrder","value",new org.json.JSONArray().put("lan").put("relay")));home.perform("settings.tab",RhActions.obj("tab","network"));layout(360,800);
+        assertFalse(described("上移局域网").isEnabled());assertTrue(described("下移局域网").isEnabled());assertFalse(described("下移自建中继").isEnabled());
+        described("下移局域网").performClick();assertEquals("relay",home.state().getJSONObject("draft").getJSONArray("routeOrder").getString(0));assertFalse(described("上移自建中继").isEnabled());assertFalse(described("下移局域网").isEnabled());
+        CheckBox lan=(CheckBox)described("连接路径：局域网");assertTrue(lan.isChecked());lan.performClick();assertEquals(1,home.state().getJSONObject("draft").getJSONArray("routeOrder").length());
+        CheckBox relay=(CheckBox)described("连接路径：自建中继");assertTrue(relay.isChecked());assertFalse(relay.isEnabled());assertFalse(described("上移自建中继").isEnabled());assertFalse(described("下移自建中继").isEnabled());
+        ((CheckBox)described("连接路径：公网直连")).performClick();assertEquals(2,home.state().getJSONObject("draft").getJSONArray("routeOrder").length());assertTrue(described("连接路径：自建中继").isEnabled());
+        button("取消").performClick();assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+    }
     @Test public void saveBarAndCategoryNavigationRemainOutsideTheScrollableBody()throws Exception{
         profile();for(int[] size:new int[][]{{360,800},{640,360},{1008,672}}){layout(size[0],size[1]);Button save=button("保存"),back=button("返回设备");assertFalse(inScroll(save));assertFalse(inScroll(back));int[] location=new int[2];save.getLocationInWindow(location);assertTrue(location[1]>=0&&location[1]+save.getHeight()<=size[1]);assertTrue(save.getHeight()>=48);}
     }

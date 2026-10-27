@@ -351,8 +351,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_profile_tab(state["profileTab"].as_str().unwrap_or("video").into());
             let order:Vec<&str>=state["draft"]["routeOrder"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
             let mut route_rows=Vec::new();
-            for key in &order {if let Some((_,label))=rhremote_core::network::ROUTES.iter().find(|(id,_)|id==key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:true});}}
-            for (key,label) in rhremote_core::network::ROUTES {if !order.contains(key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:false});}}
+            for (index,key) in order.iter().enumerate() {if let Some((_,label))=rhremote_core::network::ROUTES.iter().find(|(id,_)|id==key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:true,can_move_up:index>0,can_move_down:index+1<order.len(),can_disable:order.len()>1});}}
+            for (key,label) in rhremote_core::network::ROUTES {if !order.contains(key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:false,..Default::default()});}}
             ui.set_network_routes(ModelRc::new(VecModel::from(route_rows)));
             ui.set_relay_url(state["draftRelay"].as_str().unwrap_or(rhremote_core::network::DEFAULT_RELAY).into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);

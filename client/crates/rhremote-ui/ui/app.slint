@@ -6,7 +6,7 @@ export struct ProfileSource { client-id:string, label:string }
 export struct CopyField { label:string, value:string }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
 export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,input-text:string,invalid:bool,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
-export struct RouteRow { key:string,label:string,enabled:bool }
+export struct RouteRow { key:string,label:string,enabled:bool,can-move-up:bool,can-move-down:bool,can-disable:bool }
 export global Palette {
     in property <bool> dark;
     out property <color> page: dark ? #151b29 : #f6f7fa;
@@ -204,7 +204,7 @@ export component StreamPicker inherits Window {
                             forward-focus:row-focus;
                             border-width:row-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
                             Text{x:10px;width:parent.width - 20px;text:label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
-                            row-focus:=FocusScope{enabled:parent.available;key-pressed(event)=>{if(event.text==Key.Return || event.text==" "){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
+                            row-focus:=FocusScope{enabled:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
                             touch:=TouchArea{enabled:parent.available;mouse-cursor:pointer;clicked=>{row-focus.focus();Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
                             accessible-role:button;accessible-enabled:self.available;accessible-label:label;
                             accessible-action-default=>{if(self.available){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
@@ -527,7 +527,7 @@ export component MainWindow inherits Window {
                     Rectangle{horizontal-stretch:1;}ActionButton{text:"返回设备";action-id:"device.add.cancel";}
                 }
             }
-            if root.page!="devices" || root.streaming || root.connecting: ScrollView {
+            if root.page!="devices" || root.streaming || root.connecting: form-scroll:=ScrollView {
                 content-width:self.width;
                 VerticalLayout {
                     padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" || root.page=="profile-copy" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" || root.page=="profile-copy" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
@@ -554,22 +554,23 @@ export component MainWindow inherits Window {
                             Text{text:"设备地址";color:Palette.ink;}
                             Text{text:root.network-summary;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             Text{text:"连接会按路径顺序尝试所有已保存地址，内网地址不会限制外网连接。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
-                            network-primary:=LineEdit{text:root.network-address;placeholder-text:"首选 IP 或主机名";edited(value)=>{Commands.trigger("settings.network.edit","address="+value);}}
-                            network-extra:=LineEdit{text:root.network-addresses;placeholder-text:"备用地址，以逗号分隔，例如 100.x.x.x";edited(value)=>{Commands.trigger("settings.network.edit","addresses="+value);}}
+                            network-primary:=LineEdit{text:root.network-address;accessible-label:"首选 IP 或主机名";placeholder-text:"首选 IP 或主机名";edited(value)=>{Commands.trigger("settings.network.edit","address="+value);}}
+                            network-extra:=LineEdit{text:root.network-addresses;accessible-label:"备用地址";placeholder-text:"备用地址，以逗号分隔，例如 100.x.x.x";edited(value)=>{Commands.trigger("settings.network.edit","addresses="+value);}}
                             HorizontalLayout{
                                 ActionButton{text:"诊断连接";action-id:"device.network.diagnose";argument:root.selected-uuid;}
                                 Rectangle{horizontal-stretch:1;}
                             }
                             Text{text:"连接顺序";color:Palette.ink;}
                             for route in root.network-routes: HorizontalLayout{spacing:6px;
-                                Text{text:route.label;color:route.enabled ? Palette.ink : Palette.muted;vertical-alignment:center;horizontal-stretch:1;}
-                                ActionButton{text:route.enabled ? "启用" : "停用";chosen:route.enabled;action-id:"settings.route.toggle";argument:route.key;}
-                                if route.enabled: ActionButton{text:"↑";action-id:"settings.route.move";argument:route.key+"|up";}
-                                if route.enabled: ActionButton{text:"↓";action-id:"settings.route.move";argument:route.key+"|down";}
+                                CheckBox{text:route.label;checked:route.enabled;enabled:!route.enabled || route.can-disable;accessible-label:"连接路径："+route.label;toggled=>{Commands.trigger("settings.route.toggle",route.key);}}
+                                Rectangle{horizontal-stretch:1;}
+                                if route.enabled: ActionButton{text:"↑";action-id:"settings.route.move";argument:route.key+"|up";disabled:!route.can-move-up;accessible-label:"上移"+route.label;}
+                                if route.enabled: ActionButton{text:"↓";action-id:"settings.route.move";argument:route.key+"|down";disabled:!route.can-move-down;accessible-label:"下移"+route.label;}
                             }
+                            Text{text:"至少启用一条连接路径。";color:Palette.muted;font-size:12px;}
                             ActionButton{text:"恢复默认顺序";action-id:"settings.set";argument:"routeOrder=default";}
                             Text{text:"中继服务器";color:Palette.ink;}
-                            relay-edit:=LineEdit{text:root.relay-url;placeholder-text:"https://relay.example.com";edited(value)=>{Commands.trigger("settings.network.edit","relayUrl="+value);}}
+                            relay-edit:=LineEdit{text:root.relay-url;accessible-label:"中继服务器";placeholder-text:"https://relay.example.com";edited(value)=>{Commands.trigger("settings.network.edit","relayUrl="+value);}}
                             Text{text:"按顺序尝试已启用的路径；同类路径按实测质量选择。更改随本设备连接配置同步。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             Text{text:root.network-report;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
@@ -585,7 +586,7 @@ export component MainWindow inherits Window {
                             HorizontalLayout{spacing:16px;
                                 Text{text:field.label;color:Palette.ink;vertical-alignment:center;}
                                 Rectangle{horizontal-stretch:1;}
-                                if field.kind=="bool": ActionButton{text:field.flag ? "开启" : "关闭";chosen:field.flag;action-id:"settings.set";argument:field.key+"=toggle";}
+                                if field.kind=="bool": ActionButton{text:field.flag ? "开启" : "关闭";chosen:field.flag;action-id:"settings.set";argument:field.key+"=toggle";accessible-label:field.label+"："+self.text;}
                                 if field.kind=="number": HorizontalLayout {spacing:6px;horizontal-stretch:0;
                                     ActionButton{text:"−";action-id:"settings.step";argument:field.key+"|down";accessible-label:"减少"+field.label;}
                                     Rectangle {width:92px;height:38px;border-width:field.invalid ? 2px : 0px;border-radius:6px;border-color:#b04452;
@@ -593,7 +594,7 @@ export component MainWindow inherits Window {
                                     }
                                     ActionButton{text:"＋";action-id:"settings.step";argument:field.key+"|up";accessible-label:"增加"+field.label;}
                                 }
-                                if field.kind=="select": field-choice:=ComboBox{model:field.option-labels;current-index:field.selected-index;width:200px;horizontal-stretch:0;selected(value)=>{Commands.trigger("settings.set",field.key+"="+field.option-values[self.current-index]);}}
+                                if field.kind=="select": field-choice:=ComboBox{model:field.option-labels;current-index:field.selected-index;width:200px;horizontal-stretch:0;accessible-label:field.label;selected(value)=>{Commands.trigger("settings.set",field.key+"="+field.option-values[self.current-index]);}}
                             }
                             if field.help!="": Text{text:field.help;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
@@ -607,14 +608,14 @@ export component MainWindow inherits Window {
                         if root.settings-tab=="sync": VerticalLayout{spacing:12px;
                             Text{text:"WebDAV";color:Palette.ink;font-size:18px;font-weight:600;}
                             Text{text:"目录地址（HTTP / HTTPS）";color:Palette.muted;}
-                            dav-url:=LineEdit{enabled:!root.sync-busy;text:root.sync-url;placeholder-text:"https://example.com/dav/RHRemote/";edited(value)=>{Commands.trigger("sync.edit","url="+value);}}
+                            dav-url:=LineEdit{enabled:!root.sync-busy;text:root.sync-url;accessible-label:"WebDAV 目录地址（HTTP / HTTPS）";placeholder-text:"https://example.com/dav/RHRemote/";edited(value)=>{Commands.trigger("sync.edit","url="+value);}}
                             Text{text:"用户名";color:Palette.muted;}
-                            dav-user:=LineEdit{enabled:!root.sync-busy;text:root.sync-username;edited(value)=>{Commands.trigger("sync.edit","username="+value);}}
+                            dav-user:=LineEdit{enabled:!root.sync-busy;text:root.sync-username;accessible-label:"WebDAV 用户名";edited(value)=>{Commands.trigger("sync.edit","username="+value);}}
                             Text{text:"密码";color:Palette.muted;}
-                            dav-password:=LineEdit{enabled:!root.sync-busy;in property <int> generation:root.sync-generation;changed generation=>{self.text="";}input-type:password;placeholder-text:root.sync-has-password ? "已保存，留空保留" : "WebDAV 密码";edited(value)=>{Commands.trigger("sync.edit","password="+value);}}
+                            dav-password:=LineEdit{enabled:!root.sync-busy;in property <int> generation:root.sync-generation;changed generation=>{self.text="";}input-type:password;accessible-label:"WebDAV 密码";placeholder-text:root.sync-has-password ? "已保存，留空保留" : "WebDAV 密码";edited(value)=>{Commands.trigger("sync.edit","password="+value);}}
                             HorizontalLayout{
                                 dav-auto:=CheckBox{enabled:!root.sync-busy;text:"自动同步";checked:root.sync-automatic;toggled=>{Commands.trigger("sync.edit","automatic="+(self.checked ? "true" : "false"));}}
-                                dav-interval:=ComboBox{enabled:!root.sync-busy;model:["5 分钟","15 分钟","30 分钟","60 分钟"];current-index:root.sync-interval-index;preferred-width:150px;horizontal-stretch:0;selected(value)=>{Commands.trigger("sync.edit","intervalMinutes="+(self.current-index==0?"5":self.current-index==1?"15":self.current-index==2?"30":"60"));}}
+                                dav-interval:=ComboBox{enabled:!root.sync-busy;model:["5 分钟","15 分钟","30 分钟","60 分钟"];current-index:root.sync-interval-index;preferred-width:150px;horizontal-stretch:0;accessible-label:"自动同步间隔";selected(value)=>{Commands.trigger("sync.edit","intervalMinutes="+(self.current-index==0?"5":self.current-index==1?"15":self.current-index==2?"30":"60"));}}
                                 Rectangle{horizontal-stretch:1;}
                             }
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}

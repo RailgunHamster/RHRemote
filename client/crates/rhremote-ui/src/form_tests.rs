@@ -4,10 +4,28 @@ use slint::{ComponentHandle,LogicalPosition,LogicalSize,ModelRc,VecModel,platfor
 use std::{cell::RefCell,rc::Rc};
 
 fn click(ui:&impl ComponentHandle,label:&str){
-    let element=ElementHandle::find_by_accessible_label(ui,label).next().unwrap_or_else(||panic!("Missing {label}"));
+    let element=ElementHandle::find_by_accessible_label(ui,label).next().unwrap_or_else(||{
+        let labels:Vec<_>=i_slint_backend_testing::ElementQuery::from_root(ui).find_all().into_iter().filter_map(|element|element.accessible_label().map(|label|label.to_string())).collect();
+        panic!("Missing {label}; available labels: {labels:?}")
+    });
     let p=element.absolute_position();let size=element.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
     ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});
     ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});
+}
+fn click_in_form(ui:&MainWindow,label:&str){
+    let scroll=ElementHandle::find_by_element_id(ui,"MainWindow::form-scroll").next().expect("form scroll area");
+    let top=scroll.absolute_position().y;let bottom=top+scroll.size().height;
+    scroll.scroll(0.,100000.);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    for _ in 0..16 {
+        let target=ElementHandle::find_by_accessible_label(ui,label).next();
+        if let Some(target)=target{
+            let y=target.absolute_position().y;let end=y+target.size().height;
+            if y>=top && end<=bottom {click(ui,label);return;}
+            scroll.scroll(0.,if y<top {180.}else{-180.});
+        }else{scroll.scroll(0.,-180.);}
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    }
+    panic!("Form control is not reachable by scrolling: {label}");
 }
 #[test]
 fn real_buttons_and_category_tabs_keep_focus_for_keyboard_activation(){
@@ -166,4 +184,58 @@ fn picker_respects_availability_and_waits_for_success_before_dismissing(){
     i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamPicker::new().unwrap();ui.set_kind("displays".into());ui.set_labels(ModelRc::new(VecModel::from(vec!["不可用屏幕".into(),"显示器 2".into()])));ui.set_values(ModelRc::new(VecModel::from(vec!["missing".into(),"active".into()])));ui.set_enabled_items(ModelRc::new(VecModel::from(vec![false,true])));ui.set_chosen_items(ModelRc::new(VecModel::from(vec![false,true])));
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();ui.window().set_size(LogicalSize::new(320.,300.));click(&ui,"不可用屏幕");assert!(received.borrow().is_empty());click(&ui,"显示器 2");assert_eq!(&*received.borrow(),&[("stream.display.select".into(),"active".into())]);
     received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});assert_eq!(&*received.borrow(),&[("stream.display.select".into(),"active".into())]);ui.set_busy(true);received.borrow_mut().clear();click(&ui,"显示器 2");assert!(received.borrow().is_empty());click(&ui,"关闭");assert_eq!(received.borrow()[0].0,"stream.menu.close");ui.set_busy(false);ui.set_error("屏幕切换失败".into());received.borrow_mut().clear();click(&ui,"详情");assert_eq!(&*received.borrow(),&[("stream.menu.open".into(),"feedback".into())]);ui.set_kind("feedback".into());ui.set_error("详细错误。".repeat(100).into());let close=ElementHandle::find_by_accessible_label(&ui,"关闭").next().unwrap();let p=close.absolute_position();assert!(p.y>=0.&&p.y+close.size().height<=300.);ui.hide().unwrap();
+}
+
+#[test]
+fn focused_session_menu_rows_do_not_dispatch_after_becoming_busy_or_unavailable(){
+    i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamPicker::new().unwrap();
+    ui.set_labels(ModelRc::new(VecModel::from(vec!["可操作项".into()])));ui.set_values(ModelRc::new(VecModel::from(vec!["active".into()])));
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(kind,action)in[("displays","stream.display.select"),("shortcuts","stream.shortcut")]{
+        ui.set_kind(kind.into());
+        for unavailable in [false,true]{
+            ui.set_busy(false);ui.set_enabled_items(ModelRc::new(VecModel::from(vec![true])));click(&ui,"可操作项");received.borrow_mut().clear();
+            if unavailable{ui.set_enabled_items(ModelRc::new(VecModel::from(vec![false])));}else{ui.set_busy(true);}
+            for text in [slint::SharedString::from(Key::Return)," ".into()]{ui.window().dispatch_event(WindowEvent::KeyPressed{text:text.clone()});ui.window().dispatch_event(WindowEvent::KeyReleased{text});}
+            assert!(received.borrow().is_empty(),"{kind} dispatched after disabling its focused row: {:?}",received.borrow());
+            ui.set_busy(false);ui.set_enabled_items(ModelRc::new(VecModel::from(vec![true])));click(&ui,"可操作项");received.borrow_mut().clear();
+            ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
+            assert_eq!(&*received.borrow(),&[(action.into(),"active".into())]);
+        }
+    }ui.hide().unwrap();
+}
+
+#[test]
+fn route_controls_have_named_actions_and_disable_boundaries_and_the_last_path(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
+    let routes=Rc::new(VecModel::from(vec![
+        crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,can_move_down:true,can_disable:true,..Default::default()},
+        crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,can_move_up:true,can_disable:true,..Default::default()},
+        crate::RouteRow{key:"public_direct".into(),label:"公网直连".into(),..Default::default()},
+    ]));ui.set_network_routes(routes.clone().into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));received.borrow_mut().clear();
+        click_in_form(&ui,"上移局域网");click_in_form(&ui,"下移自建中继");assert!(received.borrow().is_empty());
+        click_in_form(&ui,"下移局域网");click_in_form(&ui,"上移自建中继");assert_eq!(&*received.borrow(),&[("settings.route.move".into(),"lan|down".into()),("settings.route.move".into(),"relay|up".into())]);
+        received.borrow_mut().clear();click_in_form(&ui,"连接路径：公网直连");assert_eq!(&*received.borrow(),&[("settings.route.toggle".into(),"public_direct".into())]);
+    }
+    routes.set_vec(vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,..Default::default()}]);received.borrow_mut().clear();
+    click_in_form(&ui,"连接路径：局域网");click_in_form(&ui,"上移局域网");click_in_form(&ui,"下移局域网");assert!(received.borrow().is_empty());
+    for label in ["首选 IP 或主机名","备用地址","中继服务器"]{click_in_form(&ui,label);}
+    ui.hide().unwrap();
+}
+
+#[test]
+fn boolean_settings_identify_the_field_in_their_action_and_keyboard_activation(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("audio".into());
+    ui.set_profile_fields(ModelRc::new(VecModel::from(vec![
+        SettingRow{key:"playAudio".into(),label:"播放声音".into(),kind:"bool".into(),..Default::default()},
+        SettingRow{key:"gamepad".into(),label:"手柄输入".into(),kind:"bool".into(),..Default::default()},
+    ])));
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(label,key)in[("播放声音：关闭","playAudio"),("手柄输入：关闭","gamepad")]{
+        received.borrow_mut().clear();click(&ui,label);ui.window().dispatch_event(WindowEvent::KeyPressed{text:" ".into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:" ".into()});
+        assert_eq!(&*received.borrow(),&[("settings.set".into(),format!("{key}=toggle")),("settings.set".into(),format!("{key}=toggle"))]);
+    }ui.hide().unwrap();
 }
