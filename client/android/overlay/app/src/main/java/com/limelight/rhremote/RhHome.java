@@ -111,13 +111,29 @@ public final class RhHome implements RhActions.Target {
         a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();root.post(this::resumed);
         final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&!syncBusy&&draft==null&&infoUuid.isEmpty()&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&!syncClearPending&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(lastSyncAttempt,sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){lastSyncAttempt=System.currentTimeMillis();invoke("sync.run",RhActions.obj("automatic",true));}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updatesBusy&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
     }
+    /** Only navigation identifiers are serialized; form data and credentials stay out of the Bundle. */
+    public void saveNavigation(android.os.Bundle state){
+        android.os.Bundle navigation=new android.os.Bundle();navigation.putInt("version",1);
+        navigation.putString("page",pageId.equals("global-settings")?"global-settings":"devices");
+        navigation.putString("tab",settingsTab);navigation.putString("selected",selected==null?browserUuid:selected.uuid);
+        navigation.putString("query",deviceQuery);navigation.putBoolean("detail",browser.isDetailOpen());state.putBundle("rhremote.navigation",navigation);
+    }
+    public void restoreNavigation(android.os.Bundle state){
+        if(state==null)return;android.os.Bundle navigation=state.getBundle("rhremote.navigation");if(navigation==null||navigation.getInt("version")!=1)return;
+        String query=navigation.getString("query",""),uuid=navigation.getString("selected",""),tab=navigation.getString("tab","updates");
+        if(query.codePointCount(0,query.length())<=128)deviceQuery=query;
+        if(computers.containsKey(uuid))browserUuid=uuid;
+        if(Arrays.asList("updates","sync","appearance","about").contains(tab))settingsTab=tab;
+        renderDevices(false);browser.showDetail(navigation.getBoolean("detail"));
+        if(navigation.getString("page","").equals("global-settings")){pageId="global-settings";showGlobal();}
+    }
     public RelativeLayout emptyView(){return empty;}
     private int c(String hex){return Color.parseColor(hex);}private int dp(float v){return Math.round(v*activity.getResources().getDisplayMetrics().density);}
     private LinearLayout column(){LinearLayout l=new LinearLayout(activity);l.setOrientation(LinearLayout.VERTICAL);return l;}
     private LinearLayout row(){LinearLayout l=new LinearLayout(activity);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
     private GradientDrawable bg(int color,int border,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));if(border!=0)d.setStroke(dp(1),border);return d;}
     private TextView text(String value,int size,int color,boolean medium){TextView t=new TextView(activity);t.setText(value);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);if(medium)t.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));return t;}
-    private Button button(String title,boolean primary,Runnable action){Button b=new Button(activity);b.setText(title);b.setTextSize(14);b.setAllCaps(false);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(Typeface.create("sans-serif-medium",0));b.setTextColor(primary?Color.WHITE:ink);b.setBackground(bg(primary?blue:surface,primary?0:line,8));b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(16),dp(8),dp(16),dp(8));b.setOnClickListener(v->action.run());b.setLayoutParams(new LinearLayout.LayoutParams(-2,dp(48)));return b;}
+    private Button button(String title,boolean primary,Runnable action){Button b=new Button(activity);b.setText(title);b.setTextSize(14);b.setAllCaps(false);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(Typeface.create("sans-serif-medium",0));RhUiStyle.button(b,primary?Color.WHITE:ink,muted,bg(primary?blue:surface,primary?0:line,8),bg(soft,line,8),bg(primary?blue:surface,primary?ink:blue,8));b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(16),dp(8),dp(16),dp(8));b.setOnClickListener(v->action.run());b.setLayoutParams(new LinearLayout.LayoutParams(-2,dp(48)));return b;}
     private Button tab(String title,boolean selected,Runnable action){Button b=button(title,false,action);b.setSelected(selected);b.setTextColor(selected?blue:muted);b.setBackground(bg(selected?blueSoft:surface,0,8));return b;}
     private RhActionRow actionRow(){RhActionRow row=new RhActionRow(activity);row.setPadding(0,dp(8),0,dp(8));return row;}
     private void applyShell(int width){int bucket=width>=dp(1180)?2:width>=dp(840)?1:0;if(bucket==shellBucket)return;shellBucket=bucket;boolean wide=bucket>0;sidebar.setVisibility(wide?View.VISIBLE:View.GONE);compactHeader.setVisibility(wide?View.GONE:View.VISIBLE);bar.setVisibility(wide?View.GONE:View.VISIBLE);sidebar.getLayoutParams().width=dp(bucket==2?184:72);sidebar.removeAllViews();navigation.clear();
@@ -323,7 +339,7 @@ public final class RhHome implements RhActions.Target {
         String message="仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。";
         if(!syncError.isEmpty())message+="\n\n"+syncError;
         if(syncClearDialog!=null&&syncClearDialog.isShowing()){syncClearDialog.setMessage(message);return;}
-        syncClearDialog=new AlertDialog.Builder(activity).setTitle("移除同步设置？").setMessage(message)
+        syncClearDialog=new AlertDialog.Builder(activity,RhUiStyle.dialogTheme(activity)).setTitle("移除同步设置？").setMessage(message)
             .setNegativeButton("取消",(dialog,which)->invoke("sync.clear.resolve",RhActions.obj("choice","cancel")))
             .setPositiveButton("移除",null).create();
         syncClearDialog.setCanceledOnTouchOutside(false);
@@ -333,7 +349,7 @@ public final class RhHome implements RhActions.Target {
     }
     private void showNavigationPrompt(){
         if(pendingNavigation==null||activity.isDestroyed()||navigationDialog!=null&&navigationDialog.isShowing())return;
-        navigationDialog=new AlertDialog.Builder(activity).setTitle("保存更改？").setMessage(pendingNavigation.optBoolean("info")?"设备名称有未保存的更改。":pendingNavigation.optBoolean("sync")?"WebDAV 设置有未保存的更改。":"连接设置有未保存的更改。")
+        navigationDialog=new AlertDialog.Builder(activity,RhUiStyle.dialogTheme(activity)).setTitle("保存更改？").setMessage(pendingNavigation.optBoolean("info")?"设备名称有未保存的更改。":pendingNavigation.optBoolean("sync")?"WebDAV 设置有未保存的更改。":"连接设置有未保存的更改。")
             .setPositiveButton("保存并继续",(dialog,which)->invoke("navigation.resolve",RhActions.obj("choice","save")))
             .setNegativeButton("放弃更改",(dialog,which)->invoke("navigation.resolve",RhActions.obj("choice","discard")))
             .setNeutralButton("继续编辑",(dialog,which)->invoke("navigation.resolve",RhActions.obj("choice","stay"))).create();
@@ -611,7 +627,7 @@ public final class RhHome implements RhActions.Target {
     private void ensureSyncDraft(){if(syncDraft==null){org.json.JSONObject s=sync.state();syncDraft=RhActions.obj("url",s.optString("url"),"username",s.optString("username"),"password","","automatic",s.optBoolean("automatic"),"intervalMinutes",s.optInt("intervalMinutes",5));}}
     private org.json.JSONObject publicSyncDraft(){if(syncDraft==null)return null;try{org.json.JSONObject s=new org.json.JSONObject(syncDraft.toString());s.remove("password");return s;}catch(Exception impossible){throw new IllegalStateException(impossible);}}
     private boolean syncDirty(){if(syncDraft==null)return false;org.json.JSONObject s=sync.state();return !syncDraft.optString("url").trim().equals(s.optString("url"))||!syncDraft.optString("username").trim().equals(s.optString("username"))||!syncDraft.optString("password").isEmpty()||syncDraft.optBoolean("automatic")!=s.optBoolean("automatic")||syncDraft.optInt("intervalMinutes",5)!=s.optInt("intervalMinutes",5);}
-    private void submitState(Button button,boolean enabled){button.setEnabled(enabled);button.setAlpha(1f);button.setTextColor(enabled?Color.WHITE:muted);button.setBackground(bg(enabled?blue:soft,enabled?blue:line,8));}
+    private void submitState(Button button,boolean enabled){button.setEnabled(enabled);button.setAlpha(1f);}
     private void refreshSyncFooter(){if(syncSave==null||!pageId.equals("global-settings")||!settingsTab.equals("sync"))return;boolean dirty=syncDirty();submitState(syncSave,dirty&&!syncBusy);syncCancel.setEnabled(dirty&&!syncBusy);syncCancel.setAlpha(dirty&&!syncBusy?1f:0.45f);syncNotice.setText(dirty?"有未保存的更改":sync.state().optBoolean("hasPassword")?"设置已保存":"未配置");syncErrorView.setText(syncError);syncErrorView.setVisibility(syncError.isEmpty()?View.GONE:View.VISIBLE);}
     private void showSync(){
         ensureSyncDraft();org.json.JSONObject s=sync.state();

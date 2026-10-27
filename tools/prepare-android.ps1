@@ -207,7 +207,8 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
                                 throw persistenceFailure;
                             }
 '@
-    $s=Replace-Once $s 'private RelativeLayout noPcFoundLayout;' "private RelativeLayout noPcFoundLayout;`n    private com.limelight.rhremote.RhHome rhHome;"
+    $s=Replace-Once $s 'private RelativeLayout noPcFoundLayout;' "private RelativeLayout noPcFoundLayout;`n    private com.limelight.rhremote.RhHome rhHome;`n    private android.os.Bundle rhNavigationState;"
+    $s=Replace-Once $s '        super.onCreate(savedInstanceState);' "        super.onCreate(savedInstanceState);`n        rhNavigationState=savedInstanceState;"
     $s=Replace-Once $s '    private void initializeViews() {' @'
     private void initializeViews() {
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -230,6 +231,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         });
         noPcFoundLayout = rhHome.emptyView();
         for(int i=0;i<pcGridAdapter.getCount();i++) rhHome.update(((ComputerObject)pcGridAdapter.getItem(i)).details);
+        rhHome.restoreNavigation(rhNavigationState);rhNavigationState=null;
     }
     private void initializeLegacyViews() {
 '@
@@ -241,6 +243,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
     $s=Replace-Once $s '        super.onDestroy();' "        super.onDestroy();`n        if(rhHome!=null)rhHome.dispose();"
     $s=Replace-Once $s '        super.onResume();' "        super.onResume();`n        if(rhHome!=null)rhHome.resumed();"
     $s=Replace-Once $s '    public static class ComputerObject {' @'
+    @Override protected void onSaveInstanceState(android.os.Bundle state){if(rhHome!=null)rhHome.saveNavigation(state);super.onSaveInstanceState(state);}
     @Override public void onBackPressed() {
         if(rhHome != null && rhHome.goBack()) return;
         super.onBackPressed();

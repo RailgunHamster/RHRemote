@@ -111,7 +111,7 @@ public final class RhStreamPanel {
     private LinearLayout page(){LinearLayout p=new LinearLayout(context);p.setOrientation(LinearLayout.VERTICAL);return p;}
     private Button button(String title,String action,JSONObject arguments){
         Button b=new Button(context);b.setText(title);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0));b.setAllCaps(false);b.setTextSize(13);b.setMinWidth(0);b.setMinimumWidth(0);b.setMinHeight(0);b.setMinimumHeight(0);
-        b.setMaxLines(2);b.setTextColor(Color.parseColor(inkColor));b.setPadding(dp(8),dp(2),dp(8),dp(2));b.setBackground(surface(surfaceColor,lineColor,8));
+        b.setMaxLines(2);RhUiStyle.button(b,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(surfaceColor,lineColor,8),surface(surfaceColor,lineColor,8),surface(surfaceColor,selectedLine,8));b.setPadding(dp(8),dp(2),dp(8),dp(2));
         b.setTag(action);b.setOnClickListener(v->actions.send(action,arguments));return b;
     }
     private Button gridButton(GridLayout grid,String title,String action,JSONObject args){Button b=button(title,action,args);grid.addView(b);return b;}

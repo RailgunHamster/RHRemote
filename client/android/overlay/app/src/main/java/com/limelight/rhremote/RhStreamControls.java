@@ -82,14 +82,14 @@ public final class RhStreamControls implements RhActions.Target {
         }
         updatePanel();return RhActions.obj("accepted",true);
     }
-    private void requestExit(){if(exitDialog!=null)return;exitDialog=new AlertDialog.Builder(game).setTitle("断开连接？").setPositiveButton("断开",(dialog,which)->RhActions.click("stream.exit.resolve",RhActions.obj("choice","disconnect"))).setNegativeButton("继续连接",(dialog,which)->RhActions.click("stream.exit.resolve",RhActions.obj("choice","stay"))).create();exitDialog.setOnCancelListener(dialog->RhActions.click("stream.exit.resolve",RhActions.obj("choice","stay")));exitDialog.show();}
+    private void requestExit(){if(exitDialog!=null)return;exitDialog=new AlertDialog.Builder(game,RhUiStyle.dialogTheme(game)).setTitle("断开连接？").setPositiveButton("断开",(dialog,which)->RhActions.click("stream.exit.resolve",RhActions.obj("choice","disconnect"))).setNegativeButton("继续连接",(dialog,which)->RhActions.click("stream.exit.resolve",RhActions.obj("choice","stay"))).create();exitDialog.setOnCancelListener(dialog->RhActions.click("stream.exit.resolve",RhActions.obj("choice","stay")));exitDialog.show();}
     private void closeExit(){if(exitDialog!=null){exitDialog.dismiss();exitDialog=null;}}
     private void closeMenu(){if(menuDialog!=null){menuDialog.dismiss();menuDialog=null;}menu="";}
     private void openMenu(String kind)throws Exception{
         if(!java.util.Arrays.asList("shortcuts","displays","feedback").contains(kind))throw new IllegalArgumentException("unknown stream menu");
         if(kind.equals("feedback")&&feedbackError.isEmpty())throw new IllegalStateException("没有会话操作错误");closeMenu();menu=kind;
         if(kind.equals("displays")){panel.setExpanded(true);panel.setTab("displays");loadMissingDisplays();return;}
-        AlertDialog.Builder builder=new AlertDialog.Builder(game).setTitle(kind.equals("feedback")?"操作失败":"远程快捷键").setNegativeButton("关闭",(dialog,which)->RhActions.click("stream.menu.close",RhActions.obj()));
+        AlertDialog.Builder builder=new AlertDialog.Builder(game,RhUiStyle.dialogTheme(game)).setTitle(kind.equals("feedback")?"操作失败":"远程快捷键").setNegativeButton("关闭",(dialog,which)->RhActions.click("stream.menu.close",RhActions.obj()));
         final JSONArray list=kind.equals("shortcuts")?RhShortcuts.catalog(game):null;
         if(kind.equals("feedback"))builder.setMessage(feedbackError);else{String[] labels=new String[list.length()];for(int i=0;i<labels.length;i++)labels[i]=list.getJSONObject(i).getString("label");builder.setAdapter(new android.widget.ArrayAdapter<>(game,android.R.layout.simple_list_item_1,labels),null);}
         menuDialog=builder.create();menuDialog.setOnCancelListener(dialog->RhActions.click("stream.menu.close",RhActions.obj()));menuDialog.show();if(list!=null)menuDialog.getListView().setOnItemClickListener((parent,view,index,row)->RhActions.click("stream.shortcut",RhActions.obj("shortcut",list.optJSONObject(index).optString("id"))));updatePanel();

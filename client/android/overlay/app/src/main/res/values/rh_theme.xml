@@ -9,4 +9,18 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowLightNavigationBar">true</item>
     </style>
+    <style name="RhDialogLight" parent="android:Theme.Material.Light.Dialog.Alert">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#5274e8</item>
+        <item name="android:colorBackground">#ffffff</item>
+        <item name="android:textColorPrimary">#34415b</item>
+        <item name="android:textColorSecondary">#69778e</item>
+    </style>
+    <style name="RhDialogDark" parent="android:Theme.Material.Dialog.Alert">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#6f8af1</item>
+        <item name="android:colorBackground">#1b2232</item>
+        <item name="android:textColorPrimary">#e1e8f6</item>
+        <item name="android:textColorSecondary">#a4b1c8</item>
+    </style>
 </resources>
