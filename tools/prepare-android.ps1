@@ -195,6 +195,7 @@ Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.ja
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
+    $s=Replace-Once $s 'private ComputerManagerService.ComputerManagerBinder managerBinder;' 'private volatile ComputerManagerService.ComputerManagerBinder managerBinder;'
     $s=Replace-Once $s '    private void startComputerUpdates() {' @'
     private void startComputerUpdates() {
         if(com.limelight.rhremote.RhActions.hasStream())return;
@@ -252,8 +253,7 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
         super.onBackPressed();
     }
     private ComputerDetails inspectRhComputer(String address,com.limelight.rhremote.RhDeviceAdd operation)throws Exception {
-        final ComputerManagerService.ComputerManagerBinder binder=managerBinder;
-        if(binder==null)throw new IOException("连接管理器尚未准备好，请稍后重试");
+        final ComputerManagerService.ComputerManagerBinder binder=operation.awaitReady(()->managerBinder,5000);
         com.limelight.rhremote.RhNetwork.validate(address);
         String plain=address.startsWith("[")&&address.endsWith("]")?address.substring(1,address.length()-1):address;
         ComputerDetails.AddressTuple tuple=new ComputerDetails.AddressTuple(plain,NvHTTP.DEFAULT_HTTP_PORT);

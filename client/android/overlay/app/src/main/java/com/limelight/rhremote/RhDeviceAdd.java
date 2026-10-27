@@ -13,9 +13,24 @@ public final class RhDeviceAdd extends RhCancellation {
     private final Activity activity;private final Executor worker;private final Listener listener;
     private final Handler main=new Handler(Looper.getMainLooper());
     private boolean running;private volatile boolean completed;
+    private volatile String phase="probing";
     public RhDeviceAdd(Activity activity,Executor worker,Listener listener){this.activity=activity;this.worker=worker;this.listener=listener;}
     public boolean cancelled(){return cancelled;}
     public boolean isFinished(){return completed;}
+    public String phase(){return phase;}
+    private void phase(String value){phase=value;main.post(()->{if(!completed&&!cancelled)listener.changed(this);});}
+    /** Wait only for the local backend, before any network request. Cancellation retires this attempt. */
+    public <T> T awaitReady(java.util.function.Supplier<T> ready,long timeoutMillis)throws java.io.IOException {
+        if(timeoutMillis<1||timeoutMillis>10000)throw new IllegalArgumentException("Invalid readiness timeout");
+        checkpoint();T value=ready.get();if(value!=null)return value;
+        phase("preparing");long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        for(;;){
+            checkpoint();value=ready.get();if(value!=null){checkpoint();phase("probing");return value;}
+            long remaining=deadline-System.nanoTime();if(remaining<=0)throw new java.io.IOException("设备列表尚未准备好，请稍后重试");
+            try{Thread.sleep(Math.max(1,Math.min(20,(remaining+999999)/1000000)));}
+            catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new java.io.IOException("连接已取消",interrupted);}
+        }
+    }
     public void cancel(){if(completed||cancelled)return;cancelRequests();listener.changed(this);}
     public void start(Work work){
         running=true;listener.changed(this);

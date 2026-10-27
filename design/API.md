@@ -40,6 +40,10 @@ Windows 回归模式下，`device.pair` 可显式传入布尔参数 `testPairPen
 
 `input.gesture` 支持 tap、secondary、drag、scroll；Android 另支持 pinch。坐标是接收端解码区域像素，Android 尺寸由 `state.stream.surface` 返回。拖动终点为 toX/toY，滚轮量为 delta，缩放倍数为 factor。输入必须有已连接的串流，所有生成的按键都需释放。
 
+## Android 添加设备状态
+
+`device.add.submit` 的单次请求包含本地准备和主机查找。`state.add.phase` 为 `preparing`、`probing` 或 `editing`：准备最多等待本地组件 5 秒，就绪后自动继续；组件已就绪时直接查找。准备／查找期间拒绝重复提交及输入变更，`device.add.cancel` 可取消。超时或失败回到 editing，保留 `address` 和 `error`，由调用者明确重试；取消后的迟到结果不会保存。
+
 ## WebDAV
 
 填写已有的 HTTP 或 HTTPS 目录、用户名和密码。目录中的固定文件名为 `rhremote-config-v1.json`。Windows 密码使用 Windows Credential Manager，Android 使用 Android Keystore 的 AES-GCM 加密；这些值都不进入便携配置。
