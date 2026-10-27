@@ -2,6 +2,8 @@
 
 本地 Android preview.37／versionCode 261。Windows 保持 preview.47，实体副屏仍不活动，没有启动或激活桌面测试窗口。OPPO 未操作，未公开发布，完整 UI 目标未完成。
 
+以下最早两次失败记录保留。后续已修复并部署 winserver 的辅助接口响应关闭流程；原 25 Mbps 大帧组装仍失败，隔离模拟器临时 6 Mbps 的浅深两条真实 UI 流程通过。最新对照见 [接口、帧号与原生复验](HOST-API-EOF-20261028.md)，不将首帧标记或低码率短测代替长期画面验收。
+
 ## 菜单主题修复
 
 快捷键弹窗已使用 RHRemote 的浅深主题，但其 ArrayAdapter 使用 Game context 创建列表行，继承了串流 Activity 的主题。实际控件回归在浅色弹窗中取得白色文字 `#ffffff`，而设计要求为 `#34415b`。现在列表使用 Builder 的主题 context，跟随对应弹窗；没有改动快捷键内容、发送协议或编解码实现。
