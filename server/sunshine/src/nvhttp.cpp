@@ -446,11 +446,12 @@ namespace nvhttp {
   }
 
   /**
-   * @brief Add authorized client data.
+   * @brief Register a PIN-authorized client once per exact certificate identity.
    *
    * @param name Human-readable name to assign.
    * @param cert Certificate data or object used by the operation.
-   * @return Persistent UUID for the added client, or an empty string when the certificate is invalid.
+   * @return Existing or newly persisted UUID, or an empty string for invalid, disabled or ambiguous identity.
+   * @note Re-pairing preserves an existing operator label and cannot enable a disabled identity.
    */
   std::string add_authorized_client(const std::string &name, std::string &&cert) {
     auto canonical_certificate = canonical_certificate_pem(cert);
@@ -458,12 +459,26 @@ namespace nvhttp {
       return {};
     }
 
+    std::lock_guard lock {client_auth_mutex()};
+    const named_cert_t *existing = nullptr;
+    for (const auto &client : client_root.named_devices) {
+      if (client.cert != canonical_certificate) {
+        continue;
+      }
+      if (existing || !client.enabled) {
+        return {};
+      }
+      existing = &client;
+    }
+    if (existing) {
+      return existing->uuid;
+    }
+
     named_cert_t named_cert;
     named_cert.name = name;
     named_cert.cert = std::move(canonical_certificate);
     named_cert.uuid = uuid_util::uuid_t::generate().string();
 
-    std::lock_guard lock {client_auth_mutex()};
     client_root.named_devices.emplace_back(std::move(named_cert));
     rebuild_client_cert_chain();
 

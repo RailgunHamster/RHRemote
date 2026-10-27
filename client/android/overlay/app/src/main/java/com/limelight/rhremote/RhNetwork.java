@@ -82,6 +82,8 @@ public final class RhNetwork {
         return source.pairState==PairingManager.PairState.PAIRED ||
             source.pairState==null&&source.serverCert!=null;
     }
+    static String pairingStatus(ComputerDetails source){return source.pairState==PairingManager.PairState.PAIRED?"verified":source.pairState==null&&source.serverCert!=null?"stored":"unpaired";}
+    static String pairingLabel(ComputerDetails source){switch(pairingStatus(source)){case "verified":return "已配对";case "stored":return "已保存配对";default:return "未配对";}}
     /** Refresh transient details lost on process restart only at connection admission.
      * A stored certificate must be verified over HTTPS, without HTTP downgrade. */
     static ComputerDetails refreshConnectionDetails(Context context,ComputerDetails source)throws Exception {

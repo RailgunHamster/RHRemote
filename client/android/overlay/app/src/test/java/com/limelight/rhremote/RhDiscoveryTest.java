@@ -81,11 +81,13 @@ public class RhDiscoveryTest {
         ComputerDetails source=new ComputerDetails();source.uuid="paired-host";source.name="PC";
         source.serverCert=com.limelight.binding.PlatformBinding.getCryptoProvider(context).getClientCertificate();
         assertNotNull(source.serverCert);assertNull(source.pairState);assertTrue(RhNetwork.connectInsteadOfPair(source));
+        assertEquals("stored",RhNetwork.pairingStatus(source));assertEquals("已保存配对",RhNetwork.pairingLabel(source));
         source.activeAddress=new ComputerDetails.AddressTuple("100.64.0.2",47989);source.httpsPort=47984;
         HttpResponses.replies.clear();HttpResponses.replies.put("100.64.0.2",source.uuid);
         HttpResponses.connectionRequests=0;
         ComputerDetails resolved=RhNetwork.refreshConnectionDetails(context,source);
         assertEquals(PairingManager.PairState.PAIRED,resolved.pairState);
+        assertEquals("verified",RhNetwork.pairingStatus(resolved));assertEquals("已配对",RhNetwork.pairingLabel(resolved));
         assertSame(source.serverCert,resolved.serverCert);assertTrue(HttpResponses.strictPin);
         assertSame(source.serverCert,HttpResponses.suppliedCertificate);
         assertEquals(source.activeAddress,resolved.activeAddress);assertNull(source.pairState);
@@ -96,5 +98,6 @@ public class RhDiscoveryTest {
         catch(IOException expected){assertEquals("uuid_mismatch",expected.getMessage());}
         source.pairState=PairingManager.PairState.NOT_PAIRED;
         assertFalse("A known revoked pairing must still offer pairing",RhNetwork.connectInsteadOfPair(source));
+        assertEquals("unpaired",RhNetwork.pairingStatus(source));assertEquals("未配对",RhNetwork.pairingLabel(source));
     }
 }

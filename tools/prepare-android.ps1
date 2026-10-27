@@ -257,7 +257,9 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
             found.manualAddress=tuple;found.activeAddress=tuple;found.state=ComputerDetails.State.ONLINE;
             ComputerDetails previous=binder.getComputer(found.uuid);
             found.serverCert=previous==null?null:previous.serverCert;
-            found.pairState=found.serverCert!=null?previous.pairState:PairState.NOT_PAIRED;
+            // A re-add changes the lookup address, not the saved trust. Verify the
+            // stored pin at admission instead of copying a cached pairing verdict.
+            found.pairState=found.serverCert!=null?null:PairState.NOT_PAIRED;
             return found;
         }
     }

@@ -124,6 +124,17 @@ public class RhPairingPersistenceTest {
             sameCertificate(old.serverCert,database.getComputerByUUID(old.uuid).serverCert);sameCertificate(old.serverCert,binder.getComputer(old.uuid).serverCert);assertEquals("100.73.139.109",database.getComputerByUUID(old.uuid).manualAddress.address);
         }finally{database.close();}
     }
+    @Test public void readdingATrustedDeviceDoesNotCopyAStaleUnpairedFlag()throws Exception{
+        Context context=RuntimeEnvironment.getApplication();ComputerDatabaseManager database=new ComputerDatabaseManager(context);ComputerDetails old=device();old.serverCert=certificate("cached-unpaired-host");
+        try{
+            assertTrue(database.updateComputer(old));ComputerManagerService service=service(database);add(service,old);ComputerManagerService.ComputerManagerBinder binder=ReflectionHelpers.getField(service,"binder");assertEquals(PairingManager.PairState.NOT_PAIRED,binder.getComputer(old.uuid).pairState);
+            PcView activity=Robolectric.buildActivity(PcView.class).get();ReflectionHelpers.setField(activity,"managerBinder",binder);
+            RhDeviceAdd operation=new RhDeviceAdd(activity,Runnable::run,new RhDeviceAdd.Listener(){public void changed(RhDeviceAdd value){}public void finished(RhDeviceAdd value,ComputerDetails device,String error){}});
+            Method inspect=PcView.class.getDeclaredMethod("inspectRhComputer",String.class,RhDeviceAdd.class);inspect.setAccessible(true);ComputerDetails found=(ComputerDetails)inspect.invoke(activity,"100.73.139.109",operation);
+            sameCertificate(old.serverCert,found.serverCert);assertNull("A re-add must verify the stored pin at connection admission instead of repeating an old pairing verdict",found.pairState);assertTrue(RhNetwork.connectInsteadOfPair(found));
+            binder.saveRhAddedComputer(found);sameCertificate(old.serverCert,database.getComputerByUUID(old.uuid).serverCert);assertNull(binder.getComputer(old.uuid).pairState);assertEquals("100.73.139.109",database.getComputerByUUID(old.uuid).manualAddress.address);
+        }finally{database.close();}
+    }
     @Test public void rejectedAddWriteDoesNotPublishANativeCacheEntry()throws Exception{
         Context context=RuntimeEnvironment.getApplication();ComputerDatabaseManager database=new ComputerDatabaseManager(context);ComputerDetails input=device();
         try{ComputerManagerService service=service(database);ComputerManagerService.ComputerManagerBinder binder=ReflectionHelpers.getField(service,"binder");Db.rejectWrites=true;

@@ -119,7 +119,7 @@ public final class RhDeviceBrowser extends LinearLayout {
         availability.setText(d.state==ComputerDetails.State.UNKNOWN?"检查中":online?"在线":"离线");availability.setTextColor(online?green:muted);
         endpoints.setText(RhNetwork.savedSummary(activity,d));lastRoute.setText(RhNetwork.lastRoute(d.uuid));
         connect.setText(paired?"连接":"配对");RhProfile p=RhProfile.load(activity,d.uuid);
-        String[] data={p.width+" × "+p.height,p.fps+" FPS",p.bitrateMbps+" Mbps",address(d),paired?"已配对":"未配对",p.codec,p.audioEnabled?"开启":"关闭",p.displayMode.equals("virtual")?"虚拟屏":"自动"};
+        String[] data={p.width+" × "+p.height,p.fps+" FPS",p.bitrateMbps+" Mbps",address(d),RhNetwork.pairingLabel(d),p.codec,p.audioEnabled?"开启":"关闭",p.displayMode.equals("virtual")?"虚拟屏":"自动"};
         for(int i=0;i<values.length;i++)values[i].setText(data[i]);int index=devices.indexOf(d);up.setEnabled(index>0);down.setEnabled(index>=0&&index<devices.size()-1);
     }
     private String address(ComputerDetails d){try{return RhNetwork.metadata(activity,d).optString("address");}catch(Exception ignored){return d.activeAddress!=null?d.activeAddress.address:d.manualAddress!=null?d.manualAddress.address:d.localAddress!=null?d.localAddress.address:"";}}
@@ -131,7 +131,7 @@ public final class RhDeviceBrowser extends LinearLayout {
             if(cell==null){cell=row();cell.setPadding(dp(12),dp(12),dp(12),dp(12));cell.setMinimumHeight(dp(92));ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_monitor);icon.setColorFilter(accent);icon.setPadding(dp(7),dp(7),dp(7),dp(7));icon.setBackground(background(page,0,8));LayoutParams iconParams=new LayoutParams(dp(36),dp(36));iconParams.setMarginEnd(dp(12));cell.addView(icon,iconParams);LinearLayout names=column();for(int i=0;i<3;i++){TextView text=text("",i==0?14:12,i==0?ink:muted,i==0);text.setSingleLine(true);text.setEllipsize(TextUtils.TruncateAt.END);text.setPadding(0,dp(2),0,dp(2));names.addView(text);}cell.addView(names,new LayoutParams(0,-2,1));final String uuid=d.uuid;cell.setOnClickListener(v->send("device.select","uuid",uuid));rows.put(d.uuid,cell);}
             cell.setBackground(background(d.uuid.equals(selected)?soft:surface,0,8));cell.setContentDescription("选择设备 "+name);LinearLayout names=(LinearLayout)cell.getChildAt(1);
             ((TextView)names.getChildAt(0)).setText(name);((TextView)names.getChildAt(1)).setText(address);TextView status=(TextView)names.getChildAt(2);
-            status.setText(d.state==ComputerDetails.State.UNKNOWN?"正在检查":d.state!=ComputerDetails.State.ONLINE?"离线":RhNetwork.connectInsteadOfPair(d)?"● 已配对":"● 待配对");status.setTextColor(d.state==ComputerDetails.State.ONLINE?green:muted);
+            status.setText(d.state==ComputerDetails.State.UNKNOWN?"正在检查":d.state!=ComputerDetails.State.ONLINE?"离线":RhNetwork.connectInsteadOfPair(d)?"● "+RhNetwork.pairingLabel(d):"● 待配对");status.setTextColor(d.state==ComputerDetails.State.ONLINE?green:muted);
         }
         boolean same=!visible.isEmpty()&&list.getChildCount()==visible.size();for(int i=0;same&&i<visible.size();i++)same=list.getChildAt(i)==rows.get(visible.get(i));
         if(!same){list.removeAllViews();for(String uuid:visible){LayoutParams p=new LayoutParams(-1,-2);p.bottomMargin=dp(6);list.addView(rows.get(uuid),p);}if(visible.isEmpty()){TextView empty=text(query.isEmpty()?"尚未添加设备":"没有匹配的设备",13,muted,false);empty.setGravity(Gravity.CENTER);list.addView(empty,new LayoutParams(-1,dp(96)));}}

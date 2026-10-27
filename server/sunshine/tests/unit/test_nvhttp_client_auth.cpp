@@ -9,8 +9,11 @@
 // standard includes
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <thread>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 // local includes
 #include <src/config.h>
@@ -137,9 +140,82 @@ TEST_F(ClientAuthorizationTest, MultipleClientsPersistAndUnpairIndependently) {
 TEST_F(ClientAuthorizationTest, DuplicateCertificateIdentityFailsClosed) {
   const auto credentials = test_utils::certificates::generate_ca_credentials();
   ASSERT_FALSE(nvhttp::test_support::add_client("first", credentials.x509, true).empty());
-  ASSERT_FALSE(nvhttp::test_support::add_client("second", credentials.x509, true).empty());
+  // Simulate ambiguous state saved by the older append-only pairing registration.
+  nlohmann::json legacy_state;
+  {
+    std::ifstream input(config::nvhttp.file_state);
+    ASSERT_TRUE(input.good());
+    input >> legacy_state;
+  }
+  auto duplicate = legacy_state["root"]["named_devices"][0];
+  duplicate["uuid"] = "legacy-duplicate-fixture";
+  legacy_state["root"]["named_devices"].push_back(duplicate);
+  {
+    std::ofstream output(config::nvhttp.file_state);
+    ASSERT_TRUE(output.good());
+    output << legacy_state.dump();
+  }
+  nvhttp::test_support::reset_client_state();
+  nvhttp::test_support::reload_client_state();
 
   EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+  EXPECT_TRUE(nvhttp::test_support::add_client("retry", credentials.x509, true).empty());
+  EXPECT_EQ(nvhttp::get_all_clients().size(), 2);
+}
+
+TEST_F(ClientAuthorizationTest, RePairingPreservesOnePersistentIdentityAndOperatorName) {
+  const auto credentials = test_utils::certificates::generate_ca_credentials();
+  const auto uuid = nvhttp::test_support::add_client("operator label", credentials.x509, true);
+  ASSERT_FALSE(uuid.empty());
+  const auto before = nvhttp::get_all_clients();
+  EXPECT_EQ(nvhttp::test_support::add_client("new pairing name", test_utils::certificates::to_crlf_pem(credentials.x509), true), uuid);
+  EXPECT_EQ(nvhttp::get_all_clients(), before);
+  EXPECT_TRUE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+  nvhttp::test_support::reset_client_state();
+  nvhttp::test_support::reload_client_state();
+  EXPECT_EQ(nvhttp::get_all_clients(), before);
+  EXPECT_TRUE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+}
+
+TEST_F(ClientAuthorizationTest, RePairingCannotEnableAnOperatorDisabledIdentity) {
+  const auto credentials = test_utils::certificates::generate_ca_credentials();
+  const auto uuid = nvhttp::test_support::add_client("disabled", credentials.x509, false);
+  ASSERT_FALSE(uuid.empty());
+  const auto before = nvhttp::get_all_clients();
+  EXPECT_TRUE(nvhttp::test_support::add_client("retry", credentials.x509, true).empty());
+  EXPECT_EQ(nvhttp::get_all_clients(), before);
+  EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+  nvhttp::test_support::reset_client_state();
+  nvhttp::test_support::reload_client_state();
+  EXPECT_EQ(nvhttp::get_all_clients(), before);
+  EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+}
+
+TEST_F(ClientAuthorizationTest, ConcurrentPairingRegistrationKeepsOneIdentity) {
+  const auto credentials = test_utils::certificates::generate_ca_credentials();
+  std::vector<std::string> results(8);
+  std::vector<std::jthread> workers;
+  for (std::size_t index = 0; index < results.size(); ++index) {
+    workers.emplace_back([&results, &credentials, index]() {
+      results[index] = nvhttp::test_support::add_client("concurrent", credentials.x509, true);
+    });
+  }
+  workers.clear();
+  ASSERT_FALSE(results[0].empty());
+  for (const auto &uuid : results) {
+    EXPECT_EQ(uuid, results[0]);
+  }
+  EXPECT_EQ(nvhttp::get_all_clients().size(), 1);
+  EXPECT_TRUE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+}
+
+TEST_F(ClientAuthorizationTest, InvalidPairingCertificateCannotChangeExistingIdentity) {
+  const auto credentials = test_utils::certificates::generate_ca_credentials();
+  ASSERT_FALSE(nvhttp::test_support::add_client("paired", credentials.x509, true).empty());
+  const auto before = nvhttp::get_all_clients();
+  EXPECT_TRUE(nvhttp::test_support::add_client("invalid", "not a certificate", true).empty());
+  EXPECT_EQ(nvhttp::get_all_clients(), before);
+  EXPECT_TRUE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
 }
 
 TEST_F(ClientAuthorizationTest, ConcurrentStateChangesRemainConsistent) {
