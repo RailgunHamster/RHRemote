@@ -10,7 +10,7 @@
 - [ ] 更新流程：完成 Windows 实际下载、应用更新／安装取消，以及双端安装成功后的配置保留。[逐项规范](design/UI-FLOW-SPEC.md)、[Android 页面生命周期证据](design/ANDROID-UPDATE-LIFECYCLE-20261027.md)
 - [ ] 同步流程：完成 Windows 实际窗口中的 HTTPS 流程、真实 WebDAV 服务跨客户端同步和其余网络／文件失败边界；补齐进程被系统终止后的反馈。[Windows 后台与布局证据](design/WINDOWS-SYNC-20261028.md)、[Android 同步与网络证据](design/ANDROID-SYNC-LIFECYCLE-20261028.md)
 - [ ] 会话控制：实测屏幕切换、窗口移屏、安全注意序列、快捷键实际送达、声音播放与缩放；补齐 Android 对应操作。Windows 已通过的分类、菜单、静音音量调整、统计和断开不再列为待测。[会话复验](design/WINDOWS-SESSION-UI-20261027.md)
-- [ ] 全局交互：实体副屏恢复后完成 Windows preview.47 的实际控件复验；补齐连接／恢复状态和 Android 活动会话菜单的键盘／导航边界，完成 Windows 其余配置分类／配对／活动会话和 Android 准备／恢复／诊断的主题边界；定位 Windows UIA 焦点，验证主界面长时遮挡和不同 DPI 双屏切换后的重绘。[主题与错误证据](design/UI-ERRORS-20261028.md)、[Tab 验收](design/WINDOWS-TAB-20261027.md)、[会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[上下文与复制预览](design/UI-CONTEXT-20261027.md)、[补画修复](design/WINDOWS-REPAINT-20261027.md)
+- [ ] 全局交互：实体副屏恢复后完成 Windows preview.47 的实际控件复验；补齐连接／恢复状态和 Android 活动会话菜单的键盘／导航边界，完成 Windows 其余配置分类／配对／活动会话和 Android 准备／恢复及诊断完成结果的其余主题边界；定位 Windows UIA 焦点，验证主界面长时遮挡和不同 DPI 双屏切换后的重绘。[主题与错误证据](design/UI-ERRORS-20261028.md)、[诊断任务与重建](design/ANDROID-DIAGNOSTIC-LIFECYCLE-20261028.md)、[Tab 验收](design/WINDOWS-TAB-20261027.md)、[会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[上下文与复制预览](design/UI-CONTEXT-20261027.md)、[补画修复](design/WINDOWS-REPAINT-20261027.md)
 - [ ] 最终交付：完成两端正式安装 / 升级的配置保留、用户可见预览与全部流程证据，再统一发布。
 
 ## P0 连接与外网
