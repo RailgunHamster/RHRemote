@@ -44,6 +44,26 @@ impl Process {
     fn ended(&self) -> bool {
         unsafe { WaitForSingleObject(self.0, 0) == WAIT_OBJECT_0 }
     }
+    fn inspect_while_running<T>(
+        &self,
+        inspect: impl FnOnce(&Self) -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
+        if self.ended() {
+            return Ok(None);
+        }
+        match inspect(self) {
+            Ok(value) => Ok((!self.ended()).then_some(value)),
+            // Image queries can fail during teardown before the process handle
+            // signals. Only a signaled original handle proves it is safe to skip.
+            Err(error) => {
+                if unsafe { WaitForSingleObject(self.0, 10) == WAIT_OBJECT_0 } {
+                    Ok(None)
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
     fn times(&self) -> Result<(u64, u64), String> {
         let (mut created, mut exited, mut kernel, mut user) = (
             FILETIME::default(),
@@ -160,14 +180,14 @@ impl Owner {
                     ));
                 }
             };
-            if child.ended() {
-                continue;
-            }
-            let (created, _) = child.times()?;
-            if created >= self.created
-                && (exited == 0 || created <= exited)
-                && same_path(&child.path()?, &self.native)
-            {
+            let selected = child.inspect_while_running(|process| {
+                let (created, _) = process.times()?;
+                if created < self.created || exited != 0 && created > exited {
+                    return Ok(false);
+                }
+                Ok(same_path(&process.path()?, &self.native))
+            })?;
+            if selected == Some(true) {
                 result.push(child);
             }
         }
@@ -203,6 +223,7 @@ impl Owner {
 mod tests {
     use super::*;
     use std::{
+        io::Write,
         os::windows::process::CommandExt,
         process::{Child, Command, Stdio},
     };
@@ -240,6 +261,24 @@ mod tests {
             created,
             native,
         }
+    }
+    fn gated_child() -> ChildGuard {
+        ChildGuard(
+            Command::new("cmd.exe")
+                .args(["/d", "/c", "set /p RHREMOTE_OWNER_TEST_GATE="])
+                .creation_flags(0x08000000)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
+    }
+    fn release(child: &mut ChildGuard) {
+        let mut input = child.0.stdin.take().unwrap();
+        input.write_all(b"release\n").unwrap();
+        drop(input);
+        assert!(child.0.wait().unwrap().success());
     }
     fn selected(owner: &Owner, pid: u32) -> bool {
         owner
@@ -290,10 +329,11 @@ mod tests {
     }
     #[test]
     fn path_parent_and_creation_boundaries_exclude_other_processes() {
-        let mut child = child(1);
+        let mut child = gated_child();
         let process = Process::open(child.0.id()).unwrap();
         let native = process.path().unwrap();
         let mut owner = owner(native.clone());
+        assert!(selected(&owner, child.0.id()));
         owner.native = native.with_file_name("not-the-native-engine.exe");
         assert!(!selected(&owner, child.0.id()));
         owner.native = native;
@@ -302,6 +342,53 @@ mod tests {
         owner.pid = std::process::id();
         owner.created = process.times().unwrap().0 + 1;
         assert!(!selected(&owner, child.0.id()));
+        release(&mut child);
+    }
+    #[test]
+    fn exit_during_a_real_path_query_is_not_a_live_inspection_failure() {
+        let mut child = gated_child();
+        let process = Process::open(child.0.id()).unwrap();
+        assert!(!process.ended());
+        let result = process.inspect_while_running(|process| {
+            let mut input = child.0.stdin.take().unwrap();
+            input.write_all(b"release\n").unwrap();
+            drop(input);
+            let until = Instant::now() + Duration::from_secs(3);
+            loop {
+                match process.path() {
+                    Err(error) => {
+                        eprintln!(
+                            "Path query during exit: {error}; signaled={}",
+                            process.ended()
+                        );
+                        return Err(error);
+                    }
+                    Ok(_) => assert!(Instant::now() < until, "Fixture did not exit"),
+                }
+            }
+        });
         assert!(child.0.wait().unwrap().success());
+        assert_eq!(result, Ok(None::<PathBuf>));
+    }
+    #[test]
+    fn a_query_error_for_a_running_process_remains_an_error() {
+        let mut child = gated_child();
+        let process = Process::open(child.0.id()).unwrap();
+        let result =
+            process.inspect_while_running(|_| Err::<PathBuf, _>("live fixture denial".into()));
+        assert_eq!(result, Err("live fixture denial".into()));
+        assert!(!process.ended());
+        assert!(child.0.try_wait().unwrap().is_none());
+        release(&mut child);
+    }
+    #[test]
+    fn a_completed_process_does_not_need_an_image_query() {
+        let mut child = gated_child();
+        let process = Process::open(child.0.id()).unwrap();
+        release(&mut child);
+        assert_eq!(
+            process.inspect_while_running::<PathBuf>(|_| panic!("An exited process was queried")),
+            Ok(None)
+        );
     }
 }

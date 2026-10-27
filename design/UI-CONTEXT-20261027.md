@@ -36,3 +36,5 @@ Android：`dist/android/RHRemote-v0.2.11-preview.33.apk`，SHA-256 `7F798EE2CA71
 Windows：`dist/velopack-releases-0.2.11-preview.43`。Portable SHA-256 `8140F5AE274C47B47B900771B105006459F7E4530E26F4EE6B440E11808D7404`；Setup `3FD6C15793031E84ED8DFB674931B6329FF3D4B2B35BC88D15374DC59CA5FFCD`；nupkg `1BF0A67A2F4F94B4FDE9EF5C312EC6E3B83E34721893D327A75AB091EA016455`。
 
 全过程使用应用接口、原生应用内测试及自身渲染，没有 computer use、系统输入、Android 控制端口转发或控制令牌读取。Windows 只允许实体副屏、不激活；正常设备列表、顺序、独立配置和凭据保持不变。未完成项继续按 UI-FLOW-SPEC.md 与 TODO.md 验收。
+
+2026-10-28 补充：本记录中的并行 `0x80070005` 已通过实际 Win32 退出竞争复现并修复，见 [退出期间的进程查询](PROCESS-EXIT-QUERY-20261028.md)。原失败结果保留，不能改写为当时已通过；本次修复不替代 preview.43 主题上下文的实际控件复验。
