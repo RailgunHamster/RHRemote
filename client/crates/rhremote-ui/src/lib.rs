@@ -4,6 +4,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
 mod devices;
+mod form_models;
 mod network;
 mod native_cleanup;
 #[cfg(windows)]
@@ -278,9 +279,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         return EventResult::PreventDefault;
                     }
-                    if event.state==ElementState::Pressed&&!event.repeat&&event.logical_key==Key::Named(NamedKey::Escape)&&ui.get_page()!="devices"{
-                        controls.dispatch("navigation.back",json!({}));return EventResult::PreventDefault;
-                    }
                 }
             }
             EventResult::Propagate
@@ -353,7 +351,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut route_rows=Vec::new();
             for (index,key) in order.iter().enumerate() {if let Some((_,label))=rhremote_core::network::ROUTES.iter().find(|(id,_)|id==key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:true,can_move_up:index>0,can_move_down:index+1<order.len(),can_disable:order.len()>1});}}
             for (key,label) in rhremote_core::network::ROUTES {if !order.contains(key){route_rows.push(RouteRow{key:(*key).into(),label:(*label).into(),enabled:false,..Default::default()});}}
-            ui.set_network_routes(ModelRc::new(VecModel::from(route_rows)));
+            form_models::update_routes(&ui,route_rows);
             ui.set_relay_url(state["draftRelay"].as_str().unwrap_or(rhremote_core::network::DEFAULT_RELAY).into());
             ui.set_profile_sources_expanded(state["profileSourcesExpanded"]==true);
             ui.set_copy_source(state["profileCopy"]["sourceName"].as_str().unwrap_or("").into());ui.set_copy_target(state["profileCopy"]["targetName"].as_str().unwrap_or("").into());ui.set_copy_notice(state["profileCopyNotice"].as_str().unwrap_or("").into());ui.set_copy_error(state["profileCopyError"].as_str().unwrap_or("").into());

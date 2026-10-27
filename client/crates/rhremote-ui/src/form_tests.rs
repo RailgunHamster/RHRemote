@@ -239,3 +239,78 @@ fn boolean_settings_identify_the_field_in_their_action_and_keyboard_activation()
         assert_eq!(&*received.borrow(),&[("settings.set".into(),format!("{key}=toggle")),("settings.set".into(),format!("{key}=toggle"))]);
     }ui.hide().unwrap();
 }
+
+#[test]
+fn a_route_action_survives_background_refresh_between_pointer_press_and_release(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
+    let rows=vec![
+        crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,can_move_down:true,can_disable:true,..Default::default()},
+        crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,can_move_up:true,can_disable:true,..Default::default()},
+    ];crate::form_models::update_routes(&ui,rows.clone());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));click_in_form(&ui,"下移局域网");received.borrow_mut().clear();
+        for _ in 0..10 {
+            let button=ElementHandle::find_by_accessible_label(&ui,"下移局域网").next().unwrap();let p=button.absolute_position();let size=button.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
+            ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});
+            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));crate::form_models::update_routes(&ui,rows.clone());
+            ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});
+        }
+        assert_eq!(&*received.borrow(),&vec![("settings.route.move".into(),"lan|down".into());10],"background refresh discarded a route action at {width}x{height}");
+    }ui.hide().unwrap();
+}
+
+#[test]
+fn updating_another_route_does_not_take_the_current_buttons_keyboard_focus(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
+    let mut rows=vec![
+        crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,can_move_down:true,can_disable:true,..Default::default()},
+        crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,can_move_up:true,can_disable:true,..Default::default()},
+    ];crate::form_models::update_routes(&ui,rows.clone());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    click_in_form(&ui,"下移局域网");received.borrow_mut().clear();rows[1].label="中继路径".into();crate::form_models::update_routes(&ui,rows);
+    ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
+    assert_eq!(&*received.borrow(),&[("settings.route.move".into(),"lan|down".into())]);ui.hide().unwrap();
+}
+
+#[test]
+fn escape_closes_a_dropdown_before_requesting_navigation_from_the_form(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());
+    ui.set_profile_fields(ModelRc::new(VecModel::from(vec![SettingRow{key:"codec".into(),label:"视频编码".into(),kind:"select".into(),option_labels:ModelRc::new(VecModel::from(vec!["H.264".into(),"HEVC".into()])),option_values:ModelRc::new(VecModel::from(vec!["H.264".into(),"HEVC".into()])),..Default::default()}])));
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(page,tab,label)in[("settings","","视频编码"),("global-settings","sync","自动同步间隔")]{
+        ui.set_page(page.into());ui.set_settings_tab(tab.into());
+        let dropdown=ElementHandle::find_by_accessible_label(&ui,label).find(|element|element.accessible_expandable()==Some(true)).expect("named dropdown");
+        let p=dropdown.absolute_position();let size=dropdown.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
+        ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});
+        assert_eq!(dropdown.accessible_expanded(),Some(true),"Dropdown did not open on {page}");received.borrow_mut().clear();
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});
+        assert_eq!(dropdown.accessible_expanded(),Some(false),"Escape did not close the dropdown on {page}");
+        assert!(received.borrow().is_empty(),"Escape escaped an open dropdown on {page}: {:?}",received.borrow());
+        ui.window().dispatch_event(WindowEvent::KeyPressRepeated{text:Key::Escape.into()});
+        assert!(received.borrow().is_empty(),"Holding Escape navigated after closing the dropdown on {page}");
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});
+        assert_eq!(&*received.borrow(),&[("navigation.back".into(),"".into())],"The form did not route Escape through the shared action after its popup closed on {page}");
+    }
+    ui.set_page("devices".into());received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert!(received.borrow().is_empty());ui.hide().unwrap();
+}
+
+#[test]
+fn escape_after_a_page_transition_does_not_require_an_extra_pointer_click(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for page in ["connection","global-settings","settings"]{
+        ui.set_page(page.into());ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});
+        assert_eq!(&*received.borrow(),&[("navigation.back".into(),"".into())],"No Escape fallback after opening {page}");received.borrow_mut().clear();
+    }ui.hide().unwrap();
+}
+
+#[test]
+fn page_focus_fallback_does_not_take_the_new_forms_initial_text_focus(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(page,action)in[("add","device.add.input"),("device-info","device.info.input")]{
+        ui.set_page(page.into());ui.window().dispatch_event(WindowEvent::KeyPressed{text:"1".into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:"1".into()});
+        assert_eq!(&*received.borrow(),&[(action.into(),"1".into())],"Initial text focus was stolen on {page}");received.borrow_mut().clear();
+    }ui.hide().unwrap();
+}

@@ -324,6 +324,19 @@ export component MainWindow inherits Window {
     in property <bool> sync-clear-prompt;
     in-out property <int> sync-clear-choice;
 
+    main-keys:=FocusScope{
+        // Handle rejected keys without becoming a pointer target or an extra Tab stop.
+        focus-on-click:false;
+        focus-on-tab-navigation:false;
+        init=>{if(root.page!="add" && root.page!="device-info"){self.focus();}}
+        in property <string> active-page:root.page;
+        changed active-page=>{if(root.page!="add" && root.page!="device-info"){self.focus();}}
+        key-pressed(event)=>{
+            if(event.text==Key.Escape && root.page!="devices"){
+                if(!event.repeat){Commands.trigger("navigation.back","");}return accept;
+            }
+            return reject;
+        }
     HorizontalLayout {
         spacing:0px;
         Rectangle {
@@ -799,4 +812,5 @@ export component MainWindow inherits Window {
         }
     }
 
+    }
 }
