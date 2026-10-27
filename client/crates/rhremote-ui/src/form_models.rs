@@ -1,4 +1,4 @@
-use crate::{MainWindow,RouteRow};
+use crate::{MainWindow,RouteRow,SyncConflictRow};
 use slint::{Model,ModelRc,VecModel};
 
 pub(crate) fn update_routes(ui:&MainWindow,rows:Vec<RouteRow>){
@@ -13,4 +13,15 @@ pub(crate) fn update_routes(ui:&MainWindow,rows:Vec<RouteRow>){
     // Replacing a model destroys its delegates, including pointer grabs and focus.
     // Only structural changes may rebuild the route rows.
     ui.set_network_routes(ModelRc::new(VecModel::from(rows)));
+}
+
+pub(crate) fn update_sync_conflicts(ui:&MainWindow,items:&serde_json::Value){
+    let rows:Vec<SyncConflictRow>=items.as_array().into_iter().flatten().map(|item|SyncConflictRow{
+        label:item["label"].as_str().unwrap_or("其他配置").into(),
+        local:item["local"].as_str().unwrap_or("").into(),
+        remote:item["remote"].as_str().unwrap_or("").into(),
+    }).collect();
+    let current=ui.get_sync_conflict_items();
+    if current.row_count()==rows.len()&&rows.iter().enumerate().all(|(index,row)|current.row_data(index).as_ref()==Some(row)){return;}
+    ui.set_sync_conflict_items(ModelRc::new(VecModel::from(rows)));
 }

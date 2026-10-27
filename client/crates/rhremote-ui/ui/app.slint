@@ -93,6 +93,7 @@ component ScrollView inherits BaseScrollView {
 export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, search-addresses:string, status:string, paired:bool, online:bool, is-self:bool }
 export struct ProfileSource { client-id:string, label:string }
 export struct CopyField { label:string, value:string }
+export struct SyncConflictRow { label:string, local:string, remote:string }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
 export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,input-text:string,invalid:bool,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
 export struct RouteRow { key:string,label:string,enabled:bool,can-move-up:bool,can-move-down:bool,can-disable:bool }
@@ -442,7 +443,7 @@ export component MainWindow inherits Window {
     in property <string> sync-error;
     in property <string> navigation-message;
     in-out property <int> navigation-choice;
-    in property <string> sync-conflicts;
+    in property <[SyncConflictRow]> sync-conflict-items;
     in property <string> sync-last;
     in property <bool> updates-managed;
     in property <bool> updates-busy;
@@ -693,6 +694,8 @@ export component MainWindow inherits Window {
                 }
             }
             if root.page!="devices" || root.streaming || root.connecting: form-scroll:=ScrollView {test-id:"scroll|form";
+                in property <bool> syncing:root.sync-busy;
+                changed syncing=>{if(!self.syncing && root.page=="global-settings" && root.settings-tab=="sync"){self.content-y=0px;}}
                 content-width:self.width;
                 VerticalLayout {
                     padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" || root.page=="profile-copy" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" || root.page=="profile-copy" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
@@ -772,6 +775,23 @@ export component MainWindow inherits Window {
                         }
                         if root.settings-tab=="sync": VerticalLayout{spacing:12px;
                             Text{text:"WebDAV";color:Palette.ink;font-size:18px;font-weight:600;}
+                            Text{text:root.sync-last;color:Palette.muted;font-size:12px;}
+                            HorizontalLayout{spacing:10px;
+                                ActionButton{text:root.sync-busy ? "同步中…" : "立即同步";primary:true;action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
+                                ActionButton{text:"移除同步设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
+                                Rectangle{horizontal-stretch:1;}
+                            }
+                            if root.sync-conflict-items.length>0: VerticalLayout{spacing:12px;
+                                Text{text:root.sync-conflict-items.length+" 项配置存在冲突。选择保留哪一端的冲突项，其余改动会合并。";color:Palette.muted;wrap:word-wrap;font-size:13px;}
+                                HorizontalLayout{spacing:10px;ActionButton{text:"冲突项保留本机";action-id:"sync.resolve";argument:"local";disabled:root.sync-busy;}ActionButton{text:"冲突项保留远端";action-id:"sync.resolve";argument:"remote";disabled:root.sync-busy;}Rectangle{horizontal-stretch:1;}}
+                                for item in root.sync-conflict-items: Rectangle{border-radius:12px;border-width:1px;border-color:Palette.line;background:Palette.soft;vertical-stretch:0;
+                                    VerticalLayout{padding:14px;spacing:6px;
+                                        Text{text:item.label;color:Palette.ink;wrap:word-wrap;font-size:14px;font-weight:600;}
+                                        Text{text:"本机："+item.local;color:Palette.muted;wrap:word-wrap;font-size:13px;}
+                                        Text{text:"远端："+item.remote;color:Palette.muted;wrap:word-wrap;font-size:13px;}
+                                    }
+                                }
+                            }
                             Text{text:"目录地址（HTTP / HTTPS）";color:Palette.muted;}
                             dav-url:=LineEdit{enabled:!root.sync-busy;text:root.sync-url;accessible-label:"WebDAV 目录地址（HTTP / HTTPS）";placeholder-text:"https://example.com/dav/RHRemote/";edited(value)=>{Commands.trigger("sync.edit","url="+value);}}
                             Text{text:"用户名";color:Palette.muted;}
@@ -784,17 +804,6 @@ export component MainWindow inherits Window {
                                 Rectangle{horizontal-stretch:1;}
                             }
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
-                            HorizontalLayout{spacing:10px;
-                                ActionButton{text:root.sync-busy ? "同步中…" : "立即同步";action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
-                                ActionButton{text:"移除同步设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
-                                Text{text:root.sync-last;color:Palette.muted;vertical-alignment:center;font-size:12px;}
-                                Rectangle{horizontal-stretch:1;}
-                            }
-                            if root.sync-conflicts!="": VerticalLayout{spacing:12px;
-                                Text{text:"配置冲突";color:Palette.ink;font-size:16px;}
-                                Text{text:root.sync-conflicts;color:Palette.muted;wrap:word-wrap;font-size:12px;}
-                                HorizontalLayout{spacing:10px;ActionButton{text:"冲突项保留本机";action-id:"sync.resolve";argument:"local";disabled:root.sync-busy;}ActionButton{text:"冲突项保留远端";action-id:"sync.resolve";argument:"remote";disabled:root.sync-busy;}Rectangle{horizontal-stretch:1;}}
-                            }
                         }
                         if root.settings-tab=="updates": VerticalLayout{spacing:14px;
                             Text{text:"RHRemote-Moonlight "+root.app-version;color:Palette.ink;font-size:18px;}

@@ -73,9 +73,122 @@ fn atomic(path: &std::path::Path, value: &impl Serialize) -> Result<(), String> 
 }
 fn http_error(e: ureq::Error) -> String {
     match e {
-        ureq::Error::Status(code, _) => format!("WebDAV HTTP {code}"),
-        _ => "WebDAV 网络请求失败".into(),
+        ureq::Error::Status(code @ (401 | 403), _) => {
+            format!("WebDAV 登录失败，请检查账户和权限（HTTP {code}）")
+        }
+        ureq::Error::Status(412, _) => "远端配置已更新，请重新同步后再处理冲突（HTTP 412）".into(),
+        ureq::Error::Status(code @ 300..=399, _) => {
+            format!("WebDAV 地址发生重定向，请使用最终目录地址（HTTP {code}）")
+        }
+        ureq::Error::Status(code, _) => {
+            format!("WebDAV 服务器返回错误，请稍后重试（HTTP {code}）")
+        }
+        ureq::Error::Transport(ref transport) => {
+            use std::error::Error;
+            let mut cause = e.source();
+            while let Some(error) = cause {
+                if error.downcast_ref::<ureq::rustls::Error>().is_some() {
+                    return "WebDAV 证书或 TLS 连接验证失败，请检查证书和地址".into();
+                }
+                if error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+                    matches!(
+                        e.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    )
+                }) {
+                    return "WebDAV 连接超时，请检查网络后重试".into();
+                }
+                cause = error.source();
+            }
+            if transport.kind() == ureq::ErrorKind::Dns {
+                "无法解析 WebDAV 地址，请检查地址和网络".into()
+            } else if transport
+                .message()
+                .is_some_and(|text| text.starts_with("tls connection"))
+            {
+                "WebDAV 证书或 TLS 连接验证失败，请检查证书和地址".into()
+            } else {
+                "WebDAV 网络请求失败，请检查网络后重试".into()
+            }
+        }
     }
+}
+
+fn conflict_items(local: &SharedConfig, remote: &SharedConfig, keys: &[String]) -> Vec<Value> {
+    fn device_name(config: &SharedConfig, id: &str) -> String {
+        config
+            .devices
+            .iter()
+            .find(|d| d.uuid == id)
+            .map(|d| {
+                if d.display_name.is_empty() {
+                    d.name.clone()
+                } else {
+                    d.display_name.clone()
+                }
+            })
+            .unwrap_or_else(|| "设备".into())
+    }
+    fn describe(config: &SharedConfig, key: &str) -> String {
+        if key == "appearance.dark" {
+            return if config.dark { "深色" } else { "浅色" }.into();
+        }
+        if key == "deviceOrder" {
+            return config
+                .devices
+                .iter()
+                .map(|d| device_name(config, &d.uuid))
+                .collect::<Vec<_>>()
+                .join(" → ");
+        }
+        if let Some(id) = key.strip_prefix("devices.") {
+            return config
+                .devices
+                .iter()
+                .find(|d| d.uuid == id)
+                .map(|d| {
+                    format!(
+                        "{} · {}{}",
+                        device_name(config, id),
+                        d.address,
+                        if d.swap_buttons {
+                            " · 左右键交换"
+                        } else {
+                            ""
+                        }
+                    )
+                })
+                .unwrap_or_else(|| "未设置".into());
+        }
+        if let Some(id) = key.strip_prefix("clients.") {
+            return config
+                .clients
+                .get(id)
+                .map(|c| format!("{} · {}", c.name, c.platform))
+                .unwrap_or_else(|| "未设置".into());
+        }
+        for (client, profiles) in &config.profiles {
+            for (host, p) in profiles {
+                if key == format!("profiles.{client}.{host}") {
+                    return format!(
+                        "{} × {} · {} FPS · {} Mbps",
+                        p.width, p.height, p.fps, p.bitrate_mbps
+                    );
+                }
+            }
+        }
+        "配置已修改".into()
+    }
+    keys.iter().map(|key| {
+        let label = if key=="deviceOrder" {"设备顺序".into()}
+        else if key=="appearance.dark" {"主题".into()}
+        else if let Some(id)=key.strip_prefix("devices.") {format!("远程设备：{}",device_name(local,id))}
+        else if key.starts_with("clients.") {"客户端资料".into()}
+        else {
+            local.profiles.iter().find_map(|(client,profiles)|profiles.keys().find(|host|key==&format!("profiles.{client}.{host}")).map(|host|format!("连接配置：{} → {}",local.clients.get(client).map(|c|c.name.as_str()).unwrap_or("客户端"),device_name(local,host)))).unwrap_or_else(||"其他配置".into())
+        };
+        json!({"key":key,"label":label,"local":describe(local,key),"remote":describe(remote,key)})
+    }).collect()
 }
 impl ConfigSync {
     pub fn new(directory: PathBuf) -> Result<Self, String> {
@@ -97,7 +210,25 @@ impl ConfigSync {
         keyring::Entry::new("RHRemote.WebDAV", id).map_err(|_| "无法访问 Windows 凭据管理器".into())
     }
     pub fn state(&self) -> Value {
-        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":self.pending.as_ref().map(|p|merge(&p.local,&p.remote,self.local.base.as_ref(),Resolution::Review).conflicts).unwrap_or_default()})
+        let conflicts = self
+            .pending
+            .as_ref()
+            .map(|p| {
+                merge(
+                    &p.local,
+                    &p.remote,
+                    self.local.base.as_ref(),
+                    Resolution::Review,
+                )
+                .conflicts
+            })
+            .unwrap_or_default();
+        let items = self
+            .pending
+            .as_ref()
+            .map(|p| conflict_items(&p.local, &p.remote, &conflicts))
+            .unwrap_or_default();
+        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":conflicts,"conflictItems":items})
     }
     pub fn configure(&mut self, args: &Value) -> Result<Value, String> {
         let address = args["url"].as_str().ok_or("url required")?.trim();
@@ -173,8 +304,19 @@ impl ConfigSync {
             .redirects(0)
             .timeout(Duration::from_secs(15))
             .build();
+        self.exchange_with_agent(&agent, address, auth, local, resolution)
+    }
+    fn exchange_with_agent(
+        &mut self,
+        agent: &ureq::Agent,
+        address: &str,
+        auth: &str,
+        local: SharedConfig,
+        resolution: Resolution,
+    ) -> Result<Value, String> {
         let fetched = match agent.get(address).set("Authorization", auth).call() {
-            Ok(r) => Some(r),
+            Ok(r) if r.status() == 200 => Some(r),
+            Ok(r) => return Err(http_error(ureq::Error::Status(r.status(), r))),
             Err(ureq::Error::Status(404, _)) => None,
             Err(e) => return Err(http_error(e)),
         };
@@ -252,9 +394,12 @@ impl ConfigSync {
         } else {
             request.set("If-None-Match", "*")
         };
-        request
+        let response = request
             .send_json(serde_json::to_value(&merged).unwrap())
             .map_err(http_error)?;
+        if !(200..300).contains(&response.status()) {
+            return Err(http_error(ureq::Error::Status(response.status(), response)));
+        }
         let mut next = self.local.clone();
         next.base = Some(merged.clone());
         next.last_sync_ms = rhremote_core::now_ms();
@@ -269,7 +414,7 @@ impl ConfigSync {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-    fn config() -> SharedConfig {
+    pub(super) fn config() -> SharedConfig {
         SharedConfig {
             schema_version: 2,
             devices: vec![rhremote_core::sync_model::SharedDevice {
@@ -299,7 +444,7 @@ mod tests {
             dark: false,
         }
     }
-    fn fixture() -> ConfigSync {
+    pub(super) fn fixture() -> ConfigSync {
         ConfigSync::new(std::env::temp_dir().join(format!(
             "rhremote-sync-{}",
             rhremote_core::random_token().unwrap()
@@ -491,4 +636,95 @@ mod tests {
         worker.join().unwrap();
         fs::remove_dir_all(sync.directory).unwrap();
     }
+    #[test]
+    fn redirected_upload_is_not_reported_as_a_successful_sync() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = format!("http://{}/dav", server.server_addr());
+        let target = format!("{address}/redirect-target");
+        let worker = std::thread::spawn(move || {
+            let get = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            assert_eq!(get.method(), &tiny_http::Method::Get);
+            get.respond(tiny_http::Response::empty(404)).unwrap();
+            let put = server
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+            assert_eq!(put.method(), &tiny_http::Method::Put);
+            put.respond(
+                tiny_http::Response::empty(302)
+                    .with_header(tiny_http::Header::from_bytes("Location", target).unwrap()),
+            )
+            .unwrap();
+            assert!(
+                server
+                    .recv_timeout(Duration::from_millis(100))
+                    .unwrap()
+                    .is_none(),
+                "A redirect was followed"
+            );
+        });
+        let mut sync = fixture();
+        let result = sync.exchange(&address, "Basic fixture", config(), Resolution::Review);
+        worker.join().unwrap();
+        assert!(
+            result.is_err(),
+            "A 302 upload must not advance the sync state: {result:?}"
+        );
+        assert!(result.unwrap_err().contains("最终目录"));
+        assert!(sync.local.base.is_none());
+        assert_eq!(sync.local.last_sync_ms, 0);
+        assert!(!sync.directory.join("webdav-local.json").exists());
+        fs::remove_dir_all(sync.directory).unwrap();
+    }
+    #[test]
+    fn conflict_summaries_show_names_values_and_client_specific_profiles() {
+        let mut local = config();
+        local.devices[0].display_name = "工作电脑".into();
+        local.clients.get_mut("pc").unwrap().name = "台式机".into();
+        let mut remote = local.clone();
+        remote.devices[0].display_name = "远端名称".into();
+        remote
+            .profiles
+            .get_mut("pc")
+            .unwrap()
+            .get_mut("self")
+            .unwrap()
+            .bitrate_mbps = 40;
+        remote.dark = true;
+        let items = conflict_items(
+            &local,
+            &remote,
+            &[
+                "devices.self".into(),
+                "profiles.pc.self".into(),
+                "appearance.dark".into(),
+                "deviceOrder".into(),
+            ],
+        );
+        assert_eq!(items[0]["label"], "远程设备：工作电脑");
+        assert!(items[0]["remote"].as_str().unwrap().contains("远端名称"));
+        assert_eq!(items[1]["label"], "连接配置：台式机 → 工作电脑");
+        assert!(items[1]["local"].as_str().unwrap().contains("25 Mbps"));
+        assert!(items[1]["remote"].as_str().unwrap().contains("40 Mbps"));
+        assert_eq!(items[2]["local"], "浅色");
+        assert_eq!(items[2]["remote"], "深色");
+        assert_eq!(items[3]["local"], "工作电脑");
+        let mut sync = fixture();
+        sync.pending = Some(Pending {
+            local,
+            remote,
+            etag: "\"1\"".into(),
+        });
+        let state = sync.state();
+        assert!(!state["conflictItems"].as_array().unwrap().is_empty());
+        assert!(state.get("password").is_none());
+        fs::remove_dir_all(sync.directory).unwrap();
+    }
 }
+
+#[cfg(test)]
+#[path = "config_sync_tls_tests.rs"]
+mod tls_tests;

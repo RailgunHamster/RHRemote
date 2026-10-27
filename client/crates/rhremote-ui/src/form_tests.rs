@@ -12,6 +12,19 @@ fn click(ui:&impl ComponentHandle,label:&str){
     ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});
     ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});
 }
+
+#[test]
+fn sync_actions_are_visible_before_account_fields_in_both_window_sizes(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("sync".into());ui.set_sync_has_password(true);
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));
+        let run=ElementHandle::find_by_accessible_label(&ui,"立即同步").next().unwrap();let url=ElementHandle::find_by_accessible_label(&ui,"WebDAV 目录地址（HTTP / HTTPS）").next().unwrap();
+        let p=run.absolute_position();let size=run.size();assert!(p.y<url.absolute_position().y,"Sync is buried below the account form at {width}x{height}");assert!(p.y>=0.&&p.x>=0.&&p.y+size.height<=height&&p.x+size.width<=width);
+        received.borrow_mut().clear();click(&ui,"立即同步");assert_eq!(&*received.borrow(),&[("sync.run".into(),"".into())]);
+        ui.set_sync_busy(true);received.borrow_mut().clear();click(&ui,"同步中…");assert!(received.borrow().is_empty());ui.set_sync_busy(false);
+    }ui.hide().unwrap();
+}
 fn click_in_form(ui:&MainWindow,label:&str){
     let scroll=ElementHandle::find_by_element_id(ui,"MainWindow::form-scroll").next().expect("form scroll area");
     let top=scroll.absolute_position().y;let bottom=top+scroll.size().height;

@@ -1,6 +1,6 @@
 [package]
 name = "rhremote-ui"
-version = "0.2.11-preview.44"
+version = "0.2.11-preview.45"
 edition.workspace = true
 license.workspace = true
 build = "build.rs"
@@ -41,5 +41,6 @@ embed-resource = "=3.0.11"
 
 [dev-dependencies]
 tiny_http = "0.12"
-i-slint-backend-testing = "=1.18.1"
+i-slint-backend-testing = { version = "=1.18.1", features = ["renderer-software"] }
+rcgen = "=0.14.10"
 
