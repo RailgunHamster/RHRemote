@@ -372,3 +372,21 @@ fn disabling_a_focused_button_then_focusing_an_editor_does_not_leave_two_focus_m
     i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
     assert_eq!(&*focused.borrow(),&["input|画面宽度".to_owned()]);ui.hide().unwrap();
 }
+
+#[test]
+fn tab_reaches_the_offscreen_relay_editor_after_the_route_buttons(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
+    ui.set_network_summary("局域网：192.0.2.1\nTailscale：100.64.0.1\nTailscale：fd7a:115c:a1e0::1\n内置直连 / 中继：已配置".into());
+    ui.set_network_routes(ModelRc::new(VecModel::from(rhremote_core::network::ROUTES.iter().enumerate().map(|(index,(key,label))|crate::RouteRow{key:(*key).into(),label:(*label).into(),enabled:true,can_move_up:index>0,can_move_down:index+1<rhremote_core::network::ROUTES.len(),can_disable:true}).collect::<Vec<_>>())));
+    ui.set_profile_fields(ModelRc::new(VecModel::from(vec![SettingRow{key:"networkMode".into(),label:"连接网络".into(),kind:"select".into(),option_labels:ModelRc::new(VecModel::from(vec!["自动".into(),"外网".into()])),option_values:ModelRc::new(VecModel::from(vec!["auto".into(),"remote".into()])),..Default::default()}])));
+    let focused=Rc::new(RefCell::new(Vec::new()));let reports=focused.clone();let probe=ui.global::<crate::UiTest>();probe.set_enabled(true);probe.set_operation("inspect".into());probe.on_report(move|id,_,_,_,has_focus,_,_,_,_,_,_|{if has_focus{reports.borrow_mut().push(id.to_string());}});
+    ui.show().unwrap();ui.window().set_size(LogicalSize::new(1180.,780.));
+    let scroll=ElementHandle::find_by_element_id(&ui,"MainWindow::form-scroll").next().unwrap();scroll.scroll(0.,100000.);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    let mut found=false;
+    for generation in 1..=60{
+        ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Tab.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Tab.into()});
+        focused.borrow_mut().clear();probe.set_generation(generation);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+        if focused.borrow().iter().any(|id|id=="input|中继服务器"){found=true;break;}
+    }
+    assert!(found,"Tab skipped the relay editor while its internal clip was outside the scroll viewport");ui.hide().unwrap();
+}

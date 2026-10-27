@@ -31,6 +31,8 @@ mod ui_rendering;
 mod device_lookup;
 #[cfg(test)]
 mod form_tests;
+#[cfg(test)]
+mod focus_clip_tests;
 slint::include_modules!();
 
 fn args_for(id: &str, arg: &str, state: &Value) -> Value {
