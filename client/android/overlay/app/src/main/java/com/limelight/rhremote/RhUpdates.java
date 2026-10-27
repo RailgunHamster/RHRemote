@@ -23,6 +23,7 @@ public final class RhUpdates {
     private final SharedPreferences preferences;
     private volatile JSONObject available;
     private volatile String message="尚未检查更新",phase="idle",provider="";
+    private volatile String activeAction="",failedAction="";
     private volatile boolean ready,prepared;
     private volatile long downloadedBytes,totalBytes;
     private volatile JSONArray sourceFailures=new JSONArray();
@@ -38,18 +39,19 @@ public final class RhUpdates {
     private String currentName(){try{return context.getPackageManager().getPackageInfo(context.getPackageName(),0).versionName;}catch(Exception e){return "";}}
     private boolean allowed(){return Build.VERSION.SDK_INT<26||context.getPackageManager().canRequestPackageInstalls();}
     public JSONObject state(){JSONObject candidate=available;return RhActions.obj("managed",true,"currentVersion",currentName(),"availableVersion",candidate==null?JSONObject.NULL:candidate.optString("version"),
-        "pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,
+        "pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,"failedAction",failedAction,
         "downloadedBytes",downloadedBytes,"totalBytes",totalBytes,"sourceFailures",sourceFailures,"installPermissionGranted",allowed(),"installPermissionPending",preferences.getBoolean("permission",false));}
-    public String primaryAction(){return available!=null||ready?"updates.install":"updates.check";}
+    public String primaryAction(){if(phase.equals("error")&&failedAction.equals("updates.check"))return "updates.check";return available!=null||ready?"updates.install":"updates.check";}
     public String primaryLabel(boolean busy){
         if(busy){if(phase.equals("checking"))return "检查中…";if(phase.equals("downloading"))return "下载中 "+(totalBytes>0?Math.min(100,downloadedBytes*100/totalBytes):0)+"%";if(phase.equals("verifying"))return "正在校验…";return "正在准备…";}
+        if(primaryAction().equals("updates.check"))return phase.equals("error")?"重新检查":"检查更新";
         if(ready)return phase.equals("error")?"重试安装":"安装更新";
         if(available!=null)return phase.equals("error")?"重试下载并安装":"下载并安装";
         return phase.equals("error")?"重新检查":"检查更新";
     }
     private void status(String phase,String text){this.phase=phase;message=text;}
-    public void failure(String text){status("error",text==null||text.isEmpty()?"更新操作失败，请重试":text);}
-    public void pending(String action){status(action.equals("updates.check")?"checking":"preparing",action.equals("updates.check")?"正在检查更新":action.equals("updates.download")?"正在准备下载 APK":"正在准备安装更新");}
+    public void failure(String text){failedAction=activeAction;status("error",text==null||text.isEmpty()?"更新操作失败，请重试":text);}
+    public void pending(String action){activeAction=action;failedAction="";status(action.equals("updates.check")?"checking":"preparing",action.equals("updates.check")?"正在检查更新":action.equals("updates.download")?"正在准备下载 APK":"正在准备安装更新");}
     private static byte[] read(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>limit)throw new IOException("更新信息过大");out.write(b,0,n);}return out.toByteArray();}
     private static HttpURLConnection open(String url)throws IOException{if(!url.startsWith("https://"))throw new IOException("HTTPS required");HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(7000);c.setReadTimeout(10000);return c;}
     private static void name(String value)throws IOException{if(value.isEmpty()||value.equals(".")||value.equals("..")||!value.matches("[A-Za-z0-9._-]+"))throw new IOException("更新文件名无效");}
@@ -74,7 +76,7 @@ public final class RhUpdates {
         java.nio.file.Files.move(temporary.toPath(),receipt.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
     public void check()throws Exception{
-        status("checking","正在检查更新");JSONObject manifest=null;JSONArray failures=new JSONArray();sourceFailures=failures;
+        pending("updates.check");JSONObject manifest=null;JSONArray failures=new JSONArray();sourceFailures=failures;
         for(String url:new String[]{GITEE+"latest/releases.android.json",GITHUB+"latest/download/releases.android.json"}){
             provider=url.startsWith(GITEE)?"Gitee":"GitHub";status("checking","正在从 "+provider+" 检查更新");
             HttpURLConnection c=null;try{
@@ -130,6 +132,7 @@ public final class RhUpdates {
     }
     public void download()throws Exception{
         if(available==null)check();JSONObject selected=available;if(selected==null)return;
+        pending("updates.download");
         if(!directory.exists()&&!directory.mkdirs())throw new IOException("更新目录不可用");
         ready=false;prepared=false;downloadedBytes=0;totalBytes=selected.getLong("size");status("downloading","正在下载 APK（0%）");
         File pending=new File(directory,"pending.apk");boolean downloaded=false;String lastError="APK 下载失败，请检查网络后重试";JSONArray failures=new JSONArray();sourceFailures=failures;
@@ -149,8 +152,8 @@ public final class RhUpdates {
     }
     /** Worker thread only: the primary install action downloads when necessary. */
     public boolean prepareInstall()throws Exception{
-        prepared=false;installationFile=null;if(available==null)check();if(available==null)return false;
-        if(!ready)download();status("verifying","正在校验安装包");
+        pending("updates.install");prepared=false;installationFile=null;if(available==null)check();if(available==null)return false;
+        if(!ready)download();pending("updates.install");status("verifying","正在校验安装包");
         try{verifyFile(apk,available);installationFile=snapshotForInstaller(available);}catch(Exception invalid){ready=false;receipt.delete();failure(invalid.getMessage());throw invalid;}
         prepared=true;status("ready","安装包校验完成");return true;
     }

@@ -1,6 +1,13 @@
 use crate::{Controller, now_ms, sync_model};
 use serde_json::{Value, json};
 
+/// UI and API must retry the operation that failed, even with a cached candidate.
+pub fn update_primary_action(state:&Value)->&'static str {
+    if state["phase"]=="error" && state["failedAction"]=="updates.check" {"updates.check"}
+    else if state["availableVersion"].is_string() || state["pendingRestart"]==true {"updates.install"}
+    else {"updates.check"}
+}
+
 impl Controller {
     pub fn automatic_sync_due(&self,now:u64,last_attempt:u64)->bool{
         let s=self.state.lock().unwrap();
@@ -19,7 +26,7 @@ impl Controller {
             return Err("更新操作正在进行".into());
         }
         let id = if id == "updates.primary" {
-            if s.updates["availableVersion"].is_string() || s.updates["pendingRestart"] == true { "updates.install" } else { "updates.check" }
+            update_primary_action(&s.updates)
         } else { id };
         if id == "updates.install" && (s.streaming || s.connecting) {
             return Err("请先断开远程连接".into());
@@ -27,6 +34,7 @@ impl Controller {
         s.updates_busy = true;
         s.update_details = false;
         s.installing_update = id == "updates.install";
+        s.updates["failedAction"]=json!("");
         s.updates["phase"] = json!(if id == "updates.check" { "checking" } else { "preparing" });
         s.updates["status"] = json!(if id == "updates.check" { "正在检查更新" } else { "正在准备更新" });
         s.revision += 1;
@@ -41,6 +49,7 @@ impl Controller {
             Err(e) => {
                 s.updates["phase"] = json!("error");
                 s.updates["status"] = json!(e);
+                s.updates["failedAction"]=json!(id);
                 return Err(e);
             }
         };
@@ -239,6 +248,21 @@ mod interaction_tests {
         assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],false);assert_eq!(c.state()["updates"]["phase"],"error");assert_eq!(c.state()["updates"]["availableVersion"],"9.0.0");assert!(c.take_window_action().is_empty());
         *platform.fail.lock().unwrap()=false;assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],true);
         let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn failed_recheck_retries_checking_without_turning_into_installation(){
+        let platform=Arc::new(Updates::default());let c=controller(platform.clone());c.dispatch("updates.primary",json!({}));
+        *platform.fail.lock().unwrap()=true;assert_eq!(c.dispatch("updates.check",json!({}))["ok"],false);assert_eq!(c.state()["updates"]["availableVersion"],"9.0.0");
+        *platform.fail.lock().unwrap()=false;assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],true);
+        assert_eq!(*platform.calls.lock().unwrap(),["updates.check","updates.check","updates.check"]);assert!(c.take_window_action().is_empty());
+        assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],true);assert_eq!(platform.calls.lock().unwrap().last().unwrap(),"updates.install");let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn rechecking_a_cached_version_does_not_discard_or_prompt_for_an_unrelated_draft(){
+        let platform=Arc::new(Updates::default());let c=controller(platform.clone());
+        c.replace_devices(serde_json::from_value(json!([{"uuid":"host","name":"PC","address":"192.168.0.104","paired":true,"online":true}])).unwrap());
+        c.dispatch("device.settings.open",json!({"uuid":"host"}));c.dispatch("settings.input",json!({"key":"width","value":"half"}));
+        c.state.lock().unwrap().updates=json!({"availableVersion":"9.0.0","phase":"error","failedAction":"updates.check"});
+        assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],true);assert!(c.state()["navigationPrompt"].is_null());assert_eq!(c.state()["page"],"settings");assert_eq!(c.state()["settingsInputs"]["width"],"half");assert_eq!(*platform.calls.lock().unwrap(),["updates.check"]);
+        c.dispatch("updates.primary",json!({}));assert_eq!(c.state()["navigationPrompt"]["kind"],"unsaved-device");assert_eq!(*platform.calls.lock().unwrap(),["updates.check"]);let _=std::fs::remove_file(&c.storage);
     }
     #[test] fn state_reads_and_navigation_are_available_while_an_update_is_busy(){
         let platform=Arc::new(Updates::default());let c=controller(platform);c.state.lock().unwrap().updates_busy=true;

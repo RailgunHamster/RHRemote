@@ -312,6 +312,7 @@ export component MainWindow inherits Window {
     in property <string> update-status;
     in property <bool> update-details;
     in property <string> update-primary-text:"检查更新";
+    in property <bool> update-primary-installs;
     in property <string> update-phase;
     in property <int> update-progress;
     in property <string> network-summary;
@@ -707,7 +708,7 @@ export component MainWindow inherits Window {
                 Rectangle{x:0px;y:0px;width:parent.width;height:1px;background:Palette.line;}
                 update-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
                     Rectangle{horizontal-stretch:1;}
-                    ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || ((root.updates-available || root.updates-pending) && (root.streaming || root.connecting));}
+                    ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || (root.update-primary-installs && (root.streaming || root.connecting));}
                 }
             }
             if root.page=="connection" || root.page=="pair":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:connection-footer.preferred-height;

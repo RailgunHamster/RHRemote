@@ -94,11 +94,23 @@ public class RhUpdateInstallTest {
         updates.check();assertFalse(updates.state().getBoolean("downloaded"));assertTrue(updates.prepareInstall());updates.install(activity);
         assertEquals(1,Requests.downloads);assertInstaller(next());assertEquals("installer",updates.state().getString("phase"));
     }
+    @Test public void recheckFailureWithACachedCandidateNeedsAnotherExplicitInstallClick()throws Exception{
+        home=new RhHome(activity,CALLBACKS);updates=org.robolectric.util.ReflectionHelpers.getField(home,"updates");home.perform("app.settings.tab",RhActions.obj("tab","updates"));
+        Button primary=button(activity.getWindow().getDecorView(),"检查更新");primary.performClick();awaitUpdate();assertEquals(0,Requests.downloads);
+        Requests.failMetadata=true;home.perform("updates.check",RhActions.obj());awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"重新检查"));assertEquals("updates.check",updates.state().getString("failedAction"));
+        Requests.failMetadata=false;primary.performClick();awaitUpdate();assertSame(primary,button(activity.getWindow().getDecorView(),"下载并安装"));assertEquals(0,Requests.downloads);assertNull(next());
+        primary.performClick();awaitUpdate();assertEquals(1,Requests.downloads);assertInstaller(next());
+    }
     @Test public void directInstallActionCanCheckAndDownloadWithoutEarlierActions()throws Exception{
         assertTrue(updates.prepareInstall());updates.install(activity);assertEquals(1,Requests.checks);assertEquals(1,Requests.downloads);assertInstaller(next());
     }
     @Test public void checkingAgainPreservesTheVerifiedDownloadedPackage()throws Exception{
         downloaded();updates.check();assertTrue(updates.state().getBoolean("downloaded"));assertTrue(updates.prepareInstall());assertEquals(1,Requests.downloads);
+    }
+    @Test public void failedRecheckKeepsTheDownloadedPackageWithoutClaimingInstallationFailed()throws Exception{
+        downloaded();Requests.failMetadata=true;try{updates.check();fail("Metadata request must fail");}catch(IOException expected){}
+        assertTrue(updates.state().getBoolean("downloaded"));assertEquals("updates.check",updates.primaryAction());assertEquals("重新检查",updates.primaryLabel(false));
+        Requests.failMetadata=false;updates.check();assertEquals("安装更新",updates.primaryLabel(false));assertTrue(updates.prepareInstall());assertEquals(1,Requests.downloads);
     }
     @Test public void downloadConnectionFailureFallsBackBeforeReadingAnyBytes()throws Exception{
         Requests.failFirstDownloadOpen=true;downloaded();assertEquals(2,Requests.downloads);assertEquals("GitHub",updates.state().getString("provider"));assertEquals(1,updates.state().getJSONArray("sourceFailures").length());

@@ -313,6 +313,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let state=view.state();let next=state["revision"].as_u64().unwrap_or(0);
         ui.set_compact(ui.window().size().width as f32/ui.window().scale_factor()<980.0);
         ui.set_update_primary_text(updates::primary_label(&state["updates"],state["updatesBusy"]==true).into());
+            ui.set_update_primary_installs(rhremote_core::update_primary_action(&state["updates"])=="updates.install");
         ui.set_update_phase(state["updates"]["phase"].as_str().unwrap_or("").into());
         ui.set_update_progress(state["updates"]["progress"].as_i64().unwrap_or(0) as i32);
         ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());

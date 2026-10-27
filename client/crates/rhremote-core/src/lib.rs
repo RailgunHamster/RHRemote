@@ -8,6 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 mod global_settings;
+pub use global_settings::update_primary_action;
 mod interaction;
 mod add_device;
 mod device_info;

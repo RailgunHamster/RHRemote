@@ -89,4 +89,10 @@ public class RhUpdatesTest {
         assertEquals(2,Requests.count);String text=page();assertTrue(text,text.contains("更新失败，请重试。"));assertFalse(text,text.contains("Gitee IOException: HTTP 503"));
         home.perform("updates.details.toggle",RhActions.obj());text=page();assertTrue(text,text.contains("Gitee IOException: HTTP 503"));assertTrue(text,text.contains("GitHub IOException: HTTP 503"));assertFalse(text,text.contains("null"));
     }
+    @Test public void failedRecheckDoesNotTurnThePrimaryActionIntoInstallation()throws Exception {
+        feed(current()+1);updates.check();assertEquals("updates.install",updates.primaryAction());
+        Requests.feed=null;try{updates.check();fail("Recheck must fail");}catch(IOException expected){}
+        assertEquals("0.2.4",updates.state().getString("availableVersion"));assertEquals("updates.check",updates.primaryAction());assertEquals("重新检查",updates.primaryLabel(false));
+        feed(current()+1);updates.check();assertEquals("updates.install",updates.primaryAction());assertEquals("下载并安装",updates.primaryLabel(false));
+    }
 }

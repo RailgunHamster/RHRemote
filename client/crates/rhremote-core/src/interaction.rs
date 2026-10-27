@@ -74,19 +74,20 @@ impl Controller {
         if s.pending_navigation.is_some() && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {
             return Some(Err("请先处理未保存的更改".into()));
         }
-        let leaving_info=matches!(id,"devices.open"|"device.select"|"device.settings.open"|"device.info.open"|"device.add.open"|"app.settings.open"|"app.settings.tab"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
+        let primary_installs=id=="updates.primary"&&crate::update_primary_action(&s.updates)=="updates.install";
+        let leaving_info=matches!(id,"devices.open"|"device.select"|"device.settings.open"|"device.info.open"|"device.add.open"|"app.settings.open"|"app.settings.tab"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || primary_installs;
         if leaving_info && s.info_draft.is_some(){
             if id=="device.info.open" && args["uuid"]==s.selected{return Some(Ok(json!({"reused":true})));}
             if crate::device_info::dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:false,info:true});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
             s.info_draft=None;s.page="devices".into();
         }
-        let leaving_sync=matches!(id,"devices.open"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || id=="app.settings.tab"&&args["tab"]!="sync" || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
+        let leaving_sync=matches!(id,"devices.open"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"sync.run"|"sync.resolve"|"updates.install") || id=="app.settings.tab"&&args["tab"]!="sync" || primary_installs;
         if leaving_sync && s.sync_draft.is_some(){
             if sync_dirty(&s){s.pending_navigation=Some(PendingNavigation{action:id.into(),args:args.clone(),sync:true,info:false});s.revision+=1;return Some(Ok(json!({"pendingNavigation":true})));}
             s.sync_draft=None;s.sync_error.clear();
         }
         let leaving=matches!(id,"devices.open"|"app.settings.open"|"app.settings.tab"|"device.settings.open"|"device.info.open"|"device.add.open"|"device.select"|"device.connect"|"device.pair"|"window.close"|"appearance.toggle"|"updates.install")
-            || id=="updates.primary"&&(s.updates["availableVersion"].is_string()||s.updates["pendingRestart"]==true);
+            || primary_installs;
         if !leaving || s.draft.is_none(){return None;}
         if id=="device.settings.open"&&args["uuid"]==s.selected{return Some(Ok(json!({"reused":true})));}
         if dirty(&s){

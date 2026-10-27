@@ -21,6 +21,11 @@ fn filename(name: &str) -> Result<(), Error> {
     }
 }
 type Snapshot = Arc<Mutex<Value>>;
+fn download_progress(live:&mut Value,percent:i16){
+    let percent=percent.clamp(0,100);live["progress"]=json!(percent);
+    live["phase"]=json!(if percent==100{"verifying"}else{"downloading"});
+    live["status"]=json!(if percent==100{"正在校验更新包".into()}else{format!("正在下载更新（{percent}%）")});
+}
 struct Mirrors {
     live: Snapshot,
     preferred: String,
@@ -162,7 +167,7 @@ pub struct Updates {
 }
 impl Updates {
     pub fn new() -> Self {
-        let live=Arc::new(Mutex::new(json!({"phase":"idle","status":"尚未检查更新","progress":0,"provider":""})));
+        let live=Arc::new(Mutex::new(json!({"phase":"idle","status":"尚未检查更新","progress":0,"provider":"","failedAction":""})));
         let value=Self {
             manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new()),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
             available:None,live,
@@ -197,12 +202,13 @@ impl Updates {
         let update=self.available.as_ref().ok_or("请先检查更新")?;
         self.status("downloading","正在下载更新（0%）");self.live.lock().unwrap()["progress"]=json!(0);
         let (tx,rx)=mpsc::channel::<i16>();let live=self.live.clone();
-        let progress=std::thread::spawn(move||{for percent in rx {let percent=percent.clamp(0,100);let mut value=live.lock().unwrap();value["progress"]=json!(percent);value["status"]=json!(if percent==100{"正在校验更新包".into()}else{format!("正在下载更新（{percent}%）")});}});
+        let progress=std::thread::spawn(move||{for percent in rx {download_progress(&mut live.lock().unwrap(),percent);}});
         let result=self.manager.as_ref().unwrap().download_updates(update,Some(tx)).map_err(|e|e.to_string());
         let _=progress.join();result?;self.refresh();self.status("downloaded","更新已下载，可安装更新");Ok(())
     }
     pub fn execute(&mut self,id:&str)->Result<Value,String> {
         if id=="updates.state" {return Ok(self.state());}
+        self.live.lock().unwrap()["failedAction"]=json!("");
         let result:Result<(),String>=(||{
             if self.manager.is_none(){return Err("当前是开发版，请使用 Velopack 安装包启用自动更新".into());}
             match id {
@@ -223,16 +229,17 @@ impl Updates {
             }
             Ok(())
         })();
-        if let Err(error)=result {self.status("error",&error);return Err(error);}
+        if let Err(error)=result {let mut live=self.live.lock().unwrap();live["phase"]=json!("error");live["status"]=json!(error);live["failedAction"]=json!(id);return Err(error);}
         Ok(self.state())
     }
 }
 /// A single primary action; advanced HTTP actions remain available for diagnostics.
 pub fn primary_label(state:&Value,busy:bool)->String {
     let phase=state["phase"].as_str().unwrap_or("");
-    if busy {return match phase {"checking"=>"检查中…".into(),"downloading"=>format!("下载中 {}%",state["progress"].as_i64().unwrap_or(0)),"applying"=>"正在安装…".into(),_=>"正在准备…".into()};}
+    if busy {return match phase {"checking"=>"检查中…".into(),"downloading"=>format!("下载中 {}%",state["progress"].as_i64().unwrap_or(0)),"verifying"=>"正在校验…".into(),"applying"=>"正在安装…".into(),_=>"正在准备…".into()};}
     let ready=state["pendingRestart"]==true;let available=state["availableVersion"].is_string();let failed=phase=="error";
-    if ready {if failed{"重试安装"}else{"重启并安装"}} else if available {if failed{"重试下载并安装"}else{"下载并安装"}} else if failed{"重新检查"}else{"检查更新"}.into()
+    if rhremote_core::update_primary_action(state)=="updates.check" {if failed{"重新检查"}else{"检查更新"}}
+    else if ready {if failed{"重试安装"}else{"重启并安装"}} else if available {if failed{"重试下载并安装"}else{"下载并安装"}} else {"检查更新"}.into()
 }
 #[cfg(test)]
 mod tests {
@@ -250,6 +257,13 @@ mod tests {
         assert_eq!(primary_label(&json!({"phase":"error"}),false),"重新检查");
         assert_eq!(primary_label(&json!({"phase":"error","availableVersion":"9.0.0"}),false),"重试下载并安装");
         assert_eq!(primary_label(&json!({"phase":"downloading","progress":37}),true),"下载中 37%");
+        assert_eq!(primary_label(&json!({"phase":"verifying","progress":100}),true),"正在校验…");
+        for ready in [false,true]{assert_eq!(primary_label(&json!({"phase":"error","failedAction":"updates.check","availableVersion":"9.0.0","pendingRestart":ready}),false),"重新检查");}
+    }
+    #[test]
+    fn mirror_fallback_returns_from_verification_to_download_progress(){
+        let mut live=json!({});
+        for(percent,label)in[(11,"下载中 11%"),(100,"正在校验…"),(4,"下载中 4%"),(100,"正在校验…")]{download_progress(&mut live,percent);assert_eq!(primary_label(&live,true),label);}
     }
     #[test]
     fn package_paths_cannot_escape_release_directory() {

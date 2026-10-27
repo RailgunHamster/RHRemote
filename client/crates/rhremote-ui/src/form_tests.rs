@@ -108,6 +108,13 @@ fn the_single_update_action_remains_visible_when_failure_details_are_long(){
 }
 
 #[test]
+fn rechecking_a_cached_update_is_available_during_a_stream_but_installation_is_not(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("updates".into());ui.set_updates_managed(true);ui.set_updates_available(true);ui.set_streaming(true);ui.set_update_primary_text("重新检查".into());ui.set_update_primary_installs(false);
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();click(&ui,"重新检查");assert_eq!(&*received.borrow(),&["updates.primary"]);
+    ui.set_update_primary_installs(true);ui.set_update_primary_text("下载并安装".into());received.borrow_mut().clear();click(&ui,"下载并安装");assert!(received.borrow().is_empty());ui.set_streaming(false);click(&ui,"下载并安装");assert_eq!(&*received.borrow(),&["updates.primary"]);ui.hide().unwrap();
+}
+
+#[test]
 fn pairing_uses_fixed_cancel_and_retry_controls_without_a_connect_action(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_connection_operation("pair".into());ui.set_connection_name("winserver · 办公电脑".into());ui.set_pair_pin("1234".into());
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
