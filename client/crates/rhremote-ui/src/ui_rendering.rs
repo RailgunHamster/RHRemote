@@ -9,7 +9,7 @@ pub fn renderer() -> &'static str {
     }
 }
 pub fn metadata() -> Value {
-    json!({"backend":"winit","renderer":renderer(),"videoRenderer":"separate_native_process","openGlDiagnosticBuild":cfg!(feature="ui-opengl")})
+    json!({"backend":"winit","renderer":renderer(),"videoRenderer":"separate_native_process","openGlDiagnosticBuild":cfg!(feature="ui-opengl"),"windowsSystemRepaint":"slint-upstream-13568"})
 }
 
 #[cfg(windows)]

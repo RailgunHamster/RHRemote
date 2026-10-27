@@ -54,7 +54,7 @@ public class RhAdmissionTest {
     @After public void cleanup()throws Exception{
         if(release!=null)release.countDown();Transport.fail=false;
         RhAdmission pending=RhActions.admission();
-        if(pending!=null){pending.cancel();if(pending.state().optBoolean("pairing"))pending.pairFinished("test cleanup");}
+        if(pending!=null){pending.cancel();if(pending.state().optBoolean("pairing"))pending.pairFinished(false,"test cleanup");}
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
         do{while(!queued.isEmpty())queued.removeFirst().run();idle();if(!RhActions.ownsAdmission(pending))break;Thread.sleep(10);}while(System.nanoTime()<end);
         RhActions.detachStream(stream);RhStatistics.finish();assertFalse("Admission reservation leaked",RhActions.hasStream());
@@ -111,11 +111,11 @@ public class RhAdmissionTest {
     @Test public void pairingCancellationWaitsForTheActualPairingWorker(){
         operation=make();operation.start(op->()->{try{op.pair(()->{},pairCancels::incrementAndGet);}catch(IOException e){throw new IllegalStateException(e);}});run();
         operation.cancel();operation.cancel();assertEquals(1,pairCancels.get());assertEquals(0,queued.size());rejectNew();
-        operation.pairFinished("配对完成");assertTrue(RhActions.hasStream());run();assertEquals("已取消连接",result);
+        operation.pairFinished(true,"配对完成");assertTrue(RhActions.hasStream());run();assertEquals("已取消连接",result);
     }
     @Test public void successfulPairingReleasesOnlyAfterProxyCleanup(){
         operation=make();operation.start(op->()->{try{op.pair(()->{},()->{});}catch(IOException e){throw new IllegalStateException(e);}});run();
-        operation.pairFinished("配对完成");assertTrue(RhActions.hasStream());run();assertEquals("配对完成",result);assertEquals(1,Transport.stops);
+        operation.pairFinished(true,"配对完成");assertTrue(RhActions.hasStream());run();assertEquals("配对完成",result);assertEquals(1,Transport.stops);
     }
     @Test public void cleanupFailureHoldsTheReservationAndExplicitRetryCanReapIt()throws Exception{
         operation=make();operation.start(op->launches::incrementAndGet);operation.cancel();run();Transport.fail=true;run();
@@ -205,4 +205,23 @@ public class RhAdmissionTest {
             home.dispose();release.countDown();awaitIdle();assertEquals(0,launches.get());
         }finally{finishBackground.countDown();for(java.util.concurrent.Future<?> task:blocked)task.get(2,TimeUnit.SECONDS);}
     }
+    @Test public void homePairingFailureKeepsAnExplicitFailureInsteadOfNormalCompletion()throws Exception{
+        release=new CountDownLatch(0);home=new RhHome(activity,callbacks(new CountDownLatch(0)));home.update(device());
+        assertTrue(RhActions.dispatch("device.pair",RhActions.obj("uuid","host","pin","1234")).getBoolean("ok"));
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);do{idle();if(home.state().getBoolean("pairing"))break;Thread.sleep(10);}while(System.nanoTime()<end);
+        assertTrue(home.state().getBoolean("pairing"));home.pairFinished(false,"配对码不正确");awaitIdle();
+        assertEquals("failed",home.state().getJSONObject("connection").getString("phase"));assertEquals("配对码不正确",home.state().getJSONObject("connection").getString("error"));assertEquals("connection",home.state().getString("page"));assertEquals(0,launches.get());
+        assertEquals("pair",home.state().getJSONObject("connection").getString("operation"));Button retry=button(activity.getWindow().getDecorView(),"重试配对");assertNotNull(retry);retry.performClick();
+        end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);do{idle();if(home.state().getBoolean("pairing"))break;Thread.sleep(10);}while(System.nanoTime()<end);assertTrue(home.state().getBoolean("pairing"));assertEquals(0,launches.get());
+        assertTrue(RhActions.dispatch("pair.cancel",RhActions.obj()).getBoolean("ok"));home.pairFinished(false,"已取消配对");awaitIdle();assertEquals("cancelled",home.state().getJSONObject("connection").getString("phase"));
+    }
+
+    @Test public void homePairingSuccessHasAnExplicitPairedOutcomeWithoutStartingVideo()throws Exception{
+        release=new CountDownLatch(0);home=new RhHome(activity,callbacks(new CountDownLatch(0)));home.update(device());
+        assertTrue(RhActions.dispatch("device.pair",RhActions.obj("uuid","host","pin","1234")).getBoolean("ok"));
+        long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);do{idle();if(home.state().getBoolean("pairing"))break;Thread.sleep(10);}while(System.nanoTime()<end);
+        assertTrue(home.state().getBoolean("pairing"));home.pairFinished(true,"配对完成");awaitIdle();
+        assertEquals("paired",home.state().getJSONObject("connection").getString("phase"));assertEquals("devices",home.state().getString("page"));assertEquals("配对完成",home.state().getString("status"));assertEquals(0,launches.get());
+    }
+
 }

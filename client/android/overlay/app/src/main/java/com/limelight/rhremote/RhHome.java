@@ -183,28 +183,28 @@ public final class RhHome implements RhActions.Target {
     private void showAdmission(RhAdmission operation){connection.stage(operation.state());showConnection();}
     private void showConnection(){
         pageId="connection";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
-        TextView title=text("连接",23,ink,true);formHeader.addView(title);heading(connection.name,"");
-        TextView stage=text(connection.title(),16,connection.phase.equals("failed")?c("#b04452"):blue,true);stage.setContentDescription("连接阶段");content.addView(stage);
+        boolean pairFlow=connection.operation.equals("pair");TextView title=text(pairFlow?"配对":"连接",23,ink,true);formHeader.addView(title);heading(connection.name,"");
+        TextView stage=text(connection.title(),16,connection.phase.equals("failed")?c("#b04452"):blue,true);stage.setContentDescription(pairFlow?"配对阶段":"连接阶段");content.addView(stage);
         if(connectionBusy()&&!connection.phase.equals("connected")){ProgressBar progress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams progressParams=new LinearLayout.LayoutParams(-1,dp(4));progressParams.topMargin=dp(20);content.addView(progress,progressParams);}
-        label("1  检查地址与配对");label("2  建立串流");label("3  显示远程画面");
+        if(!pairFlow){label("1  检查地址与配对");label("2  建立串流");label("3  显示远程画面");}
         if(!connection.error.isEmpty()){String detail=connection.error.startsWith("连接失败：")?connection.error.substring(5):connection.error;TextView error=text(detail,14,c("#b04452"),false);error.setContentDescription("连接错误");error.setPadding(0,dp(20),0,dp(8));content.addView(error);}
         RhActionRow footer=actionRow();
         if(connectionBusy()){
-            boolean cleaning=connection.stopping||connection.phase.equals("cleaning")||connection.phase.equals("failed");
-            Button cancel=button(cleaning?"正在清理…":connection.phase.equals("connected")?"断开连接":"取消连接",false,()->invoke("stream.disconnect",RhActions.obj()));cancel.setEnabled(!cleaning);footer.addView(cancel);
+            boolean cleaning=connection.stopping||connection.phase.equals("cancelling")||connection.phase.equals("cleaning")||connection.phase.equals("failed");
+            Button cancel=button(cleaning?"正在清理…":pairFlow?"取消配对":connection.phase.equals("connected")?"断开连接":"取消连接",false,()->invoke(pairFlow?"pair.cancel":"stream.disconnect",RhActions.obj()));cancel.setEnabled(!cleaning);footer.addView(cancel);
         }else{
             footer.addView(button("返回设备",false,()->invoke("connection.dismiss",RhActions.obj())));
-            if(connection.phase.equals("failed"))footer.addView(button("重试连接",true,()->invoke("connection.retry",RhActions.obj())));
+            if(connection.phase.equals("failed"))footer.addView(button(connection.operation.equals("pair")?"重试配对":"重试连接",true,()->invoke("connection.retry",RhActions.obj())));
         }
         LinearLayout aligned=row();aligned.setGravity(Gravity.END);aligned.addView(footer,new LinearLayout.LayoutParams(-2,-2));formFooter.addView(aligned);formPadding(scroll.getWidth());refreshNavigation();
     }
     private void beginAdmission(ComputerDetails target,boolean connect,String pin){
-        RhActions.clearConnectionError();browserUuid=target.uuid;selected=target;String alias=RhShared.alias(activity,target.uuid);connection.begin(target.uuid,alias.isEmpty()?target.name:alias);
+        RhActions.clearConnectionError();browserUuid=target.uuid;selected=target;String alias=RhShared.alias(activity,target.uuid);connection.begin(target.uuid,alias.isEmpty()?target.name:alias);connection.operation=connect?"connect":"pair";
         RhProfile profile=RhProfile.load(activity,target.uuid);networkBusy=true;
         admission=new RhAdmission(activity,target.uuid,CONNECT,new RhAdmission.Listener(){
             public void changed(RhAdmission operation){if(activity.isDestroyed())return;actions.setDiscoveryPaused(true);if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
             public void finished(RhAdmission operation,boolean handedOff,String result){if(admission!=operation)return;admission=null;networkBusy=false;pairing=false;pairPin="";
-                String error=operation.state().optString("error");connection.finished(handedOff,error.isEmpty()?"":result);
+                String error=operation.state().optString("error");if(error.isEmpty()&&operation.state().optBoolean("cancelled"))connection.stop();connection.finished(handedOff,error);
                 if(!activity.isDestroyed()){
                     if(handedOff||!error.isEmpty()){showConnection();updateUi.postDelayed(connectionTick,300);}
                     else{returnToDevice();if(!result.isEmpty())message(result);}
@@ -215,7 +215,7 @@ public final class RhHome implements RhActions.Target {
             if(connect)RhStatistics.begin(profile);
             operation.progress("resolving");ComputerDetails routed=RhNetwork.resolve(activity,new ComputerDetails(target),profile,null,operation);
             operation.progress("identity");ComputerDetails resolved=RhNetwork.refreshConnectionDetails(activity,routed,operation);
-            if(!connect||resolved.pairState!=PairingManager.PairState.PAIRED||resolved.serverCert==null)return ()->{update(resolved);pairPin=pin;pairing=true;showPair();try{operation.pair(()->actions.pair(resolved,pin),actions::cancelPair);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
+            if(!connect||resolved.pairState!=PairingManager.PairState.PAIRED||resolved.serverCert==null)return ()->{update(resolved);connection.operation="pair";pairPin=pin;pairing=true;showPair();try{operation.pair(()->actions.pair(resolved,pin),actions::cancelPair);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
             Runnable launch=actions.prepareConnect(resolved,operation);operation.checkpoint();
             return ()->{try(RhStatistics.Scope trace=new RhStatistics.Scope("admission_ui_update")){update(resolved);}try{operation.handoff(launch);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
         });
@@ -430,10 +430,10 @@ public final class RhHome implements RhActions.Target {
             if(!pageId.equals("connection"))throw new IllegalStateException("请先打开连接页");
             if(connection.uuid.isEmpty())throw new IllegalStateException("没有可操作的连接");
             if(connectionBusy())throw new IllegalStateException("上一连接尚未结束");
-            if(id.equals("connection.retry"))return perform("device.connect",RhActions.obj("uuid",connection.uuid));
+            if(id.equals("connection.retry"))return perform(connection.operation.equals("pair")?"device.pair":"device.connect",RhActions.obj("uuid",connection.uuid));
             returnToDevice();message("");return RhActions.obj("accepted",true);
         }
-        if(pageId.equals("connection")&&connectionBusy()&&Arrays.asList("devices.open","device.select","device.add.open","device.settings.open","device.info.open","app.settings.open","app.settings.tab","appearance.toggle").contains(id))throw new IllegalStateException("请先取消或断开当前连接");
+        if((pageId.equals("connection")||pageId.equals("pair"))&&connectionBusy()&&Arrays.asList("devices.open","device.select","device.add.open","device.settings.open","device.info.open","app.settings.open","app.settings.tab","appearance.toggle").contains(id))throw new IllegalStateException(connection.operation.equals("pair")?"请先完成或取消当前配对":"请先取消或断开当前连接");
         if(pendingNavigation!=null&&!Arrays.asList("settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先处理未保存的更改");
         boolean leavingInfo=Arrays.asList("devices.open","device.select","device.settings.open","device.add.open","device.info.open","app.settings.open","app.settings.tab","device.connect","device.pair","appearance.toggle","sync.run","sync.resolve","updates.install").contains(id)||id.equals("updates.primary")&&updates.primaryAction().equals("updates.install");
         if(!infoUuid.isEmpty()&&leavingInfo){
@@ -645,6 +645,11 @@ public final class RhHome implements RhActions.Target {
     }
     private void startSync(String resolution)throws Exception{syncError="";org.json.JSONObject captured=RhShared.capture(activity,new ArrayList<>(computers.values()));syncBusy=true;message("同步中…");if(pageId.equals("global-settings")&&settingsTab.equals("sync"))showGlobal();else if(pageId.equals("add"))refreshAdd();NETWORK.execute(()->{try{org.json.JSONObject result=sync.run(captured,resolution);activity.runOnUiThread(()->{syncBusy=false;try{if(result.has("shared")){boolean before=RhShared.dark(activity);RhShared.apply(activity,result.getJSONObject("shared"));restoreSharedDevices();if(pageId.equals("devices")||pageId.equals("global-settings")&&settingsTab.equals("sync"))message("同步完成");if(before!=RhShared.dark(activity)){activity.recreate();return;}}else if(pageId.equals("global-settings")&&settingsTab.equals("sync"))message("配置冲突，请选择保留哪一端的冲突项");if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("devices"))renderDevices(false);else if(pageId.equals("add"))refreshAdd();}catch(Exception e){message("应用同步配置失败");}});}catch(Exception e){activity.runOnUiThread(()->{syncBusy=false;syncError=e instanceof java.io.IOException?e.getMessage():"同步失败，请检查 WebDAV 设置";if(pageId.equals("global-settings")&&settingsTab.equals("sync"))message(syncError);if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("add"))refreshAdd();});}});}
     private void restoreSharedDevices(){try{org.json.JSONArray list=RhShared.read(activity).getJSONArray("devices");for(int i=0;i<list.length();i++){org.json.JSONObject d=list.getJSONObject(i);String uuid=d.getString("uuid");if(!computers.containsKey(uuid)){ComputerDetails added=new ComputerDetails();added.uuid=uuid;added.name=d.getString("name");added.manualAddress=new ComputerDetails.AddressTuple(d.getString("address"),47989);computers.put(uuid,added);}}}catch(Exception e){message("已同步的设备列表读取失败");}}
-    private void showPair(){pageId="pair";profileVisible=true;showContent();content.removeAllViews();heading("配对","");label("在 Sunshine 输入配对码");TextView pin=text(pairPin,40,blue,true);content.addView(pin);content.addView(button("取消配对",false,()->invoke("pair.cancel",RhActions.obj())));}
-    public void pairFinished(boolean success,String result){if(admission!=null){admission.pairFinished(result);return;}pairing=false;pairPin="";showDevices();message(result);}
+    private void showPair(){
+        pageId="pair";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
+        formHeader.addView(text("配对",23,ink,true));TextView name=text(connection.name,13,muted,false);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);formHeader.addView(name);
+        label("请在这台电脑的 RHRemote-Sunshine 管理界面输入配对码：");TextView pin=text(pairPin,40,blue,true);pin.setContentDescription("配对码");content.addView(pin);label("等待主机确认配对");
+        RhActionRow footer=actionRow();footer.addView(button("取消配对",false,()->invoke("pair.cancel",RhActions.obj())));LinearLayout aligned=row();aligned.setGravity(Gravity.END);aligned.addView(footer,new LinearLayout.LayoutParams(-2,-2));formFooter.addView(aligned);formPadding(scroll.getWidth());refreshNavigation();
+    }
+    public void pairFinished(boolean success,String result){if(admission!=null){admission.pairFinished(success,result);return;}pairing=false;pairPin="";showDevices();message(result);}
 }

@@ -92,6 +92,21 @@ fn the_single_update_action_remains_visible_when_failure_details_are_long(){
 }
 
 #[test]
+fn pairing_uses_fixed_cancel_and_retry_controls_without_a_connect_action(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_connection_operation("pair".into());ui.set_connection_name("winserver · 办公电脑".into());ui.set_pair_pin("1234".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_page("pair".into());ui.set_connection_phase("pairing".into());ui.set_connection_busy(true);
+        let cancel=ElementHandle::find_by_accessible_label(&ui,"取消配对").next().unwrap();let p=cancel.absolute_position();let size=cancel.size();assert!(p.y>=height-100.&&p.y+size.height<=height&&p.x+size.width<=width);
+        received.borrow_mut().clear();click(&ui,"取消配对");assert_eq!(&*received.borrow(),&["pair.cancel"]);
+        ui.set_page("connection".into());ui.set_connection_phase("cancelling".into());received.borrow_mut().clear();click(&ui,"正在清理…");assert!(received.borrow().is_empty());assert!(ElementHandle::find_by_accessible_label(&ui,"重试配对").next().is_none());
+        ui.set_connection_phase("failed".into());ui.set_connection_busy(false);ui.set_connection_error("配对码不正确。".repeat(80).into());
+        assert!(ElementHandle::find_by_accessible_label(&ui,"重试连接").next().is_none());let retry=ElementHandle::find_by_accessible_label(&ui,"重试配对").next().unwrap();let p=retry.absolute_position();assert!(p.y>=height-100.&&p.y+retry.size().height<=height);
+        received.borrow_mut().clear();click(&ui,"重试配对");click(&ui,"返回设备");assert_eq!(&*received.borrow(),&["connection.retry","connection.dismiss"]);
+    }ui.hide().unwrap();
+}
+
+#[test]
 fn copy_preview_keeps_its_commands_fixed_and_dispatches_one_explicit_accept_action(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("profile-copy".into());ui.set_copy_source("OPPO 平板 · 1234".into());ui.set_copy_target("工作机".into());
     ui.set_copy_fields(ModelRc::new(VecModel::from((0..40).map(|i|crate::CopyField{label:format!("配置参数 {i}").into(),value:"较长的配置内容 ".repeat(10).into()}).collect::<Vec<_>>())));

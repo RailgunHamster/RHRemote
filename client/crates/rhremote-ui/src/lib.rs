@@ -152,6 +152,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         })
         .select()?;
     let ui = MainWindow::new()?;
+    ui.set_isolated_preview(std::env::var("RHREMOTE_TEST_MODE").as_deref()==Ok("1") && std::env::var_os("RHREMOTE_DATA_DIR").is_some_and(|v|!v.is_empty()));
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     controller.ui_rendering(ui_rendering::metadata());
     native.statistics.lock().unwrap().mark("ui_backend_selected");
@@ -320,6 +321,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"]==true);ui.set_trace_path(state["statistics"]["tracing"]["latest"].as_str().unwrap_or("").into());
             revision=next;ui.set_page(state["page"].as_str().unwrap_or("devices").into());ui.set_info_name(state["infoDraft"]["displayName"].as_str().unwrap_or("").into());ui.set_info_error(state["infoDraft"]["error"].as_str().unwrap_or("").into());ui.set_info_dirty(state["infoDirty"]==true);ui.set_status(state["status"].as_str().unwrap_or("").into());ui.set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));ui.global::<Palette>().set_dark(state["saved"]["dark"].as_bool().unwrap_or(false));
             ui.set_connection_phase(state["connection"]["phase"].as_str().unwrap_or("").into());
+            ui.set_connection_operation(state["connection"]["operation"].as_str().unwrap_or("").into());
             ui.set_connection_title(state["connection"]["title"].as_str().unwrap_or("").into());
             ui.set_connection_name(state["connection"]["name"].as_str().unwrap_or("").into());
             ui.set_connection_error(state["connection"]["error"].as_str().unwrap_or("").into());
@@ -422,8 +424,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(move || {
         poll.dispatch("devices.refresh", json!({}));
         loop {
-            if let Some((attempt, device, error)) = transport.pairing_result() {
-                poll.pairing_complete(attempt, device, error);
+            if let Some((attempt, device, error, cleanup_pending)) = transport.pairing_result() {
+                poll.pairing_complete(attempt, device, error, cleanup_pending);
             }
             let epoch = poll.stream_epoch();
             if let Ok(value) = transport.state() {

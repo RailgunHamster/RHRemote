@@ -68,9 +68,10 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
         checkpoint();external=true;cancelExternal=abort;phase="pairing";listener.changed(this);
         try{begin.run();}catch(RuntimeException|LinkageError e){external=false;cancelExternal=null;throw e;}
     }
-    public void pairFinished(String message){
+    public void pairFinished(boolean success,String message){
         external=false;cancelExternal=null;result=message;
-        if(!cancelled)phase="cleaning";listener.changed(this);cleanup();
+        if(!cancelled){if(!success)failure=message==null||message.isEmpty()?"配对失败，请重试":message;phase="cleaning";}
+        listener.changed(this);cleanup();
     }
     public void cancel(){
         if(completed)return;

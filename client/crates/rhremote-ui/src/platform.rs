@@ -858,7 +858,7 @@ impl NativePlatform {
             );
         }
     }
-    pub fn pairing_result(&self) -> Option<(u64, Device, String)> {
+    pub fn pairing_result(&self) -> Option<(u64, Device, String, bool)> {
         let mut pending = self.pairing.lock().unwrap();
         if pending.is_none() {
             return None;
@@ -868,18 +868,22 @@ impl NativePlatform {
         let operation = pending.take()?;
         let (attempt, device) = (operation.attempt, operation.device);
         child.take();
-        drop(child);
-        drop(pending);
         let outcome: Value = fs::read(&self.session_status)
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(Value::Null);
-        self.finish_pairing(operation.cancellation, outcome["phase"] != "paired");
+        // Retire this attempt's status while its admission locks are still held.
+        // A slow probe must not overwrite a later pair attempt after cancellation.
+        let _ = fs::write(&self.session_status,b"{\"streaming\":false,\"phase\":\"idle\",\"error\":\"\"}");
+        drop(child);
+        drop(pending);
+        let paired=outcome["phase"]=="paired"&&status.success();
+        self.finish_pairing(operation.cancellation, !paired);
         let mut device = self.probe(&device);
-        if outcome["phase"] == "paired" {
+        if paired {
             device.paired = true;
         }
-        let error = if device.paired {
+        let error = if paired {
             String::new()
         } else if let Some(message) = outcome["error"].as_str().filter(|s| !s.is_empty()) {
             message.chars().take(512).collect()
@@ -891,11 +895,7 @@ impl NativePlatform {
                 status.code().unwrap_or(-1)
             )
         };
-        let _ = fs::write(
-            &self.session_status,
-            b"{\"streaming\":false,\"phase\":\"idle\",\"error\":\"\"}",
-        );
-        Some((attempt, device, error))
+        Some((attempt, device, error, self.cleanup.pending()))
     }
     fn network_host_diagnostic(&self, address: &str, uuid: &str) -> Result<Value, String> {
         if self
@@ -1503,7 +1503,8 @@ impl Platform for NativePlatform {
                     let _ = child.wait();
                 }
                 if let Some(operation)=operation {self.finish_pairing(operation.cancellation, true);}
-                Ok(json!({"cancelled":true,"pairId":pair_id}))
+                let _=fs::write(&self.session_status,b"{\"streaming\":false,\"phase\":\"cancelled\",\"error\":\"\"}");
+                Ok(json!({"cancelled":true,"pairId":pair_id,"cleanupPending":self.cleanup.pending()}))
             }
             "stream.disconnect" => {
                 self.stop_owned()

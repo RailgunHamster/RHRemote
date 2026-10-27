@@ -503,7 +503,7 @@ impl Controller {
         s.ui_rendering=value;
         s.revision+=1;
     }
-    pub fn pairing_complete(&self, attempt: u64, device: Device, error: String) {
+    pub fn pairing_complete(&self, attempt: u64, device: Device, error: String, cleanup_pending: bool) {
         let mut s = self.state.lock().unwrap();
         if s.page != "pair" || s.pair_attempt != attempt || s.selected != device.uuid {
             return;
@@ -511,13 +511,18 @@ impl Controller {
         if let Some(row) = s.devices.iter_mut().find(|d| d.uuid == device.uuid) {
             *row = device.clone();
         }
-        s.page = "devices".into();
         s.pair_pin.clear();
-        s.status = if device.paired {
-            "配对完成".into()
+        s.connect_in_flight=false;
+        s.stream_epoch+=1;
+        if error.is_empty() && device.paired {
+            s.page="devices".into();s.connecting=false;
+            s.connection.phase="paired".into();s.connection.error.clear();s.status="配对完成".into();
         } else {
-            error
-        };
+            s.page="connection".into();s.connecting=cleanup_pending;
+            s.connection.error=if error.is_empty(){"配对未完成，请重试".into()}else{error};
+            s.connection.phase=if cleanup_pending{"cleaning"}else{"failed"}.into();
+            s.status=s.connection.error.clone();
+        }
         s.revision += 1;
     }
     fn persist(&self, saved: &Saved) -> Result<(), String> {
@@ -539,7 +544,7 @@ impl Controller {
         let result = if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
             let clear_pending=self.state.lock().unwrap().sync_clear_pending;
-            let action=if clear_pending {"sync.clear.resolve"} else {match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>if self.state.lock().unwrap().connection.busy(){"stream.disconnect"}else{"connection.dismiss"},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"}};
+            let action=if clear_pending {"sync.clear.resolve"} else {match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>{let s=self.state.lock().unwrap();if !s.connection.busy(){"connection.dismiss"}else if s.connection.operation=="pair"{"pair.cancel"}else{"stream.disconnect"}},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"}};
             let result=self.dispatch(action,if clear_pending{json!({"choice":"cancel"})}else if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
         } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if is_session_control_action(id){self.dispatch_session_control(id,args)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.profile_copy_gate(id){result} else if id.starts_with("settings.copy."){self.dispatch_profile_copy(id,args)} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
             self.dispatch_add(id,args)
@@ -858,8 +863,14 @@ impl Controller {
                 }
             }
             _ => {
-                if id == "pair.cancel" && s.page != "pair" {
-                    return Err("no active pairing".into());
+                if id == "pair.cancel" {
+                    if s.connection.operation!="pair" || !s.connection.busy() || s.connection.stopping || s.connection.phase=="cleaning" {
+                        return Err("no active pairing".into());
+                    }
+                    s.pair_attempt+=1;s.pair_pin.clear();s.page="connection".into();
+                    s.connection.stopping=true;s.connection.phase="cancelling".into();
+                    s.connecting=true;s.connect_in_flight=true;s.stream_epoch+=1;
+                    s.status="正在取消配对…".into();s.revision+=1;
                 }
                 if id.starts_with("stream.") || id == "input.gesture" {
                     if !s.streaming && !(id == "stream.disconnect" && s.connecting) {
@@ -911,8 +922,10 @@ impl Controller {
                             return Err("PIN must contain four digits".into());
                         }
                         args["pin"] = json!(pin);
+                        s.connection.begin(&d);s.connection.operation="pair".into();s.connection.phase="pairing".into();
                         s.pair_pin = pin;
                         s.page = "pair".into();
+                        s.connecting=true;s.connect_in_flight=true;s.stream_epoch+=1;s.status="等待主机确认配对".into();s.revision+=1;
                     }
                 }
                 if id=="stream.disconnect" {session_ui::clear(&mut s);}
@@ -940,11 +953,13 @@ impl Controller {
                         if id == "device.pair" {
                             let mut state = self.state.lock().unwrap();
                             if args["attemptId"].as_u64() == Some(state.pair_attempt) {
-                                state.page = "devices".into();
+                                state.page = "connection".into();state.connect_in_flight=false;state.connecting=false;
                                 state.pair_pin.clear();
                                 state.status = error.clone();
+                                state.connection.fail(error.clone());state.stream_epoch+=1;
                             }
                         }
+                        if id=="pair.cancel" {let mut state=self.state.lock().unwrap();state.connect_in_flight=false;state.stream_epoch+=1;state.status=error.clone();state.connection.error=error.clone();}
                         return Err(error);
                     }
                 };
@@ -978,10 +993,13 @@ impl Controller {
                         s.show_stats = args["profile"]["statistics"].as_bool().unwrap_or(false);
                     }
                     "pair.cancel" => {
-                        s.pair_attempt += 1;
-                        s.page = "devices".into();
-                        s.pair_pin.clear();
+                        s.connect_in_flight=false;s.stream_epoch+=1;
+                        if result["cleanupPending"]==false {
+                            s.connecting=false;s.connection.phase="cancelled".into();s.connection.error.clear();
+                            s.page="devices".into();s.status="已取消配对".into();
+                        }
                     }
+                    "device.pair" => {if args["attemptId"].as_u64()==Some(s.pair_attempt){s.connect_in_flight=false;s.stream_epoch+=1;}}
                     "stream.disconnect" => {
                         s.status = "正在断开…".into();
                         s.pan = false;
@@ -1383,9 +1401,9 @@ mod tests {
             s.pair_attempt = 2;
         }
         device.paired = true;
-        c.pairing_complete(1, device.clone(), String::new());
+        c.pairing_complete(1, device.clone(), String::new(), false);
         assert_eq!(c.state()["page"], "pair");
-        c.pairing_complete(2, device.clone(), String::new());
+        c.pairing_complete(2, device.clone(), String::new(), false);
         assert_eq!(c.state()["page"], "devices");
         assert_eq!(c.state()["pairPin"], "");
         assert_eq!(c.state()["status"], "配对完成");
@@ -1397,10 +1415,17 @@ mod tests {
             s.pair_attempt = 3;
         }
         device.paired = false;
-        c.pairing_complete(3, device, "配对码未被主机确认".into());
-        assert_eq!(c.state()["page"], "devices");
+        c.pairing_complete(3, device, "配对码未被主机确认".into(), false);
+        assert_eq!(c.state()["page"], "connection");
         assert_eq!(c.state()["status"], "配对码未被主机确认");
         assert_eq!(c.state()["pairPin"], "");
+    }
+    #[test]
+    fn failed_repair_is_not_reported_as_success_from_a_cached_pairing() {
+        let c=controller();let mut device:Device=serde_json::from_value(c.state()["devices"][0].clone()).unwrap();device.paired=true;
+        {let mut s=c.state.lock().unwrap();s.page="pair".into();s.selected=device.uuid.clone();s.pair_attempt=4;s.pair_pin="1234".into();}
+        c.pairing_complete(4,device,"配对码不正确".into(),false);
+        assert_eq!(c.state()["status"],"配对码不正确");assert_eq!(c.state()["devices"][0]["paired"],true);assert_eq!(c.state()["pairPin"],"");
     }
     #[test]
     fn failed_pair_launch_does_not_leave_a_waiting_pin() {
@@ -1409,7 +1434,7 @@ mod tests {
             c.dispatch("device.pair", json!({"uuid":"a","pin":"1234"}))["ok"],
             false
         );
-        assert_eq!(c.state()["page"], "devices");
+        assert_eq!(c.state()["page"], "connection");
         assert_eq!(c.state()["pairPin"], "");
     }
     #[test]

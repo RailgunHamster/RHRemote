@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 pub struct Connection {
     pub uuid: String,
     pub name: String,
+    pub operation: String,
     pub attempt: u64,
     pub phase: String,
     pub error: String,
@@ -18,12 +19,13 @@ pub struct Connection {
 impl Connection {
     pub fn begin(&mut self, device: &Device) {
         *self = Self { uuid: device.uuid.clone(), name: if device.display_name.is_empty() {device.name.clone()} else {device.display_name.clone()},
-            attempt: self.attempt + 1, phase: "resolving".into(), ..Self::default() };
+            operation: "connect".into(), attempt: self.attempt + 1, phase: "resolving".into(), ..Self::default() };
     }
     pub fn busy(&self) -> bool {
-        matches!(self.phase.as_str(), "resolving"|"starting"|"first-frame"|"connected"|"reconnecting"|"cancelling"|"cleaning")
+        matches!(self.phase.as_str(), "resolving"|"pairing"|"starting"|"first-frame"|"connected"|"reconnecting"|"cancelling"|"cleaning")
     }
     pub fn title(&self) -> &str {
+        if self.operation=="pair" {return match self.phase.as_str(){"pairing"=>"等待主机确认配对","paired"=>"配对完成","failed"=>"配对失败","cancelling"=>"正在取消配对","cleaning"=>"正在清理配对","cancelled"=>"已取消配对",_=>"配对"};}
         match self.phase.as_str() {
             "resolving" => "检查连接地址", "starting" => "建立串流", "first-frame" => "等待远程画面",
             "connected" => "已连接", "reconnecting" => "正在恢复连接", "cancelling" => "正在断开",
@@ -38,12 +40,18 @@ pub(crate) fn observe(s: &mut State, streaming: bool, data: &Value) {
     if c.uuid.is_empty() || !c.busy() { return; }
     if c.stopping {
         if streaming || s.connect_in_flight || data["nativeCleanupPending"]!=false {
-            c.phase="cancelling".into(); s.connecting=true; s.status="正在断开…".into();
+            c.phase="cancelling".into(); s.connecting=true; s.status=c.title().into();
         } else {
             c.phase=if c.first_frame {"ended"} else {"cancelled"}.into();
             c.error.clear(); s.status=c.title().into();
-            if s.page=="connection" {s.page="devices".into();}
+            if s.page=="connection" || s.page=="pair" {s.page="devices".into();}
         }
+        return;
+    }
+    if c.operation=="pair" {
+        if c.phase=="cleaning" && data["nativeCleanupPending"]==false {c.phase="failed".into();}
+        s.connecting=c.busy();
+        s.status=if c.error.is_empty(){c.title().into()}else{c.error.clone()};
         return;
     }
     if data["phase"]=="reconnecting" {
@@ -66,18 +74,18 @@ pub(crate) fn observe(s: &mut State, streaming: bool, data: &Value) {
 impl Controller {
     pub(crate) fn connection_gate(&self, id:&str) -> Option<Result<Value,String>> {
         let s=self.state.lock().unwrap();
-        if s.page=="connection" && s.connection.busy() && matches!(id,
+        if matches!(s.page.as_str(),"connection"|"pair") && s.connection.busy() && matches!(id,
             "devices.open"|"device.select"|"device.add.open"|"device.settings.open"|"device.info.open"|"app.settings.open"|"app.settings.tab"|"appearance.toggle") {
-            return Some(Err("请先取消或断开当前连接".into()));
+            return Some(Err(if s.connection.operation=="pair" {"请先完成或取消当前配对"}else{"请先取消或断开当前连接"}.into()));
         }
         None
     }
     pub(crate) fn connection_action(&self,id:&str)->Result<Value,String> {
-        let (uuid,busy)={let s=self.state.lock().unwrap();if s.page!="connection" {return Err("请先打开连接页".into());}(s.connection.uuid.clone(),s.connection.busy())};
+        let (uuid,busy,pairing)={let s=self.state.lock().unwrap();if s.page!="connection" {return Err("请先打开连接页".into());}(s.connection.uuid.clone(),s.connection.busy(),s.connection.operation=="pair")};
         if uuid.is_empty(){return Err("没有可操作的连接".into());}
         if busy{return Err("上一连接尚未结束".into());}
         let response=match id {
-            "connection.retry"=>self.dispatch("device.connect",json!({"uuid":uuid})),
+            "connection.retry"=>self.dispatch(if pairing{"device.pair"}else{"device.connect"},json!({"uuid":uuid})),
             "connection.dismiss"=>self.dispatch("devices.open",json!({})),
             _=>return Err("unknown connection action".into()),
         };
@@ -156,5 +164,31 @@ mod tests {
         c.dispatch("connection.dismiss",json!({}));assert_eq!(c.state()["page"],"devices");assert_eq!(c.state()["status"],"");
         c.dispatch("device.settings.open",json!({"uuid":"host"}));c.dispatch("settings.input",json!({"key":"width","value":""}));
         assert_eq!(c.dispatch("connection.dismiss",json!({}))["ok"],false);assert_eq!(c.state()["settingsInputs"]["width"],"");let _=std::fs::remove_file(&c.storage);
+    }
+    #[test]fn pairing_poll_cleanup_retry_and_cancellation_stay_with_the_original_device(){
+        struct PairHost(std::sync::Mutex<Vec<String>>);
+        impl Platform for PairHost {fn execute(&self,id:&str,_:&Value)->Result<Value,String>{self.0.lock().unwrap().push(id.into());Ok(json!({"accepted":true,"cleanupPending":id=="pair.cancel"}))}}
+        let host=Arc::new(PairHost(std::sync::Mutex::new(vec![])));
+        let c=Controller::new("test",std::env::temp_dir().join(format!("rhremote-pair-flow-{}.json",random_token().unwrap())),host.clone()).unwrap();
+        c.replace_devices(serde_json::from_value(json!([{"uuid":"host","name":"winserver","address":"192.168.0.104","online":true,"paired":true},{"uuid":"other","name":"claw","address":"192.168.0.113","online":true,"paired":true}])).unwrap());
+        c.dispatch("devices.filter",json!({"query":"work"}));let saved=c.state()["saved"].clone();
+        assert_eq!(c.dispatch("device.pair",json!({"uuid":"host","pin":"1234"}))["ok"],true);
+        poll(&c,false,"idle",false,"old transport error",false);
+        assert_eq!(c.state()["page"],"pair");assert_eq!(c.state()["connection"]["phase"],"pairing");assert_eq!(c.state()["connecting"],true);
+        for id in ["devices.open","device.select","app.settings.open","appearance.toggle","device.connect","device.pair"] {assert_eq!(c.dispatch(id,json!({"uuid":"other"}))["ok"],false,"{id}");}
+        let device:Device=serde_json::from_value(c.state()["devices"][0].clone()).unwrap();
+        c.pairing_complete(1,device.clone(),"配对码不正确".into(),true);
+        assert_eq!(c.state()["page"],"connection");assert_eq!(c.state()["connection"]["phase"],"cleaning");assert_eq!(c.state()["connection"]["title"],"正在清理配对");
+        assert_eq!(c.dispatch("connection.retry",json!({}))["ok"],false);
+        poll(&c,false,"idle",false,"stale stream error",true);assert_eq!(c.state()["connection"]["error"],"配对码不正确");
+        poll(&c,false,"idle",false,"",false);assert_eq!(c.state()["connection"]["phase"],"failed");assert_eq!(c.state()["connection"]["title"],"配对失败");
+        assert_eq!(c.dispatch("connection.retry",json!({"uuid":"other"}))["ok"],true);assert_eq!(c.state()["connection"]["uuid"],"host");assert_eq!(c.state()["connection"]["attempt"],2);
+        assert_eq!(host.0.lock().unwrap().iter().filter(|id|id.as_str()=="device.pair").count(),2);assert!(!host.0.lock().unwrap().iter().any(|id|id=="device.connect"));
+        assert_eq!(c.dispatch("navigation.back",json!({}))["ok"],true);assert_eq!(c.state()["page"],"connection");assert_eq!(c.state()["connection"]["phase"],"cancelling");assert_eq!(c.state()["pairPin"],"");
+        c.pairing_complete(2,device,"late pairing error".into(),false);assert_eq!(c.state()["connection"]["phase"],"cancelling");
+        assert_eq!(c.dispatch("pair.cancel",json!({}))["ok"],false);poll(&c,false,"cancelled",false,"late pairing error",true);
+        assert_eq!(c.state()["page"],"connection");poll(&c,false,"cancelled",false,"late pairing error",false);
+        assert_eq!(c.state()["page"],"devices");assert_eq!(c.state()["connection"]["phase"],"cancelled");assert_eq!(c.state()["connection"]["error"],"");assert_eq!(c.state()["status"],"已取消配对");assert_eq!(c.state()["deviceQuery"],"work");assert_eq!(c.state()["saved"],saved);
+        let _=std::fs::remove_file(&c.storage);
     }
 }

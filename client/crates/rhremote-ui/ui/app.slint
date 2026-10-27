@@ -217,7 +217,8 @@ export component MainWindow inherits Window {
     init => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     changed dark => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     icon:@image-url("../../../shared/icons/rhremote.svg");
-    title:"RHRemote-Moonlight";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
+    title:root.isolated-preview ? "RHRemote-Moonlight · 测试预览" : "RHRemote-Moonlight";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
+    in property <bool> isolated-preview;
     background:Palette.page;default-font-family:"Microsoft YaHei UI";default-font-size:14px;
     in property <[DeviceRow]> devices;
     in property <DeviceRow> selected-device;
@@ -270,6 +271,7 @@ export component MainWindow inherits Window {
     in property <bool> streaming;
     in property <bool> connecting;
     in property <string> connection-phase;
+    in property <string> connection-operation;
     in property <string> connection-title;
     in property <string> connection-name;
     in property <string> connection-error;
@@ -335,6 +337,7 @@ export component MainWindow inherits Window {
                 Rectangle {vertical-stretch:1;}
                 NavigationItem{text:"设置";icon:@image-url("icons/settings.svg");action-id:"app.settings.open";chosen:root.page=="global-settings";compact:root.compact;}
                 NavigationItem{text:root.dark ? "浅色模式" : "深色模式";icon:@image-url("icons/moon.svg");action-id:"appearance.toggle";compact:root.compact;}
+                if root.isolated-preview:Text{text:root.compact ? "测试" : "测试预览 · 独立配置";color:Palette.blue;font-size:11px;horizontal-alignment:center;height:24px;}
                 if !root.compact: Rectangle {height:52px;
                     VerticalLayout {padding-left:12px;alignment:center;spacing:5px;
                         Text {text:"v"+root.app-version;color:Palette.muted;font-size:11px;}
@@ -467,6 +470,12 @@ export component MainWindow inherits Window {
                         Text {text:"尚未添加设备";font-size:13px;color:Palette.muted;horizontal-alignment:center;}
                         HorizontalLayout {Rectangle {horizontal-stretch:1;}ActionButton {text:"添加电脑";action-id:"device.add.open";primary:true;}Rectangle {horizontal-stretch:1;}}
                     }
+                }
+            }
+            if root.page=="pair":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:pair-header.preferred-height;
+                pair-header:=VerticalLayout{padding:20px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:6px;
+                    Text{text:"配对";font-size:23px;font-weight:600;color:Palette.ink;}
+                    Text{text:root.connection-name;color:Palette.muted;font-size:13px;overflow:elide;}
                 }
             }
             if root.page=="profile-copy":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:copy-header.preferred-height;
@@ -670,20 +679,21 @@ export component MainWindow inherits Window {
                             }
                         }
                         if root.connection-busy && root.connection-phase!="connected":ProgressIndicator{indeterminate:true;}
-                        Text{text:"1  检查地址与配对";color:root.connection-phase=="resolving" ? Palette.blue : Palette.muted;font-size:14px;}
-                        Text{text:"2  建立串流";color:root.connection-phase=="starting" ? Palette.blue : Palette.muted;font-size:14px;}
-                        Text{text:"3  显示远程画面";color:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? Palette.blue : Palette.muted;font-size:14px;}
+                        if root.connection-operation!="pair":VerticalLayout{spacing:22px;
+                            Text{text:"1  检查地址与配对";color:root.connection-phase=="resolving" ? Palette.blue : Palette.muted;font-size:14px;}
+                            Text{text:"2  建立串流";color:root.connection-phase=="starting" ? Palette.blue : Palette.muted;font-size:14px;}
+                            Text{text:"3  显示远程画面";color:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? Palette.blue : Palette.muted;font-size:14px;}
+                        }
                         if root.connection-error!="":Text{text:root.connection-error;color:#b04452;font-size:14px;wrap:word-wrap;}
                         if root.control-requests-pending:Text{text:"正在结束上一项会话操作…";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                         if root.connection-phase=="connected":Text{text:"会话控制位于远程画面上方。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                     }
                     if root.page=="pair": VerticalLayout {spacing:22px;
-                        Text{text:"在 Sunshine 确认配对";color:Palette.ink;font-size:25px;}
-                        Text{text:"请在主机管理界面输入：";color:Palette.muted;}
+                        Text{text:"请在这台电脑的 RHRemote-Sunshine 管理界面输入配对码：";color:Palette.muted;wrap:word-wrap;}
                         Text{text:root.pair-pin;color:Palette.blue;font-size:44px;}
-                        ActionButton{text:"取消配对";action-id:"pair.cancel";}
+                        Text{text:"等待主机确认配对";color:Palette.muted;wrap:word-wrap;}
                     }
-                    if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.page!="device-info" && root.page!="connection" && root.page!="profile-copy" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                    if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.page!="device-info" && root.page!="connection" && root.page!="pair" && root.page!="profile-copy" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     Rectangle {min-height:12px;vertical-stretch:1;}
 
             Text{text:"基于 Moonlight 开源核心 · GPL v3";color:Palette.muted;font-size:11px;}
@@ -696,13 +706,13 @@ export component MainWindow inherits Window {
                     ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || ((root.updates-available || root.updates-pending) && (root.streaming || root.connecting));}
                 }
             }
-            if root.page=="connection":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:connection-footer.preferred-height;
+            if root.page=="connection" || root.page=="pair":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:connection-footer.preferred-height;
                 Rectangle{x:0px;y:0px;width:parent.width;height:1px;background:Palette.line;}
                 connection-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
                     Rectangle{horizontal-stretch:1;}
-                    if root.connection-busy:ActionButton{text:root.connection-phase=="cancelling" || root.connection-phase=="cleaning" ? "正在清理…" : root.connection-phase=="connected" ? "断开连接" : "取消连接";action-id:"stream.disconnect";disabled:root.connection-phase=="cancelling" || root.connection-phase=="cleaning";}
+                    if root.connection-busy:ActionButton{text:root.connection-phase=="cancelling" || root.connection-phase=="cleaning" ? "正在清理…" : root.connection-operation=="pair" ? "取消配对" : root.connection-phase=="connected" ? "断开连接" : "取消连接";action-id:root.connection-operation=="pair" ? "pair.cancel" : "stream.disconnect";disabled:root.connection-phase=="cancelling" || root.connection-phase=="cleaning";}
                     if !root.connection-busy:ActionButton{text:"返回设备";action-id:"connection.dismiss";}
-                    if !root.connection-busy && root.connection-phase=="failed":ActionButton{text:"重试连接";action-id:"connection.retry";primary:true;disabled:root.control-requests-pending;}
+                    if !root.connection-busy && root.connection-phase=="failed":ActionButton{text:root.connection-operation=="pair" ? "重试配对" : "重试连接";action-id:"connection.retry";primary:true;disabled:root.control-requests-pending;}
                 }
             }
             if root.page=="profile-copy":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:copy-footer.preferred-height;
