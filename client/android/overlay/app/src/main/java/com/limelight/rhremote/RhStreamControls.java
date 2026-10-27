@@ -91,7 +91,7 @@ public final class RhStreamControls implements RhActions.Target {
         if(kind.equals("displays")){panel.setExpanded(true);panel.setTab("displays");loadMissingDisplays();return;}
         AlertDialog.Builder builder=new AlertDialog.Builder(game,RhUiStyle.dialogTheme(game)).setTitle(kind.equals("feedback")?"操作失败":"远程快捷键").setNegativeButton("关闭",(dialog,which)->RhActions.click("stream.menu.close",RhActions.obj()));
         final JSONArray list=kind.equals("shortcuts")?RhShortcuts.catalog(game):null;
-        if(kind.equals("feedback"))builder.setMessage(feedbackError);else{String[] labels=new String[list.length()];for(int i=0;i<labels.length;i++)labels[i]=list.getJSONObject(i).getString("label");builder.setAdapter(new android.widget.ArrayAdapter<>(game,android.R.layout.simple_list_item_1,labels),null);}
+        if(kind.equals("feedback"))builder.setMessage(feedbackError);else{String[] labels=new String[list.length()];for(int i=0;i<labels.length;i++)labels[i]=list.getJSONObject(i).getString("label");builder.setAdapter(new android.widget.ArrayAdapter<>(builder.getContext(),android.R.layout.simple_list_item_1,labels),null);}
         menuDialog=builder.create();menuDialog.setOnCancelListener(dialog->RhActions.click("stream.menu.close",RhActions.obj()));menuDialog.show();if(list!=null)menuDialog.getListView().setOnItemClickListener((parent,view,index,row)->RhActions.click("stream.shortcut",RhActions.obj("shortcut",list.optJSONObject(index).optString("id"))));updatePanel();
     }
     private void loadMissingDisplays(){JSONObject data=display==null?RhActions.obj():display.state();JSONArray monitors=data.optJSONArray("displays");if(!displayBusy&&(monitors==null||monitors.length()==0||!data.optString("error").isEmpty()))displayAction(null);}
