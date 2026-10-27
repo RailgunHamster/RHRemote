@@ -5,6 +5,9 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
 mod devices;
 mod form_models;
+mod ui_test;
+mod ui_keyboard;
+mod ui_driver;
 mod network;
 mod native_cleanup;
 #[cfg(windows)]
@@ -141,11 +144,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(port) = std::env::var("RHREMOTE_CONTROL_PORT") {
         rhremote_core::start_http(controller.clone(), port.parse()?, token)?;
     }
+    let passive_preview=native.ui_test.enabled;
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name(ui_rendering::renderer().into())
-        .with_winit_window_attributes_hook(|attributes| {
-            if attributes.title == "RHRemote-Moonlight · 串流控制" {
+        .with_winit_window_attributes_hook(move |attributes| {
+            if attributes.title == "RHRemote-Moonlight · 串流控制" || passive_preview {
                 attributes.with_active(false)
             } else {
                 attributes
@@ -200,6 +204,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let toolbar_queue = controller.clone();
     let toolbar_timing = native.clone();
     toolbar.global::<Commands>().on_trigger(move |id, arg| {
+        toolbar_timing.ui_test.observe_action(id.as_str());
         if toolbar_sender
             .try_send((id.to_string(), arg.to_string(), toolbar_timing.statistics.lock().unwrap().now(), std::time::Instant::now()))
             .is_err()
@@ -217,6 +222,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let picker_actions = controller.clone();
     let picker_timing = native.clone();
     picker.global::<Commands>().on_trigger(move |id, arg| {
+        picker_timing.ui_test.observe_action(id.as_str());
         if picker_sender
             .try_send((id.to_string(), arg.to_string(), picker_timing.statistics.lock().unwrap().now(), std::time::Instant::now()))
             .is_err()
@@ -246,6 +252,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let queue = controller.clone();
     let ui_timing = native.clone();
     ui.global::<Commands>().on_trigger(move |id, arg| {
+        ui_timing.ui_test.observe_action(id.as_str());
         if sender.try_send((id.to_string(), arg.to_string(), ui_timing.statistics.lock().unwrap().now(), std::time::Instant::now())).is_err() {
             queue.message("操作队列已满，请稍后重试".into());
         }
@@ -257,28 +264,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let WindowEvent::ModifiersChanged(value)=event{shift.set(value.state().shift_key());}
             if let Some(ui)=weak.upgrade(){
                 if let WindowEvent::KeyboardInput{event,..}=event {
-                    if ui.get_sync_clear_prompt(){
-                        if event.state==ElementState::Pressed&&!event.repeat {
-                            match event.logical_key {
-                                Key::Named(NamedKey::Escape)=>{controls.dispatch("sync.clear.resolve",json!({"choice":"cancel"}));},
-                                Key::Named(NamedKey::Tab)=>ui.set_sync_clear_choice(1-ui.get_sync_clear_choice()),
-                                Key::Named(NamedKey::Enter)=>{controls.dispatch("sync.clear.resolve",json!({"choice":if ui.get_sync_clear_choice()==0{"cancel"}else{"remove"}}));},
-                                _=>{}
-                            }
-                        }
-                        return EventResult::PreventDefault;
-                    }
-                    if ui.get_navigation_prompt(){
-                        if event.state==ElementState::Pressed&&!event.repeat {
-                            match event.logical_key {
-                                Key::Named(NamedKey::Escape)=>{controls.dispatch("navigation.resolve",json!({"choice":"stay"}));},
-                                Key::Named(NamedKey::Tab)=>ui.set_navigation_choice((ui.get_navigation_choice()+if shift.get(){2}else{1})%3),
-                                Key::Named(NamedKey::Enter)=>{let choice=["stay","discard","save"][ui.get_navigation_choice() as usize];controls.dispatch("navigation.resolve",json!({"choice":choice}));},
-                                _=>{}
-                            }
-                        }
-                        return EventResult::PreventDefault;
-                    }
+                    let key=match event.logical_key{Key::Named(NamedKey::Escape)=>"Escape",Key::Named(NamedKey::Tab)=>"Tab",Key::Named(NamedKey::Enter)=>"Enter",_=>"Other"};
+                    if ui_keyboard::modal(&ui,&controls,key,event.state==ElementState::Pressed,event.repeat,shift.get()).is_some(){return EventResult::PreventDefault;}
                 }
             }
             EventResult::Propagate
@@ -304,6 +291,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut profile_fingerprint = String::new();
     let mut toolbar_display_fingerprint = String::new();
     let mut picker_fingerprint = String::new();
+    let mut ui_driver=ui_driver::Driver::new(native.ui_test.clone(),&ui,&toolbar,&picker);
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade() else{return};
         let logical_width=ui.window().size().width as f32/ui.window().scale_factor();
@@ -413,6 +401,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 toolbar_state["picker"]=overlay::follow_picker(&picker,&state,&toolbar_state);
             }
             view.toolbar_state(toolbar_state);
+            if let Some(picker)=picker_weak.upgrade(){ui_driver.tick(&ui,&toolbar,&picker,&view);}
         }
         match view.take_window_action().as_str(){
             "window.minimize"=>ui.window().set_minimized(true),"window.maximize"=>ui.window().set_maximized(!ui.window().is_maximized()),"window.close"=>{let _=slint::quit_event_loop();},

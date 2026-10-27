@@ -314,3 +314,49 @@ fn page_focus_fallback_does_not_take_the_new_forms_initial_text_focus(){
         assert_eq!(&*received.borrow(),&[(action.into(),"1".into())],"Initial text focus was stolen on {page}");received.borrow_mut().clear();
     }ui.hide().unwrap();
 }
+
+#[test]
+fn closing_an_unsaved_decision_restores_the_existing_editors_focus_without_test_mode(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());
+    ui.set_profile_fields(ModelRc::new(VecModel::from(vec![SettingRow{key:"width".into(),label:"画面宽度".into(),kind:"number".into(),input_text:"".into(),..Default::default()}])));
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    assert!(!ui.global::<crate::UiTest>().get_enabled());
+    let editor=ElementHandle::find_by_accessible_label(&ui,"画面宽度").find(|item|item.accessible_read_only().is_some()).expect("actual width editor");let p=editor.absolute_position();let size=editor.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
+    ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});
+    ui.window().dispatch_event(WindowEvent::KeyPressed{text:"1".into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:"1".into()});assert_eq!(&*received.borrow(),&[("settings.input".into(),"width=1".into())]);
+    ui.set_navigation_prompt(true);ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});assert_eq!(received.borrow().last().unwrap(),&("navigation.resolve".into(),"stay".into()));
+    ui.set_navigation_prompt(false);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:"2".into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:"2".into()});
+    assert_eq!(&*received.borrow(),&[("settings.input".into(),"width=12".into())]);ui.hide().unwrap();
+}
+
+#[test]
+fn dismissing_a_decision_with_an_unavailable_origin_keeps_the_page_keyboard_fallback(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_settings_dirty(true);
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();click(&ui,"保存");
+    ui.set_navigation_prompt(true);ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
+    ui.set_settings_dirty(false);ui.set_navigation_prompt(false);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});assert!(received.borrow().is_empty());
+    ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert_eq!(&*received.borrow(),&[("navigation.back".into(),"".into())]);ui.hide().unwrap();
+}
+
+#[test]
+fn completing_a_decision_into_a_different_page_preserves_the_new_forms_initial_focus(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();click(&ui,"返回设备");
+    ui.set_navigation_prompt(true);ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
+    ui.set_page("add".into());ui.set_navigation_prompt(false);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:"1".into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:"1".into()});assert_eq!(&*received.borrow(),&[("device.add.input".into(),"1".into())]);ui.hide().unwrap();
+}
+
+#[test]
+fn modal_selection_tracks_the_actual_buttons_focus_without_test_mode(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();
+    ui.set_page("settings".into());ui.set_navigation_prompt(true);ui.show().unwrap();
+    click(&ui,"放弃更改");assert_eq!(ui.get_navigation_choice(),1);
+    click(&ui,"保存并继续");assert_eq!(ui.get_navigation_choice(),2);
+    click(&ui,"继续编辑");assert_eq!(ui.get_navigation_choice(),0);
+    ui.set_navigation_prompt(false);ui.set_sync_clear_prompt(true);
+    click(&ui,"移除");assert_eq!(ui.get_sync_clear_choice(),1);
+    let cancel=ElementHandle::find_by_accessible_label(&ui,"取消").last().expect("modal cancel button");
+    let p=cancel.absolute_position();let size=cancel.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
+    ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});assert_eq!(ui.get_sync_clear_choice(),0);
+    ui.hide().unwrap();
+}

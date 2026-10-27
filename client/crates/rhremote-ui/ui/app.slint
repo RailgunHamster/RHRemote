@@ -1,6 +1,91 @@
-import { ProgressIndicator, ScrollView, LineEdit, CheckBox, SpinBox, ComboBox, Palette as WidgetPalette } from "std-widgets.slint";
+import { ProgressIndicator, ScrollView as BaseScrollView, LineEdit as BaseLineEdit, CheckBox as BaseCheckBox, SpinBox as BaseSpinBox, ComboBox as BaseComboBox, Palette as WidgetPalette } from "std-widgets.slint";
 
 export global Commands { callback trigger(string,string); }
+export global UiTest {
+    in property <bool> enabled;
+    in property <int> generation;
+    in property <string> operation;
+    in property <string> target;
+    in property <float> scroll-delta;
+    callback report(string,string,string,bool,bool,bool,bool,float,float,float,float);
+}
+export global KeyboardFocus {
+    in-out property <string> last-content-control;
+    in-out property <string> restore-target;
+    in-out property <int> restore-generation;
+    public function remember(id:string,focused:bool,content:bool){
+        if(focused && content){KeyboardFocus.last-content-control=id;}
+    }
+}
+component UiProbe inherits Rectangle {
+    width:0px;height:0px;
+    in property <string> control-id;
+    in property <string> kind;
+    in property <string> label;
+    in property <bool> control-enabled:true;
+    in property <bool> focused;
+    in property <bool> checked;
+    in property <bool> expanded;
+    in property <bool> remember-focus:true;
+    in property <length> control-width;
+    in property <length> control-height;
+    in property <length> scroll-y;
+    in property <length> scroll-maximum;
+    in property <int> request:UiTest.generation;
+    callback focus-requested();
+    callback scroll-requested(float);
+    property <int> restore-request:KeyboardFocus.restore-generation;
+    changed focused=>{if(root.control-id!=""){KeyboardFocus.remember(root.control-id,root.focused,root.remember-focus);}}
+    changed control-id=>{if(root.focused && root.control-id!=""){KeyboardFocus.remember(root.control-id,true,root.remember-focus);}}
+    changed restore-request=>{if(root.control-id!="" && KeyboardFocus.restore-target==root.control-id && root.control-enabled){root.focus-requested();}}
+    changed request=>{
+        if(UiTest.enabled && root.control-id!=""){
+            if(UiTest.operation=="inspect"){
+                UiTest.report(root.control-id,root.kind,root.label,root.control-enabled,root.focused,root.checked,root.expanded,root.control-width/1px,root.control-height/1px,root.scroll-y/1px,root.scroll-maximum/1px);
+            }else if(UiTest.target==root.control-id && root.control-enabled){
+                if(UiTest.operation=="focus"){root.focus-requested();}
+                else if(UiTest.operation=="scroll" && root.kind=="scroll"){root.scroll-requested(UiTest.scroll-delta);}
+            }
+        }
+    }
+}
+component LineEdit inherits BaseLineEdit {
+    property <string> test-label:root.accessible-label!="" ? root.accessible-label : root.placeholder-text;
+    property <string> test-id:"input|"+root.test-label;
+    property <int> test-request:UiTest.generation;
+    property <int> restore-request:KeyboardFocus.restore-generation;
+    changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
+    changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"input",root.test-label,root.enabled,root.has-focus,false,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+}
+component ComboBox inherits BaseComboBox {
+    property <string> test-id:"choice|"+root.accessible-label;
+    property <int> test-request:UiTest.generation;
+    property <int> restore-request:KeyboardFocus.restore-generation;
+    changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
+    changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"combobox",root.accessible-label,root.enabled,root.has-focus,false,root.accessible-expanded,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+}
+component CheckBox inherits BaseCheckBox {
+    property <string> test-id:"check|"+root.accessible-label;
+    property <int> test-request:UiTest.generation;
+    property <int> restore-request:KeyboardFocus.restore-generation;
+    changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
+    changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"checkbox",root.accessible-label,root.enabled,root.has-focus,root.checked,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+}
+component SpinBox inherits BaseSpinBox {
+    property <string> test-id:"spin|"+root.accessible-label;
+    property <int> test-request:UiTest.generation;
+    property <int> restore-request:KeyboardFocus.restore-generation;
+    changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
+    changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"spinbox",root.accessible-label,root.enabled,root.has-focus,false,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+}
+component ScrollView inherits BaseScrollView {
+    in property <string> test-id;
+    UiProbe{control-id:root.test-id;kind:"scroll";control-width:root.width;control-height:root.height;scroll-y:root.content-y;scroll-maximum:max(0px,root.content-height - root.visible-height);scroll-requested(delta)=>{root.content-y=max(-max(0px,root.content-height - root.visible-height),min(0px,root.content-y + delta*1px));}}
+}
 export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, search-addresses:string, status:string, paired:bool, online:bool, is-self:bool }
 export struct ProfileSource { client-id:string, label:string }
 export struct CopyField { label:string, value:string }
@@ -26,6 +111,8 @@ component ActionButton inherits Rectangle {
     in property <bool> chosen:false;
     in property <bool> disabled:false;
     out property <bool> focused:key-focus.has-focus;
+    callback focused-in();
+    changed focused=>{if(root.focused){root.focused-in();}}
     min-width: label.preferred-width + 32px;
     preferred-width: label.preferred-width + 32px;
     horizontal-stretch:0;
@@ -42,6 +129,7 @@ component ActionButton inherits Rectangle {
     accessible-enabled:!root.disabled;
     accessible-label: root.text;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
+    UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}}
 }
 component TabButton inherits ActionButton { border-width:root.focused ? 1px : 0px; }
 component NavigationItem inherits Rectangle {
@@ -68,6 +156,7 @@ component NavigationItem inherits Rectangle {
     touch:=TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{nav-focus.focus();Commands.trigger(root.action-id,"");}}
     accessible-role:button;accessible-label:root.text;accessible-enabled:!root.disabled;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,"");}}
+    UiProbe{control-id:"nav|"+root.action-id;kind:"navigation";label:root.text;control-enabled:!root.disabled;focused:nav-focus.has-focus;control-width:root.width;control-height:root.height;focus-requested=>{nav-focus.focus();}}
 }
 component DetailField inherits VerticalLayout {
     in property <string> label;
@@ -117,7 +206,7 @@ export component StreamToolbar inherits Window {
                 TabButton{text:"屏幕";action-id:"stream.controls.tab";argument:"displays";chosen:root.controls-tab=="displays";horizontal-stretch:1;}
                 TabButton{text:"声音";action-id:"stream.controls.tab";argument:"audio";chosen:root.controls-tab=="audio";horizontal-stretch:1;}
             }
-            ScrollView {vertical-stretch:1;
+            ScrollView {test-id:"scroll|toolbar";vertical-stretch:1;
                 VerticalLayout {spacing:8px;alignment:start;
                     if root.controls-tab=="input":VerticalLayout{spacing:8px;
                         if !root.narrow:HorizontalLayout{spacing:8px;
@@ -157,7 +246,7 @@ export component StreamToolbar inherits Window {
                         ActionButton{text:root.audio-enabled ? "声音：开" : "声音：关";action-id:"stream.audio.toggle";chosen:root.audio-enabled;disabled:root.busy;}
                         HorizontalLayout{spacing:8px;
                             Text{text:"音量";color:Palette.ink;vertical-alignment:center;}
-                            SpinBox{minimum:0;maximum:100;value:root.audio-volume;enabled:!root.busy;max-width:120px;edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
+                            SpinBox{minimum:0;maximum:100;value:root.audio-volume;enabled:!root.busy;max-width:120px;accessible-label:"串流音量";edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
                             Text{text:"%";color:Palette.muted;vertical-alignment:center;}
                         }
                     }
@@ -192,22 +281,23 @@ export component StreamPicker inherits Window {
                 if root.kind!="feedback" && root.error!="":ActionButton{text:"详情";action-id:"stream.menu.open";argument:"feedback";}
                 ActionButton{text:"关闭";action-id:"stream.menu.close";}
             }
-            ScrollView{vertical-stretch:1;horizontal-stretch:1;
+            ScrollView{test-id:"scroll|picker";vertical-stretch:1;horizontal-stretch:1;
                 VerticalLayout{spacing:4px;alignment:start;
                     if root.error!="":Text{text:root.error;color:#b04452;wrap:word-wrap;}
                     if root.kind!="feedback" && root.labels.length==0:Text{text:"暂无屏幕信息，请在屏幕分类刷新。";color:Palette.muted;wrap:word-wrap;}
                     if root.kind!="feedback":VerticalLayout{spacing:4px;
-                        for label[index] in root.labels:Rectangle{
+                        for item-label[index] in root.labels:Rectangle{
                             property <bool> available:!root.busy && (root.enabled-items.length<=index || root.enabled-items[index]);
                             property <bool> chosen:root.chosen-items.length>index && root.chosen-items[index];
                             height:40px;border-radius:8px;background:self.chosen || touch.has-hover ? Palette.soft : transparent;
                             forward-focus:row-focus;
                             border-width:row-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
-                            Text{x:10px;width:parent.width - 20px;text:label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
+                            Text{x:10px;width:parent.width - 20px;text:item-label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
                             row-focus:=FocusScope{enabled:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
                             touch:=TouchArea{enabled:parent.available;mouse-cursor:pointer;clicked=>{row-focus.focus();Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
-                            accessible-role:button;accessible-enabled:self.available;accessible-label:label;
+                            accessible-role:button;accessible-enabled:self.available;accessible-label:item-label;
                             accessible-action-default=>{if(self.available){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
+                            UiProbe{control-id:"picker|"+root.kind+"|"+root.values[index];kind:"menu-item";label:item-label;control-enabled:parent.available;focused:row-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{row-focus.focus();}}
                         }
                     }
                 }
@@ -331,12 +421,22 @@ export component MainWindow inherits Window {
         init=>{if(root.page!="add" && root.page!="device-info"){self.focus();}}
         in property <string> active-page:root.page;
         changed active-page=>{if(root.page!="add" && root.page!="device-info"){self.focus();}}
+        property <string> dialog-page;
+        property <bool> dialog-open:root.navigation-prompt || root.sync-clear-prompt;
+        changed dialog-open=>{
+            if(self.dialog-open){self.dialog-page=root.page;}
+            else if(self.dialog-page==root.page){
+                let target=KeyboardFocus.last-content-control;
+                self.focus();KeyboardFocus.restore-target=target;KeyboardFocus.restore-generation+=1;
+            }
+        }
         key-pressed(event)=>{
             if(event.text==Key.Escape && root.page!="devices"){
                 if(!event.repeat){Commands.trigger("navigation.back","");}return accept;
             }
             return reject;
         }
+    UiProbe{control-id:"page";kind:"scope";focused:main-keys.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;focus-requested=>{main-keys.focus();}}
     HorizontalLayout {
         spacing:0px;
         Rectangle {
@@ -377,7 +477,7 @@ export component MainWindow inherits Window {
                             ActionButton {text:"刷新";action-id:"devices.refresh";height:32px;}
                         }
                         LineEdit {text:root.device-query;placeholder-text:"搜索名称或地址";height:36px;edited(value)=>{Commands.trigger("devices.filter",value);}}
-                        ScrollView {horizontal-stretch:1;vertical-stretch:1;content-width:self.width;
+                        ScrollView {test-id:"scroll|devices";horizontal-stretch:1;vertical-stretch:1;content-width:self.width;
                             VerticalLayout {spacing:6px;alignment:start;
                                 for device in root.devices: Rectangle {
                                     height:86px;border-radius:8px;
@@ -399,6 +499,7 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                     device-focus:=FocusScope{key-pressed(event)=>{if(event.text==Key.Return || event.text==" "){Commands.trigger("device.select",device.uuid);return accept;}return reject;}}
+                                    UiProbe{control-id:"device|"+device.uuid;kind:"device";label:"选择设备 "+device.name;focused:device-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{device-focus.focus();}}
                                     device-touch:=TouchArea {mouse-cursor:pointer;clicked=>{device-focus.focus();Commands.trigger("device.select",device.uuid);}}
                                     accessible-role:button;accessible-label:"选择设备 "+device.name;
                                     accessible-action-default=>{Commands.trigger("device.select",device.uuid);}
@@ -436,7 +537,7 @@ export component MainWindow inherits Window {
                             }
                             Rectangle {y:parent.height - 1px;height:1px;background:Palette.line;}
                         }
-                        ScrollView {content-width:self.width;vertical-stretch:1;
+                        ScrollView {test-id:"scroll|details";content-width:self.width;vertical-stretch:1;
                             VerticalLayout {padding:root.compact ? 20px : 28px;spacing:20px;alignment:start;
                                 Rectangle {height:root.compact ? 132px : 148px;border-radius:10px;border-width:1px;border-color:Palette.line;
                                     HorizontalLayout {padding:20px;spacing:24px;
@@ -540,7 +641,7 @@ export component MainWindow inherits Window {
                     Rectangle{horizontal-stretch:1;}ActionButton{text:"返回设备";action-id:"device.add.cancel";}
                 }
             }
-            if root.page!="devices" || root.streaming || root.connecting: form-scroll:=ScrollView {
+            if root.page!="devices" || root.streaming || root.connecting: form-scroll:=ScrollView {test-id:"scroll|form";
                 content-width:self.width;
                 VerticalLayout {
                     padding:root.compact ? 20px : 34px;padding-left:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" || root.page=="profile-copy" ? root.form-inset : root.compact ? 20px : 34px;padding-right:root.page=="settings" || root.page=="global-settings" || root.page=="add" || root.page=="device-info" || root.page=="profile-copy" ? root.form-inset : root.compact ? 20px : 34px;spacing:18px;
@@ -794,7 +895,7 @@ export component MainWindow inherits Window {
                 Text{text:"移除同步设置？";color:Palette.ink;font-size:22px;font-weight:600;}
                 Text{text:"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。";color:Palette.muted;wrap:word-wrap;font-size:14px;}
                 if root.sync-error!="":Text{text:root.sync-error;color:#b04452;wrap:word-wrap;font-size:13px;}
-                HorizontalLayout {spacing:8px;Rectangle{horizontal-stretch:1;}clear-cancel:=ActionButton{text:"取消";action-id:"sync.clear.resolve";argument:"cancel";chosen:root.sync-clear-choice==0;disabled:root.sync-busy;}clear-confirm:=ActionButton{text:"移除";action-id:"sync.clear.resolve";argument:"remove";chosen:root.sync-clear-choice==1;disabled:root.sync-busy;}}
+                HorizontalLayout {spacing:8px;Rectangle{horizontal-stretch:1;}clear-cancel:=ActionButton{focused-in=>{root.sync-clear-choice=0;}text:"取消";action-id:"sync.clear.resolve";argument:"cancel";chosen:root.sync-clear-choice==0;disabled:root.sync-busy;}clear-confirm:=ActionButton{focused-in=>{root.sync-clear-choice=1;}text:"移除";action-id:"sync.clear.resolve";argument:"remove";chosen:root.sync-clear-choice==1;disabled:root.sync-busy;}}
             }
         }
     }
@@ -807,7 +908,7 @@ export component MainWindow inherits Window {
             decision:=VerticalLayout {padding:24px;spacing:18px;
                 Text{text:"保存更改？";color:Palette.ink;font-size:22px;font-weight:600;}
                 Text{text:root.navigation-message;color:Palette.muted;wrap:word-wrap;font-size:14px;}
-                HorizontalLayout {spacing:8px;continue-choice:=ActionButton{text:"继续编辑";action-id:"navigation.resolve";argument:"stay";chosen:root.navigation-choice==0;}Rectangle{horizontal-stretch:1;}discard-choice:=ActionButton{text:"放弃更改";action-id:"navigation.resolve";argument:"discard";chosen:root.navigation-choice==1;}save-choice:=ActionButton{text:"保存并继续";action-id:"navigation.resolve";argument:"save";chosen:root.navigation-choice==2;primary:true;}}
+                HorizontalLayout {spacing:8px;continue-choice:=ActionButton{focused-in=>{root.navigation-choice=0;}text:"继续编辑";action-id:"navigation.resolve";argument:"stay";chosen:root.navigation-choice==0;}Rectangle{horizontal-stretch:1;}discard-choice:=ActionButton{focused-in=>{root.navigation-choice=1;}text:"放弃更改";action-id:"navigation.resolve";argument:"discard";chosen:root.navigation-choice==1;}save-choice:=ActionButton{focused-in=>{root.navigation-choice=2;}text:"保存并继续";action-id:"navigation.resolve";argument:"save";chosen:root.navigation-choice==2;primary:true;}}
             }
         }
     }

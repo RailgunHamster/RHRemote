@@ -70,8 +70,8 @@ impl Controller {
     pub(crate) fn navigation_gate(&self,id:&str,args:&Value)->Option<Result<Value,String>>{
         let mut s=self.state.lock().unwrap();
         if id=="sync.run" && args["automatic"]==true && (automatic_sync_blocked(&s)||s.sync["automatic"]!=true){return Some(Ok(json!({"skipped":true})));}
-        if s.sync_clear_pending && !matches!(id,"sync.clear.resolve"|"sync.clear"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"){return Some(Err("请先确认是否移除同步设置".into()));}
-        if s.pending_navigation.is_some() && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {
+        if s.sync_clear_pending && !id.starts_with("view.ui.") && !matches!(id,"sync.clear.resolve"|"sync.clear"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"){return Some(Err("请先确认是否移除同步设置".into()));}
+        if s.pending_navigation.is_some() && !id.starts_with("view.ui.") && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {
             return Some(Err("请先处理未保存的更改".into()));
         }
         let primary_installs=id=="updates.primary"&&crate::update_primary_action(&s.updates)=="updates.install";
@@ -153,6 +153,11 @@ mod tests {
         let c=fixture();input(&c,"fps","24");c.dispatch("navigation.back",json!({}));
         assert_eq!(c.dispatch("settings.set",json!({"key":"codec","value":"H.264"}))["ok"],false);assert_eq!(c.dispatch("updates.state",json!({}))["ok"],true);
         assert_eq!(c.dispatch("device.settings.open",json!({"uuid":"second"}))["ok"],false);assert_eq!(c.state()["selected"],"host");let _=std::fs::remove_file(&c.storage);
+    }
+    #[test]fn ui_test_requests_do_not_dismiss_a_decision_or_bypass_business_gates(){
+        let c=fixture();input(&c,"fps","24");c.dispatch("navigation.back",json!({}));let before=c.state()["saved"].clone();
+        for id in ["view.ui.inspect","view.ui.focus","view.ui.key","view.ui.result"]{assert_eq!(c.dispatch(id,json!({}))["ok"],true);assert_eq!(c.state()["navigationPrompt"]["kind"],"unsaved-device");}
+        assert_eq!(c.dispatch("settings.save",json!({}))["ok"],false);assert_eq!(c.state()["saved"],before);assert_eq!(c.state()["settingsInputs"]["fps"],"24");let _=std::fs::remove_file(&c.storage);
     }
     #[test] fn reopening_the_same_settings_does_not_erase_changes_and_cancel_is_explicit(){
         let c=fixture();input(&c,"volume","42");c.dispatch("device.settings.open",json!({"uuid":"host"}));assert_eq!(c.state()["settingsInputs"]["volume"],"42");

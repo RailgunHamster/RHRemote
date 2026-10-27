@@ -600,6 +600,7 @@ pub struct NativePlatform {
     updates: Mutex<crate::updates::Updates>,
     update_snapshot: Arc<Mutex<Value>>,
     pub statistics: Arc<Mutex<crate::statistics::Statistics>>,
+    pub ui_test: Arc<crate::ui_test::Bridge>,
     retired_launches: Arc<Mutex<Vec<std::thread::JoinHandle<Result<LaunchOutcome, String>>>>>,
     cleanup: crate::native_cleanup::Queue,
     stop_requested: AtomicBool,
@@ -608,6 +609,8 @@ pub struct NativePlatform {
 }
 impl NativePlatform {
     pub fn new(engine: PathBuf, token: String, data: PathBuf) -> Result<Self, String> {
+        let default_data=PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote");
+        let ui_test=Arc::new(crate::ui_test::Bridge::new(std::env::var_os("RHREMOTE_DATA_DIR").is_some()&&crate::ui_test::isolated(&data,&default_data,&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default())));
         let statistics = crate::statistics::Statistics::new(&data);
         let updates=crate::updates::Updates::new();
         let update_snapshot=updates.snapshot();
@@ -693,6 +696,7 @@ impl NativePlatform {
             updates: Mutex::new(updates),
             update_snapshot,
             statistics: Arc::new(Mutex::new(statistics)),
+            ui_test,
             retired_launches: Arc::new(Mutex::new(Vec::new())),
             cleanup: Default::default(),
             stop_requested: AtomicBool::new(false),
@@ -1355,6 +1359,7 @@ impl Platform for NativePlatform {
             None
         };
         match action {
+            id if id.starts_with("view.ui.")=>self.ui_test.execute(id,args),
             "engine.close" => {
                 self.closing.store(true,Ordering::SeqCst);
                 let result=self.stop_owned();
