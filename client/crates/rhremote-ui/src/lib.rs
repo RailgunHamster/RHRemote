@@ -46,7 +46,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},
         "settings.network.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "statistics.configure" => json!({"enabled":arg=="true"}),
-        "app.settings.tab" | "settings.tab" => json!({"tab":arg}),
+        "app.settings.tab" | "settings.tab" | "stream.controls.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
         "stream.shortcut" => json!({"shortcut":arg}),
         "stream.menu.open" => json!({"menu":arg}),
@@ -183,9 +183,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         for (id, arg, requested_at_us, queued) in receiver {
             let args = args_for(&id, &arg, &actions.state());
             // Network updates must not occupy the navigation/action queue.
-            if id.starts_with("updates.") || matches!(id.as_str(),"sync.run"|"sync.resolve") {
+            if id.starts_with("updates.") || rhremote_core::is_session_control_action(&id) || matches!(id.as_str(),"sync.run"|"sync.resolve") {
                 let actions=actions.clone();
-                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true && !id.starts_with("updates."){actions.message(response["error"].as_str().unwrap_or("操作失败").into());}});
+                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true && !id.starts_with("updates.") && !rhremote_core::is_session_control_action(&id){actions.message(response["error"].as_str().unwrap_or("操作失败").into());}});
                 continue;
             }
             let response = actions.dispatch_timed(&id, args, Some(rhremote_core::ActionTiming{requested_at_us,queue_wait_us:queued.elapsed().as_micros()}));
@@ -204,7 +204,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             toolbar_queue.message("操作队列已满".into());
         }
-        if id.as_str() != "stream.disconnect" {
+        if matches!(id.as_str(),"stream.shortcut"|"stream.window.move"|"stream.display.select") {
             overlay::focus_stream(&toolbar_queue.state());
         }
     });
@@ -293,6 +293,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_profile_fields(ModelRc::from(profile_model.clone()));
     let mut profile_fingerprint = String::new();
     let mut toolbar_display_fingerprint = String::new();
+    let mut picker_fingerprint = String::new();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade() else{return};
         let logical_width=ui.window().size().width as f32/ui.window().scale_factor();
@@ -311,7 +312,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_connection_title(state["connection"]["title"].as_str().unwrap_or("").into());
             ui.set_connection_name(state["connection"]["name"].as_str().unwrap_or("").into());
             ui.set_connection_error(state["connection"]["error"].as_str().unwrap_or("").into());
-            ui.set_connection_busy(state["connection"]["busy"]==true);
+            ui.set_connection_busy(state["connection"]["busy"]==true);ui.set_control_requests_pending(state["controlRequests"].as_u64().unwrap_or(0)>0);
             ui.set_settings_dirty(state["settingsDirty"]==true);ui.set_settings_error(state["settingsError"].as_str().unwrap_or("").into());if !ui.get_navigation_prompt()&&state["navigationPrompt"].is_object(){ui.set_navigation_choice(0);}ui.set_navigation_prompt(state["navigationPrompt"].is_object());ui.set_navigation_message(state["navigationPrompt"]["message"].as_str().unwrap_or("").into());
             let sync_form=if state["syncDraft"].is_object(){&state["syncDraft"]}else{&state["sync"]};ui.set_sync_generation(state["syncGeneration"].as_u64().unwrap_or(0) as i32);ui.set_sync_dirty(state["syncDirty"]==true);ui.set_sync_error(state["syncError"].as_str().unwrap_or("").into());
             ui.set_add_address(state["add"]["address"].as_str().unwrap_or("").into());ui.set_add_phase(state["add"]["phase"].as_str().unwrap_or("editing").into());ui.set_add_error(state["add"]["error"].as_str().unwrap_or("").into());
@@ -368,26 +369,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(toolbar)=toolbar_weak.upgrade(){
             toolbar.set_expanded(state["controls"]==true);
             toolbar.set_audio_enabled(state["audioEnabled"]==true);toolbar.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
-            toolbar.set_device_name(ui.get_selected_name());toolbar.set_status(state["status"].as_str().unwrap_or("").into());toolbar.set_stats_enabled(state["showStats"]==true);
+            toolbar.set_device_name(ui.get_selected_name());toolbar.set_stats_enabled(state["showStats"]==true);
+            let controls_tab=state["controlsTab"].as_str().unwrap_or("input");let feedback=&state["controlAction"];let feedback_visible=feedback["group"]==controls_tab;
+            toolbar.set_controls_tab(controls_tab.into());toolbar.set_busy(feedback["busy"]==true);toolbar.set_failed(feedback_visible && feedback["error"].as_str().is_some_and(|s|!s.is_empty()));
+            toolbar.set_status(if state["connecting"]==true {state["status"].as_str().unwrap_or("")}else if feedback_visible {feedback["message"].as_str().unwrap_or("")}else{""}.into());
             toolbar.global::<Palette>().set_dark(state["saved"]["dark"]==true);
             let display_fingerprint=format!("{}:{}",state["statistics"]["displays"],state["statistics"]["selectedDisplay"]["id"]);
             if display_fingerprint!=toolbar_display_fingerprint {
                 toolbar_display_fingerprint=display_fingerprint;
                 toolbar.set_displays(ui.get_remote_displays());
                 toolbar.set_display_labels(ModelRc::new(VecModel::from(ui.get_remote_displays().iter().map(|d|d.label).collect::<Vec<_>>())));
-                if let Some(index)=ui.get_remote_displays().iter().position(|d|d.chosen){toolbar.set_display_index(index as i32);}
+                toolbar.set_display_index(ui.get_remote_displays().iter().position(|d|d.chosen).map(|i|i as i32).unwrap_or(-1));
             }
             let mut toolbar_state=overlay::follow(&toolbar,&state);
             if let Some(picker)=picker_weak.upgrade(){
                 let kind=state["streamMenu"].as_str().unwrap_or("");
-                if !kind.is_empty() && kind!=picker.get_kind().as_str(){
-                    picker.set_kind(kind.into());
-                    if kind=="shortcuts" {picker.set_labels(toolbar.get_shortcut_labels());picker.set_values(toolbar.get_shortcut_ids());}
+                let fingerprint=if kind=="displays"{format!("{kind}:{toolbar_display_fingerprint}")}else{kind.into()};
+                if fingerprint!=picker_fingerprint {
+                    picker_fingerprint=fingerprint;picker.set_kind(kind.into());
+                    if kind=="shortcuts" {picker.set_labels(toolbar.get_shortcut_labels());picker.set_values(toolbar.get_shortcut_ids());picker.set_enabled_items(ModelRc::new(VecModel::from(vec![true;toolbar.get_shortcut_ids().row_count()])));picker.set_chosen_items(Default::default());}
+                    else if kind=="displays" {
+                        picker.set_labels(toolbar.get_display_labels());picker.set_values(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.id).collect::<Vec<_>>())));
+                        picker.set_enabled_items(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.available).collect::<Vec<_>>())));picker.set_chosen_items(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.chosen).collect::<Vec<_>>())));
+                    }
                 }
-                if kind=="displays" {
-                    picker.set_labels(toolbar.get_display_labels());
-                    picker.set_values(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.id).collect::<Vec<_>>())));
-                }
+                let picker_error=if kind=="feedback" {feedback["error"].as_str().unwrap_or("")}else if (kind=="displays" && feedback["group"]=="displays" || kind=="shortcuts" && feedback["group"]=="input") && feedback["error"].as_str().is_some_and(|e|!e.is_empty()) {feedback["message"].as_str().unwrap_or("操作失败")}else{""};
+                picker.set_busy(feedback["busy"]==true);picker.set_error(picker_error.into());
                 picker.global::<Palette>().set_dark(state["saved"]["dark"]==true);
                 toolbar_state["picker"]=overlay::follow_picker(&picker,&state,&toolbar_state);
             }

@@ -81,49 +81,89 @@ export component StreamToolbar inherits Window {
     in property <bool> audio-enabled;
     in property <int> audio-volume:100;
     in property <bool> stats-enabled;
+    in property <bool> busy;
+    in property <bool> failed;
+    in property <string> controls-tab:"input";
     in property <string> device-name;
     in property <string> status;
     in property <[RemoteDisplay]> displays;
     in property <[string]> display-labels;
     in property <[string]> shortcut-labels;
     in property <[string]> shortcut-ids;
-    in-out property <int> shortcut-index:5;
     in-out property <int> display-index:0;
-    preferred-width:expanded ? 1020px : 72px;
-    preferred-height:expanded ? 144px : 28px;
-    min-width:1px;min-height:expanded ? 144px : 28px;
-    max-width:expanded ? 1020px : 72px;max-height:expanded ? 144px : 28px;
-    // Keep the toggle at the same screen coordinate in both states.
-    Rectangle {
-        x:(parent.width - self.width)/2;y:0px;width:72px;height:28px;
-        background:Palette.surface;border-radius:10px;border-width:1px;border-color:Palette.line;
-        Text {text:root.expanded ? "收起" : "控制";color:Palette.blue;horizontal-alignment:center;vertical-alignment:center;font-size:12px;}
-        TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger("stream.controls.toggle","");}}
-        accessible-role:button;accessible-label:root.expanded ? "收起" : "控制";
-        accessible-action-default=>{Commands.trigger("stream.controls.toggle","");}
+    property <bool> narrow:self.width<400px;
+    preferred-width:expanded ? 560px : 72px;
+    preferred-height:expanded ? 292px : 28px;
+    min-width:1px;min-height:1px;
+    max-width:expanded ? 560px : 72px;max-height:expanded ? 292px : 28px;
+    // The same handle remains at the center of the native stream's top edge.
+    ActionButton {
+        x:(parent.width - self.width)/2;y:0px;width:72px;height:28px;min-width:1px;border-radius:10px;
+        text:root.expanded ? "收起" : "控制";action-id:"stream.controls.toggle";
     }
     if root.expanded: Rectangle {
-        y:28px;height:116px;
+        y:28px;height:parent.height - 28px;
         background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
         VerticalLayout {
-            padding:8px;spacing:6px;
-            HorizontalLayout {spacing:6px;
-                Text {text:root.device-name;color:Palette.ink;vertical-alignment:center;overflow:elide;max-width:120px;}
-                ActionButton {text:"Ctrl+Alt+Del";action-id:"stream.shortcut";argument:"ctrl-alt-delete";}
-                ActionButton {text:"快捷键 ▾";action-id:"stream.menu.open";argument:"shortcuts";}
-                ActionButton {text:root.audio-enabled ? "声音：开" : "声音：关";action-id:"stream.audio.toggle";chosen:root.audio-enabled;}
-                SpinBox {minimum:0;maximum:100;value:root.audio-volume;max-width:90px;edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
-                ActionButton {text:"统计";action-id:"stream.stats.toggle";chosen:root.stats-enabled;}
-                ActionButton {text:"断开";action-id:"stream.disconnect";}
+            padding:12px;spacing:8px;
+            HorizontalLayout {spacing:8px;
+                Text{text:root.device-name;color:Palette.ink;font-size:13px;vertical-alignment:center;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
+                ActionButton{text:"断开";action-id:"stream.disconnect";}
             }
             HorizontalLayout {spacing:6px;
-                ActionButton {text:"自动选屏";action-id:"stream.display.select";argument:"auto";}
-                ActionButton {text:"虚拟屏";action-id:"stream.display.select";argument:"virtual";}
-                ActionButton {text:root.display-labels.length > 0 ? root.display-labels[root.display-index] + " ▾" : "屏幕 ▾";action-id:"stream.menu.open";argument:"displays";disabled:root.displays.length==0;}
-                ActionButton {text:"刷新";action-id:"stream.displays.refresh";}
-                ActionButton {text:"窗口 ←";action-id:"stream.window.move";argument:"left";}
-                ActionButton {text:"窗口 →";action-id:"stream.window.move";argument:"right";}
-                Text {text:root.status;color:Palette.muted;vertical-alignment:center;overflow:elide;}
+                TabButton{text:"操作";action-id:"stream.controls.tab";argument:"input";chosen:root.controls-tab=="input";horizontal-stretch:1;}
+                TabButton{text:"屏幕";action-id:"stream.controls.tab";argument:"displays";chosen:root.controls-tab=="displays";horizontal-stretch:1;}
+                TabButton{text:"声音";action-id:"stream.controls.tab";argument:"audio";chosen:root.controls-tab=="audio";horizontal-stretch:1;}
+            }
+            ScrollView {vertical-stretch:1;
+                VerticalLayout {spacing:8px;alignment:start;
+                    if root.controls-tab=="input":VerticalLayout{spacing:8px;
+                        if !root.narrow:HorizontalLayout{spacing:8px;
+                            ActionButton{text:"Ctrl+Alt+Delete";action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"快捷键 ▾";action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                        }
+                        if root.narrow:VerticalLayout{spacing:8px;
+                            ActionButton{text:"Ctrl+Alt+Delete";action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"快捷键 ▾";action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                        }
+                        ActionButton{text:root.stats-enabled ? "统计：开" : "统计：关";action-id:"stream.stats.toggle";chosen:root.stats-enabled;disabled:root.busy;}
+                    }
+                    if root.controls-tab=="displays":VerticalLayout{spacing:8px;
+                        if !root.narrow:HorizontalLayout{spacing:8px;
+                            ActionButton{text:"自动选屏";action-id:"stream.display.select";argument:"auto";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"虚拟屏";action-id:"stream.display.select";argument:"virtual";disabled:root.busy;horizontal-stretch:1;}
+                        }
+                        if root.narrow:VerticalLayout{spacing:8px;
+                            ActionButton{text:"自动选屏";action-id:"stream.display.select";argument:"auto";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"虚拟屏";action-id:"stream.display.select";argument:"virtual";disabled:root.busy;horizontal-stretch:1;}
+                        }
+                        HorizontalLayout{spacing:8px;
+                            ActionButton{text:"显示器 ▾";action-id:"stream.menu.open";argument:"displays";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"刷新";action-id:"stream.displays.refresh";disabled:root.busy;}
+                        }
+                        Text{text:root.display-labels.length>root.display-index && root.display-index>=0 ? root.display-labels[root.display-index] : "暂无屏幕信息";color:Palette.muted;font-size:12px;overflow:elide;}
+                        if !root.narrow:HorizontalLayout{spacing:8px;
+                            ActionButton{text:"窗口移到左屏";action-id:"stream.window.move";argument:"left";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"窗口移到右屏";action-id:"stream.window.move";argument:"right";disabled:root.busy;horizontal-stretch:1;}
+                        }
+                        if root.narrow:VerticalLayout{spacing:8px;
+                            ActionButton{text:"窗口移到左屏";action-id:"stream.window.move";argument:"left";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"窗口移到右屏";action-id:"stream.window.move";argument:"right";disabled:root.busy;horizontal-stretch:1;}
+                        }
+                    }
+                    if root.controls-tab=="audio":VerticalLayout{spacing:8px;
+                        ActionButton{text:root.audio-enabled ? "声音：开" : "声音：关";action-id:"stream.audio.toggle";chosen:root.audio-enabled;disabled:root.busy;}
+                        HorizontalLayout{spacing:8px;
+                            Text{text:"音量";color:Palette.ink;vertical-alignment:center;}
+                            SpinBox{minimum:0;maximum:100;value:root.audio-volume;enabled:!root.busy;max-width:120px;edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
+                            Text{text:"%";color:Palette.muted;vertical-alignment:center;}
+                        }
+                    }
+                }
+            }
+            HorizontalLayout{spacing:8px;
+                Text{text:root.status;color:root.failed ? #b04452 : Palette.muted;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;vertical-alignment:center;accessible-label:root.status;}
+                if root.failed:ActionButton{text:"详情";action-id:"stream.menu.open";argument:"feedback";height:30px;}
             }
         }
     }
@@ -134,27 +174,39 @@ export component StreamPicker inherits Window {
     in property <string> kind;
     in property <[string]> labels;
     in property <[string]> values;
-    preferred-width:420px;preferred-height:400px;min-width:180px;min-height:80px;
+    in property <[bool]> enabled-items;
+    in property <[bool]> chosen-items;
+    in property <bool> busy;
+    in property <string> error;
+    preferred-width:420px;preferred-height:400px;min-width:1px;min-height:1px;
     callback dismiss();
     forward-focus:focus;
-    focus := FocusScope {
+    focus:=FocusScope{
         key-pressed(event)=>{if(event.text==Key.Escape){root.dismiss();return accept;}return reject;}
-        VerticalLayout {
-            padding:8px;spacing:6px;
-            HorizontalLayout {
-                Text {text:root.kind=="shortcuts" ? "快捷键" : "屏幕";color:Palette.ink;vertical-alignment:center;}
-                ActionButton {text:"关闭";action-id:"stream.menu.close";max-width:80px;}
+        VerticalLayout{padding:8px;spacing:6px;
+            HorizontalLayout{
+                Text{text:root.kind=="shortcuts" ? "快捷键" : root.kind=="feedback" ? "操作失败" : "屏幕";color:Palette.ink;vertical-alignment:center;}
+                Rectangle{horizontal-stretch:1;}
+                if root.kind!="feedback" && root.error!="":ActionButton{text:"详情";action-id:"stream.menu.open";argument:"feedback";}
+                ActionButton{text:"关闭";action-id:"stream.menu.close";}
             }
-            ScrollView {
-                vertical-stretch:1;horizontal-stretch:1;
-                VerticalLayout {
-                    spacing:2px;alignment:start;
-                    for label[index] in root.labels: Rectangle {
-                        height:40px;border-radius:8px;background:touch.has-hover ? Palette.soft : transparent;
-                        Text {x:10px;width:parent.width - 20px;text:label;color:Palette.ink;vertical-alignment:center;overflow:elide;}
-                        touch := TouchArea {mouse-cursor:pointer;clicked=>{Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);Commands.trigger("stream.menu.close","");}}
-                        accessible-role:button;accessible-label:label;
-                        accessible-action-default=>{Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);Commands.trigger("stream.menu.close","");}
+            ScrollView{vertical-stretch:1;horizontal-stretch:1;
+                VerticalLayout{spacing:4px;alignment:start;
+                    if root.error!="":Text{text:root.error;color:#b04452;wrap:word-wrap;}
+                    if root.kind!="feedback" && root.labels.length==0:Text{text:"暂无屏幕信息，请在屏幕分类刷新。";color:Palette.muted;wrap:word-wrap;}
+                    if root.kind!="feedback":VerticalLayout{spacing:4px;
+                        for label[index] in root.labels:Rectangle{
+                            property <bool> available:!root.busy && (root.enabled-items.length<=index || root.enabled-items[index]);
+                            property <bool> chosen:root.chosen-items.length>index && root.chosen-items[index];
+                            height:40px;border-radius:8px;background:self.chosen || touch.has-hover ? Palette.soft : transparent;
+                            forward-focus:row-focus;
+                            border-width:row-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
+                            Text{x:10px;width:parent.width - 20px;text:label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
+                            row-focus:=FocusScope{enabled:parent.available;key-pressed(event)=>{if(event.text==Key.Return || event.text==" "){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
+                            touch:=TouchArea{enabled:parent.available;mouse-cursor:pointer;clicked=>{row-focus.focus();Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
+                            accessible-role:button;accessible-enabled:self.available;accessible-label:label;
+                            accessible-action-default=>{if(self.available){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
+                        }
                     }
                 }
             }
@@ -222,6 +274,7 @@ export component MainWindow inherits Window {
     in property <string> connection-name;
     in property <string> connection-error;
     in property <bool> connection-busy;
+    in property <bool> control-requests-pending;
     in property <bool> controls;
     in property <string> stream-statistics;
     in property <[string]> shortcut-labels;
@@ -371,7 +424,7 @@ export component MainWindow inherits Window {
                                         VerticalLayout {spacing:10px;alignment:center;
                                             Text {text:"桌面连接";font-size:16px;font-weight:600;color:Palette.ink;}
                                             Text {text:root.selected-device.is-self ? "本机不支持连接自身" : root.selected-device.paired ? "已配对" : "连接前需要配对";font-size:12px;color:Palette.muted;}
-                                            HorizontalLayout {ActionButton {text:root.selected-device.is-self ? "本机" : root.selected-device.paired ? "连接" : "配对";action-id:root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-uuid;primary:true;disabled:root.selected-device.is-self;min-width:112px;}Rectangle{horizontal-stretch:1;}}
+                                            HorizontalLayout {ActionButton {text:root.selected-device.is-self ? "本机" : root.selected-device.paired ? "连接" : "配对";action-id:root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-uuid;primary:true;disabled:root.selected-device.is-self || root.control-requests-pending;min-width:112px;}Rectangle{horizontal-stretch:1;}}
                                         }
                                     }
                                 }
@@ -619,6 +672,7 @@ export component MainWindow inherits Window {
                         Text{text:"2  建立串流";color:root.connection-phase=="starting" ? Palette.blue : Palette.muted;font-size:14px;}
                         Text{text:"3  显示远程画面";color:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? Palette.blue : Palette.muted;font-size:14px;}
                         if root.connection-error!="":Text{text:root.connection-error;color:#b04452;font-size:14px;wrap:word-wrap;}
+                        if root.control-requests-pending:Text{text:"正在结束上一项会话操作…";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                         if root.connection-phase=="connected":Text{text:"会话控制位于远程画面上方。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                     }
                     if root.page=="pair": VerticalLayout {spacing:22px;
@@ -646,7 +700,7 @@ export component MainWindow inherits Window {
                     Rectangle{horizontal-stretch:1;}
                     if root.connection-busy:ActionButton{text:root.connection-phase=="cancelling" || root.connection-phase=="cleaning" ? "正在清理…" : root.connection-phase=="connected" ? "断开连接" : "取消连接";action-id:"stream.disconnect";disabled:root.connection-phase=="cancelling" || root.connection-phase=="cleaning";}
                     if !root.connection-busy:ActionButton{text:"返回设备";action-id:"connection.dismiss";}
-                    if !root.connection-busy && root.connection-phase=="failed":ActionButton{text:"重试连接";action-id:"connection.retry";primary:true;}
+                    if !root.connection-busy && root.connection-phase=="failed":ActionButton{text:"重试连接";action-id:"connection.retry";primary:true;disabled:root.control-requests-pending;}
                 }
             }
             if root.page=="profile-copy":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:copy-footer.preferred-height;

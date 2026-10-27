@@ -13,6 +13,8 @@ mod add_device;
 mod device_info;
 mod connection;
 mod profile_copy;
+mod session_ui;
+pub use session_ui::is_control_action as is_session_control_action;
 pub mod sync_model;
 pub mod network;
 
@@ -208,6 +210,9 @@ pub struct State {
     pub statistics: Value,
     pub network: Value,
     pub controls: bool,
+    pub controls_tab: String,
+    pub control_action: session_ui::ControlAction,
+    pub control_requests: usize,
     pub stream_menu: String,
     pub trackpad: bool,
     pub pan: bool,
@@ -337,6 +342,9 @@ impl Controller {
                 statistics: Value::Null,
                 network: Value::Null,
                 controls: false,
+                controls_tab: "input".into(),
+                control_action: Default::default(),
+                control_requests: 0,
                 stream_menu: String::new(),
                 trackpad: false,
                 pan: false,
@@ -436,6 +444,7 @@ impl Controller {
         } else if !streaming && s.streaming {
             s.status = "已断开".into();
         }
+        if s.streaming && !streaming {session_ui::clear(&mut s);}
         s.streaming = streaming;
         if !streaming {
             s.stream_menu.clear();
@@ -529,7 +538,7 @@ impl Controller {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
             let action=match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>if self.state.lock().unwrap().connection.busy(){"stream.disconnect"}else{"connection.dismiss"},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"};
             let result=self.dispatch(action,if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
-        } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.profile_copy_gate(id){result} else if id.starts_with("settings.copy."){self.dispatch_profile_copy(id,args)} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
+        } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if is_session_control_action(id){self.dispatch_session_control(id,args)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.profile_copy_gate(id){result} else if id.starts_with("settings.copy."){self.dispatch_profile_copy(id,args)} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
             self.dispatch_add(id,args)
         } else if id.starts_with("device.info.") {
             self.dispatch_info(id,args)
@@ -802,20 +811,25 @@ impl Controller {
                 s.controls = !s.controls;
                 s.stream_menu.clear();
             }
+            "stream.controls.tab" => {
+                if !s.streaming || !s.controls {return Err("请先展开活动串流的控制栏".into());}
+                let tab=args["tab"].as_str().unwrap_or("");if !["input","displays","audio"].contains(&tab){return Err("unknown stream control tab".into());}
+                s.controls_tab=tab.into();s.stream_menu.clear();
+            }
             "stream.menu.open" => {
                 if !s.streaming || !s.controls {
                     return Err("请先展开活动串流的控制栏".into());
                 }
                 let menu = args["menu"].as_str().unwrap_or("");
-                if !["shortcuts", "displays"].contains(&menu) {
+                if !["shortcuts", "displays", "feedback"].contains(&menu) {
                     return Err("unknown stream menu".into());
                 }
+                if menu=="feedback" && s.control_action.error.is_empty(){return Err("没有会话操作错误".into());}
                 s.stream_menu = menu.into();
             }
             "stream.menu.close" => s.stream_menu.clear(),
             "stream.shortcuts.list" => return Ok(shortcuts()),
-            "stream.shortcuts.open" => s.controls = true,
-            "stream.displays.open" => s.controls = true,
+            "stream.shortcuts.open" | "stream.displays.open" => {if !s.streaming {return Err("没有可操作的串流".into());}s.controls=true;s.controls_tab=if id=="stream.shortcuts.open"{"input"}else{"displays"}.into();s.stream_menu=if id=="stream.shortcuts.open"{"shortcuts"}else{""}.into();},
             "window.minimize"
             | "window.maximize"
             | "window.close"
@@ -841,20 +855,6 @@ impl Controller {
                 }
             }
             _ => {
-                if id == "stream.shortcut"
-                    && !shortcuts()
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .any(|v| v["id"] == args["shortcut"] && args["shortcut"].is_string())
-                {
-                    return Err("unknown remote shortcut".into());
-                }
-                if id == "stream.window.move"
-                    && ![Some("left"), Some("right")].contains(&args["direction"].as_str())
-                {
-                    return Err("direction must be left or right".into());
-                }
                 if id == "pair.cancel" && s.page != "pair" {
                     return Err("no active pairing".into());
                 }
@@ -864,6 +864,7 @@ impl Controller {
                     }
                 }
                 if id == "device.connect" || id == "device.pair" {
+                    if s.control_requests>0{return Err("上一项会话操作正在结束，请稍候".into());}
                     if s.page == "pair" {
                         return Err("请先完成或取消当前配对".into());
                     }
@@ -884,6 +885,7 @@ impl Controller {
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
                     if id == "device.connect" {
+                        session_ui::clear(&mut s);s.controls_tab="input".into();
                         s.connection.begin(&d);
                         s.page = "connection".into();
                         // An ended stream's firstFrame must not describe this attempt.
@@ -910,6 +912,7 @@ impl Controller {
                         s.page = "pair".into();
                     }
                 }
+                if id=="stream.disconnect" {session_ui::clear(&mut s);}
                 if id == "stream.disconnect" && !s.connection.uuid.is_empty() {
                     s.connection.stopping=true;
                     s.connection.phase="cancelling".into();
@@ -989,15 +992,6 @@ impl Controller {
                     }
                     "stream.keyboard.toggle" => {
                         s.keyboard = !s.keyboard;
-                    }
-                    "stream.stats.toggle" => {
-                        s.show_stats = !s.show_stats;
-                    }
-                    "stream.audio.toggle" => {
-                        s.audio_enabled = result["enabled"] == true;
-                    }
-                    "stream.audio.volume" => {
-                        s.volume = result["volume"].as_u64().unwrap_or(100) as u32;
                     }
                     _ => {}
                 }

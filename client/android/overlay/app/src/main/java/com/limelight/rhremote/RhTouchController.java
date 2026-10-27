@@ -29,6 +29,8 @@ public final class RhTouchController {
     public boolean isTrackpad(){return trackpad;}
     public boolean togglePan(){cancel();return panMode=!panMode;}
     public boolean isPanMode(){return panMode;}
+    public float scale(){return scale;}
+    public org.json.JSONObject viewTransform(){return RhActions.obj("scale",scale,"x",panX,"y",panY);}
     public org.json.JSONObject surfaceSize(){return RhActions.obj("width",surface.getWidth(),"height",surface.getHeight());}
     public void cancel(){handler.removeCallbacksAndMessages(null);sequence++;if(primary){button(true,false);primary=false;}if(secondary){button(false,false);secondary=false;}active=drag=multi=false;}
     public void inject(org.json.JSONObject args)throws org.json.JSONException{

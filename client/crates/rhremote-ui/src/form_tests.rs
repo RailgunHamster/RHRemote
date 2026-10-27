@@ -3,7 +3,7 @@ use i_slint_backend_testing::ElementHandle;
 use slint::{ComponentHandle,LogicalPosition,LogicalSize,ModelRc,VecModel,platform::{Key,PointerEventButton,WindowEvent}};
 use std::{cell::RefCell,rc::Rc};
 
-fn click(ui:&MainWindow,label:&str){
+fn click(ui:&impl ComponentHandle,label:&str){
     let element=ElementHandle::find_by_accessible_label(ui,label).next().unwrap_or_else(||panic!("Missing {label}"));
     let p=element.absolute_position();let size=element.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
     ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});
@@ -111,4 +111,21 @@ fn long_source_names_cannot_push_the_preview_button_out_of_the_form(){
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();ui.window().set_size(LogicalSize::new(720.,560.));
     let inspect=ElementHandle::find_by_accessible_label(&ui,"查看配置").next().unwrap();let p=inspect.absolute_position();let size=inspect.size();assert!(p.x>=0.&&p.x+size.width<=720.);click(&ui,"查看配置");assert_eq!(&*received.borrow(),&[("settings.copy.preview".into(),"pad-1234".into())]);
     ui.set_profile_sources(Default::default());received.borrow_mut().clear();click(&ui,"从其他客户端复制配置");assert!(received.borrow().is_empty());ui.hide().unwrap();
+}
+
+#[test]
+fn session_tabs_keep_disconnect_reachable_and_pending_commands_do_not_send_twice(){
+    i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamToolbar::new().unwrap();ui.set_device_name("winserver".into());ui.set_expanded(true);ui.set_controls_tab("input".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for width in [560.,355.]{ui.window().set_size(LogicalSize::new(width,292.));for tab in ["input","displays","audio"]{ui.set_controls_tab(tab.into());let disconnect=ElementHandle::find_by_accessible_label(&ui,"断开").next().unwrap();let p=disconnect.absolute_position();let size=disconnect.size();assert!(p.x>=0.&&p.x+size.width<=width&&p.y+size.height<=292.);received.borrow_mut().clear();click(&ui,"断开");assert_eq!(received.borrow()[0].0,"stream.disconnect");}
+        ui.set_controls_tab("input".into());ui.set_busy(false);received.borrow_mut().clear();click(&ui,"Ctrl+Alt+Delete");assert_eq!(&*received.borrow(),&[("stream.shortcut".into(),"ctrl-alt-delete".into())]);ui.set_busy(true);received.borrow_mut().clear();click(&ui,"Ctrl+Alt+Delete");assert!(received.borrow().is_empty());click(&ui,"屏幕");assert_eq!(&*received.borrow(),&[("stream.controls.tab".into(),"displays".into())]);ui.set_busy(false);
+        ui.set_failed(true);ui.set_status("屏幕切换失败。".repeat(100).into());let details=ElementHandle::find_by_accessible_label(&ui,"详情").next().unwrap();let p=details.absolute_position();let size=details.size();assert!(p.x+size.width<=width&&p.y+size.height<=292.);received.borrow_mut().clear();click(&ui,"详情");assert_eq!(&*received.borrow(),&[("stream.menu.open".into(),"feedback".into())]);ui.set_failed(false);
+    }ui.hide().unwrap();
+}
+
+#[test]
+fn picker_respects_availability_and_waits_for_success_before_dismissing(){
+    i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamPicker::new().unwrap();ui.set_kind("displays".into());ui.set_labels(ModelRc::new(VecModel::from(vec!["不可用屏幕".into(),"显示器 2".into()])));ui.set_values(ModelRc::new(VecModel::from(vec!["missing".into(),"active".into()])));ui.set_enabled_items(ModelRc::new(VecModel::from(vec![false,true])));ui.set_chosen_items(ModelRc::new(VecModel::from(vec![false,true])));
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();ui.window().set_size(LogicalSize::new(320.,300.));click(&ui,"不可用屏幕");assert!(received.borrow().is_empty());click(&ui,"显示器 2");assert_eq!(&*received.borrow(),&[("stream.display.select".into(),"active".into())]);
+    received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});assert_eq!(&*received.borrow(),&[("stream.display.select".into(),"active".into())]);ui.set_busy(true);received.borrow_mut().clear();click(&ui,"显示器 2");assert!(received.borrow().is_empty());click(&ui,"关闭");assert_eq!(received.borrow()[0].0,"stream.menu.close");ui.set_busy(false);ui.set_error("屏幕切换失败".into());received.borrow_mut().clear();click(&ui,"详情");assert_eq!(&*received.borrow(),&[("stream.menu.open".into(),"feedback".into())]);ui.set_kind("feedback".into());ui.set_error("详细错误。".repeat(100).into());let close=ElementHandle::find_by_accessible_label(&ui,"关闭").next().unwrap();let p=close.absolute_position();assert!(p.y>=0.&&p.y+close.size().height<=300.);ui.hide().unwrap();
 }

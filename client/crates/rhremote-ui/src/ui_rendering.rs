@@ -163,11 +163,11 @@ mod region {
     mod tests {
         use super::*;
         #[test]
-        fn expanded_toolbar_excludes_top_sides_and_retains_both_control_rows() {
+        fn expanded_toolbar_excludes_top_sides_and_retains_the_grouped_panel() {
             for scale in [1.0, 1.25, 1.5, 2.0] {
                 let g = Geometry {
-                    width: (1020.0 * scale) as i32,
-                    height: (144.0 * scale) as i32,
+                    width: (560.0 * scale) as i32,
+                    height: (292.0 * scale) as i32,
                     x: 0,
                     y: 0,
                     scale,
@@ -179,7 +179,7 @@ mod region {
                     json!({"toggleInside":true,"topSidesExcluded":true,"panelInside":true})
                 );
                 assert!(shape.contains(g.width / 2, (70.0 * scale) as i32));
-                assert!(shape.contains(g.width / 2, (120.0 * scale) as i32));
+                assert!(shape.contains(g.width / 2, (270.0 * scale) as i32));
                 assert!(!shape.contains(0, 0));
                 assert!(!shape.contains(g.width / 2, g.height));
             }

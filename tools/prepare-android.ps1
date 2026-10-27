@@ -49,6 +49,9 @@ Edit-Source 'app/proguard-rules.pro' {param($s)
     return $s+"`n# Stable JNI bridge and product action interfaces.`n-keep class com.limelight.rhremote.** { *; }`n"
 }
 Edit-Source 'app/src/main/AndroidManifest.xml' {param($s)
+    # Keep Game's upstream legacy Back dispatch. Android 15 intercepts every KEYCODE_BACK
+    # before the view tree when modern Back is enabled, including mouse right-click events.
+    # Game.onBackPressed below routes system Back without taking mouse input from Moonlight.
     $s=$s.Replace('<uses-permission android:name="android.permission.INTERNET" />','<uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />')
     $s=$s.Replace('    </application>','        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.updates" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/rh_update_paths" /></provider>
@@ -405,6 +408,7 @@ Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
     $s=Replace-Once $s '    private final TouchContext[] touchContextMap' '    private boolean rhAdmissionRejected;
     private com.limelight.rhremote.RhTouchController rhTouch;
     private com.limelight.rhremote.RhStreamControls rhControls;
+    @Override public void onBackPressed() { if(rhControls != null && rhControls.goBack()) return; super.onBackPressed(); }
     public com.limelight.rhremote.RhAudioRenderer rhAudioRenderer;
     private com.limelight.rhremote.RhProfile rhProfile;
     private final TouchContext[] touchContextMap'

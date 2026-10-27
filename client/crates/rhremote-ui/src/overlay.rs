@@ -36,9 +36,9 @@ fn placement(
     scale: f32,
     expanded: bool,
 ) -> (i32, i32, i32, i32) {
-    let width = ((if expanded { 1020.0 } else { 72.0 }) * scale) as i32;
+    let width = ((if expanded { 560.0 } else { 72.0 }) * scale) as i32;
     let width = width.min((client_width - 16).max(1));
-    let height = ((if expanded { 144.0 } else { 28.0 }) * scale) as i32;
+    let height = ((if expanded { 292.0 } else { 28.0 }) * scale) as i32;
     (left + (client_width - width) / 2, top + 4, width, height)
 }
 
@@ -186,7 +186,7 @@ pub fn follow_picker(picker: &crate::StreamPicker, state: &Value, toolbar: &Valu
             anchor,
             (r.left, r.top, r.right, r.bottom),
             picker.window().scale_factor(),
-            picker.get_labels().row_count(),
+            if state["streamMenu"]=="feedback" {26}else{picker.get_labels().row_count()},
         );
         picker
             .window()
@@ -251,7 +251,7 @@ mod tests {
     fn placement_stays_on_negative_secondary_and_collapses_in_place() {
         assert_eq!(
             super::placement(-3840, 0, 1920, 1.0, true),
-            (-3390, 4, 1020, 144)
+            (-3160, 4, 560, 292)
         );
         assert_eq!(
             super::placement(-3840, 0, 1920, 1.0, false),
