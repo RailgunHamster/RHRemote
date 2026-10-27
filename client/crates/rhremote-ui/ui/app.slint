@@ -123,7 +123,9 @@ component ActionButton inherits Rectangle {
     border-color: key-focus.has-focus || root.chosen ? Palette.blue : Palette.line;
     border-width: root.primary && !key-focus.has-focus ? 0px : 1px;
     label := Text {text:root.text;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
-    key-focus := FocusScope {enabled:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,root.argument);return accept;}return reject;}}
+    // Slint 1.18.1 ignores FocusOut on disabled FocusScope items. Keep delivery
+    // enabled and gate focus entry/actions so a former focus marker can clear.
+    key-focus := FocusScope {focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,root.argument);return accept;}return reject;}}
     touch := TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{key-focus.focus();Commands.trigger(root.action-id,root.argument);}}
     accessible-role: button;
     accessible-enabled:!root.disabled;
@@ -152,7 +154,7 @@ component NavigationItem inherits Rectangle {
         if !root.compact: Text {text:root.text;color:root.chosen ? Palette.blue : Palette.ink;font-weight:root.chosen ? 600 : 400;vertical-alignment:center;font-size:13px;}
         if !root.compact: Rectangle {horizontal-stretch:1;}
     }
-    nav-focus:=FocusScope{enabled:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,"");return accept;}return reject;}}
+    nav-focus:=FocusScope{focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,"");return accept;}return reject;}}
     touch:=TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{nav-focus.focus();Commands.trigger(root.action-id,"");}}
     accessible-role:button;accessible-label:root.text;accessible-enabled:!root.disabled;
     accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,"");}}
@@ -293,7 +295,7 @@ export component StreamPicker inherits Window {
                             forward-focus:row-focus;
                             border-width:row-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
                             Text{x:10px;width:parent.width - 20px;text:item-label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
-                            row-focus:=FocusScope{enabled:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
+                            row-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
                             touch:=TouchArea{enabled:parent.available;mouse-cursor:pointer;clicked=>{row-focus.focus();Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
                             accessible-role:button;accessible-enabled:self.available;accessible-label:item-label;
                             accessible-action-default=>{if(self.available){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}

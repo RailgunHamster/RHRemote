@@ -360,3 +360,15 @@ fn modal_selection_tracks_the_actual_buttons_focus_without_test_mode(){
     ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});assert_eq!(ui.get_sync_clear_choice(),0);
     ui.hide().unwrap();
 }
+
+#[test]
+fn disabling_a_focused_button_then_focusing_an_editor_does_not_leave_two_focus_markers(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_settings_dirty(true);
+    ui.set_profile_fields(ModelRc::new(VecModel::from(vec![SettingRow{key:"width".into(),label:"画面宽度".into(),kind:"number".into(),input_text:"1920".into(),..Default::default()}])));
+    let focused=Rc::new(RefCell::new(Vec::new()));let reports=focused.clone();let probe=ui.global::<crate::UiTest>();probe.set_enabled(true);probe.set_operation("inspect".into());probe.on_report(move|id,_,_,_,has_focus,_,_,_,_,_,_|{if has_focus{reports.borrow_mut().push(id.to_string());}});
+    ui.show().unwrap();click(&ui,"保存");ui.set_settings_dirty(false);
+    let editor=ElementHandle::find_by_accessible_label(&ui,"画面宽度").find(|item|item.accessible_read_only().is_some()).expect("actual width editor");let p=editor.absolute_position();let size=editor.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
+    ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});ui.set_settings_dirty(true);probe.set_generation(1);
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    assert_eq!(&*focused.borrow(),&["input|画面宽度".to_owned()]);ui.hide().unwrap();
+}

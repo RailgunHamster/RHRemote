@@ -27,6 +27,7 @@ function Call-Ui([string]$Operation,[string]$Control,[string]$Key,[switch]$Shift
  try{$record=& $uiScript @argsUi}catch{$steps.Add([pscustomobject]@{operation=$Operation;control=$Control;key=$Key;requestId=$argsUi.RequestId;failure=$_.Exception.Message});throw}
  Assert-Ui ($record.result.systemInputInjected -eq $false) 'Unexpected system input path'
  $steps.Add([pscustomobject]@{operation=$Operation;control=$Control;key=$Key;record=$record})
+ Assert-Ui (@($record.result.focused).Count -le 1) 'Several controls retain focus markers simultaneously'
  $record.result
 }
 function Expect-FocusFailure([string]$Control,[string]$Pattern){
