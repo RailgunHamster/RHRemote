@@ -1,10 +1,17 @@
 package com.limelight.rhremote;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.KeyEvent;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import com.limelight.Game;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.jni.MoonBridge;
@@ -46,6 +53,8 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private boolean successorStopping,terminalPending;
     private Intent claimedIntent;
     private String error="";
+    private AlertDialog feedbackDialog;
+    private TextView feedbackDetail;
     private final Runnable watchdog,handoffTimeout=()->failed("串流窗口未能接管连接");
     private final Runnable networkTimeout=()->failed("网络恢复等待超时，请检查网络后重试");
 
@@ -142,6 +151,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         RhStatistics.event("route_media_failed",-1,RhActions.obj("reason",message,"network",route,"recovery",policy.state()));
         main.post(()->{
             if(activity.isFinishing())cancel();
+            updateFeedback();
             stopOriginal(delay);
         });
         return true;
@@ -152,6 +162,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
             if(!cleaned){RhStatistics.event("recovery_cleanup_timeout",-1,RhActions.obj("attemptId",id));if(!cancelled)failed("上一会话清理超时，已停止自动重连");return;}
             oldStopped=true;cleanupPending=false;
             if(cancelled){RhStatistics.finish();release();return;}
+            updateFeedback();
             resolveNext(delay);
         }));}catch(RuntimeException|LinkageError e){failed("上一会话清理失败，请重新启动 RHRemote");}
     }
@@ -192,8 +203,9 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private void launch(Intent next){
         if(cancelled||fatal||activity.isFinishing()||activity.isDestroyed()){cancel();return;}
         handoff=true;main.postDelayed(handoffTimeout,15_000);
+        updateFeedback();
         RhStatistics.event("recovery_handoff",-1,RhActions.obj("attemptId",id));
-        try{activity.startActivity(next);activity.finish();}
+        try{activity.startActivity(next);closeFeedback();activity.finish();}
         catch(RuntimeException|LinkageError e){failed("串流窗口未能启动");}
     }
     private void failed(String message){
@@ -201,7 +213,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         error=message;cancel();RhStatistics.finish();
         RhActions.connectionError("连接失败："+message);
         android.widget.Toast.makeText(activity.getApplicationContext(),message,android.widget.Toast.LENGTH_LONG).show();
-        activity.finish();
+        closeFeedback();activity.finish();
     }
     private synchronized void release(){
         if(completed||cleanupPending||workerRunning||!RhActions.ownsRecovery(this)||!cancelled)return;
@@ -212,12 +224,12 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
                 catch(Exception|LinkageError e){main.post(()->error="通道清理失败，请重新启动 RHRemote");}
                 finally{workerRunning=false;if(cancelCleanupDone)main.post(this::release);}
             });}catch(RuntimeException rejected){workerRunning=false;error="通道清理任务无法启动";}
-        }else{completed=true;clearSuccessor();RhActions.endRecovery(this);}
+        }else{completed=true;closeFeedback();clearSuccessor();RhActions.endRecovery(this);}
     }
     public void cancel(){
         if(completed)return;
         cancelRequests();main.removeCallbacks(watchdog);main.removeCallbacks(handoffTimeout);main.removeCallbacks(networkTimeout);
-        onMain(()->{stopSuccessor();release();});
+        onMain(()->{updateFeedback();stopSuccessor();release();});
     }
     private void successorReady(RhRecovery next){
         if(completed){next.predecessor=null;return;}successor=next;successorStopper=next.stopper;if(cancelled)stopSuccessor();
@@ -233,6 +245,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         }));}catch(RuntimeException|LinkageError e){error="新会话清理失败，请重新启动 RHRemote";}
     }
     public void background(){
+        closeFeedback();
         RhAdmission entering=initialAdmission;
         if(entering!=null&&RhActions.ownsAdmission(entering)){entering.gameReady(this);entering.cancel();return;}
         initialAdmission=null;
@@ -240,7 +253,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         if(previous!=null&&RhActions.ownsRecovery(previous)){previous.successorReady(this);previous.cancel();return;}
         predecessor=null;
         if(handoff||completed)return;
-        if(RhActions.belongsElsewhere(activity)){completed=true;main.removeCallbacks(watchdog);return;}
+        if(RhActions.belongsElsewhere(activity)){completed=true;closeFeedback();main.removeCallbacks(watchdog);return;}
         cancel();
         if(!retrying){retrying=true;cleanupPending=true;RhActions.beginRecovery(this);stopOriginal(0);}
     }
@@ -251,7 +264,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     boolean canAttach(){return handoff&&gameAdmitted&&!cancelled&&!completed;}
     private boolean matchesClaim(Intent intent){return gameAdmitted&&intent.getLongExtra(HANDOFF,0)==id&&uuid!=null&&uuid.equals(intent.getStringExtra(Game.EXTRA_PC_UUID));}
     void attached(){
-        completed=true;cleanupPending=false;main.removeCallbacks(handoffTimeout);forgetRequests();
+        completed=true;cleanupPending=false;closeFeedback();main.removeCallbacks(handoffTimeout);forgetRequests();
         if(claimedIntent!=null)claimedIntent.removeExtra(HANDOFF);claimedIntent=null;clearSuccessor();
         RhActions.endRecovery(this);RhStatistics.event("recovery_attached",-1,RhActions.obj("attemptId",id));
     }
@@ -261,7 +274,37 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         if(pending==null||pending.id!=requested||!pending.canLaunch()||pending.uuid==null||!pending.uuid.equals(intent.getStringExtra(Game.EXTRA_PC_UUID)))return false;
         pending.gameAdmitted=true;pending.cleanupPending=true;pending.claimedIntent=intent;return true;
     }
+    private String feedbackText(){return cancelled?"正在清理连接":handoff?"正在启动串流":cleanupPending?"正在结束上一会话":"正在检查连接地址";}
+    /** The old session panel is disposed during cleanup; this dialog belongs to the recovery lease. */
+    private void updateFeedback(){
+        if(completed||!retrying||!RhActions.ownsRecovery(this)||activity.isFinishing()||activity.isDestroyed()){closeFeedback();return;}
+        if(feedbackDialog==null){
+            if(cancelled)return;
+            AlertDialog.Builder builder=new AlertDialog.Builder(activity,RhUiStyle.dialogTheme(activity));
+            android.content.Context context=builder.getContext();int padding=Math.round(24*context.getResources().getDisplayMetrics().density);
+            LinearLayout content=new LinearLayout(context);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(padding,padding,padding,0);
+            feedbackDetail=new TextView(context);feedbackDetail.setTextSize(16);feedbackDetail.setContentDescription("恢复连接阶段");content.addView(feedbackDetail,new LinearLayout.LayoutParams(-1,-2));
+            ProgressBar progress=new ProgressBar(context,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams progressLayout=new LinearLayout.LayoutParams(-1,Math.max(1,padding/6));progressLayout.topMargin=padding;content.addView(progress,progressLayout);
+            ScrollView scroll=new ScrollView(context);scroll.addView(content);
+            AlertDialog dialog=builder.setTitle("正在恢复连接").setView(scroll).setNegativeButton("取消连接",null).setCancelable(false).create();feedbackDialog=dialog;
+            dialog.setOnKeyListener((owner,key,event)->{
+                if(key!=KeyEvent.KEYCODE_BACK&&key!=KeyEvent.KEYCODE_ESCAPE)return false;
+                if(event.getAction()==KeyEvent.ACTION_UP&&!event.isCanceled())cancelFromFeedback(dialog);
+                return true;
+            });
+            try{dialog.show();}catch(android.view.WindowManager.BadTokenException unavailable){closeFeedback();RhStatistics.event("recovery_feedback_unavailable",-1,RhActions.obj("attemptId",id));return;}
+            dialog.getButton(DialogInterface.BUTTON_NEGATIVE).setContentDescription("取消恢复连接");
+            dialog.getButton(DialogInterface.BUTTON_NEGATIVE).setOnClickListener(view->cancelFromFeedback(dialog));
+        }
+        feedbackDetail.setText(feedbackText());feedbackDialog.getButton(DialogInterface.BUTTON_NEGATIVE).setEnabled(!cancelled);
+    }
+    private void cancelFromFeedback(AlertDialog owner){
+        if(owner!=feedbackDialog||completed||cancelled||!RhActions.ownsRecovery(this))return;
+        RhActions.click("stream.disconnect",RhActions.obj());
+    }
+    private void closeFeedback(){AlertDialog retired=feedbackDialog;feedbackDialog=null;feedbackDetail=null;if(retired!=null)retired.dismiss();}
     public JSONObject state(){return RhActions.obj("connected",false,"phase",!error.isEmpty()?"error":cancelled?"cancelling":handoff?"starting":"reconnecting","attemptId",id,
-        "workerRunning",workerRunning,"cleanupPending",cleanupPending||workerRunning,"error",error,"recovery",policy.state());}
-    public JSONObject perform(String action,JSONObject args){if(!action.equals("stream.disconnect"))throw new IllegalStateException("正在重连，可取消当前连接");RhActions.connectionStopping(uuid);cancel();activity.finish();return RhActions.obj("cancelled",true);}
+        "workerRunning",workerRunning,"cleanupPending",cleanupPending||workerRunning,"error",error,"recovery",policy.state(),
+        "feedback",RhActions.obj("visible",feedbackDialog!=null&&feedbackDialog.isShowing(),"title","正在恢复连接","detail",feedbackText(),"cancelAction","stream.disconnect"));}
+    public JSONObject perform(String action,JSONObject args){if(!action.equals("stream.disconnect"))throw new IllegalStateException("正在重连，可取消当前连接");RhActions.connectionStopping(uuid);cancel();closeFeedback();activity.finish();return RhActions.obj("cancelled",true);}
 }

@@ -41,6 +41,7 @@ public class RhRecoveryTest {
             .putExtra(Game.EXTRA_HOST,"192.168.0.104").putExtra(Game.EXTRA_PORT,47989)
             .putExtra(Game.EXTRA_SERVER_CERT,new byte[]{1,2,3}));
         RhStatistics.initialize(activity);
+        RhActions.initialize(activity,null);
         activity.getSharedPreferences("rhremote.statistics",0).edit().putBoolean("enabled",false).commit();
         profile=RhProfile.fromJson("host",new JSONObject("{\"width\":1920,\"height\":1080,\"fps\":30,\"bitrateMbps\":25,\"codec\":\"H.264\",\"audioEnabled\":false,\"swapButtons\":true,\"trackpad\":false,\"statistics\":false}"));
         Field field=RhNetwork.class.getDeclaredField("last");field.setAccessible(true);
@@ -58,6 +59,40 @@ public class RhRecoveryTest {
         },executor);
     }
     private void idle(){org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    private android.app.AlertDialog feedback(){
+        android.app.Dialog dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog();
+        assertTrue("Recovery must retain visible progress after the session controls are removed",dialog instanceof android.app.AlertDialog&&dialog.isShowing());
+        return (android.app.AlertDialog)dialog;
+    }
+    @Test public void recoveryShowsItsCleanupAndLetsTheActualButtonCancelWithoutResolving()throws Exception{
+        recovery=make(Runnable::run);assertTrue(recovery.stageFailed(1,-1));idle();
+        android.app.AlertDialog dialog=feedback();JSONObject visible=recovery.state().getJSONObject("feedback");
+        assertTrue(visible.getBoolean("visible"));assertEquals("正在恢复连接",visible.getString("title"));assertEquals("正在结束上一会话",visible.getString("detail"));
+        assertTrue(dialog.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.KEYCODE_ESCAPE)));
+        assertTrue(dialog.dispatchKeyEvent(android.view.KeyEvent.changeFlags(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,android.view.KeyEvent.KEYCODE_ESCAPE),android.view.KeyEvent.FLAG_CANCELED)));
+        assertFalse("A cancelled key release must preserve recovery",activity.isFinishing());
+        assertTrue(dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).isEnabled());
+        dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();idle();
+        assertTrue(activity.isFinishing());assertTrue(RhActions.hasStream());assertEquals(0,resolutions);
+        cleanup.accept(true);cleanup=null;idle();assertFalse(RhActions.hasStream());assertFalse(dialog.isShowing());assertEquals(0,resolutions);
+    }
+    @Test public void anOldRecoveryButtonCannotCancelANewerRecovery()throws Exception{
+        recovery=make(Runnable::run);assertTrue(recovery.stageFailed(1,-1));idle();android.app.AlertDialog old=feedback();
+        recovery.cancel();cleanup.accept(true);cleanup=null;idle();assertFalse(old.isShowing());assertFalse(RhActions.hasStream());
+        recovery=make(Runnable::run);assertTrue(recovery.stageFailed(1,-1));idle();android.app.AlertDialog current=feedback();assertNotSame(old,current);
+        for(int action:new int[]{android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.ACTION_UP})assertTrue(old.dispatchKeyEvent(new android.view.KeyEvent(action,android.view.KeyEvent.KEYCODE_BACK)));
+        old.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();idle();
+        assertTrue(current.isShowing());assertEquals("reconnecting",recovery.state().getString("phase"));assertFalse(activity.isFinishing());
+    }
+    @Test public void recoveryAdvancesItsVisibleStageWhileTheNetworkWorkerIsQueued()throws Exception{
+        java.util.List<Runnable> work=new java.util.ArrayList<>();recovery=make(work::add);
+        assertTrue(recovery.stageFailed(1,-1));idle();android.app.AlertDialog dialog=feedback();
+        cleanup.accept(true);cleanup=null;idle();assertEquals("正在检查连接地址",recovery.state().getJSONObject("feedback").getString("detail"));
+        assertTrue(dialog.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.KEYCODE_ESCAPE)));assertFalse(activity.isFinishing());
+        assertTrue(dialog.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,android.view.KeyEvent.KEYCODE_ESCAPE)));idle();assertTrue(activity.isFinishing());assertTrue(RhActions.hasStream());
+        work.remove(0).run();idle();assertEquals(0,resolutions);assertEquals(1,work.size());work.remove(0).run();idle();
+        assertFalse(RhActions.hasStream());assertFalse(dialog.isShowing());assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+    }
     @Test public void recoveryUsesANewGameInstanceInsteadOfReusingTheFinishingActivity()throws Exception{
         android.content.pm.ActivityInfo info=activity.getPackageManager().getActivityInfo(new android.content.ComponentName(activity,Game.class),0);
         assertEquals("singleTask loses the reconnect intent when the old Game finishes",android.content.pm.ActivityInfo.LAUNCH_MULTIPLE,info.launchMode);
