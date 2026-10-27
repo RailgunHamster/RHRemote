@@ -2,6 +2,8 @@ package com.limelight.rhremote;
 
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.DialogInterface;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.TextView;
@@ -82,17 +84,20 @@ public final class RhStreamControls implements RhActions.Target {
         }
         updatePanel();return RhActions.obj("accepted",true);
     }
-    private void requestExit(){if(exitDialog!=null)return;exitDialog=new AlertDialog.Builder(game,RhUiStyle.dialogTheme(game)).setTitle("断开连接？").setPositiveButton("断开",(dialog,which)->RhActions.click("stream.exit.resolve",RhActions.obj("choice","disconnect"))).setNegativeButton("继续连接",(dialog,which)->RhActions.click("stream.exit.resolve",RhActions.obj("choice","stay"))).create();exitDialog.setOnCancelListener(dialog->RhActions.click("stream.exit.resolve",RhActions.obj("choice","stay")));exitDialog.show();}
+    private void requestExit(){if(exitDialog!=null)return;exitDialog=new AlertDialog.Builder(game,RhUiStyle.dialogTheme(game)).setTitle("断开连接？").setPositiveButton("断开",(dialog,which)->dialogAction(dialog,"stream.exit.resolve",RhActions.obj("choice","disconnect"))).setNegativeButton("继续连接",(dialog,which)->dialogAction(dialog,"stream.exit.resolve",RhActions.obj("choice","stay"))).create();exitDialog.setOnCancelListener(dialog->dialogAction(dialog,"stream.exit.resolve",RhActions.obj("choice","stay")));localEscape(exitDialog,"stream.exit.resolve",RhActions.obj("choice","stay"));exitDialog.show();}
+    private void dialogAction(DialogInterface owner,String action,JSONObject arguments){if(disposed||(owner!=menuDialog&&owner!=exitDialog))return;RhActions.click(action,arguments);}
+    /** Consume both halves locally; older Android dialogs do not handle Escape consistently. */
+    private void localEscape(AlertDialog dialog,String action,JSONObject arguments){dialog.setOnKeyListener((ignored,key,event)->{if(key!=KeyEvent.KEYCODE_ESCAPE)return false;if(event.getAction()==KeyEvent.ACTION_UP&&!event.isCanceled())dialogAction(dialog,action,arguments);return true;});}
     private void closeExit(){if(exitDialog!=null){exitDialog.dismiss();exitDialog=null;}}
     private void closeMenu(){if(menuDialog!=null){menuDialog.dismiss();menuDialog=null;}menu="";}
     private void openMenu(String kind)throws Exception{
         if(!java.util.Arrays.asList("shortcuts","displays","feedback").contains(kind))throw new IllegalArgumentException("unknown stream menu");
         if(kind.equals("feedback")&&feedbackError.isEmpty())throw new IllegalStateException("没有会话操作错误");closeMenu();menu=kind;
         if(kind.equals("displays")){panel.setExpanded(true);panel.setTab("displays");loadMissingDisplays();return;}
-        AlertDialog.Builder builder=new AlertDialog.Builder(game,RhUiStyle.dialogTheme(game)).setTitle(kind.equals("feedback")?"操作失败":"远程快捷键").setNegativeButton("关闭",(dialog,which)->RhActions.click("stream.menu.close",RhActions.obj()));
+        AlertDialog.Builder builder=new AlertDialog.Builder(game,RhUiStyle.dialogTheme(game)).setTitle(kind.equals("feedback")?"操作失败":"远程快捷键").setNegativeButton("关闭",(dialog,which)->dialogAction(dialog,"stream.menu.close",RhActions.obj()));
         final JSONArray list=kind.equals("shortcuts")?RhShortcuts.catalog(game):null;
         if(kind.equals("feedback"))builder.setMessage(feedbackError);else{String[] labels=new String[list.length()];for(int i=0;i<labels.length;i++)labels[i]=list.getJSONObject(i).getString("label");builder.setAdapter(new android.widget.ArrayAdapter<>(builder.getContext(),android.R.layout.simple_list_item_1,labels),null);}
-        menuDialog=builder.create();menuDialog.setOnCancelListener(dialog->RhActions.click("stream.menu.close",RhActions.obj()));menuDialog.show();if(list!=null)menuDialog.getListView().setOnItemClickListener((parent,view,index,row)->RhActions.click("stream.shortcut",RhActions.obj("shortcut",list.optJSONObject(index).optString("id"))));updatePanel();
+        menuDialog=builder.create();final AlertDialog owner=menuDialog;owner.setOnCancelListener(dialog->dialogAction(dialog,"stream.menu.close",RhActions.obj()));localEscape(owner,"stream.menu.close",RhActions.obj());owner.show();if(list!=null)owner.getListView().setOnItemClickListener((parent,view,index,row)->dialogAction(owner,"stream.shortcut",RhActions.obj("shortcut",list.optJSONObject(index).optString("id"))));updatePanel();
     }
     private void loadMissingDisplays(){JSONObject data=display==null?RhActions.obj():display.state();JSONArray monitors=data.optJSONArray("displays");if(!displayBusy&&(monitors==null||monitors.length()==0||!data.optString("error").isEmpty()))displayAction(null);}
     private void displayAction(String id){

@@ -43,4 +43,32 @@ public class RhSessionMenuTest {
         assertTrue(controls.goBack());assertTrue(controls.state().getBoolean("exitPrompt"));AlertDialog exit=dialog("exitDialog");exit.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();Shadows.shadowOf(Looper.getMainLooper()).idle();
         assertFalse(controls.state().getBoolean("exitPrompt"));assertTrue(controls.state().getBoolean("connected"));assertTrue(controls.state().getBoolean("firstFrame"));assertFalse(game.isFinishing());
     }
+    void escape(AlertDialog popup){
+        long time=android.os.SystemClock.uptimeMillis();
+        for(int action:new int[]{KeyEvent.ACTION_DOWN,KeyEvent.ACTION_UP})popup.dispatchKeyEvent(new KeyEvent(time,time+action,action,KeyEvent.KEYCODE_ESCAPE,0,0,KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,InputDevice.SOURCE_KEYBOARD));
+        Shadows.shadowOf(Looper.getMainLooper()).idle();
+    }
+    @Test public void escapeClosesOnlyTheLocalMenuAndPreservesTheExpandedSession()throws Exception{
+        for(boolean dark:new boolean[]{false,true}){
+            create(dark);controls.perform("stream.controls.toggle",RhActions.obj());controls.perform("stream.shortcuts.open",RhActions.obj());AlertDialog menu=dialog("menuDialog");
+            escape(menu);assertFalse("Escape must dismiss shortcuts",menu.isShowing());assertEquals("",controls.state().getString("streamMenu"));assertTrue(controls.state().getBoolean("controls"));assertTrue(controls.state().getBoolean("connected"));assertFalse(game.isFinishing());controls.dispose();controls=null;
+        }
+    }
+    @Test public void escapeOnTheDisconnectDecisionKeepsTheStreamConnected()throws Exception{
+        for(boolean dark:new boolean[]{false,true}){
+            create(dark);controls.perform("stream.exit.request",RhActions.obj());AlertDialog exit=dialog("exitDialog");escape(exit);
+            assertFalse("Escape must cancel the decision",exit.isShowing());assertFalse(controls.state().getBoolean("exitPrompt"));assertTrue(controls.state().getBoolean("connected"));assertTrue(controls.state().getBoolean("firstFrame"));assertFalse(game.isFinishing());controls.dispose();controls=null;
+        }
+    }
+    @Test public void escapeRepeatsAndCancelledReleaseKeepTheDialogUntilANormalRelease()throws Exception{
+        create(false);controls.perform("stream.shortcuts.open",RhActions.obj());AlertDialog menu=dialog("menuDialog");long time=android.os.SystemClock.uptimeMillis();
+        for(int repeat:new int[]{0,2}){assertTrue(menu.dispatchKeyEvent(new KeyEvent(time,time+repeat,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ESCAPE,repeat,0,KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,InputDevice.SOURCE_KEYBOARD)));assertTrue("Do not close on key down",menu.isShowing());}
+        assertTrue(menu.dispatchKeyEvent(new KeyEvent(time,time+3,KeyEvent.ACTION_UP,KeyEvent.KEYCODE_ESCAPE,0,0,KeyCharacterMap.VIRTUAL_KEYBOARD,0,KeyEvent.FLAG_CANCELED,InputDevice.SOURCE_KEYBOARD)));Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(menu.isShowing());assertEquals("shortcuts",controls.state().getString("streamMenu"));escape(menu);assertFalse(menu.isShowing());assertTrue(controls.state().getBoolean("connected"));
+    }
+    @Test public void lateCallbacksFromReplacedDialogsCannotResolveTheCurrentDialog()throws Exception{
+        create(false);controls.perform("stream.shortcuts.open",RhActions.obj());AlertDialog oldMenu=dialog("menuDialog");controls.perform("stream.menu.close",RhActions.obj());controls.perform("stream.shortcuts.open",RhActions.obj());AlertDialog currentMenu=dialog("menuDialog");
+        escape(oldMenu);assertTrue("Old Escape closed the new menu",currentMenu.isShowing());oldMenu.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();oldMenu.cancel();Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(currentMenu.isShowing());assertEquals("shortcuts",controls.state().getString("streamMenu"));escape(currentMenu);
+        controls.perform("stream.exit.request",RhActions.obj());AlertDialog oldExit=dialog("exitDialog");controls.perform("stream.exit.resolve",RhActions.obj("choice","stay"));controls.perform("stream.exit.request",RhActions.obj());AlertDialog currentExit=dialog("exitDialog");
+        escape(oldExit);assertTrue("Old Escape resolved the new exit decision",currentExit.isShowing());oldExit.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();oldExit.cancel();Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(currentExit.isShowing());assertTrue(controls.state().getBoolean("exitPrompt"));currentExit.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();Shadows.shadowOf(Looper.getMainLooper()).idle();assertFalse(controls.state().getBoolean("exitPrompt"));assertTrue(controls.state().getBoolean("connected"));assertFalse(game.isFinishing());
+    }
 }
