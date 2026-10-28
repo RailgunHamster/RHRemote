@@ -116,19 +116,23 @@ component ActionButton inherits Rectangle {
     in property <bool> primary:false;
     in property <bool> chosen:false;
     in property <bool> disabled:false;
+    in property <bool> subtle:false;
+    in property <bool> has-icon:false;
+    in property <image> icon;
     out property <bool> focused:key-focus.has-focus;
     callback focused-in();
     changed focused=>{if(root.focused){root.focused-in();}}
-    min-width: label.preferred-width + 32px;
-    preferred-width: label.preferred-width + 32px;
+    min-width: label.preferred-width + 32px + (root.has-icon ? 24px : 0px);
+    preferred-width: label.preferred-width + 32px + (root.has-icon ? 24px : 0px);
     horizontal-stretch:0;
     height: 38px;
     border-radius: 8px;
-    background: root.disabled ? Palette.soft : root.primary ? (touch.has-hover ? #4666d6 : Palette.blue) : root.chosen ? Palette.soft : touch.has-hover ? Palette.soft : Palette.surface;
+    background: root.disabled ? Palette.soft : root.primary ? (touch.has-hover ? #4666d6 : Palette.blue) : root.chosen ? Palette.soft : touch.has-hover ? Palette.soft : root.subtle ? Palette.page : Palette.surface;
     forward-focus: key-focus;
     border-color: key-focus.has-focus || root.chosen ? Palette.blue : Palette.line;
-    border-width: root.primary && !key-focus.has-focus ? 0px : 1px;
-    label := Text {text:root.text;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
+    border-width: (root.primary || root.subtle) && !key-focus.has-focus && !root.chosen ? 0px : 1px;
+    if root.has-icon:Image{source:root.icon; x:12px;y:(parent.height - self.height)/2;width:16px;height:16px;colorize:root.disabled ? Palette.muted : root.primary ? white : root.chosen ? Palette.blue : Palette.ink;}
+    label := Text {x:root.has-icon ? 28px : 0px;width:parent.width - self.x;text:root.text;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
     // Slint 1.18.1 ignores FocusOut on disabled FocusScope items. Keep delivery
     // enabled and gate focus entry/actions so a former focus marker can clear.
     key-focus := FocusScope {focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,root.argument);return accept;}return reject;}}
@@ -141,6 +145,27 @@ component ActionButton inherits Rectangle {
     UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve" && root.action-id!="navigation.back";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}}
 }
 component TabButton inherits ActionButton { border-width:root.focused ? 1px : 0px; }
+component SettingsCard inherits Rectangle {
+    background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;vertical-stretch:0;
+    VerticalLayout {padding:20px;spacing:16px;@children}
+}
+component ThemePreview inherits Rectangle {
+    in property <bool> dark-preview;
+    in property <bool> chosen;
+    height:252px;min-width:190px;horizontal-stretch:1;
+    background:Palette.surface;border-radius:12px;border-width:1px;border-color:root.chosen ? Palette.blue : Palette.line;
+    VerticalLayout {padding:14px;spacing:12px;
+        Rectangle {height:120px;background:root.dark-preview ? #151b29 : #f6f7fa;border-radius:8px;
+            Rectangle {x:6px;y:6px;width:parent.width*0.24;height:parent.height - 12px;background:root.dark-preview ? #242d3e : white;border-radius:5px;
+                Rectangle {x:6px;y:12px;width:parent.width - 12px;height:6px;background:#6f8af1;border-radius:3px;}
+            }
+            for i in 3: Rectangle {x:parent.width*0.31;y:18px+i*28px;width:parent.width*0.62;height:15px;background:root.dark-preview ? #303c53 : #e3e8f2;border-radius:4px;}
+        }
+        Text{text:root.dark-preview ? "深色" : "浅色";font-size:15px;font-weight:600;color:Palette.ink;}
+        if root.chosen: Text{text:"已选择";height:38px;color:Palette.blue;vertical-alignment:center;horizontal-alignment:center;font-size:13px;}
+        if !root.chosen: ActionButton{text:root.dark-preview ? "切换为深色" : "切换为浅色";action-id:"appearance.toggle";horizontal-stretch:1;}
+    }
+}
 component NavigationItem inherits Rectangle {
     in property <string> text;
     in property <image> icon;
@@ -223,6 +248,7 @@ export component StreamToolbar inherits Window {
     // The same handle remains at the center of the native stream's top edge.
     ActionButton {
         x:(parent.width - self.width)/2;y:0px;width:72px;height:28px;min-width:1px;border-radius:10px;
+        primary:true;has-icon:true;icon:root.expanded ? @image-url("icons/chevron-up.svg") : @image-url("icons/chevron-down.svg");
         text:root.expanded ? "收起" : "控制";action-id:"stream.controls.toggle";
     }
     if root.pending && !root.expanded:Rectangle{
@@ -258,36 +284,36 @@ export component StreamToolbar inherits Window {
                 VerticalLayout {spacing:8px;alignment:start;
                     if root.controls-tab=="input":VerticalLayout{spacing:8px;
                         if !root.narrow:HorizontalLayout{spacing:8px;
-                            ActionButton{text:"Ctrl+Alt+Delete";action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
-                            ActionButton{text:"快捷键 ▾";action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"Ctrl+Alt+Delete";subtle:true;has-icon:true;icon:@image-url("icons/lock.svg");action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
                         }
                         if root.narrow:VerticalLayout{spacing:8px;
-                            ActionButton{text:"Ctrl+Alt+Delete";action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
-                            ActionButton{text:"快捷键 ▾";action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"Ctrl+Alt+Delete";subtle:true;has-icon:true;icon:@image-url("icons/lock.svg");action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
                         }
-                        ActionButton{text:root.stats-enabled ? "统计：开" : "统计：关";action-id:"stream.stats.toggle";chosen:root.stats-enabled;disabled:root.busy;}
+                        HorizontalLayout{Rectangle{horizontal-stretch:1;}ActionButton{text:root.stats-enabled ? "统计：开" : "统计：关";action-id:"stream.stats.toggle";chosen:root.stats-enabled;disabled:root.busy;has-icon:true;icon:@image-url("icons/chart.svg");}}
                     }
                     if root.controls-tab=="displays":VerticalLayout{spacing:8px;
                         if !root.narrow:HorizontalLayout{spacing:8px;
-                            ActionButton{text:"自动选屏";action-id:"stream.display.select";argument:"auto";disabled:root.busy;horizontal-stretch:1;}
-                            ActionButton{text:"虚拟屏";action-id:"stream.display.select";argument:"virtual";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"自动选屏";subtle:true;has-icon:true;icon:@image-url("icons/monitor.svg");action-id:"stream.display.select";argument:"auto";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"虚拟屏";subtle:true;has-icon:true;icon:@image-url("icons/monitor.svg");action-id:"stream.display.select";argument:"virtual";disabled:root.busy;horizontal-stretch:1;}
                         }
                         if root.narrow:VerticalLayout{spacing:8px;
-                            ActionButton{text:"自动选屏";action-id:"stream.display.select";argument:"auto";disabled:root.busy;horizontal-stretch:1;}
-                            ActionButton{text:"虚拟屏";action-id:"stream.display.select";argument:"virtual";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"自动选屏";subtle:true;has-icon:true;icon:@image-url("icons/monitor.svg");action-id:"stream.display.select";argument:"auto";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"虚拟屏";subtle:true;has-icon:true;icon:@image-url("icons/monitor.svg");action-id:"stream.display.select";argument:"virtual";disabled:root.busy;horizontal-stretch:1;}
                         }
                         HorizontalLayout{spacing:8px;
-                            ActionButton{text:"显示器 ▾";action-id:"stream.menu.open";argument:"displays";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"显示器 ▾";subtle:true;has-icon:true;icon:@image-url("icons/monitor.svg");action-id:"stream.menu.open";argument:"displays";disabled:root.busy;horizontal-stretch:1;}
                             ActionButton{text:"刷新";action-id:"stream.displays.refresh";disabled:root.busy;}
                         }
                         Text{text:root.display-labels.length>root.display-index && root.display-index>=0 ? root.display-labels[root.display-index] : "暂无屏幕信息";color:Palette.muted;font-size:12px;overflow:elide;}
                         if !root.narrow:HorizontalLayout{spacing:8px;
-                            ActionButton{text:"窗口移到左屏";action-id:"stream.window.move";argument:"left";disabled:root.busy;horizontal-stretch:1;}
-                            ActionButton{text:"窗口移到右屏";action-id:"stream.window.move";argument:"right";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"窗口移到左屏";subtle:true;has-icon:true;icon:@image-url("icons/move-left.svg");action-id:"stream.window.move";argument:"left";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"窗口移到右屏";subtle:true;has-icon:true;icon:@image-url("icons/move-right.svg");action-id:"stream.window.move";argument:"right";disabled:root.busy;horizontal-stretch:1;}
                         }
                         if root.narrow:VerticalLayout{spacing:8px;
-                            ActionButton{text:"窗口移到左屏";action-id:"stream.window.move";argument:"left";disabled:root.busy;horizontal-stretch:1;}
-                            ActionButton{text:"窗口移到右屏";action-id:"stream.window.move";argument:"right";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"窗口移到左屏";subtle:true;has-icon:true;icon:@image-url("icons/move-left.svg");action-id:"stream.window.move";argument:"left";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"窗口移到右屏";subtle:true;has-icon:true;icon:@image-url("icons/move-right.svg");action-id:"stream.window.move";argument:"right";disabled:root.busy;horizontal-stretch:1;}
                         }
                     }
                     if root.controls-tab=="audio":VerticalLayout{spacing:8px;
@@ -717,7 +743,7 @@ export component MainWindow inherits Window {
                         Text{text:"将替换当前草稿的连接参数。设备地址和主机鼠标设置沿用当前值。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                         for field in root.copy-fields:DetailField{label:field.label;value:field.value;}
                     }
-                    if root.page=="settings": VerticalLayout {spacing:18px;vertical-stretch:0;
+                    if root.page=="settings": SettingsCard {
                         if root.profile-tab=="advanced": VerticalLayout {spacing:12px;
                         HorizontalLayout{ActionButton{text:"从其他客户端复制配置";action-id:"settings.sources.toggle";chosen:root.profile-sources-expanded;disabled:root.profile-sources.length==0;}Rectangle{horizontal-stretch:1;}}
                         if root.profile-sources.length==0:Text{text:"同步其他客户端的连接设置后可复制。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
@@ -782,10 +808,10 @@ export component MainWindow inherits Window {
                     }
                     if root.page=="global-settings": VerticalLayout {spacing:20px;vertical-stretch:0;
                         if root.settings-tab=="appearance": VerticalLayout{spacing:16px;
-                            Text{text:"主题";color:Palette.ink;font-size:16px;}
-                            HorizontalLayout{ActionButton{text:root.dark ? "切换为浅色" : "切换为深色";action-id:"appearance.toggle";}Rectangle{horizontal-stretch:1;}}
+                            Text{text:"主题";color:Palette.ink;font-size:18px;font-weight:600;}
+                            HorizontalLayout{spacing:16px;ThemePreview{dark-preview:false;chosen:!root.dark;}ThemePreview{dark-preview:true;chosen:root.dark;}}
                         }
-                        if root.settings-tab=="sync": VerticalLayout{spacing:12px;
+                        if root.settings-tab=="sync": SettingsCard {
                             Text{text:"WebDAV";color:Palette.ink;font-size:18px;font-weight:600;}
                             Text{text:root.sync-last;color:Palette.muted;font-size:12px;}
                             HorizontalLayout{spacing:10px;
@@ -817,8 +843,12 @@ export component MainWindow inherits Window {
                             }
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
-                        if root.settings-tab=="updates": VerticalLayout{spacing:14px;
-                            Text{text:"RHRemote-Moonlight "+root.app-version;color:Palette.ink;font-size:18px;}
+                        if root.settings-tab=="updates": SettingsCard {
+                            HorizontalLayout {spacing:16px;
+                                Image {source:@image-url("../../../shared/icons/rhremote.svg");width:48px;height:48px;}
+                                VerticalLayout {spacing:5px;Text{text:"RHRemote";color:Palette.ink;font-size:22px;font-weight:600;}Text{text:"Moonlight · "+root.app-version;color:Palette.muted;font-size:13px;}}
+                                Rectangle{horizontal-stretch:1;}
+                            }
                             Text{text:root.updates-managed ? "自动检查更新 · GitHub / Gitee" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
                             if root.updates-available: Text{text:"可用版本："+root.update-version;color:Palette.ink;}
                             if root.updates-busy: Rectangle {height:4px;background:Palette.line;border-radius:2px;
@@ -829,15 +859,18 @@ export component MainWindow inherits Window {
                             if root.update-phase=="error" && root.update-details:Text{text:root.update-status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                             Text{text:root.streaming || root.connecting ? "请先断开远程连接再安装更新。" : "安装时会重启 RHRemote。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
-                        if root.settings-tab=="about": VerticalLayout{spacing:14px;
-                            Text{text:"RHRemote-Moonlight";font-size:22px;color:Palette.ink;}
-                            Text{text:"版本 "+root.app-version+"\n串流核心 · Moonlight\n服务端 · Sunshine\nGPL v3";color:Palette.muted;}
-                            ActionButton{text:root.test-mode?"测试统计：开启":"测试统计：关闭";action-id:"statistics.configure";argument:root.test-mode?"false":"true";chosen:root.test-mode;disabled:root.streaming||root.connecting;}
+                        if root.settings-tab=="about": VerticalLayout{spacing:16px;
+                            SettingsCard {HorizontalLayout{spacing:16px;Image{source:@image-url("../../../shared/icons/rhremote.svg");width:48px;height:48px;}VerticalLayout{spacing:5px;Text{text:"RHRemote";font-size:22px;font-weight:600;color:Palette.ink;}Text{text:"Moonlight · "+root.app-version;color:Palette.muted;font-size:13px;}}Rectangle{horizontal-stretch:1;}}}
+                            SettingsCard {Text{text:"开源组件";font-size:16px;font-weight:600;color:Palette.ink;}HorizontalLayout{Text{text:"客户端核心";width:100px;color:Palette.muted;font-size:13px;}Text{text:"Moonlight";color:Palette.ink;font-size:13px;}Rectangle{horizontal-stretch:1;}}HorizontalLayout{Text{text:"服务端";width:100px;color:Palette.muted;font-size:13px;}Text{text:"Sunshine";color:Palette.ink;font-size:13px;}Rectangle{horizontal-stretch:1;}}HorizontalLayout{Text{text:"许可证";width:100px;color:Palette.muted;font-size:13px;}Text{text:"GPL v3";color:Palette.ink;font-size:13px;}Rectangle{horizontal-stretch:1;}}}
+                            SettingsCard {
+                            Text{text:"诊断";font-size:16px;font-weight:600;color:Palette.ink;}
+                            HorizontalLayout{Text{text:"连接统计";color:Palette.ink;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}ActionButton{text:root.test-mode?"测试统计：开启":"测试统计：关闭";action-id:"statistics.configure";argument:root.test-mode?"false":"true";chosen:root.test-mode;disabled:root.streaming||root.connecting;}}
                             Text{text:"测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。";color:Palette.muted;wrap:word-wrap;}
-                            Text{text:root.trace-path;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                            if root.trace-path!="": Text{text:root.trace-path;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                            }
                         }
                     }
-                    if root.page=="device-info":VerticalLayout{spacing:18px;vertical-stretch:0;
+                    if root.page=="device-info":SettingsCard {
                         Text{text:"设备名称";color:Palette.ink;font-size:14px;}
                         info-editor:=LineEdit{init=>{self.focus();}text:root.info-name;placeholder-text:root.selected-device.host-name;accessible-label:"设备名称";enabled:!root.sync-busy;edited(value)=>{Commands.trigger("device.info.input",value);}accepted=>{Commands.trigger("device.info.save","");}}
                         if root.info-error!="":Text{text:root.info-error;color:Palette.failure;font-size:13px;wrap:word-wrap;}
@@ -848,7 +881,7 @@ export component MainWindow inherits Window {
                         Text{text:"设备标识";color:Palette.muted;font-size:12px;}
                         Text{text:root.selected-uuid;color:Palette.ink;font-size:13px;wrap:word-wrap;}
                     }
-                    if root.page=="add": VerticalLayout {spacing:18px;vertical-stretch:0;
+                    if root.page=="add": SettingsCard {
                         Text{text:"IP 或主机名，支持局域网、Tailscale 和公网地址";color:Palette.muted;wrap:word-wrap;}
                         Text{text:"设备地址";color:Palette.ink;font-size:14px;}
                         address:=LineEdit {init=>{self.focus();}text:root.add-address;enabled:!root.add-busy;accessible-label:"设备地址";placeholder-text:"例如 192.168.0.104 或 100.x.x.x";edited(value)=>{Commands.trigger("device.add.input",value);}accepted=>{Commands.trigger("device.add.submit",self.text);}}

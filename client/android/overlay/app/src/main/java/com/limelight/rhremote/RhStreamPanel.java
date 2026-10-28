@@ -137,7 +137,7 @@ public final class RhStreamPanel {
         b.setTag(action);b.setOnClickListener(v->actions.send(action,arguments));return b;
     }
     private void icon(Button button,int resource){android.graphics.drawable.Drawable drawable=context.getDrawable(resource).mutate();drawable.setBounds(0,0,dp(18),dp(18));drawable.setTintList(new android.content.res.ColorStateList(new int[][]{{-android.R.attr.state_enabled},{android.R.attr.state_selected},{}},new int[]{Color.parseColor(mutedColor),Color.parseColor(RhShared.dark(context)?"#6f8af1":"#5274e8"),Color.parseColor(inkColor)}));button.setCompoundDrawablesRelative(drawable,null,null,null);button.setCompoundDrawablePadding(dp(7));}
-    private Button gridButton(GridLayout grid,String title,String action,JSONObject args){Button b=button(title,action,args);grid.addView(b);return b;}
+    private Button gridButton(GridLayout grid,String title,String action,JSONObject args){Button b=button(title,action,args);b.setMaxLines(1);b.setHorizontallyScrolling(false);b.setAutoSizeTextTypeUniformWithConfiguration(10,13,1,android.util.TypedValue.COMPLEX_UNIT_SP);grid.addView(b);return b;}
     private void gridColumns(GridLayout grid,int count){
         // Remove old explicit specs before changing column count (Android validates them).
         List<View> children=new ArrayList<>();for(int i=0;i<grid.getChildCount();i++)children.add(grid.getChildAt(i));grid.removeAllViews();grid.setColumnCount(count);

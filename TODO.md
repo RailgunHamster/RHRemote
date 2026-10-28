@@ -6,13 +6,15 @@
 
 ## P0 双端 UI 完整验收
 
+当前先整理两端完整界面效果与可见预览，再继续下列业务流程。最新卡片、分类栏、浅深色与会话面板见 [界面记录](design/UI-VISUAL-20261028.md)；布局图不计为真实连接、更新或同步通过。
+
 - [ ] Android 原 25 Mbps 的大帧缺失：继续定位局域网、Windows 接收与模拟器转发中的具体丢点，补齐持续动态画面验收；临时 6 Mbps 的两种主题 UI 短测不替代默认画质或长期验收。[接口、帧号与原生复验](design/HOST-API-EOF-20261028.md)
 - [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界，原生视频窗口首帧前的可见反馈、取消和其余错误路径，并定位模拟器复验中的一次自然查找失败；本地组件未初始化的受控路径已修复，不能据此确定那次失败的根因。[逐项规范](design/UI-FLOW-SPEC.md)、[添加准备与重试](design/ANDROID-ADD-READINESS-20261028.md)
 - [ ] 更新流程：完成 Windows 实际下载、应用更新／安装取消，以及双端安装成功后的配置保留。[逐项规范](design/UI-FLOW-SPEC.md)、[Android 页面生命周期证据](design/ANDROID-UPDATE-LIFECYCLE-20261027.md)
 - [ ] 同步流程：完成 Windows 实际窗口中的 HTTPS 流程、真实 WebDAV 服务跨客户端同步和其余网络／文件失败边界；补齐传输／本机应用阶段被终止后的结果核对；Android 排队阶段实际结束进程后的提示和自动同步暂停已通过。[Windows 后台与布局证据](design/WINDOWS-SYNC-20261028.md)、[Android 同步与网络证据](design/ANDROID-SYNC-LIFECYCLE-20261028.md)、[中断提示](design/ANDROID-SYNC-INTERRUPTION-20261028.md)、[提交顺序](design/ANDROID-SYNC-COMMIT-20261028.md)、[Windows 提交与控件](design/WINDOWS-SYNC-COMMIT-20261028.md)
 - [ ] 会话控制：双端实测屏幕切换、窗口移屏、安全注意序列、快捷键实际送达、声音播放与真实缩放输入。[Windows 会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[Android 浅深会话复验](design/HOST-API-EOF-20261028.md)
 - [ ] 全局交互：补齐 Windows 配对／连接／恢复／活动会话的实际控件、连接／恢复状态的键盘操作及 Android 真实外接键盘路由，完成 Windows 配对／活动会话和 Android 准备及诊断完成结果的其余主题边界；Android 恢复提示的浅深主题与实际取消已通过模拟终止复验，物理断网和外网边界仍待验收；定位 Windows UIA 焦点，验证主界面长时遮挡和不同 DPI 双屏切换后的重绘。[恢复提示与取消](design/ANDROID-RECOVERY-UI-20261028.md)、[本地按键与旧回调](design/ANDROID-SESSION-KEYBOARD-20261028.md)、[会话焦点与音量输入](design/ANDROID-SESSION-NAVIGATION-20261028.md)、[主题与错误证据](design/UI-ERRORS-20261028.md)、[诊断任务与重建](design/ANDROID-DIAGNOSTIC-LIFECYCLE-20261028.md)、[Tab 验收](design/WINDOWS-TAB-20261027.md)、[Windows 当前预览](design/WINDOWS-PREVIEW48-MAIN-20261028.md)、[会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[上下文与复制预览](design/UI-CONTEXT-20261027.md)、[补画修复](design/WINDOWS-REPAINT-20261027.md)
-- [ ] 最终交付：完成两端正式安装 / 升级的配置保留、用户可见预览与全部流程证据，再统一发布。
+- [ ] 最终交付：完成两端正式安装 / 升级的配置保留与全部流程证据，再统一发布；本地界面预览单独提供。
 
 ## P0 连接与外网
 
@@ -49,7 +51,7 @@
 
 ## 优化与验收约束
 
-- 客户端操作通过共享动作和实际控件测试接口，布局使用应用自身截图；不使用 computer use。Windows 预览只允许实体副屏并保持不激活，副屏不可用时继续后台工作，不回退主屏。
+- 客户端操作通过共享动作和实际控件测试接口，布局使用应用自身截图；不使用 computer use。Windows 预览默认使用实体副屏并保持不激活；用户明确允许当轮使用主屏时，可显式指定已枚举的物理主屏并记录授权，不自动回退或改用虚拟屏。
 - 保留目前已验证的软件编码默认；优化采用相同有效输入和可比负载的前后对照。收益不明确，或关键指标退步时，不替换默认实现。
 - 对照首帧、帧间隔 P99、端到端延迟、丢帧和 CPU／GPU／网络开销；平均帧率及静态画面不代替持续动态画面验收。
 - 保留用户画质、声音、配对及同步配置；网络适配只改变本次连接的有效参数，测试结束还原临时参数和显示布局，业务服务保持运行。
