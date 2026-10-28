@@ -48,6 +48,7 @@ impl MainView {
         ui.set_update_primary_installs(
             rhremote_core::update_primary_action(&state["updates"]) == "updates.install",
         );
+        ui.set_update_install_hint(state["updateInstallHint"].as_str().unwrap_or("").into());
         ui.set_update_phase(state["updates"]["phase"].as_str().unwrap_or("").into());
         ui.set_update_progress(state["updates"]["progress"].as_i64().unwrap_or(0) as i32);
         ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());

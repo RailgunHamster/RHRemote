@@ -94,6 +94,16 @@ pub(crate) fn endpoints(s:&mut State)->Result<(String,Vec<String>),String>{
     Ok((primary.clone(),all.into_iter().filter(|a|!a.eq_ignore_ascii_case(&primary)).collect()))
 }
 impl Controller {
+    pub(crate) fn update_installation_gate(&self, id: &str, args: &Value) -> Option<Result<Value, String>> {
+        let s = self.state.lock().unwrap();
+        if !s.installing_update { return None; }
+        if id == "sync.run" && args["automatic"] == true {
+            return Some(Ok(json!({"skipped":true,"reason":"update_installing"})));
+        }
+        if id.ends_with(".state") || id.starts_with("view.ui.") || id.ends_with(".snapshot")
+            || matches!(id, "settings.catalog" | "window.minimize" | "window.maximize") { return None; }
+        Some(Err("正在安装更新，请稍候".into()))
+    }
     /// Return Some when a modal consumed the action; never persist just by navigating.
     pub(crate) fn navigation_gate(&self,id:&str,args:&Value)->Option<Result<Value,String>>{
         let mut s=self.state.lock().unwrap();

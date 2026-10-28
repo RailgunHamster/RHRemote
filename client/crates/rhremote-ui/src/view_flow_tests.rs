@@ -24,12 +24,18 @@ use std::{
 /// Only the external boundary is substituted. No sockets, vault or production data are used.
 struct Boundary {
     sync: Mutex<Value>,
+    updates: Mutex<Value>,
+    update_gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    sync_gate: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     fail_save: AtomicBool,
     calls: Mutex<Vec<String>>,
 }
 impl Default for Boundary {
     fn default() -> Self {
         Self {
+            updates: Mutex::new(json!({"managed":false,"phase":"idle"})),
+            update_gate: Mutex::new(None),
+            sync_gate: Mutex::new(None),
             sync: Mutex::new(
                 json!({"url":"https://example.test/dav/","username":"fixture","hasPassword":true,"automatic":false,"intervalMinutes":15}),
             ),
@@ -42,8 +48,32 @@ impl Platform for Boundary {
     fn execute(&self, id: &str, args: &Value) -> Result<Value, String> {
         match id {
             "sync.state" => Ok(self.sync.lock().unwrap().clone()),
-            "updates.state" => Ok(json!({"managed":false,"phase":"idle"})),
+            "updates.state" => Ok(self.updates.lock().unwrap().clone()),
+            "updates.prepare" => {
+                self.calls.lock().unwrap().push(id.into());
+                if let Some((entered, released)) = self.update_gate.lock().unwrap().take() {
+                    entered.send(()).unwrap();
+                    released.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                let ready = json!({"managed":true,"phase":"downloaded","availableVersion":"9.0.0","pendingRestart":true,"status":"更新已下载，可安装更新"});
+                *self.updates.lock().unwrap() = ready.clone();
+                Ok(ready)
+            }
+            "updates.install" => {
+                self.calls.lock().unwrap().push(id.into());
+                let applying = json!({"managed":true,"phase":"applying","availableVersion":"9.0.0","pendingRestart":true});
+                *self.updates.lock().unwrap() = applying.clone();
+                Ok(applying)
+            }
             "devices.restore" => Ok(json!({"devices":args["devices"]})),
+            "sync.run" => {
+                self.calls.lock().unwrap().push(id.into());
+                if let Some((entered, released)) = self.sync_gate.lock().unwrap().take() {
+                    entered.send(()).unwrap();
+                    released.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                Err("fixture transfer ended".into())
+            }
             "sync.configure" => {
                 self.calls.lock().unwrap().push(id.into());
                 if self.fail_save.load(Ordering::SeqCst) {
@@ -75,6 +105,9 @@ struct Flow {
 }
 impl Flow {
     fn new(width: f32, height: f32) -> Self {
+        Self::with_boundary(width, height, Arc::new(Boundary::default()))
+    }
+    fn with_boundary(width: f32, height: f32, boundary: Arc<Boundary>) -> Self {
         let directory =
             std::env::temp_dir().join(format!("rhremote-view-flow-{}", random_token().unwrap()));
         std::fs::create_dir(&directory).unwrap();
@@ -115,7 +148,6 @@ impl Flow {
             ..Default::default()
         };
         std::fs::write(&storage, serde_json::to_vec(&saved).unwrap()).unwrap();
-        let boundary = Arc::new(Boundary::default());
         let controller = Controller::new("windows", storage.clone(), boundary.clone()).unwrap();
         let devices:Vec<Device>=serde_json::from_value(json!([
             {"uuid":"host","name":"winserver","address":"192.0.2.1","addresses":["100.64.0.1"],"online":true,"paired":true},
@@ -171,8 +203,10 @@ impl Flow {
         let controls: Vec<_> = ElementHandle::find_by_accessible_label(&self.ui, label)
             .filter(|e| {
                 e.accessible_role() == Some(AccessibleRole::Button)
-                    && e.accessible_id()
-                        .is_some_and(|value| value.starts_with(&action))
+                    && e.accessible_id().is_some_and(|value| {
+                        value.starts_with(&action)
+                            || arg.is_empty() && value == format!("nav|{id}").as_str()
+                    })
             })
             .collect();
         assert_eq!(controls.len(), 1, "Expected one button {label}");
@@ -197,6 +231,16 @@ impl Flow {
         self.activate(element, uuid, "device.settings.open", uuid)
     }
     fn activate(&mut self, element: ElementHandle, label: &str, id: &str, arg: &str) -> Value {
+        let (id, arg) = self.emit(element, label, id, arg);
+        self.command(&id, &arg)
+    }
+    fn emit(
+        &mut self,
+        element: ElementHandle,
+        label: &str,
+        id: &str,
+        arg: &str,
+    ) -> (String, String) {
         let p = element.absolute_position();
         let s = element.size();
         let window = self.ui.window().size();
@@ -227,7 +271,7 @@ impl Flow {
             vec![(id.to_string(), arg.to_string())],
             "Wrong or duplicate shared action for {label}"
         );
-        self.command(&emitted[0].0, &emitted[0].1)
+        emitted.into_iter().next().unwrap()
     }
     fn capture(&self, name: &str) {
         if let Some(root) = std::env::var_os("RHREMOTE_UI_EVIDENCE_DIR") {
@@ -539,5 +583,106 @@ fn page_back_buttons_stay_on_the_left_and_restore_device_context() {
                 assert_eq!(f.saved(), before);
             }
         }
+    }
+}
+
+#[test]
+fn update_primary_buttons_keep_edits_open_until_the_actual_draft_decision() {
+    backend();
+    for (width, height, tag) in [(1180., 780., "wide"), (720., 560., "compact")] {
+        for dark in [false, true] {
+            let boundary = Arc::new(Boundary::default());
+            *boundary.updates.lock().unwrap() =
+                json!({"managed":true,"phase":"available","availableVersion":"9.0.0"});
+            let (entered, ready) = std::sync::mpsc::channel();
+            let (release, released) = std::sync::mpsc::channel();
+            *boundary.update_gate.lock().unwrap() = Some((entered, released));
+            let mut f = Flow::with_boundary(width, height, boundary.clone());
+            f.ui.global::<crate::Palette>().set_dark(dark);
+            f.input("app.settings.tab", "updates");
+            let before = f.saved();
+            let button = f.button("下载并安装", "updates.primary", "");
+            let (id, arg) = f.emit(button, "下载并安装", "updates.primary", "");
+            let controller = f.controller.clone();
+            let args = args_for(&id, &arg, &controller.state());
+            let job = std::thread::spawn(move || controller.dispatch(&id, args));
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+            f.refresh();
+            f.click("返回", "devices.open", "");
+            f.click("连接设置", "device.settings.open", "host");
+            f.click("音频", "settings.tab", "audio");
+            f.input("settings.input", "volume=37");
+            release.send(()).unwrap();
+            assert_eq!(job.join().unwrap()["ok"], true);
+            f.refresh();
+            assert!(f.controller.take_window_action().is_empty());
+            assert!(f.ui.get_navigation_prompt());
+            assert_eq!(f.saved(), before);
+            f.capture(&format!("update-{tag}-{dark}-draft-after-download"));
+            f.click("继续编辑", "navigation.resolve", "stay");
+            assert_eq!(f.controller.state()["settingsInputs"]["volume"], "37");
+            assert_eq!(*boundary.calls.lock().unwrap(), ["updates.prepare"]);
+            f.click("概览", "device.select", "host");
+            f.click("保存并继续", "navigation.resolve", "save");
+            assert_eq!(f.controller.profile("host").volume, 37);
+            f.click("设置", "app.settings.open", "");
+            f.capture(&format!("update-{tag}-{dark}-ready-after-edit"));
+            f.click("重启并安装", "updates.primary", "");
+            assert_eq!(
+                *boundary.calls.lock().unwrap(),
+                ["updates.prepare", "updates.install"]
+            );
+            assert_eq!(f.controller.take_window_action(), "window.close");
+            assert!(f.ui.get_updates_busy());
+            assert!(
+                !f.button("正在安装…", "updates.primary", "")
+                    .accessible_enabled()
+                    .unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn prepared_update_shows_why_installation_waits_and_enables_one_button_after_sync() {
+    backend();
+    for (width, height, tag) in [(1180., 780., "wide"), (720., 560., "compact")] {
+        let boundary = Arc::new(Boundary::default());
+        *boundary.updates.lock().unwrap() = json!({"managed":true,"phase":"downloaded","availableVersion":"9.0.0","pendingRestart":true,"status":"更新已下载，可安装更新"});
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *boundary.sync_gate.lock().unwrap() = Some((entered, released));
+        let mut f = Flow::with_boundary(width, height, boundary.clone());
+        f.input("app.settings.tab", "updates");
+        let before = f.saved();
+        let controller = f.controller.clone();
+        let job = std::thread::spawn(move || controller.dispatch("sync.run", json!({})));
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        f.refresh();
+        let button = f.button("重启并安装", "updates.primary", "");
+        let enabled = button.accessible_enabled();
+        let hint = ElementHandle::find_by_accessible_label(&f.ui, "请先完成配置同步").next();
+        let rejected = f.controller.dispatch("updates.primary", json!({}));
+        f.capture(&format!("update-{tag}-waiting-for-sync"));
+        release.send(()).unwrap();
+        assert_eq!(job.join().unwrap()["ok"], false);
+        assert_eq!(enabled, Some(false));
+        assert_eq!(rejected["error"], "请先完成配置同步");
+        let hint = hint.expect("Disabled install must have a visible explanation");
+        assert!(hint.absolute_position().y >= height - 100.);
+        assert!(hint.size().width > 0.);
+        f.refresh();
+        assert!(
+            f.button("重启并安装", "updates.primary", "")
+                .accessible_enabled()
+                .unwrap()
+        );
+        f.click("重启并安装", "updates.primary", "");
+        assert_eq!(
+            *boundary.calls.lock().unwrap(),
+            ["sync.run", "updates.install"]
+        );
+        assert_eq!(f.controller.take_window_action(), "window.close");
+        assert_eq!(f.saved(), before);
     }
 }

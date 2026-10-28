@@ -190,6 +190,46 @@ public class RhUpdateInstallTest {
         assertTrue(home.state().getBoolean("updatesBusy"));assertEquals(operation,home.state().getJSONObject("updates").getLong("operationId"));assertEquals("downloading",home.state().getJSONObject("updates").getString("phase"));assertFalse(RhActions.dispatch("updates.primary",RhActions.obj()).getBoolean("ok"));assertFalse(button(activity.getWindow().getDecorView(),"下载中 0%").isEnabled());
         Requests.release.countDown();awaitUpdate();assertInstaller(next());assertNull(next());assertEquals(1,Requests.downloads);assertEquals(1,Requests.checks);
     }
+    @Test public void editsOpenedDuringDownloadAreCheckedBeforeTheInstallerHandoff()throws Exception{
+        page();com.limelight.nvstream.http.ComputerDetails device=new com.limelight.nvstream.http.ComputerDetails();device.uuid="update-draft-host";device.name="workstation";device.manualAddress=new com.limelight.nvstream.http.ComputerDetails.AddressTuple("192.0.2.1",47989);home.update(device);home.perform("devices.open",RhActions.obj());home.perform("app.settings.tab",RhActions.obj("tab","updates"));
+        String before=RhShared.canonical(RhShared.read(activity));Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
+        home.perform("device.settings.open",RhActions.obj("uuid",device.uuid));home.perform("settings.input",RhActions.obj("key","fps","value","24"));Requests.release.countDown();awaitUpdate();
+        assertNull("Download completion must not open Android's installer over an unsaved form",next());assertEquals("unsaved-device",home.state().getJSONObject("navigationPrompt").getString("kind"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+        home.perform("navigation.resolve",RhActions.obj("choice","stay"));assertEquals("24",home.state().getJSONObject("settingsInputs").getString("fps"));assertNull(next());assertFalse(home.state().getBoolean("updatesBusy"));
+        home.perform("settings.save",RhActions.obj());home.perform("app.settings.tab",RhActions.obj("tab","updates"));Button install=button(activity.getWindow().getDecorView(),"安装更新");assertNotNull(install);install.performClick();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);assertEquals(24,RhProfile.load(activity,device.uuid).fps);
+    }
+    private String beginDownloadWithDraft(String kind,boolean invalid)throws Exception{
+        page();com.limelight.nvstream.http.ComputerDetails device=new com.limelight.nvstream.http.ComputerDetails();device.uuid="update-draft-host";device.name="workstation";device.manualAddress=new com.limelight.nvstream.http.ComputerDetails.AddressTuple("192.0.2.1",47989);home.update(device);home.perform("devices.open",RhActions.obj());home.perform("app.settings.tab",RhActions.obj("tab","updates"));String before=RhShared.canonical(RhShared.read(activity));
+        Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));
+        if(kind.equals("device")){home.perform("device.settings.open",RhActions.obj("uuid",device.uuid));home.perform("settings.input",RhActions.obj("key","fps","value",invalid?"":"24"));}
+        else if(kind.equals("info")){home.perform("device.info.open",RhActions.obj("uuid",device.uuid));home.perform("device.info.input",RhActions.obj("displayName","Changed name"));}
+        else{home.perform("app.settings.tab",RhActions.obj("tab","sync"));home.perform("sync.edit",RhActions.obj("key","username","value","changed"));}
+        return before;
+    }
+    @Test public void aChangedDeviceNameCanStayOrBeDiscardedBeforeInstallation()throws Exception{
+        String before=beginDownloadWithDraft("info",false);Requests.release.countDown();awaitUpdate();assertNull(next());assertEquals("unsaved-info",home.state().getJSONObject("navigationPrompt").getString("kind"));home.perform("navigation.resolve",RhActions.obj("choice","stay"));assertEquals("Changed name",home.state().getJSONObject("infoDraft").getString("displayName"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+        home.perform("updates.install",RhActions.obj());home.perform("navigation.resolve",RhActions.obj("choice","discard"));awaitUpdate();assertInstaller(next());assertEquals(before,RhShared.canonical(RhShared.read(activity)));assertEquals(1,Requests.downloads);
+    }
+    @Test public void changedSyncSettingsAreProtectedBeforeInstallation()throws Exception{
+        String before=beginDownloadWithDraft("sync",false);Requests.release.countDown();awaitUpdate();assertNull(next());assertEquals("unsaved-sync",home.state().getJSONObject("navigationPrompt").getString("kind"));home.perform("navigation.resolve",RhActions.obj("choice","stay"));assertEquals("changed",home.state().getJSONObject("syncDraft").getString("username"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+        home.perform("updates.install",RhActions.obj());home.perform("navigation.resolve",RhActions.obj("choice","discard"));awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);
+    }
+    @Test public void invalidEditsCanBeCorrectedWithoutDownloadingTheApkAgain()throws Exception{
+        String before=beginDownloadWithDraft("device",true);Requests.release.countDown();awaitUpdate();try{home.perform("navigation.resolve",RhActions.obj("choice","save"));fail("Invalid frame rate saved");}catch(RhSettingsDraft.Invalid expected){}
+        assertNull(next());assertEquals("",home.state().getJSONObject("settingsInputs").getString("fps"));assertEquals("fps",home.state().getString("settingsErrorField"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+        home.perform("settings.input",RhActions.obj("key","fps","value","24"));home.perform("updates.install",RhActions.obj());home.perform("navigation.resolve",RhActions.obj("choice","save"));awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);
+    }
+    @Test public void backgroundCompletionDoesNotPromptOverAnUnsavedForm()throws Exception{
+        String before=beginDownloadWithDraft("device",false);home.paused();Requests.release.countDown();awaitUpdate();assertNull(next());assertTrue(home.state().isNull("navigationPrompt"));home.resumed();idle();assertNull(next());assertEquals("24",home.state().getJSONObject("settingsInputs").getString("fps"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+    }
+    @Test public void completingDownloadDoesNotReplaceAnExistingDecision()throws Exception{
+        beginDownloadWithDraft("device",false);home.perform("app.settings.tab",RhActions.obj("tab","about"));JSONObject before=org.robolectric.util.ReflectionHelpers.getField(home,"pendingNavigation");String decision=before.toString();Requests.release.countDown();awaitUpdate();assertNull(next());JSONObject after=org.robolectric.util.ReflectionHelpers.getField(home,"pendingNavigation");assertEquals(decision,after.toString());
+        home.perform("navigation.resolve",RhActions.obj("choice","stay"));assertNull(next());assertEquals("24",home.state().getJSONObject("settingsInputs").getString("fps"));
+    }
+    @Test public void addingADeviceDefersInstallationUntilAnotherExplicitClick()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));home.perform("device.add.open",RhActions.obj());home.perform("device.add.input",RhActions.obj("address","192.0.2.99"));Requests.release.countDown();awaitUpdate();assertNull(next());assertEquals("192.0.2.99",home.state().getJSONObject("add").getString("address"));assertFalse(home.state().getString("updateInstallHint").isEmpty());
+        home.perform("device.add.cancel",RhActions.obj());home.perform("app.settings.tab",RhActions.obj("tab","updates"));button(activity.getWindow().getDecorView(),"安装更新").performClick();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);
+    }
     @Test public void backgroundCompletionWaitsForOneRealForegroundEntry()throws Exception{
         page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));home.paused();Requests.release.countDown();
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(!updates.state().optString("phase").equals("ready")){idle();assertTrue("Download did not prepare",System.nanoTime()<end);Thread.sleep(5);}idle();

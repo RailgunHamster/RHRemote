@@ -401,6 +401,8 @@ impl Controller {
         value["connection"]["busy"]=json!(s.connection.busy());
         value["navigation"]=json!({"locked":connection::navigation_locked(&s),"reason":connection::navigation_hint(&s)});
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
+        value["updateInstallHint"]=json!(global_settings::update_installation_blocked(&s).unwrap_or(""));
+        value["updatesBusy"]=json!(s.updates_busy || s.installing_update);
         value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
         value["syncClearPrompt"]=if s.sync_clear_pending{json!({"title":"移除同步设置？","message":"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。"})}else{Value::Null};
         value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
@@ -552,7 +554,7 @@ impl Controller {
         if !catalog().as_array().unwrap().iter().any(|a| a["id"] == id) {
             return json!({"ok":false,"error":"unknown action","action":id});
         }
-        let result = if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
+        let result = if let Some(result)=self.update_installation_gate(id,&args){result} else if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
             let clear_pending=self.state.lock().unwrap().sync_clear_pending;
             let action=if clear_pending {"sync.clear.resolve"} else {match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>{let s=self.state.lock().unwrap();if !s.connection.busy(){"connection.dismiss"}else if s.connection.operation=="pair"{"pair.cancel"}else{"stream.disconnect"}},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"}};
@@ -1500,7 +1502,7 @@ mod tests {
         }
         assert_eq!(
             c.dispatch("device.connect", json!({"uuid":"a"}))["error"],
-            "更新操作进行中，请稍后连接"
+            "正在安装更新，请稍候"
         );
     }
     #[test]
@@ -1725,3 +1727,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod update_install_tests;

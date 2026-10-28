@@ -271,7 +271,13 @@ fn connections(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) ->
 
 fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Value>) -> Result<()> {
     let theme = if dark { "dark" } else { "light" };
-    let size = if large { "large" } else if narrow { "compact" } else { "wide" };
+    let size = if large {
+        "large"
+    } else if narrow {
+        "compact"
+    } else {
+        "wide"
+    };
     let catalog = rhremote_core::settings_catalog();
     let profile = serde_json::to_value(rhremote_core::Profile::default())?;
     for scene in [
@@ -295,10 +301,36 @@ fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Val
         ui.set_app_version(env!("CARGO_PKG_VERSION").into());
         ui.set_selected_uuid("fixture-winserver".into());
         ui.set_selected_name("winserver".into());
-        let selected=DeviceRow{uuid:"fixture-winserver".into(),name:"winserver".into(),host_name:"winserver".into(),address:"192.0.2.1".into(),status:"在线".into(),paired:true,online:true,..Default::default()};
+        let selected = DeviceRow {
+            uuid: "fixture-winserver".into(),
+            name: "winserver".into(),
+            host_name: "winserver".into(),
+            address: "192.0.2.1".into(),
+            status: "在线".into(),
+            paired: true,
+            online: true,
+            ..Default::default()
+        };
         ui.set_selected_device(selected.clone());
-        ui.set_devices(model(vec![selected,DeviceRow{uuid:"fixture-self".into(),name:"RailgunHamster".into(),status:"本机".into(),is_self:true,..Default::default()},DeviceRow{uuid:"fixture-claw".into(),name:"claw".into(),status:"离线".into(),paired:true,..Default::default()}]));
-        ui.set_device_total(3);ui.set_device_online(2);
+        ui.set_devices(model(vec![
+            selected,
+            DeviceRow {
+                uuid: "fixture-self".into(),
+                name: "RailgunHamster".into(),
+                status: "本机".into(),
+                is_self: true,
+                ..Default::default()
+            },
+            DeviceRow {
+                uuid: "fixture-claw".into(),
+                name: "claw".into(),
+                status: "离线".into(),
+                paired: true,
+                ..Default::default()
+            },
+        ]));
+        ui.set_device_total(3);
+        ui.set_device_online(2);
         ui.set_client_name("Windows · 预览".into());
         let is_profile = ["video", "audio", "input", "network", "advanced"].contains(&scene);
         ui.set_page(
@@ -384,11 +416,31 @@ fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Val
                 .collect(),
         ));
         ui.show()?;
-        let width = if large { 1920. } else if narrow { 720. } else { 1180. };
-        ui.window()
-            .set_size(LogicalSize::new(width, if large { 1080. } else if narrow { 560. } else { 780. }));
-        let list_width=if is_profile || scene=="device-info" {if narrow {224.} else {276.}}else{0.};
-        ui.set_form_inset(((width - if narrow { 64. } else { 184. } - list_width - 800.) / 2.).max(24.));
+        let width = if large {
+            1920.
+        } else if narrow {
+            720.
+        } else {
+            1180.
+        };
+        ui.window().set_size(LogicalSize::new(
+            width,
+            if large {
+                1080.
+            } else if narrow {
+                560.
+            } else {
+                780.
+            },
+        ));
+        let list_width = if is_profile || scene == "device-info" {
+            if narrow { 224. } else { 276. }
+        } else {
+            0.
+        };
+        ui.set_form_inset(
+            ((width - if narrow { 64. } else { 184. } - list_width - 800.) / 2.).max(24.),
+        );
         capture(&ui, out, &format!("form-{scene}-{size}-{theme}"), images)?;
         scroll_bottom(&ui, ui.global::<UiTest>(), "scroll|form")?;
         capture(
@@ -397,6 +449,123 @@ fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Val
             &format!("form-{scene}-bottom-{size}-{theme}"),
             images,
         )?;
+        ui.hide()?;
+    }
+    Ok(())
+}
+
+fn update_states(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Result<()> {
+    let theme = if dark { "dark" } else { "light" };
+    let size = if narrow { "compact" } else { "wide" };
+    for (name, state, busy, label, hint) in [
+        (
+            "idle",
+            json!({"phase":"idle","status":"尚未检查更新"}),
+            false,
+            "检查更新",
+            "",
+        ),
+        (
+            "checking",
+            json!({"phase":"checking","status":"正在检查更新"}),
+            true,
+            "检查中…",
+            "",
+        ),
+        (
+            "available",
+            json!({"phase":"available","availableVersion":"9.0.0","status":"发现新版本"}),
+            false,
+            "下载并安装",
+            "",
+        ),
+        (
+            "downloading",
+            json!({"phase":"downloading","progress":37,"availableVersion":"9.0.0","status":"正在下载更新（37%）"}),
+            true,
+            "下载中 37%",
+            "",
+        ),
+        (
+            "verifying",
+            json!({"phase":"verifying","progress":100,"availableVersion":"9.0.0","status":"正在校验更新包"}),
+            true,
+            "正在校验…",
+            "",
+        ),
+        (
+            "downloaded",
+            json!({"phase":"downloaded","pendingRestart":true,"availableVersion":"9.0.0","status":"更新已下载，可安装更新"}),
+            false,
+            "重启并安装",
+            "",
+        ),
+        (
+            "deferred-sync",
+            json!({"phase":"downloaded","pendingRestart":true,"availableVersion":"9.0.0","status":"更新已下载，可安装更新"}),
+            false,
+            "重启并安装",
+            "请先完成配置同步",
+        ),
+        (
+            "check-failed",
+            json!({"phase":"error","failedAction":"updates.check","availableVersion":"9.0.0","status":"GitHub 与 Gitee 更新源均不可用"}),
+            false,
+            "重新检查",
+            "",
+        ),
+        (
+            "download-failed",
+            json!({"phase":"error","failedAction":"updates.install","availableVersion":"9.0.0","status":"更新包下载失败，请检查网络后重试"}),
+            false,
+            "重试下载并安装",
+            "",
+        ),
+        (
+            "applying",
+            json!({"phase":"applying","pendingRestart":true,"availableVersion":"9.0.0","status":"正在重启 RHRemote 并安装更新"}),
+            true,
+            "正在安装…",
+            "",
+        ),
+        (
+            "unmanaged",
+            json!({"phase":"idle","status":"尚未检查更新"}),
+            false,
+            "检查更新",
+            "",
+        ),
+    ] {
+        let ui = MainWindow::new()?;
+        ui.global::<Palette>().set_dark(dark);
+        ui.set_dark(dark);
+        ui.set_compact(narrow);
+        ui.set_isolated_preview(true);
+        ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+        ui.set_page("global-settings".into());
+        ui.set_settings_tab("updates".into());
+        ui.set_updates_managed(name != "unmanaged");
+        ui.set_updates_available(state["availableVersion"].is_string());
+        ui.set_updates_pending(state["pendingRestart"] == true);
+        ui.set_updates_busy(busy);
+        ui.set_update_primary_text(label.into());
+        ui.set_update_primary_installs(
+            rhremote_core::update_primary_action(&state) == "updates.install",
+        );
+        ui.set_update_install_hint(hint.into());
+        ui.set_update_phase(state["phase"].as_str().unwrap().into());
+        ui.set_update_progress(state["progress"].as_i64().unwrap_or(0) as i32);
+        ui.set_update_status(state["status"].as_str().unwrap().into());
+        ui.set_update_version(state["availableVersion"].as_str().unwrap_or("").into());
+        ui.set_update_details(state["phase"] == "error");
+        ui.window().set_size(LogicalSize::new(
+            if narrow { 720. } else { 1180. },
+            if narrow { 560. } else { 780. },
+        ));
+        let logical_width = if narrow { 720.0_f32 } else { 1180.0 };
+        ui.set_form_inset(((logical_width - if narrow { 64.0 } else { 184.0 } - 800.0) / 2.0).max(24.0));
+        ui.show()?;
+        capture(&ui, out, &format!("update-{name}-{size}-{theme}"), images)?;
         ui.hide()?;
     }
     Ok(())
@@ -423,6 +592,7 @@ fn main() -> Result<()> {
             pickers(out, dark, narrow, &mut images)?;
             connections(out, dark, narrow, &mut images)?;
             forms(out, dark, narrow, false, &mut images)?;
+            update_states(out, dark, narrow, &mut images)?;
         }
         forms(out, dark, false, true, &mut images)?;
     }

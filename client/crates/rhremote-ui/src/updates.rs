@@ -172,7 +172,9 @@ impl Updates {
             manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new()),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
             available:None,live,
         };
-        value.refresh();value
+        value.refresh();
+        if value.state()["pendingRestart"] == true { value.status("downloaded", "更新已下载，可安装更新"); }
+        value
     }
     pub fn snapshot(&self) -> Snapshot { self.live.clone() }
     pub fn state(&self) -> Value { self.live.lock().unwrap().clone() }
@@ -214,14 +216,18 @@ impl Updates {
             match id {
                 "updates.check"=>self.check()?,
                 "updates.download"=>self.download()?,
-                "updates.install"=>{
+                "updates.prepare"=>{
                     if self.manager.as_ref().unwrap().get_update_pending_restart().is_none(){
                         if self.available.is_none(){self.check()?;}
                         if self.available.is_none(){return Ok(());}
                         self.download()?;
                     }
+                    self.refresh();
+                    self.status("downloaded","更新已下载，可安装更新");
+                },
+                "updates.install"=>{
                     let manager=self.manager.as_ref().unwrap();
-                    let pending=manager.get_update_pending_restart().ok_or("更新包尚未准备好")?;
+                    let pending=manager.get_update_pending_restart().ok_or("更新包尚未准备好，请重新下载")?;
                     self.status("applying","正在重启 RHRemote 并安装更新");
                     manager.wait_exit_then_apply_updates(pending,false,true,Vec::<String>::new()).map_err(|e|e.to_string())?;
                 },
@@ -229,7 +235,7 @@ impl Updates {
             }
             Ok(())
         })();
-        if let Err(error)=result {let mut live=self.live.lock().unwrap();live["phase"]=json!("error");live["status"]=json!(error);live["failedAction"]=json!(id);return Err(error);}
+        if let Err(error)=result {self.refresh();let mut live=self.live.lock().unwrap();live["phase"]=json!("error");live["status"]=json!(error);live["failedAction"]=json!(if id=="updates.prepare"{"updates.install"}else{id});return Err(error);}
         Ok(self.state())
     }
 }

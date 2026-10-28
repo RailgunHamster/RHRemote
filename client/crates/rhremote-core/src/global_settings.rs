@@ -8,6 +8,20 @@ pub fn update_primary_action(state:&Value)->&'static str {
     else {"updates.check"}
 }
 
+pub(crate) fn update_installation_blocked(s: &crate::State) -> Option<&'static str> {
+    if s.streaming || s.connecting || s.connection.busy() || s.page == "pair" {
+        Some("请先完成或断开当前远程连接")
+    } else if s.sync_busy {
+        Some("请先完成配置同步")
+    } else if s.page == "add" || s.add.busy() {
+        Some("请先完成或取消添加设备")
+    } else if s.pending_navigation.is_some() || s.sync_clear_pending {
+        Some("请先处理当前确认")
+    } else if s.closing {
+        Some("应用正在关闭")
+    } else { None }
+}
+
 fn sync_feedback_visible(s: &crate::State) -> bool {
     s.page == "devices" || (s.page == "global-settings" && s.settings_tab == "sync")
 }
@@ -56,23 +70,33 @@ impl Controller {
         let id = if id == "updates.primary" {
             update_primary_action(&s.updates)
         } else { id };
-        if id == "updates.install" && (s.streaming || s.connecting) {
-            return Err("请先断开远程连接".into());
+        if id == "updates.install" {
+            if let Some(reason) = update_installation_blocked(&s) { return Err(reason.into()); }
+            // Navigation and admission are separate lock acquisitions. Recheck here
+            // so a concurrent edit cannot slip between the decision and installation.
+            if crate::interaction::dirty(&s) || crate::interaction::sync_dirty(&s) || crate::device_info::dirty(&s) {
+                drop(s);
+                if let Some(result) = self.navigation_gate("updates.install", &json!({})) { return result; }
+                return self.dispatch_update("updates.install");
+            }
         }
+        let preparing = id == "updates.install" && s.updates["pendingRestart"] != true;
         s.updates_busy = true;
         s.update_details = false;
-        s.installing_update = id == "updates.install";
+        s.installing_update = id == "updates.install" && !preparing;
         s.updates["failedAction"]=json!("");
         s.updates["phase"] = json!(if id == "updates.check" { "checking" } else { "preparing" });
         s.updates["status"] = json!(if id == "updates.check" { "正在检查更新" } else { "正在准备更新" });
         s.revision += 1;
         drop(s);
-        let result = self.platform.execute(id, &json!({}));
+        // Preparation may take minutes. Do not launch the updater until the
+        // subsequent install request passes the current draft/session guards.
+        let result = self.platform.execute(if preparing { "updates.prepare" } else { id }, &json!({}));
         let mut s = self.state.lock().unwrap();
         s.updates_busy = false;
         s.installing_update = false;
         s.revision += 1;
-        let result = match result {
+        let mut result = match result {
             Ok(v) => v,
             Err(e) => {
                 s.updates["phase"] = json!("error");
@@ -82,7 +106,25 @@ impl Controller {
             }
         };
         s.updates = result.clone();
-        if id == "updates.install" && result["phase"] == "applying" {
+        if preparing && result["pendingRestart"] == true {
+            if let Some(reason) = update_installation_blocked(&s) {
+                result["installDeferred"] = json!(true);
+                result["deferredReason"] = json!(reason);
+                return Ok(result);
+            }
+            drop(s);
+            let continued = self.dispatch("updates.install", json!({}));
+            if continued["ok"] == true { return Ok(continued["result"].clone()); }
+            let current = self.state.lock().unwrap();
+            if current.updates_busy || update_installation_blocked(&current).is_some() {
+                let mut ready = current.updates.clone();
+                ready["installDeferred"] = json!(true);
+                return Ok(ready);
+            }
+            return Err(continued["error"].as_str().unwrap_or("安装更新失败").into());
+        }
+        if !preparing && id == "updates.install" && result["phase"] == "applying" {
+            s.installing_update = true;
             s.window_action = "window.close".into();
         }
         Ok(result)
@@ -339,18 +381,64 @@ mod interaction_tests {
             if id=="updates.state"{return Ok(json!({"managed":true,"phase":"idle"}));}
             self.calls.lock().unwrap().push(id.into());
             if *self.fail.lock().unwrap(){return Err("fixture network unavailable".into());}
-            Ok(if id=="updates.check"{json!({"availableVersion":"9.0.0","phase":"available"})}else{json!({"availableVersion":"9.0.0","pendingRestart":true,"phase":"applying"})})
+            Ok(if id=="updates.check"{json!({"availableVersion":"9.0.0","phase":"available"})}else{json!({"availableVersion":"9.0.0","pendingRestart":true,"phase":if id=="updates.prepare"{"downloaded"}else{"applying"}})})
         }
     }
     fn controller(platform:Arc<Updates>)->Arc<Controller>{
         Controller::new("test",std::env::temp_dir().join(format!("rhremote-interaction-{}.json",random_token().unwrap())),platform).unwrap()
+    }
+    #[test]
+    fn download_completion_must_not_close_a_draft_opened_while_install_was_preparing() {
+        use std::sync::{atomic::{AtomicBool, Ordering}, mpsc};
+        struct Preparing {
+            first: AtomicBool,
+            entered: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl Platform for Preparing {
+            fn execute(&self, id: &str, _: &Value) -> Result<Value, String> {
+                if id == "sync.state" || id == "devices.restore" { return Ok(json!({})); }
+                if id == "updates.state" { return Ok(json!({"managed":true,"phase":"available","availableVersion":"9.0.0"})); }
+                if matches!(id, "updates.prepare" | "updates.install") {
+                    if self.first.swap(false, Ordering::SeqCst) {
+                        self.entered.send(()).unwrap();
+                        self.release.lock().unwrap().recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+                    }
+                    return Ok(json!({"managed":true,"availableVersion":"9.0.0","pendingRestart":true,
+                        "phase":if id == "updates.prepare" {"downloaded"} else {"applying"}}));
+                }
+                Err(format!("Unexpected external operation: {id}"))
+            }
+        }
+        let (entered, ready) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let platform = Arc::new(Preparing { first: AtomicBool::new(true), entered, release: Mutex::new(wait) });
+        let path = std::env::temp_dir().join(format!("rhremote-update-draft-{}.json", random_token().unwrap()));
+        let c = Controller::new("windows", path.clone(), platform).unwrap();
+        c.replace_devices(serde_json::from_value(json!([{"uuid":"host","name":"PC","address":"192.0.2.1","paired":true,"online":true}])).unwrap());
+        let updating = c.clone();
+        let worker = std::thread::spawn(move || updating.dispatch("updates.install", json!({})));
+        ready.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let opened = c.dispatch("device.settings.open", json!({"uuid":"host"}));
+        let edited = c.dispatch("settings.input", json!({"key":"fps","value":"24"}));
+        release.send(()).unwrap();
+        let finished = worker.join().unwrap();
+        assert_eq!(opened["ok"], true);
+        assert_eq!(edited["ok"], true);
+        assert_eq!(finished["ok"], true);
+        let close = c.take_window_action();
+        let current = c.state();
+        let _ = std::fs::remove_file(path);
+        assert!(close.is_empty(), "Downloading must not bypass the draft decision: {close}");
+        assert_eq!(current["navigationPrompt"]["kind"], "unsaved-device");
+        assert_eq!(current["settingsInputs"]["fps"], "24");
     }
     #[test] fn primary_checks_first_and_only_installs_on_the_next_explicit_click(){
         let platform=Arc::new(Updates::default());let c=controller(platform.clone());
         assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],true);assert!(c.take_window_action().is_empty());
         assert_eq!(*platform.calls.lock().unwrap(),["updates.check"]);
         assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],true);assert_eq!(c.take_window_action(),"window.close");
-        assert_eq!(*platform.calls.lock().unwrap(),["updates.check","updates.install"]);
+        assert_eq!(*platform.calls.lock().unwrap(),["updates.check","updates.prepare","updates.install"]);
         let _=std::fs::remove_file(&c.storage);
     }
     #[test] fn failure_keeps_the_candidate_for_retry_and_never_closes_the_window(){

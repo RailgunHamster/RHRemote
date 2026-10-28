@@ -25,6 +25,7 @@ final class RhUpdateWork {
 
     private RhUpdateWork(Context context){this.context=context;updates=new RhUpdates(context);}
     synchronized boolean busy(){return running||installReady||resumeInstall;}
+    synchronized boolean awaitingInstall(){return !running&&(installReady||resumeInstall);}
     synchronized JSONObject state(){JSONObject value=updates.state();try{value.put("operationId",operation);value.put("busy",busy());value.put("awaitingForeground",!running&&(installReady||resumeInstall));}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
     synchronized void attach(Listener value){listener=value;}
     synchronized boolean detach(Listener value){if(listener!=value)return false;listener=null;return true;}
