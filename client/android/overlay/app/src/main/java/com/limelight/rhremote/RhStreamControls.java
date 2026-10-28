@@ -1,14 +1,10 @@
 package com.limelight.rhremote;
 
 import android.app.AlertDialog;
-import android.content.Context;
 import android.content.DialogInterface;
 import android.view.KeyEvent;
 import android.view.View;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.TextView;
-import androidx.core.view.ViewCompat;
-import androidx.core.view.WindowInsetsCompat;
 import com.limelight.Game;
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
@@ -18,28 +14,29 @@ import org.json.*;
 public final class RhStreamControls implements RhActions.Target {
     private final Game game;private final RhTouchController touch;private final PreferenceConfiguration preferences;
     private final RhStreamPanel panel;private final RhProfile profile;private final RhDisplay display;
-    private boolean keyboard,disposed,connected,firstFrame,shortcutBusy,displayBusy;
+    private boolean disposed,connected,firstFrame,shortcutBusy,displayBusy;
+    private final RhSoftKeyboard keyboard;
     private JSONObject lastShortcut=RhActions.obj();private String displayError="";
     private String feedbackAction="",feedbackGroup="",feedbackMessage="",feedbackError="",menu="";
     private AlertDialog menuDialog,exitDialog;
     public static RhStreamControls install(Game game,RhTouchController touch,PreferenceConfiguration preferences,RhProfile profile,RhDisplay display){RhStreamControls controls=new RhStreamControls(game,touch,preferences,profile,display);return controls.disposed?null:controls;}
     private RhStreamControls(Game game,RhTouchController touch,PreferenceConfiguration preferences,RhProfile profile,RhDisplay display){
-        this.game=game;this.touch=touch;this.preferences=preferences;this.profile=profile;this.display=display;
+        this.game=game;this.touch=touch;this.preferences=preferences;this.profile=profile;this.display=display;keyboard=new RhSoftKeyboard(game);
         panel=new RhStreamPanel(game,game.findViewById(android.R.id.content),RhActions::click);panel.setDeviceName(game.getIntent().getStringExtra(Game.EXTRA_PC_NAME));
         touch.setTransformListener(this::transformed);
         updatePanel();RhActions.initialize(game,null);if(!RhActions.attachStream(this,game))dispose();
     }
-    public void dispose(){if(disposed)return;disposed=true;closeMenu();closeExit();touch.setTransformListener(null);touch.cancel();panel.dispose();RhActions.detachStream(this);}
+    public void dispose(){if(disposed)return;disposed=true;keyboard.dispose();closeMenu();closeExit();touch.setTransformListener(null);touch.cancel();panel.dispose();RhActions.detachStream(this);}
     public void markFirstFrame(){if(disposed)return;firstFrame=true;game.runOnUiThread(this::updatePanel);}
     public void markConnected(){if(disposed)return;connected=true;try{if(display!=null)display.applyInitial();}catch(Exception failure){displayError=problem(failure,"屏幕切换失败");noteFailure("stream.display.select",displayError);}updatePanel();}
-    private boolean busy(){return displayBusy||shortcutBusy;}
+    private boolean busy(){return displayBusy||shortcutBusy||keyboard.pending();}
     private static String group(String id){return (id.startsWith("stream.display.")||id.startsWith("stream.displays."))||id.equals("stream.window.move")?"displays":id.startsWith("stream.audio.")?"audio":"input";}
     private static String problem(Exception failure,String fallback){return failure.getMessage()==null?fallback:failure.getMessage();}
-    private static String failed(String id){switch(id){case "stream.displays.refresh":return "屏幕列表读取失败";case "stream.display.select":return "屏幕切换失败";case "stream.window.move":return "窗口移动失败";case "stream.shortcut":return "快捷键发送失败";case "stream.audio.toggle":case "stream.audio.volume":return "声音设置失败";case "stream.stats.toggle":return "统计设置失败";default:return "操作失败";}}
+    private static String failed(String id){switch(id){case "stream.displays.refresh":return "屏幕列表读取失败";case "stream.display.select":return "屏幕切换失败";case "stream.window.move":return "窗口移动失败";case "stream.shortcut":return "快捷键发送失败";case "stream.audio.toggle":case "stream.audio.volume":return "声音设置失败";case "stream.keyboard.toggle":return "键盘操作失败";case "stream.stats.toggle":return "统计设置失败";default:return "操作失败";}}
     private void feedback(String id,String message,String error){feedbackAction=id;feedbackGroup=group(id);feedbackMessage=error.isEmpty()?message:failed(id);feedbackError=error;}
-    private boolean keyboardVisible(){WindowInsetsCompat insets=ViewCompat.getRootWindowInsets(game.getWindow().getDecorView());return insets==null?keyboard:insets.isVisible(WindowInsetsCompat.Type.ime());}
+    private boolean keyboardVisible(){return keyboard.visible();}
     private void updatePanel(){if(disposed)return;panel.update(touch.isTrackpad(),touch.isPanMode(),profile.audioEnabled,profile.volume,display==null?RhActions.obj():display.state(),displayBusy,displayError,feedbackAction);String message=feedbackMessage;String scope=feedbackGroup;if(!busy()&&feedbackError.isEmpty()&&(!connected||!firstFrame)){scope=panel.tab();message=connected?"等待首帧…":"正在建立串流…";}panel.updateControls(connected,preferences.enablePerfOverlay,touch.scale(),busy(),scope,message,feedbackError);panel.updateScrollMode(touch.isScrollMode());if(menuDialog!=null&&menuDialog.getListView()!=null)menuDialog.getListView().setEnabled(!busy());}
-    public JSONObject state(){TextView overlay=game.findViewById(R.id.performanceOverlay);return RhActions.obj("connected",connected,"firstFrame",firstFrame,"phase",!connected?"starting":firstFrame?"connected":"first-frame","audioEnabled",profile.audioEnabled,"volume",profile.volume,"audioPackets",game.rhAudioRenderer==null?0:game.rhAudioRenderer.packets(),"controls",panel.isExpanded(),"controlsTab",panel.tab(),"controlsLayout",panel.layoutState(),"controlAction",RhActions.obj("action",feedbackAction,"group",feedbackGroup,"busy",busy(),"message",feedbackMessage,"error",feedbackError),"streamMenu",menu,"exitPrompt",exitDialog!=null,"trackpad",touch.isTrackpad(),"pan",touch.isPanMode(),"scrollMode",touch.isScrollMode(),"keyboard",keyboardVisible(),"zoom",touch.viewTransform(),"showStats",preferences.enablePerfOverlay,"statistics",overlay==null?"":overlay.getText().toString(),"surface",touch.surfaceSize(),"lastShortcut",lastShortcut,"shortcutBusy",shortcutBusy,"display",display==null?RhActions.obj():display.state(),"displayBusy",displayBusy,"displayError",displayError);}
+    public JSONObject state(){TextView overlay=game.findViewById(R.id.performanceOverlay);return RhActions.obj("connected",connected,"firstFrame",firstFrame,"phase",!connected?"starting":firstFrame?"connected":"first-frame","audioEnabled",profile.audioEnabled,"volume",profile.volume,"audioPackets",game.rhAudioRenderer==null?0:game.rhAudioRenderer.packets(),"controls",panel.isExpanded(),"controlsTab",panel.tab(),"controlsLayout",panel.layoutState(),"controlAction",RhActions.obj("action",feedbackAction,"group",feedbackGroup,"busy",busy(),"message",feedbackMessage,"error",feedbackError),"streamMenu",menu,"exitPrompt",exitDialog!=null,"trackpad",touch.isTrackpad(),"pan",touch.isPanMode(),"scrollMode",touch.isScrollMode(),"keyboard",keyboardVisible(),"keyboardPending",keyboard.pending(),"keyboardTargetVisible",keyboard.target(),"keyboardError",keyboard.error(),"zoom",touch.viewTransform(),"showStats",preferences.enablePerfOverlay,"statistics",overlay==null?"":overlay.getText().toString(),"surface",touch.surfaceSize(),"lastShortcut",lastShortcut,"shortcutBusy",shortcutBusy,"display",display==null?RhActions.obj():display.state(),"displayBusy",displayBusy,"displayError",displayError);}
     public void noteFailure(String id,String error){if(disposed||busy()||id.equals(feedbackAction)&&error.equals(feedbackError))return;feedback(id,"",error);updatePanel();}
     public boolean dispatchKeyEvent(KeyEvent event){return !disposed&&panel.dispatchKeyEvent(event,this::goBack);}
     private void transformed(double scale){panel.updateZoom((float)scale);if(feedbackAction.equals("stream.zoom.reset")&&feedbackError.isEmpty()&&Math.abs(scale-1)>.001){feedbackAction="input.gesture";feedbackGroup="input";feedbackMessage="";if(panel.isExpanded()&&panel.tab().equals("input"))panel.updateFeedback("input","","");}}
@@ -47,7 +44,7 @@ public final class RhStreamControls implements RhActions.Target {
         if(disposed)return false;
         if(exitDialog!=null){RhActions.click("stream.exit.resolve",RhActions.obj("choice","stay"));return true;}
         if(menuDialog!=null){RhActions.click("stream.menu.close",RhActions.obj());return true;}
-        if(keyboardVisible()){((InputMethodManager)game.getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(game.getWindow().getDecorView().getWindowToken(),0);keyboard=false;return true;}
+        if(keyboard.pending()||keyboardVisible()){requestKeyboard(false);return true;}
         if(panel.isExpanded()){RhActions.click("stream.controls.toggle",RhActions.obj());return true;}
         RhActions.click(connected?"stream.exit.request":"stream.disconnect",RhActions.obj());return true;
     }
@@ -71,7 +68,7 @@ public final class RhStreamControls implements RhActions.Target {
             case "stream.controls.toggle":closeMenu();panel.setExpanded(!panel.isExpanded());break;
             case "stream.controls.tab":closeMenu();panel.setTab(args.getString("tab"));if(panel.tab().equals("displays"))loadMissingDisplays();break;
             case "stream.mode.toggle":touch.setTrackpad(!touch.isTrackpad());feedback(id,touch.isTrackpad()?"触控板模式":"直接点击模式","");break;
-            case "stream.keyboard.toggle":panel.setExpanded(false);game.toggleKeyboard();keyboard=!keyboard;break;
+            case "stream.keyboard.toggle":boolean show=keyboard.pending()?!keyboard.target():!keyboardVisible();panel.setExpanded(false);requestKeyboard(show);break;
             case "stream.scroll.set":touch.setScrollMode(args.getBoolean("enabled"));feedback(id,touch.isScrollMode()?"滚动模式已开启":"滚动模式已关闭","");break;
             case "stream.pan.toggle":touch.togglePan();feedback(id,touch.isPanMode()?"移动画面已开启":"移动画面已关闭","");break;
             case "stream.zoom.reset":touch.resetZoom();feedback(id,"缩放已还原","");break;
@@ -114,4 +111,9 @@ public final class RhStreamControls implements RhActions.Target {
         new Thread(()->{JSONObject result;try{RhHost.request(game,game.getIntent().getStringExtra(Game.EXTRA_HOST),game.getIntent().getByteArrayExtra(Game.EXTRA_SERVER_CERT),"/v1/input/secure-attention",RhActions.obj("action","ctrl-alt-delete"));result=RhActions.obj("shortcut",id,"accepted",true);}catch(Exception failure){result=RhActions.obj("shortcut",id,"accepted",false,"error",problem(failure,"主机辅助服务不可用"));}final JSONObject completed=result;game.runOnUiThread(()->{if(disposed)return;shortcutBusy=false;lastShortcut=completed;feedback(action,completed.optBoolean("accepted")?"已发送快捷键":"",completed.optString("error"));updatePanel();});},"RHRemote secure attention").start();
     }
     private void applyAudio(){if(game.rhAudioRenderer!=null)game.rhAudioRenderer.setPlayback(profile.audioEnabled,profile.volume);}
+    private void requestKeyboard(boolean show){
+        feedback("stream.keyboard.toggle",show?"正在打开键盘…":"正在关闭键盘…","");
+        keyboard.request(show,(visible,error)->{if(disposed)return;if(feedbackAction.equals("stream.keyboard.toggle"))feedback("stream.keyboard.toggle",visible?"键盘已打开":"键盘已关闭",error);if(!error.isEmpty()&&!panel.isExpanded()&&menuDialog==null&&exitDialog==null){panel.setExpanded(true);panel.setTab("input");}updatePanel();});updatePanel();
+    }
+    public void toggleKeyboardFromGame(){if(disposed||game.isFinishing())return;try{perform("stream.keyboard.toggle",RhActions.obj());}catch(Exception failure){noteFailure("stream.keyboard.toggle",problem(failure,"键盘操作失败"));}}
 }

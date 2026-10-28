@@ -405,6 +405,7 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($
 }
 Edit-Source 'app/src/main/java/com/limelight/nvstream/http/PairingManager.java' {param($s)return $s}
 Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
+    $s=Replace-Once $s '        inputManager.toggleSoftInput(0, 0);' '        if(rhControls != null) rhControls.toggleKeyboardFromGame();'
     $s=Replace-Once $s '        super.onCreate(savedInstanceState);' @'
         super.onCreate(savedInstanceState);
         if(!com.limelight.rhremote.RhRecovery.allowGame(getIntent())||!com.limelight.rhremote.RhAdmission.allowGame(getIntent())) { rhAdmissionRejected=true; finish(); return; }

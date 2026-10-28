@@ -74,12 +74,12 @@ public sealed class RhSessionInputProbe70 : Form {
  void Event(string name){int value;counts.TryGetValue(name,out value);counts[name]=value+1;pendingEvents.Enqueue(json.Serialize(new{utc=DateTime.UtcNow.ToString("o"),name=name,count=value+1})+"\n");Invalidate();}
  void KeyMessage(string route,int key,int modifiers){
   // Only the fixed test keys in this owned window; never record character input.
-  if(keyMessages.Count>=128||!(key==16||key==17||key==18||key==91||key==37||key==38||key==39||key==40||key==65||key==67||key==70||key==83||key==27||key==115))return;
+  if(keyMessages.Count>=512||!(key==16||key==17||key==18||key==91||key==37||key==38||key==39||key==40||key==65||key==67||key==70||key==83||key==27||key==115))return;
   int threadMask=0;int[] keys={16,17,18,91,92};for(int i=0;i<keys.Length;i++)if((GetKeyState(keys[i])&0x8000)!=0)threadMask|=1<<i;
   keyMessages.Add(new{utc=DateTime.UtcNow.ToString("o"),route=route,key=key,modifiers=modifiers,threadModifiers=threadMask,asyncModifiers=Held()});
  }
  protected override void WndProc(ref Message message){if(message.Msg==0x0100||message.Msg==0x0101||message.Msg==0x0104||message.Msg==0x0105)KeyMessage("win32-"+message.Msg.ToString("x"),message.WParam.ToInt32(),0);if(message.Msg==0x0312){int id=message.WParam.ToInt32();if(id>=1&&id<=4){Event(hotkeys[id-1]);WriteStatus();return;}}base.WndProc(ref message);}
- protected override bool ProcessCmdKey(ref Message message,Keys data){if(data==(Keys.Alt|Keys.F4)){closingReason="alt-f4";Event("alt-f4");}return base.ProcessCmdKey(ref message,data);}
+ protected override bool ProcessCmdKey(ref Message message,Keys data){KeyMessage("command-before",(int)(data&Keys.KeyCode),(int)(data&Keys.Modifiers));if(data==(Keys.Alt|Keys.F4)){closingReason="alt-f4";Event("alt-f4");}bool handled=base.ProcessCmdKey(ref message,data);KeyMessage(handled?"command-consumed":"command-passed",(int)(data&Keys.KeyCode),(int)(data&Keys.Modifiers));return handled;}
  protected override void OnMouseDown(MouseEventArgs e){mouseDown++;Focus();base.OnMouseDown(e);WriteStatus();}
  protected override void OnMouseUp(MouseEventArgs e){mouseUp++;base.OnMouseUp(e);WriteStatus();}
  protected override void OnKeyDown(KeyEventArgs e){

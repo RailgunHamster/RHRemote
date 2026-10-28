@@ -18,6 +18,7 @@ final class RhSessionRemoteInputProbe {
     final RhSessionFlowDeviceTest test;
     final File bridge;
     final String run,probeRun;
+    final int repeats;
     final JSONArray steps=new JSONArray();
     int sequence;
     boolean secureRequested,escaped;
@@ -29,6 +30,7 @@ final class RhSessionRemoteInputProbe {
         run=InstrumentationRegistry.getArguments().getString("sessionRun","");
         probeRun=InstrumentationRegistry.getArguments().getString("remoteInputRun","");
         assertTrue("Explicit owned probe identity required",probeRun.matches("session70-[a-f0-9]{12}"));
+        repeats=Integer.parseInt(InstrumentationRegistry.getArguments().getString("remoteInputRepeats","1"));assertTrue(repeats>=1&&repeats<=5);
         bridge=new File(test.folder,"remote-input");assertFalse(bridge.exists());assertTrue(bridge.mkdir());
     }
     private JSONObject await(String id,String phase)throws Exception {
@@ -56,8 +58,10 @@ final class RhSessionRemoteInputProbe {
     }
     private void step(String id,Operation operation)throws Exception {
         sequence++;publish(id,"prepare");JSONObject ready=await(id,"ready");
-        operation.run(ready);publish(id,"sent");JSONObject verified=await(id,"verified");
+        RhStatistics.event("ui_remote_input_requested",-1,RhActions.obj("sequence",sequence,"id",id));
+        operation.run(ready);RhStatistics.event("ui_remote_input_accepted",-1,RhActions.obj("sequence",sequence,"id",id));publish(id,"sent");JSONObject verified=await(id,"verified");
         assertTrue("Remote result was not verified",verified.getBoolean("received"));steps.put(verified);
+        RhStatistics.event("ui_remote_input_verified",-1,RhActions.obj("sequence",sequence,"id",id));
         RhShared.write(new File(test.folder,"session-remote-input-progress.json"),RhActions.obj("steps",steps));
     }
     private void visibleButton(String label){
@@ -91,7 +95,7 @@ final class RhSessionRemoteInputProbe {
     private void run()throws Exception {
         try{
             step("activate",this::activate);
-            for(String id:new String[]{"ctrl-alt-left","ctrl-alt-right","ctrl-alt-up","ctrl-alt-down","ctrl-c","ctrl-a","ctrl-s","ctrl-f"})step(id,ready->shortcut(id));
+            for(int repeat=0;repeat<repeats;repeat++)for(String id:new String[]{"ctrl-alt-left","ctrl-alt-right","ctrl-alt-up","ctrl-alt-down","ctrl-c","ctrl-a","ctrl-s","ctrl-f"})step(id,ready->shortcut(id));
             test.click("屏幕");
             for(String direction:new String[]{"right","left"})step("window-move-"+direction,ready->{
                 visibleButton(direction.equals("right")?"窗口移到右屏":"窗口移到左屏");
@@ -104,7 +108,7 @@ final class RhSessionRemoteInputProbe {
             step("alt-f4",ready->shortcut("alt-f4"));
             assertTrue(test.stream().getBoolean("connected"));assertTrue(test.stream().getBoolean("firstFrame"));
             assertFalse(test.stream().getBoolean("audioEnabled"));
-            RhShared.write(new File(test.folder,"session-remote-input.json"),RhActions.obj("run",run,"probeRun",probeRun,"steps",steps,"remoteResultsVerified",true,"actualControlCallbacks",true,"productionInputTransport",true,"systemInputUsedToDriveClient",false,"audioEnabled",false,"physicalKeyboardTested",false));
+            RhShared.write(new File(test.folder,"session-remote-input.json"),RhActions.obj("run",run,"probeRun",probeRun,"repeats",repeats,"steps",steps,"remoteResultsVerified",true,"actualControlCallbacks",true,"productionInputTransport",true,"systemInputUsedToDriveClient",false,"audioEnabled",false,"physicalKeyboardTested",false));
         }finally{
             // If the assertion or external observer failed while secure attention
             // was open, return through the same production remote Escape action.

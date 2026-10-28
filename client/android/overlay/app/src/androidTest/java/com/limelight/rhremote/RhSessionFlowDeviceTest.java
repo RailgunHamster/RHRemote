@@ -139,6 +139,7 @@ public class RhSessionFlowDeviceTest {
             ownTraces.add(RhStatistics.state().getString("latest"));RhShared.write(new File(folder,"session-initial-state.json"),stream());JSONObject pixels=videoPixels();RhShared.write(new File(folder,"session-real-video-pixels.json"),pixels);
             if(InstrumentationRegistry.getArguments().getString("sessionLumaProbe","false").equals("true"))RhShared.write(new File(folder,"session-decoder-luma-probe.json"),decoderSurfaceLuma());
             click("控制");if(InstrumentationRegistry.getArguments().getString("sessionNavigationProbe","false").equals("true"))sessionNavigation();JSONObject handle=stream().getJSONObject("controlsLayout").getJSONObject("handle");capture("session-real-input");click("屏幕");waitFor(()->!stream().optBoolean("displayBusy"),20,"Screen inventory");JSONObject display=stream().getJSONObject("display");assertTrue(display.getJSONArray("displays").length()>0);capture("session-real-displays");
+            if(InstrumentationRegistry.getArguments().getString("sessionImeProbe","false").equals("true")){click("操作");RhSessionImeProbe.run(this);click("屏幕");}
             if(testScreens)RhSessionScreenProbe.screens(this);
             if(!InstrumentationRegistry.getArguments().getString("remoteInputRun","").isEmpty())RhSessionRemoteInputProbe.run(this);
             click("声音");action("stream.audio.volume",RhActions.obj("volume",30));assertEquals(30,stream().getInt("volume"));assertFalse(stream().optBoolean("audioEnabled"));capture("session-real-audio");

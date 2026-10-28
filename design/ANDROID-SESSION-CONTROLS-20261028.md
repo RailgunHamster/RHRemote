@@ -62,3 +62,5 @@
 本地 ARM64 APK：`dist/android/RHRemote-v0.2.11-preview.71.apk`，289，SHA-256 `384d924f1cf2d8dc916c2d4aca76efca1b3b4cf98b37e09ec81657dc6ead5d0e`。签名 SHA-256 仍为 `2f6464fe50d23ef17e4fdab8c1dcc7b6ec4171b890158738653c51854031dadc`。ARM64 视频／输入原生库 SHA-256 `e06e8ed08358084185a92ccf90e47b2b8d989bb8efa4bdcd52a13b2a78679419` 与 preview.69 相同；本轮主应用仅调整两个文本区域的对齐。
 
 仍需完成快捷键偶发样本定位、其余快捷键、Windows 缩放、Android 竖屏会话与实机触控／滚动模式、声音实际播放，以及更新／同步的其余完整流程。未覆盖日常 Windows 客户端，未安装到 OPPO，未公开发布，完整 UI 目标继续保持未完成。
+
+后续 preview.72 发现并修正了会话键盘开关的实际显示与取消问题，测试请求、动画和实际可见状态的证据独立记录在 [键盘开关复验](ANDROID-SESSION-IME-20261029.md)。重复快捷键的新正向样本不替代上述 light06 的原因定位。
