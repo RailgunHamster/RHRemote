@@ -117,6 +117,47 @@ mod packet_argument_tests {
 mod recovery_transport_tests {
     use super::*;
     fn owned_json(body:&str,pid:u32)->String{let mut value:Value=serde_json::from_str(body).unwrap();value["processId"]=json!(pid);value.to_string()}
+    #[test]
+    fn live_native_without_a_phase_keeps_the_controller_pending_and_rejects_duplicate_connects() {
+        struct Accepted(std::sync::atomic::AtomicUsize);
+        impl Platform for Accepted {
+            fn execute(&self,id:&str,_:&Value)->Result<Value,String>{if id=="device.connect"{self.0.fetch_add(1,Ordering::SeqCst);}Ok(json!({"accepted":true}))}
+        }
+        let root=std::env::temp_dir().join(format!("rhremote-empty-native-phase-{}",rhremote_core::random_token().unwrap()));
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();let port=server.server_addr().to_ip().unwrap().port();
+        let child=Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command","Start-Sleep -Seconds 30"]).creation_flags(0x08000000).spawn().unwrap();let pid=child.id();
+        let worker=std::thread::spawn(move||{for phase in ["","starting","connected"]{let Some(request)=server.recv_timeout(Duration::from_secs(2)).unwrap() else {break};request.respond(tiny_http::Response::from_string(json!({"processId":pid,"phase":phase,"streaming":phase=="connected","firstFrame":phase=="connected"}).to_string())).unwrap();}});
+        let mut native=NativePlatform::new(PathBuf::from("unused-empty-phase.exe"),"fixture-token".into(),root.clone()).unwrap();native.port=port;*native.child.lock().unwrap()=Some(child);
+        let mut recovery=Recovery::new(json!({}));recovery.native_started=Some(Instant::now());*native.recovery.lock().unwrap()=Some(recovery);
+        let accepted=Arc::new(Accepted(std::sync::atomic::AtomicUsize::new(0)));
+        let controller=rhremote_core::Controller::new("test",root.join("preferences.json"),accepted.clone()).unwrap();
+        controller.replace_devices(vec![Device{uuid:"owned-host".into(),name:"winserver".into(),display_name:String::new(),address:"192.0.2.1".into(),addresses:Vec::new(),online:true,paired:true,is_self:false}]);
+        assert_eq!(controller.dispatch("device.connect",json!({"uuid":"owned-host"}))["ok"],true);
+        let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+            for expected in ["starting","starting","connected"] {
+                let state=native.state().unwrap();controller.stream_state(state["streaming"]==true,state);
+                assert_eq!(controller.state()["connection"]["phase"],expected,"An owned API heartbeat without a phase is not an ended connection");
+                assert_eq!(controller.state()["connection"]["error"],"");
+                assert_eq!(controller.dispatch("device.connect",json!({"uuid":"owned-host"}))["ok"],false);
+                assert_eq!(accepted.0.load(Ordering::SeqCst),1);
+            }
+            assert_eq!(controller.state()["connection"]["firstFrame"],true);
+        }));
+        stop_fixture(&native);worker.join().unwrap();assert!(root.starts_with(std::env::temp_dir())&&root.file_name().unwrap().to_string_lossy().starts_with("rhremote-empty-native-phase-"));fs::remove_dir_all(&root).unwrap();
+        if let Err(failure)=result {std::panic::resume_unwind(failure);}
+    }
+    #[test]
+    fn an_empty_native_phase_still_has_a_bounded_initialization_budget() {
+        let root=std::env::temp_dir().join(format!("rhremote-empty-phase-budget-{}",rhremote_core::random_token().unwrap()));
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();let port=server.server_addr().to_ip().unwrap().port();
+        let child=Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command","Start-Sleep -Seconds 30"]).creation_flags(0x08000000).spawn().unwrap();let pid=child.id();
+        let worker=std::thread::spawn(move||{let request=server.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();request.respond(tiny_http::Response::from_string(json!({"processId":pid,"phase":"","streaming":false,"firstFrame":false}).to_string())).unwrap();if let Some(request)=server.recv_timeout(Duration::from_secs(2)).unwrap(){let path=request.url().to_owned();request.respond(tiny_http::Response::from_string("{}")).unwrap();Some(path)}else{None}});
+        let mut native=NativePlatform::new(PathBuf::from("unused-empty-budget.exe"),"fixture-token".into(),root.clone()).unwrap();native.port=port;*native.child.lock().unwrap()=Some(child);
+        let mut recovery=Recovery::new(json!({}));recovery.native_started=Some(Instant::now()-Duration::from_secs(16));*native.recovery.lock().unwrap()=Some(recovery);
+        let _=native.state().unwrap();let timed_out=native.recovery.lock().unwrap().as_ref().unwrap().timeout_requested;
+        let request=worker.join().unwrap();stop_fixture(&native);assert!(root.starts_with(std::env::temp_dir())&&root.file_name().unwrap().to_string_lossy().starts_with("rhremote-empty-phase-budget-"));fs::remove_dir_all(root).unwrap();
+        assert!(timed_out,"An uninitialized API must not wait indefinitely");assert_eq!(request.as_deref(),Some("/v1/disconnect"));
+    }
     fn protocol_budget_fixture(owned_status: bool) {
         let root=std::env::temp_dir().join(format!("rhremote-protocol-budget-{}",rhremote_core::random_token().unwrap()));
         let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
@@ -1051,6 +1092,16 @@ impl NativePlatform {
         // describe the previous process. Neither may end or arm a fresh child.
         if alive && value["processId"].as_u64()!=slot.as_ref().map(|child|u64::from(child.id())) {
             value=json!({"streaming":false,"firstFrame":false,"phase":if recovery.as_ref().is_some_and(|r|r.policy.armed()){"reconnecting"}else{"connecting"},"error":"","awaitingOwnedState":true});
+        } else if alive && recovery.is_some()
+            && value["phase"].as_str().is_none_or(str::is_empty)
+            && value["firstFrame"] != true
+            && value["error"].as_str().is_none_or(str::is_empty)
+            && value["routeFatal"] != true
+        {
+            // The native API starts serving before its first stage is published.
+            // Preserve the admitted launch and keep its initialization budget active.
+            value["phase"]=json!(if recovery.as_ref().is_some_and(|r|r.policy.armed()){"reconnecting"}else{"connecting"});
+            value["awaitingNativePhase"]=json!(true);
         }
         let mut released = alive
             && http_unavailable
