@@ -1,6 +1,6 @@
 # RHRemote TODO
 
-更新时间：2026-10-28。仅列未完成工作；已通过项目、旧版本发布记录和测试流水已移出本清单，证据保留在 design/ 文档及 Git 历史中。
+更新时间：2026-10-29。仅列未完成工作；已通过项目、旧版本发布记录和测试流水已移出本清单，证据保留在 design/ 文档及 Git 历史中。
 
 以 1080p30 为验收基线，优先 winserver 和 OPPO 外网使用；保留各设备独立参数与降低分辨率的选项。
 
@@ -12,7 +12,7 @@
 - [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界及首帧前其余真实错误路径，定位模拟器复验的一次自然查找失败；受控错误注入不能代替真实身份／硬件失败验收。[逐项规范](design/UI-FLOW-SPEC.md)、[添加准备与重试](design/ANDROID-ADD-READINESS-20261028.md)、[Windows 保存边界](design/WINDOWS-PAIRING-PERSISTENCE-20261028.md)、[视频等待取消与控件](design/WINDOWS-CONNECTION-CONTROLS-20261028.md)、[Windows 密钥与真实 PIN 错误复验](design/WINDOWS-PAIRING-KEY-20261028.md)
 - [ ] 更新流程：完成 Windows 主按钮触发的完整真实下载→安装、应用更新／安装取消，以及双端通过系统安装成功后的配置保留。[取消、真实源传输与当前边界](design/UPDATE-CANCELLATION-20261028.md)、[逐项规范](design/UI-FLOW-SPEC.md)、[安装交接证据与边界](design/UPDATE-DRAFT-HANDOFF-20261028.md)、[Android 页面生命周期证据](design/ANDROID-UPDATE-LIFECYCLE-20261027.md)
 - [ ] 同步流程：完成 Windows 实际窗口中的 HTTPS 及其余网络／文件失败边界；补齐服务器已提交后和本机应用阶段的进程终止、Android 真实传输中断、自动同步实际计时及 OPPO 验收。[待确认写入与当前终止验证边界](design/SYNC-UNCONFIRMED-WRITE-20261028.md)、[HTTP 真实跨端证据](design/REAL-WEBDAV-CROSS-CLIENT-20261028.md)、[Android 提交顺序](design/ANDROID-SYNC-COMMIT-20261028.md)、[Windows 提交与控件](design/WINDOWS-SYNC-COMMIT-20261028.md)
-- [ ] 会话控制：完成 Android 真实串流选屏、窗口移屏、安全注意序列及快捷键实际送达；补齐 Windows 其余快捷键、双端声音播放与真实缩放输入。[Windows 按键与移屏的具体通过范围](design/WINDOWS-SESSION-INPUT-20261028.md)、[选屏与剩余范围](design/SESSION-DISPLAY-RESULTS-20261028.md)、[Android 浅深会话复验](design/HOST-API-EOF-20261028.md)
+- [ ] 会话控制：定位 Android 快捷键已发送但远端偶发缺少 Ctrl+A 回执的样本；补齐双端其余快捷键、声音实际播放、Windows 缩放，以及 Android 竖屏会话和实机触控／滚动模式的中键及四向滚动。[Android 当前实测范围与未通过样本](design/ANDROID-SESSION-CONTROLS-20261028.md)、[Windows 按键与移屏范围](design/WINDOWS-SESSION-INPUT-20261028.md)
 - [ ] 全局交互：补齐 Windows 配对／连接／活动会话的其余实际控件、双向 Tab 等键盘路径及 Android 真实外接键盘路由，完成 Windows 配对／活动会话和 Android 准备及诊断完成结果的其余主题边界；双端物理断网和外网恢复仍待验收；定位 Windows UIA 焦点，验证主界面长时遮挡和不同 DPI 双屏切换后的重绘。[Windows 恢复与剩余边界](design/WINDOWS-RECOVERY-UI-20261028.md)、[恢复提示与取消](design/ANDROID-RECOVERY-UI-20261028.md)、[本地按键与旧回调](design/ANDROID-SESSION-KEYBOARD-20261028.md)、[会话焦点与音量输入](design/ANDROID-SESSION-NAVIGATION-20261028.md)、[主题与错误证据](design/UI-ERRORS-20261028.md)、[诊断任务与重建](design/ANDROID-DIAGNOSTIC-LIFECYCLE-20261028.md)、[Tab 验收](design/WINDOWS-TAB-20261027.md)、[Windows 当前预览](design/WINDOWS-PREVIEW48-MAIN-20261028.md)、[会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[上下文与复制预览](design/UI-CONTEXT-20261027.md)、[补画修复](design/WINDOWS-REPAINT-20261027.md)
 - [ ] 最终交付：完成两端正式安装 / 升级的配置保留与全部流程证据，再统一发布；本地界面预览单独提供。
 

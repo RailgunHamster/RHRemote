@@ -1,5 +1,7 @@
 # RHRemote 客户端交互规范与验收
 
+最新 Android 会话验证见 [会话控件、远端回执与对齐](ANDROID-SESSION-CONTROLS-20261028.md)：本地 preview.71 修正设备名和缩放文字对齐，取得两主题的真实切屏、应用内双指缩放及 15 步远端回执；保留 Ctrl+A 偶发无回执的失败样本，不能据正向样本认定快捷键稳定性或完整 UI 已完成。
+
 最新 Windows 会话操作验证见 [实际按键回执、窗口移屏与退出统计](WINDOWS-SESSION-INPUT-20261028.md)：本地 preview.70 完成两轮指定控件到远端的回执和正常退出，保留先前一次 15 秒原生清理超时作为未解决问题。此项不代替完整 UI、Android 实际会话或升级验收。
 
 目标：完整整理 Windows 与 Android 的设备、连接、设置、更新、同步和会话操作流程。视觉沿用已选的 HelpWire D 方向；交互以 HelpWire 的设备列表 → 选中设备 → 连接 / 编辑 → 会话工具栏为主线。Sunshine 的配对协议及 RHRemote 的 WebDAV / 更新功能按相同的表单和状态规则接入，不伪称这些功能来自 HelpWire。

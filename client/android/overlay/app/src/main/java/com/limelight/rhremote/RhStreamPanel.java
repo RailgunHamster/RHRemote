@@ -70,7 +70,7 @@ public final class RhStreamPanel {
         panel=new LinearLayout(context);panel.setOrientation(LinearLayout.VERTICAL);panel.setClickable(true);panel.setFocusable(false);
         panel.setPadding(dp(14),dp(12),dp(14),dp(12));
         panel.setBackground(surface(surfaceColor,lineColor,16));panel.setElevation(dp(10));
-        LinearLayout header=new LinearLayout(context);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0,0,0,dp(8));sessionName=text("远程设备",14);sessionName.setSingleLine(true);sessionName.setEllipsize(android.text.TextUtils.TruncateAt.END);header.addView(sessionName,new LinearLayout.LayoutParams(0,dp(48),1));disconnect=button("断开","stream.disconnect",RhActions.obj());RhUiStyle.buttonText(disconnect,failureColor,Color.parseColor(mutedColor));header.addView(disconnect,new LinearLayout.LayoutParams(-2,dp(48)));panel.addView(header);
+        LinearLayout header=new LinearLayout(context);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(0,0,0,dp(8));sessionName=text("远程设备",14);sessionName.setGravity(Gravity.CENTER_VERTICAL);sessionName.setSingleLine(true);sessionName.setEllipsize(android.text.TextUtils.TruncateAt.END);header.addView(sessionName,new LinearLayout.LayoutParams(0,dp(48),1));disconnect=button("断开","stream.disconnect",RhActions.obj());RhUiStyle.buttonText(disconnect,failureColor,Color.parseColor(mutedColor));header.addView(disconnect,new LinearLayout.LayoutParams(-2,dp(48)));panel.addView(header);
         LinearLayout navigation=new LinearLayout(context);navigation.setPadding(0,0,0,dp(10));
         String[] ids={"input","displays","audio"}, labels={"操作","屏幕","声音"};
         for(int i=0;i<ids.length;i++){
@@ -101,7 +101,7 @@ public final class RhStreamPanel {
         scrollModeSwitch.setThumbTintList(new android.content.res.ColorStateList(new int[][]{{android.R.attr.state_checked},{}},new int[]{Color.parseColor(RhShared.dark(context)?"#6f8af1":"#5274e8"),Color.parseColor(mutedColor)}));scrollModeSwitch.setTrackTintList(new android.content.res.ColorStateList(new int[][]{{android.R.attr.state_checked},{}},new int[]{Color.parseColor(selectedLine),Color.parseColor(lineColor)}));
         scrollModeSwitch.setOnCheckedChangeListener((view,checked)->{if(!bindingScrollMode)actions.send("stream.scroll.set",RhActions.obj("enabled",checked));});LinearLayout.LayoutParams scrollModeLayout=new LinearLayout.LayoutParams(-1,dp(48));scrollModeLayout.topMargin=dp(8);input.addView(scrollModeSwitch,scrollModeLayout);TextView scrollHelp=text("单击中键 · 四向滚动",12);scrollHelp.setTextColor(Color.parseColor(mutedColor));scrollHelp.setPadding(dp(4),0,dp(4),0);input.addView(scrollHelp);
         LinearLayout viewOptions=new LinearLayout(context);viewOptions.setGravity(Gravity.CENTER_VERTICAL);viewOptions.setPadding(dp(4),dp(12),0,0);
-        zoomLabel=text("缩放 100%",13);viewOptions.addView(zoomLabel,new LinearLayout.LayoutParams(0,dp(44),1));
+        zoomLabel=text("缩放 100%",13);zoomLabel.setGravity(Gravity.CENTER_VERTICAL);viewOptions.addView(zoomLabel,new LinearLayout.LayoutParams(0,dp(44),1));
         stats=button("统计：关","stream.stats.toggle",RhActions.obj());icon(stats,R.drawable.rh_chart);viewOptions.addView(stats,new LinearLayout.LayoutParams(-2,dp(44)));input.addView(viewOptions);
 
         displayStatus=text("正在读取屏幕…",13);displayStatus.setPadding(dp(4),dp(2),dp(4),dp(12));screens.addView(displayStatus);
