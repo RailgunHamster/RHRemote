@@ -123,3 +123,28 @@ fn modal_dialogs_keep_background_buttons_blocked_for_semantic_activation() {
     assert_eq!(result["status"], "complete", "{result}");
     assert_eq!(&*f.calls.borrow(), &[("navigation.resolve".into(), "stay".into())]);
 }
+
+#[test]
+fn detached_failure_controls_require_the_current_ui_owned_session_context() {
+    let mut f = Fixture::new();
+    f.controller.stream_state(true,json!({"phase":"connected","firstFrame":true,"nativeCleanupPending":false}));
+    f.controller.stream_state(false,json!({"phase":"error","error":"automatic recovery exhausted","firstFrame":false,"nativeCleanupPending":false}));
+    assert_eq!(f.controller.state()["connection"]["phase"],"failed");
+    f.toolbar.set_connection_failed(true);f.toolbar.set_pending(false);
+    let attempt=f.controller.state()["connection"]["attempt"].clone();
+    for context in [json!({"visible":false}),json!({"visible":true,"detached":true,"connectionFailed":true,"uuid":"other","attempt":attempt}),json!({"visible":true,"detached":true,"connectionFailed":true,"uuid":"host","attempt":99})] {
+        f.controller.toolbar_state(context);
+        assert_eq!(f.activate(json!({"window":"toolbar","actionId":"connection.retry"}))["status"],"failed");
+        assert!(f.calls.borrow().is_empty());
+    }
+    f.controller.toolbar_state(json!({"visible":true,"detached":true,"connectionFailed":true,"uuid":"host","attempt":attempt}));
+    let result=f.activate(json!({"window":"toolbar","actionId":"connection.retry"}));
+    assert_eq!(result["status"],"complete","{result}");
+    assert_eq!(result["result"]["commandIds"],json!(["connection.retry"]));
+    let result=f.activate(json!({"window":"toolbar","actionId":"connection.dismiss"}));
+    assert_eq!(result["status"],"complete","{result}");
+    assert_eq!(result["result"]["commandIds"],json!(["connection.dismiss"]));
+    f.controller.dispatch("connection.dismiss",json!({}));
+    assert_eq!(f.activate(json!({"window":"toolbar","actionId":"connection.retry"}))["status"],"failed");
+    assert_eq!(f.calls.borrow().len(),2,"a stale failure card must not dispatch");
+}

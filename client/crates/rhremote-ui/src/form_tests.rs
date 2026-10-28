@@ -538,3 +538,59 @@ fn pending_toolbar_exposes_status_and_cancel_without_expanding_controls(){
     ui.set_expanded(false);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert_eq!(&*received.borrow(),&[("stream.disconnect".into(),"".into())]);
     ui.set_canceling(true);received.borrow_mut().clear();ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Escape.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Escape.into()});assert!(received.borrow().is_empty());ui.hide().unwrap();
 }
+
+#[test]
+fn recovery_failure_keeps_buttons_visible_and_uses_retry_dismiss_keyboard_actions(){
+    use i_slint_backend_testing::{TestingBackend, TestingBackendOptions};
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    for scale in [1.0,1.5,2.25] {
+        for width in [355.,560.] {
+          for dark in [false,true] {
+            let ui=crate::StreamToolbar::new().unwrap();
+            let calls=Rc::new(RefCell::new(Vec::new()));let received=calls.clone();
+            ui.global::<Commands>().on_trigger(move|id,arg|received.borrow_mut().push((id.to_string(),arg.to_string())));
+            ui.global::<crate::Palette>().set_dark(dark);
+            ui.set_device_name("winserver · 工作电脑".into());ui.set_connection_failed(true);
+            ui.set_connection_error("网络中断，自动恢复未能完成。请检查远程设备后重试。".repeat(30).into());
+            ui.window().dispatch_event(WindowEvent::ScaleFactorChanged{scale_factor:scale});
+            // TestingWindow::set_size uses scale=1 internally. Set its physical
+            // buffer and the logical resize separately, as a real backend does.
+            ui.window().set_size(slint::PhysicalSize::new((width*scale) as u32,(248.*scale) as u32));
+            ui.window().dispatch_event(WindowEvent::Resized{size:LogicalSize::new(width,248.)});
+            ui.show().unwrap();
+            for expanded in [false,true] {
+                ui.set_expanded(expanded);let frame=ui.window().take_snapshot().unwrap();
+                assert_eq!((frame.width(),frame.height()),((width*scale) as u32,(248.*scale) as u32));
+                let error=ElementHandle::find_by_accessible_label(&ui,&ui.get_connection_error()).next().unwrap();
+                assert!(error.size().width<=width-32.+0.1 && error.size().height>248.,"long error must wrap inside a vertical scroll area at {scale}/{width}/{dark}: {:?}",error.size());
+                let before_y=error.absolute_position().y;
+                let footer_y=ElementHandle::find_by_accessible_label(&ui,"重试").next().unwrap().absolute_position().y;
+                let scroll=ui.global::<crate::UiTest>();scroll.set_enabled(true);scroll.set_operation("scroll".into());scroll.set_target("scroll|connection-error".into());scroll.set_scroll_delta(-10000.);scroll.set_generation(scroll.get_generation()+1);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));ui.window().take_snapshot().unwrap();
+                assert!(error.absolute_position().y<before_y-100.,"long error cannot scroll");
+                assert_eq!(ElementHandle::find_by_accessible_label(&ui,"重试").next().unwrap().absolute_position().y,footer_y,"scroll must not move the recovery actions");
+                scroll.set_scroll_delta(10000.);scroll.set_generation(scroll.get_generation()+1);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));ui.window().take_snapshot().unwrap();
+                assert!((error.absolute_position().y-before_y).abs()<0.1);
+                for(label,action)in[("返回设备","connection.dismiss"),("重试","connection.retry"),("关闭","navigation.back")] {
+                    let button=ElementHandle::find_by_accessible_label(&ui,label).next().unwrap();let p=button.absolute_position();let size=button.size();
+                    assert!(p.x>=0.&&p.y>=0.&&p.x+size.width<=width+0.1&&p.y+size.height<=248.1,"{label} outside recovery card at {scale}/{width}: {p:?}/{size:?}");
+                    calls.borrow_mut().clear();click(&ui,label);assert_eq!(&*calls.borrow(),&[(action.into(),"".into())]);
+                }
+                assert!(ElementHandle::find_by_accessible_label(&ui,"Ctrl+Alt+Delete").next().is_none());
+                calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Escape",false,true);assert!(calls.borrow().is_empty());
+                crate::ui_keyboard::send_to_window(ui.window(),"Escape",false,false);assert_eq!(&*calls.borrow(),&[("connection.dismiss".into(),"".into())]);
+            }
+    // Replaced controls must not retain keyboard focus on the old shortcut.
+    ui.set_connection_failed(false);ui.set_expanded(true);click(&ui,"Ctrl+Alt+Delete");
+    ui.set_connection_failed(true);calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert!(calls.borrow().is_empty());
+    let probe=ui.global::<crate::UiTest>();probe.set_enabled(true);probe.set_operation("focus".into());probe.set_target("action|navigation.back||关闭".into());probe.set_generation(1);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
+    calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Tab",false,false);crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert_eq!(&*calls.borrow(),&[("connection.dismiss".into(),"".into())]);
+    calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Tab",false,false);crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert_eq!(&*calls.borrow(),&[("connection.retry".into(),"".into())]);
+    if let Some(directory)=std::env::var_os("RHREMOTE_RECOVERY_EVIDENCE_DIR") {
+        let path=std::path::PathBuf::from(directory).join(format!("failure-{width}-{scale}-{dark}.png"));assert!(!path.exists());
+        let frame=ui.window().take_snapshot().unwrap();image::save_buffer(path,frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();
+    }
+    ui.hide().unwrap();
+          }
+        }
+    }
+}

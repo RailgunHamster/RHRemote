@@ -309,6 +309,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut main_view=view_state::MainView::new(&ui);
     let mut toolbar_display_fingerprint = String::new();
     let mut picker_fingerprint = String::new();
+    let mut toolbar_follower=overlay::Follower::default();
     let mut ui_driver=ui_driver::Driver::new(native.ui_test.clone(),&ui,&toolbar,&picker);
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade() else{return};
@@ -319,6 +320,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let pending=state["connecting"]==true;
             let canceling=matches!(state["connection"]["phase"].as_str(),Some("cancelling"|"cleaning"));
             toolbar.set_pending(pending);toolbar.set_canceling(canceling);
+            toolbar.set_connection_failed(state["page"]=="connection" && state["connection"]["operation"]=="connect" && state["connection"]["phase"]=="failed");
+            toolbar.set_connection_error(state["connection"]["error"].as_str().unwrap_or("").into());
             toolbar.set_pending_cancel_label(if canceling {"正在断开…"}else if state["connection"]["phase"]=="reconnecting" {"取消恢复"}else{"取消连接"}.into());
             toolbar.set_audio_enabled(state["audioEnabled"]==true);toolbar.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
             toolbar.set_device_name(ui.get_selected_name());toolbar.set_stats_enabled(state["showStats"]==true);
@@ -333,7 +336,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 toolbar.set_display_labels(ModelRc::new(VecModel::from(ui.get_remote_displays().iter().map(|d|d.label).collect::<Vec<_>>())));
                 toolbar.set_display_index(ui.get_remote_displays().iter().position(|d|d.chosen).map(|i|i as i32).unwrap_or(-1));
             }
-            let mut toolbar_state=overlay::follow(&toolbar,&state);
+            let mut toolbar_state=toolbar_follower.follow(&toolbar,&state);
             if let Some(picker)=picker_weak.upgrade(){
                 let kind=state["streamMenu"].as_str().unwrap_or("");
                 let fingerprint=if kind=="displays"{format!("{kind}:{toolbar_display_fingerprint}")}else{kind.into()};

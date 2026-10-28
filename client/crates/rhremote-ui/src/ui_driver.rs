@@ -325,8 +325,17 @@ impl Driver {
             return;
         };
         let state = controller.state();
+        let recovery_card = state["page"] == "connection"
+            && state["connection"]["operation"] == "connect"
+            && state["connection"]["phase"] == "failed"
+            && state["toolbar"]["visible"] == true
+            && state["toolbar"]["detached"] == true
+            && state["toolbar"]["connectionFailed"] == true
+            && state["toolbar"]["uuid"] == state["connection"]["uuid"]
+            && state["toolbar"]["attempt"] == state["connection"]["attempt"];
         if request.window != "main"
             && (state["streaming"] != true && state["connecting"] != true
+                && !(request.window == "toolbar" && recovery_card)
                 || request.window == "picker"
                     && state["streamMenu"].as_str().unwrap_or("").is_empty())
         {

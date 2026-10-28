@@ -59,6 +59,7 @@ fn toolbars(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Re
         "busy",
         "error",
         "pending",
+        "recovery-failed",
         "collapsed",
     ] {
         let ui = StreamToolbar::new()?;
@@ -74,6 +75,8 @@ fn toolbars(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Re
         );
         ui.set_expanded(scene != "pending" && scene != "collapsed");
         ui.set_pending(scene == "pending");
+        ui.set_connection_failed(scene == "recovery-failed");
+        ui.set_connection_error("连接中断，自动恢复未能完成。请检查远程设备或网络后重试。".repeat(12).into());
         ui.set_busy(scene == "busy");
         ui.set_failed(scene == "error");
         ui.set_status(
@@ -114,7 +117,7 @@ fn toolbars(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Re
             } else {
                 560.
             },
-            if scene == "collapsed" {
+            if scene == "recovery-failed" {248.} else if scene == "collapsed" {
                 28.
             } else if scene == "pending" {
                 if narrow { 160. } else { 116. }

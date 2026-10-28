@@ -301,6 +301,9 @@ export component StreamToolbar inherits Window {
     in property <bool> expanded:true;
     in property <bool> pending;
     in property <bool> canceling;
+    in property <bool> connection-failed;
+    in property <string> connection-error;
+    changed connection-failed=>{toolbar-focus.focus();}
     in property <string> pending-cancel-label:"取消连接";
     in property <bool> audio-enabled;
     in property <int> audio-volume:100;
@@ -316,20 +319,21 @@ export component StreamToolbar inherits Window {
     in property <[string]> shortcut-ids;
     in-out property <int> display-index:0;
     property <bool> narrow:self.width<400px;
-    preferred-width:expanded || pending ? 560px : 72px;
-    preferred-height:expanded ? 292px : pending ? (narrow ? 160px : 116px) : 28px;
+    preferred-width:expanded || pending || connection-failed ? 560px : 72px;
+    preferred-height:connection-failed ? 248px : expanded ? 292px : pending ? (narrow ? 160px : 116px) : 28px;
     min-width:1px;min-height:1px;
-    max-width:expanded || pending ? 560px : 72px;max-height:expanded ? 292px : pending ? (narrow ? 160px : 116px) : 28px;
+    max-width:expanded || pending || connection-failed ? 560px : 72px;max-height:connection-failed ? 248px : expanded ? 292px : pending ? (narrow ? 160px : 116px) : 28px;
     forward-focus:toolbar-focus;
     toolbar-focus:=FocusScope{
         focus-on-click:false;focus-on-tab-navigation:false;
         init=>{self.focus();}
-        property <bool> body-visible:root.expanded || root.pending;
+        property <bool> body-visible:root.expanded || root.pending || root.connection-failed;
         changed body-visible=>{self.focus();}
         key-pressed(event)=>{
             if(event.text==Key.Escape){
                 if(!event.repeat){
-                    if(root.expanded){Commands.trigger("stream.controls.toggle","");}
+                    if(root.connection-failed){Commands.trigger("connection.dismiss","");}
+                    else if(root.expanded){Commands.trigger("stream.controls.toggle","");}
                     else if(root.pending && !root.canceling){Commands.trigger("stream.disconnect","");}
                 }
                 return accept;
@@ -340,10 +344,29 @@ export component StreamToolbar inherits Window {
     // The same handle remains at the center of the native stream's top edge.
     ActionButton {
         x:(parent.width - self.width)/2;y:0px;width:72px;height:28px;min-width:1px;border-radius:10px;
-        primary:true;has-icon:true;icon:root.expanded ? @image-url("icons/chevron-up.svg") : @image-url("icons/chevron-down.svg");
-        text:root.expanded ? "收起" : "控制";action-id:"stream.controls.toggle";
+        primary:true;has-icon:!root.connection-failed;icon:root.expanded ? @image-url("icons/chevron-up.svg") : @image-url("icons/chevron-down.svg");
+        text:root.connection-failed ? "关闭" : root.expanded ? "收起" : "控制";action-id:root.connection-failed ? "navigation.back" : "stream.controls.toggle";
     }
-    if root.pending && !root.expanded:Rectangle{
+    if root.connection-failed:Rectangle{
+        y:28px;height:parent.height - 28px;
+        background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
+        VerticalLayout{padding:16px;spacing:12px;
+            HorizontalLayout{spacing:12px;
+                Text{text:"连接失败";color:Palette.ink;font-size:15px;font-weight:600;}
+                Text{text:root.device-name;color:Palette.muted;horizontal-alignment:right;overflow:elide;min-width:0px;horizontal-stretch:1;}
+            }
+            ScrollView{test-id:"scroll|connection-error";vertical-stretch:1;content-width:self.width;
+                VerticalLayout{alignment:start;
+                    Text{text:root.connection-error;color:Palette.failure;wrap:word-wrap;vertical-alignment:top;accessible-label:root.connection-error;}
+                }
+            }
+            HorizontalLayout{spacing:8px;alignment:end;
+                ActionButton{text:"返回设备";action-id:"connection.dismiss";}
+                ActionButton{text:"重试";primary:true;action-id:"connection.retry";}
+            }
+        }
+    }
+    if root.pending && !root.expanded && !root.connection-failed:Rectangle{
         y:28px;height:parent.height - 28px;
         background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
         VerticalLayout{padding:12px;spacing:8px;
@@ -358,7 +381,7 @@ export component StreamToolbar inherits Window {
             }
         }
     }
-    if root.expanded: Rectangle {
+    if root.expanded && !root.connection-failed: Rectangle {
         y:28px;height:parent.height - 28px;
         background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
         VerticalLayout {
