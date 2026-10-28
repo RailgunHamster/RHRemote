@@ -36,11 +36,20 @@ def windows(root):
     path = root / 'app/backend/nvpairingmanager.cpp'
     text = path.read_text(encoding='utf-8')
     text = replace(text, '#include "nvpairingmanager.h"', '#include "nvpairingmanager.h"\n#include "gui/rhpairing.h"')
+    text = replace(text, '''    QByteArray aesKey = QCryptographicHash::hash(saltedPin, hashAlgo).constData();
+    aesKey.truncate(16);''', '''    const QByteArray aesKey = RhPairing::deriveKey(saltedPin, hashAlgo);''')
     text = replace(text, '    QByteArray salt = generateRandomBytes(16);', '''    QByteArray salt = generateRandomBytes(16);
     if(!RhPairing::id().isEmpty()) {
         // Persist before the first request can become pending on the host.
         RhPairing::save(salt.toHex(),signMessage(RhPairing::message(salt.toHex())).toHex());
     }''')
+    path.write_text(text, encoding='utf-8', newline='\n')
+
+    path = root / 'app/backend/computermanager.cpp'
+    text = path.read_text(encoding='utf-8')
+    text = replace(text, '''               emit pairingCompleted(m_Computer, tr("The PIN from the PC didn't match. Please try again."));''', '''               emit pairingCompleted(m_Computer, qgetenv("RHREMOTE_PAIR_OPERATION")=="1"
+                   ? QStringLiteral("配对码校验未通过。请重新配对，并在主机输入新显示的配对码。")
+                   : tr("The PIN from the PC didn't match. Please try again."));''')
     path.write_text(text, encoding='utf-8', newline='\n')
 
 

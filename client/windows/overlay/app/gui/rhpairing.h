@@ -1,5 +1,6 @@
 #pragma once
 #include <QByteArray>
+#include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
@@ -7,6 +8,11 @@
 
 // Only public, attempt-scoped proof crosses the process boundary; the key stays native.
 struct RhPairing {
+    static QByteArray deriveKey(const QByteArray& saltedPin, QCryptographicHash::Algorithm algorithm) {
+        // A digest is binary. A constData() C-string conversion truncates at
+        // its first zero byte and can pass a short buffer to AES-128.
+        return QCryptographicHash::hash(saltedPin, algorithm).left(16);
+    }
     // Only a regression explicitly requested by the authenticated test shell.
     // Server PIN checks, certificates, grants and existing trust are unchanged.
     static bool pendingRegression() {
