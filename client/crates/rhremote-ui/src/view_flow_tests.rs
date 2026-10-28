@@ -503,3 +503,41 @@ fn device_settings_keep_the_list_and_guard_cross_device_drafts() {
         }
     }
 }
+
+#[test]
+fn page_back_buttons_stay_on_the_left_and_restore_device_context() {
+    backend();
+    for (width, height, tag) in [(1180., 780., "wide"), (720., 560., "compact")] {
+        for dark in [false, true] {
+            let mut f = Flow::new(width, height);
+            f.ui.global::<crate::Palette>().set_dark(dark);
+            f.input("devices.filter", "100.64.0.1");
+            let before = f.saved();
+            for (open, back, back_id, list) in [
+                ("device.info.open", "返回设备", "navigation.back", true),
+                ("device.add.open", "返回设备", "device.add.cancel", false),
+                ("app.settings.open", "返回", "devices.open", false),
+            ] {
+                f.input(open, if list { "host" } else { "" });
+                let button = f.button(back, back_id, "");
+                let navigation_width = if width < 980. { 64. } else { 184. };
+                let list_width = if list {
+                    if width < 980. { 224. } else { 276. }
+                } else {
+                    0.
+                };
+                let expected_x = navigation_width + list_width + f.ui.get_form_inset();
+                assert!(
+                    (button.absolute_position().x - expected_x).abs() < 1.,
+                    "{open}: Back must be the first control in the page header"
+                );
+                f.capture(&format!("left-back-{open}-{tag}-{dark}"));
+                assert_eq!(f.click(back, back_id, "")["ok"], true);
+                assert_eq!(f.ui.get_page(), "devices");
+                assert_eq!(f.ui.get_selected_uuid(), "host");
+                assert_eq!(f.ui.get_device_query(), "100.64.0.1");
+                assert_eq!(f.saved(), before);
+            }
+        }
+    }
+}
