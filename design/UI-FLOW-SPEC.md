@@ -45,6 +45,8 @@
 
 ## 当前状态
 
+Windows 本地 preview.55 修复无界面配对进程退出前未完成主机证书保存的问题；实际配对后连接、首帧前取消后重试、关闭重开后的配对保留及连接均已复验。更新单按钮及草稿保护保留 preview.54，Android 仍为 preview.54。[当前连接证据与剩余范围](WINDOWS-PAIRING-PERSISTENCE-20261028.md)
+
 Windows 本地 preview.53 修正连接设置页签贴边及横向错列，设备名、两层页签和正文使用同一内容列。[原因及对齐验证](SETTINGS-ALIGNMENT-20261028.md)
 
 本地 preview.52 将设备资料、添加电脑与应用设置的返回统一到页头左侧，连接设置继续保留设备切换。[返回与原生控件复验](UI-NAVIGATION-20261028.md)

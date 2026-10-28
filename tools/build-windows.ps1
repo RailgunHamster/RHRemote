@@ -20,6 +20,8 @@ exit /b %errorlevel%
 if($LASTEXITCODE -ne 0){throw 'Windows build failed.'}
 & (Join-Path $PSScriptRoot 'test-frame-clock.ps1') -SourceDir $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Native frame clock queue regressions failed.'}
+& (Join-Path $PSScriptRoot 'test-windows-pairing-persistence.ps1') -QtDirectory $QtDir
+if($LASTEXITCODE -ne 0){throw 'Native pairing persistence regressions failed.'}
 $out=Join-Path $repo 'dist/windows';New-Item -ItemType Directory -Force -Path $out|Out-Null
 $runtime='D:\RHRemoteTools\Moonlight-RHRemote-6.1.0'
 & robocopy $runtime $out /E /NFL /NDL /NJH /NJS /XF *.exe *.ini *.pem *.key *.log portable.dat /XD 'Moonlight Game Streaming Project' 'cache' 'boxart' 'logs'|Out-Null

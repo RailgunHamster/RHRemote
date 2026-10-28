@@ -14,7 +14,7 @@ Edit-Source 'app/main.cpp' {param($s)
     $s=$s.Replace('QCoreApplication::setOrganizationName("Moonlight Game Streaming Project");','QCoreApplication::setOrganizationName("RHRemote");')
     $s=$s.Replace('QCoreApplication::setOrganizationDomain("moonlight-stream.com");','QCoreApplication::setOrganizationDomain("rhremote.local");')
     $s=$s.Replace('QCoreApplication::setApplicationName("Moonlight");','QCoreApplication::setApplicationName("RHRemote");')
-    $s="#include `"gui/rhprofiles.h`"`n#include `"gui/rhcontrol.h`"`n#include `"gui/rhcapturetools.h`"`n#include <QIcon>`n"+$s
+    $s="#include `"gui/rhprofiles.h`"`n#include `"gui/rhcontrol.h`"`n#include `"gui/rhcapturetools.h`"`n#include `"gui/rhpairingpersistence.h`"`n#include <memory>`n#include <QIcon>`n"+$s
     $s=[regex]::Replace($s,'int main\(int argc, char \*argv\[\]\)\r?\n\{',"int main(int argc, char *argv[])`n{`n    RhCaptureTools::isolate();")
     $s=Replace-Once $s '    QQuickStyle::setStyle("Material");' @'
     qmlRegisterSingletonType<RhProfiles>("RhProfiles", 1, 0, "RhProfiles",
@@ -28,11 +28,58 @@ Edit-Source 'app/main.cpp' {param($s)
             auto launcher = new CliPair::Launcher(pairParser.getHost(), pairParser.getPredefinedPin(), &app);
             if(qEnvironmentVariableIsSet("RHREMOTE_PAIR_OPERATION")) {
                 QObject::connect(launcher,&CliPair::Launcher::failed,&app,[&app](const QString& error){RhRuntime::status("pair_failed",error);app.exit(1);});
-                QObject::connect(launcher,&CliPair::Launcher::success,&app,[&app](){RhRuntime::status("paired",QString());app.quit();});
-                launcher->execute(new ComputerManager(StreamingPreferences::get()));
+                rhHeadlessManager=std::make_unique<ComputerManager>(StreamingPreferences::get());
+                QObject::connect(launcher,&CliPair::Launcher::success,&app,[&](){
+                    rhPairSucceeded=true;
+                    rhPairedUuid=qEnvironmentVariable("RHREMOTE_TARGET_UUID");
+                    for(const NvComputer* computer:rhHeadlessManager->getComputers()) {
+                        QReadLocker lock(&computer->lock);
+                        if(computer->uuid.compare(rhPairedUuid,Qt::CaseInsensitive)==0) {
+                            rhPairedCertificate=computer->serverCert;
+                            break;
+                        }
+                    }
+                    RhRuntime::status("pair_saving",QString());
+                    app.quit();
+                });
+                launcher->execute(rhHeadlessManager.get());
                 hasGUI=false;
                 break;
             }
+'@
+    $s=Replace-Once $s '    QQmlApplicationEngine engine;' @'
+    // Headless pair/list launchers previously leaked their manager. Process exit
+    // could terminate its delayed QSettings writer before committing the host pin.
+    std::unique_ptr<ComputerManager> rhHeadlessManager;
+    bool rhPairSucceeded=false;
+    QString rhPairedUuid;
+    QSslCertificate rhPairedCertificate;
+    QQmlApplicationEngine engine;
+'@
+    $s=Replace-Once $s '            launcher->execute(new ComputerManager(StreamingPreferences::get()));' @'
+            rhHeadlessManager=std::make_unique<ComputerManager>(StreamingPreferences::get());
+            launcher->execute(rhHeadlessManager.get());
+'@
+    $s=Replace-Once $s '    QThreadPool::globalInstance()->waitForDone(30000);' @'
+    const bool rhTasksStopped=QThreadPool::globalInstance()->waitForDone(30000);
+    if(rhHeadlessManager) {
+        if(rhTasksStopped) {
+            // Destructor joins the delayed writer while the application is alive.
+            rhHeadlessManager.reset();
+        } else {
+            // Outstanding tasks may still reference it. Do not delete a live owner
+            // or claim pairing success; this process is about to terminate.
+            rhHeadlessManager.release();
+        }
+    }
+    if(rhPairSucceeded) {
+        QSettings persisted;
+        const QString error=rhTasksStopped
+            ? RhPairingPersistence::confirm(persisted,rhPairedUuid,rhPairedCertificate)
+            : QStringLiteral("配对完成，但本地保存未完成，请重新配对");
+        if(error.isEmpty())RhRuntime::status("paired",QString());
+        else {RhRuntime::status("pair_failed",error);err=1;}
+    }
 '@
     $s=Replace-Once $s '        engine.load(QUrl(QStringLiteral("qrc:/gui/main.qml")));' @'
         const bool rhAdapter=commandLineParserResult==GlobalCommandLineParser::StreamRequested && !qEnvironmentVariableIsEmpty("RHREMOTE_TARGET_UUID");
