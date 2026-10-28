@@ -3,6 +3,10 @@ use rhremote_core::sync_model::{Resolution, SharedConfig, merge};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{fs, io::Read, path::PathBuf, time::Duration};
+mod dav;
+#[cfg(test)]
+#[path = "config_sync_lock_tests.rs"]
+mod lock_tests;
 
 const LIMIT: u64 = 2 * 1024 * 1024;
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -29,6 +33,7 @@ pub struct ConfigSync {
     local: Local,
     pending: Option<Pending>,
     awaiting: Option<AwaitingApply>,
+    locking: Option<bool>,
 }
 
 fn default_interval() -> u32 {
@@ -80,6 +85,7 @@ fn http_error(e: ureq::Error) -> String {
             format!("WebDAV 登录失败，请检查账户和权限（HTTP {code}）")
         }
         ureq::Error::Status(412, _) => "远端配置已更新，请重新同步后再处理冲突（HTTP 412）".into(),
+        ureq::Error::Status(423, _) => "另一台设备正在同步，请稍后重试（HTTP 423）".into(),
         ureq::Error::Status(code @ 300..=399, _) => {
             format!("WebDAV 地址发生重定向，请使用最终目录地址（HTTP {code}）")
         }
@@ -208,6 +214,7 @@ impl ConfigSync {
             local,
             pending: None,
             awaiting: None,
+            locking: None,
         })
     }
     fn credential(id: &str) -> Result<keyring::Entry, String> {
@@ -274,6 +281,7 @@ impl ConfigSync {
         self.local = next;
         self.pending = None;
         self.awaiting=None;
+        self.locking=None;
         Ok(self.state())
     }
     pub fn clear(&mut self) -> Result<Value, String> {
@@ -286,6 +294,7 @@ impl ConfigSync {
         self.local = Local::default();
         self.pending = None;
         self.awaiting=None;
+        self.locking=None;
         Ok(self.state())
     }
     pub fn run(&mut self, local: SharedConfig, resolution: Resolution) -> Result<Value, String> {
@@ -300,8 +309,17 @@ impl ConfigSync {
             base64::engine::general_purpose::STANDARD
                 .encode(format!("{}:{password}", self.local.username))
         );
-        self.exchange(address.as_str(), &auth, local, resolution)
+        let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(15)).build();
+        self.exchange_negotiated(&agent, address.as_str(), &auth, local, resolution)
     }
+    fn exchange_negotiated(&mut self, agent:&ureq::Agent, address:&str, auth:&str, local:SharedConfig, resolution:Resolution)->Result<Value,String> {
+        let locking=match self.locking {Some(value)=>value,None=>{let value=dav::supported(agent,address,auth)?;self.locking=Some(value);value}};
+        let mut lease=if locking {Some(dav::Lease::acquire(agent,address,auth)?)}else{None};
+        let result=self.exchange_protected(agent,address,auth,local,resolution,lease.as_ref());
+        if let Some(lease)=lease.as_mut(){if let Err(error)=lease.release(){if result.is_ok(){return Err(error);}}}
+        result
+    }
+    #[cfg(test)]
     fn exchange(
         &mut self,
         address: &str,
@@ -315,6 +333,7 @@ impl ConfigSync {
             .build();
         self.exchange_with_agent(&agent, address, auth, local, resolution)
     }
+    #[cfg(test)]
     fn exchange_with_agent(
         &mut self,
         agent: &ureq::Agent,
@@ -323,6 +342,12 @@ impl ConfigSync {
         local: SharedConfig,
         resolution: Resolution,
     ) -> Result<Value, String> {
+        self.exchange_protected(agent,address,auth,local,resolution,None)
+    }
+    fn exchange_protected(
+        &mut self, agent:&ureq::Agent, address:&str, auth:&str, local:SharedConfig,
+        resolution:Resolution, lease:Option<&dav::Lease>,
+    ) -> Result<Value,String> {
         let fetched = match agent.get(address).set("Authorization", auth).call() {
             Ok(r) if r.status() == 200 => Some(r),
             Ok(r) => return Err(http_error(ureq::Error::Status(r.status(), r))),
@@ -344,10 +369,15 @@ impl ConfigSync {
             if bytes.len() as u64 > LIMIT {
                 return Err("远端配置过大".into());
             }
-            let remote: SharedConfig =
-                serde_json::from_slice(&bytes).map_err(|_| "远端配置格式无效")?;
-            remote.validate()?;
-            (Some(remote), Some(etag))
+            // Some DAV servers materialize a locked new URL as a zero-byte file.
+            // Initial setup may resume that empty creation, but valid data is never skipped.
+            if bytes.is_empty() && lease.is_some_and(|l| l.created_resource || self.local.base.is_none() && self.local.last_sync_ms==0) {
+                (None,Some(etag))
+            } else {
+                let remote: SharedConfig = serde_json::from_slice(&bytes).map_err(|_| "远端配置格式无效")?;
+                remote.validate()?;
+                (Some(remote), Some(etag))
+            }
         } else {
             (None, None)
         };
@@ -403,6 +433,7 @@ impl ConfigSync {
         } else {
             request.set("If-None-Match", "*")
         };
+        let request = if let Some(lease)=lease {request.set("If",&lease.condition())}else{request};
         let response = request
             .send_json(serde_json::to_value(&merged).unwrap())
             .map_err(http_error)?;

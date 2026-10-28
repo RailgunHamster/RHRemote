@@ -45,7 +45,9 @@
 
 ## 当前状态
 
-Windows 本地 preview.55 修复无界面配对进程退出前未完成主机证书保存的问题；实际配对后连接、首帧前取消后重试、关闭重开后的配对保留及连接均已复验。更新单按钮及草稿保护保留 preview.54，Android 仍为 preview.54。[当前连接证据与剩余范围](WINDOWS-PAIRING-PERSISTENCE-20261028.md)
+Windows 与 Android 本地 preview.57 已完成现有 WebDAV 服务上的 HTTP 真实跨端同步：独立分辨率、并发别名冲突、设备顺序、其他客户端参数预览取消及自身设备禁连。服务忽略普通 HTTP 条件写入头，现使用其支持的 WebDAV 独占锁；正常账户和数据保持原值。159 项 Windows UI／361 项 Android 单测及原生跨端流程通过，安装包仅在本地，HTTPS 实际窗口、传输中结束进程和 OPPO 等范围继续保留。[本轮证据与兼容修复](REAL-WEBDAV-CROSS-CLIENT-20261028.md)
+
+Windows preview.55 的配对持久化与原生引擎保留：实际配对后连接、首帧前取消后重试、关闭重开后的配对保留及连接均已复验。双端更新单按钮及草稿保护保留 preview.54。[连接证据与剩余范围](WINDOWS-PAIRING-PERSISTENCE-20261028.md)
 
 Windows 本地 preview.53 修正连接设置页签贴边及横向错列，设备名、两层页签和正文使用同一内容列。[原因及对齐验证](SETTINGS-ALIGNMENT-20261028.md)
 

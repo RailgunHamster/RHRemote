@@ -73,7 +73,7 @@ final class RhSyncWork {
         if(!recorded)throw new java.io.IOException(error());
         try{worker.execute(()->{
             JSONObject result=null;String failure="",nextPhase="completed";boolean uncertain=false;
-            try{result=sync.run(captured,resolution);}catch(Exception invalid){failure=RhSync.failureMessage(invalid);}
+            try{result=sync.run(captured,resolution);}catch(Exception invalid){failure=RhSync.failureMessage(invalid);uncertain=sync.state().optBoolean("awaitingLocalApply");}
             if(failure.isEmpty()&&result!=null){
                 if(result.has("shared")){
                     try{progress("applying");RhShared.apply(context,result.getJSONObject("shared"));}

@@ -18,6 +18,7 @@ public final class RhSync {
     private JSONObject pendingLocal,pendingRemote;private String pendingEtag;
     private volatile JSONObject awaitingApply,appliedAccount;
     private volatile JSONArray conflicts=new JSONArray();
+    private Boolean locking;
     public RhSync(Context c){context=c.getApplicationContext();file=new File(c.getFilesDir(),"webdav-local.json");try{local=new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8));}catch(Exception e){local=new JSONObject();}}
     public JSONObject state(){JSONObject l=local;JSONArray found=conflicts;return RhActions.obj("url",l.optString("url"),"username",l.optString("username"),"automatic",l.optBoolean("automatic"),"intervalMinutes",l.optInt("intervalMinutes",5),"hasPassword",l.has("ciphertext"),"lastSyncMs",l.optLong("lastSyncMs"),"conflicts",found,"conflictItems",review(pendingLocal,pendingRemote,found),"awaitingLocalApply",awaitingApply!=null);}
     private static String deviceName(JSONObject config,String uuid){if(config!=null){JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject value=rows.optJSONObject(i);if(value!=null&&uuid.equals(value.optString("uuid")))return value.optString("displayName").isEmpty()?value.optString("name","设备"):value.optString("displayName");}}return "设备";}
@@ -48,7 +49,7 @@ public final class RhSync {
         JSONObject next=new JSONObject(local.toString());boolean same=address.equals(next.optString("url"))&&user.equals(next.optString("username"));if(password.isEmpty()&&(!same||!next.has("ciphertext")))throw new IOException("请填写 WebDAV 密码");
         if(!same){next.remove("base");next.remove("lastSyncMs");}
         if(!password.isEmpty()){Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());next.put("iv",Base64.encodeToString(cipher.getIV(),Base64.NO_WRAP));next.put("ciphertext",Base64.encodeToString(cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)),Base64.NO_WRAP));}
-        next.put("url",address);next.put("username",user);next.put("automatic",args.optBoolean("automatic"));next.put("intervalMinutes",intervalMinutes);RhShared.write(file,next);local=next;clearPending();clearApplied();
+        next.put("url",address);next.put("username",user);next.put("automatic",args.optBoolean("automatic"));next.put("intervalMinutes",intervalMinutes);RhShared.write(file,next);local=next;clearPending();clearApplied();locking=null;
     }
     public void clear()throws IOException{
         if(file.exists()&&!file.isFile())throw new IOException("本机同步配置文件不可写");
@@ -57,7 +58,7 @@ public final class RhSync {
         // removal or discard the in-memory account until its persisted state is verified.
         try{if(new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8)).length()!=0)throw new IOException("同步设置未能移除，请重试");}
         catch(JSONException invalid){throw new IOException("本机同步配置写入失败",invalid);}
-        local=new JSONObject();clearPending();clearApplied();
+        local=new JSONObject();clearPending();clearApplied();locking=null;
     }
     private void clearPending(){pendingLocal=null;pendingRemote=null;pendingEtag=null;conflicts=new JSONArray();}
     private String password(JSONObject l)throws Exception{Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(l.getString("iv"),Base64.NO_WRAP)));return new String(cipher.doFinal(Base64.decode(l.getString("ciphertext"),Base64.NO_WRAP)),StandardCharsets.UTF_8);}
@@ -73,6 +74,7 @@ public final class RhSync {
             String code=message.substring("WebDAV HTTP ".length());
             if(code.equals("401")||code.equals("403"))return "WebDAV 登录失败，请检查账户和权限（HTTP "+code+"）";
             if(code.equals("412"))return "远端配置已更新，请重新同步后再处理冲突（HTTP 412）";
+            if(code.equals("423"))return "另一台设备正在同步，请稍后重试（HTTP 423）";
             if(code.startsWith("3"))return "WebDAV 地址发生重定向，请使用最终目录地址（HTTP "+code+"）";
             return "WebDAV 服务器返回错误，请稍后重试（HTTP "+code+"）";
         }
@@ -83,15 +85,18 @@ public final class RhSync {
     public JSONObject run(JSONObject ours,String resolution)throws Exception{
         clearApplied();
         ours=RhShared.normalize(ours);JSONObject l=local;URL url=endpoint(l.getString("url"));String auth="Basic "+Base64.encodeToString((l.getString("username")+":"+password(l)).getBytes(StandardCharsets.UTF_8),Base64.NO_WRAP);
+        if(locking==null)locking=RhDavLease.supported(url,auth,RhSync::open);
+        try(RhDavLease lease=locking?RhDavLease.acquire(url,auth):null){
         JSONObject remote=null;String etag=null;HttpURLConnection get=open(url,"GET",auth);
-        try{int code=get.getResponseCode();if(code==200){etag=get.getHeaderField("ETag");if(etag==null||etag.startsWith("W/"))throw new IOException("WebDAV 服务器未提供强 ETag");try(InputStream in=get.getInputStream()){remote=RhShared.normalize(new JSONObject(new String(read(in),StandardCharsets.UTF_8)));}}else if(code!=404)throw new IOException("WebDAV HTTP "+code);}finally{get.disconnect();}
+        try{int code=get.getResponseCode();if(code==200){etag=get.getHeaderField("ETag");if(etag==null||etag.startsWith("W/"))throw new IOException("WebDAV 服务器未提供强 ETag");try(InputStream in=get.getInputStream()){byte[] bytes=read(in);boolean emptyCreation=bytes.length==0&&lease!=null&&(lease.createdResource()||!l.has("base")&&l.optLong("lastSyncMs")==0);if(!emptyCreation)remote=RhShared.normalize(new JSONObject(new String(bytes,StandardCharsets.UTF_8)));}}else if(code!=404)throw new IOException("WebDAV HTTP "+code);}finally{get.disconnect();}
         if(!resolution.equals("review")){if(!Arrays.asList("local","remote").contains(resolution)||pendingLocal==null||!RhShared.canonical(pendingLocal).equals(RhShared.canonical(ours))||remote==null||!RhShared.canonical(pendingRemote).equals(RhShared.canonical(remote))||!Objects.equals(etag,pendingEtag)){clearPending();throw new IOException("配置已变化，请重新同步并检查冲突");}}
         JSONArray found=new JSONArray();JSONObject merged=remote==null?ours:merge(ours,remote,l.optJSONObject("base"),resolution,found);
         if(found.length()>0){pendingLocal=new JSONObject(ours.toString());pendingRemote=new JSONObject(remote.toString());pendingEtag=etag;conflicts=found;return RhActions.obj("conflicts",found);}
         RhShared.validate(merged);
         if(remote!=null){File dir=new File(context.getFilesDir(),"sync-backups");if(!dir.exists()&&!dir.mkdirs())throw new IOException("backup directory unavailable");RhShared.write(new File(dir,"remote-"+System.currentTimeMillis()+".json"),remote);File[] files=dir.listFiles((d,n)->n.startsWith("remote-"));if(files!=null){Arrays.sort(files,Comparator.comparing(File::getName));for(int i=0;i<files.length-20;i++)files[i].delete();}}
-        byte[] bytes=merged.toString().getBytes(StandardCharsets.UTF_8);HttpURLConnection put=open(url,"PUT",auth);try{put.setRequestProperty("Content-Type","application/json");put.setRequestProperty(etag==null?"If-None-Match":"If-Match",etag==null?"*":etag);put.setDoOutput(true);put.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=put.getOutputStream()){out.write(bytes);}int code=put.getResponseCode();if(code<200||code>=300)throw new IOException("WebDAV HTTP "+code);}finally{put.disconnect();}
+        byte[] bytes=merged.toString().getBytes(StandardCharsets.UTF_8);HttpURLConnection put=open(url,"PUT",auth);try{put.setRequestProperty("Content-Type","application/json");put.setRequestProperty(etag==null?"If-None-Match":"If-Match",etag==null?"*":etag);if(lease!=null)put.setRequestProperty("If",lease.condition());put.setDoOutput(true);put.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=put.getOutputStream()){out.write(bytes);}int code=put.getResponseCode();if(code<200||code>=300)throw new IOException("WebDAV HTTP "+code);}finally{put.disconnect();}
         appliedAccount=new JSONObject(l.toString());awaitingApply=new JSONObject(merged.toString());clearPending();return RhActions.obj("shared",merged,"conflicts",new JSONArray());
+        }
     }
     private void clearApplied(){awaitingApply=null;appliedAccount=null;}
     /** A confirmed PUT is not a local merge base until its exact configuration is durable. */
