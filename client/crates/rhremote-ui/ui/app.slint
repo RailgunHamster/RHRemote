@@ -33,6 +33,7 @@ component UiProbe inherits Rectangle {
     in property <length> scroll-maximum;
     in property <int> request:UiTest.generation;
     callback focus-requested();
+    callback activate-requested();
     callback scroll-requested(float);
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed focused=>{if(root.control-id!=""){KeyboardFocus.remember(root.control-id,root.focused,root.remember-focus);}}
@@ -44,6 +45,7 @@ component UiProbe inherits Rectangle {
                 UiTest.report(root.control-id,root.kind,root.label,root.control-enabled,root.focused,root.checked,root.expanded,root.control-width/1px,root.control-height/1px,root.scroll-y/1px,root.scroll-maximum/1px);
             }else if(UiTest.target==root.control-id && root.control-enabled){
                 if(UiTest.operation=="focus"){root.focus-requested();}
+                else if(UiTest.operation=="activate"){root.activate-requested();}
                 else if(UiTest.operation=="scroll" && root.kind=="scroll"){root.scroll-requested(UiTest.scroll-delta);}
             }
         }
@@ -110,6 +112,7 @@ export global Palette {
     out property <color> failure: dark ? #f28b9c : #b04452;
 }
 component ActionButton inherits Rectangle {
+    function invoke-action(){if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
     in property <string> text;
     in property <string> action-id;
     in property <string> argument;
@@ -136,14 +139,14 @@ component ActionButton inherits Rectangle {
     label := Text {x:root.has-icon ? 28px : 0px;width:parent.width - self.x;text:root.text;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
     // Slint 1.18.1 ignores FocusOut on disabled FocusScope items. Keep delivery
     // enabled and gate focus entry/actions so a former focus marker can clear.
-    key-focus := FocusScope {focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,root.argument);return accept;}return reject;}}
-    touch := TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{key-focus.focus();Commands.trigger(root.action-id,root.argument);}}
+    key-focus := FocusScope {focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){root.invoke-action();return accept;}return reject;}}
+    touch := TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{key-focus.focus();root.invoke-action();}}
     accessible-role: button;
     accessible-enabled:!root.disabled;
     accessible-label: root.text;
     accessible-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;
-    accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
-    UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.remember-focus && root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve" && root.action-id!="navigation.back" && root.action-id!="device.select" && root.action-id!="device.settings.open";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}}
+    accessible-action-default=>{root.invoke-action();}
+    UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.remember-focus && root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve" && root.action-id!="navigation.back" && root.action-id!="device.select" && root.action-id!="device.settings.open";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}activate-requested=>{root.invoke-action();}}
 }
 component TabButton inherits ActionButton { border-width:root.focused ? 1px : 0px; }
 component BackButton inherits ActionButton { remember-focus:false;has-icon:true;icon:@image-url("icons/chevron-left.svg"); }

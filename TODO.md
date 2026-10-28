@@ -9,7 +9,7 @@
 当前先整理两端完整界面效果与可见预览，再继续下列业务流程。最新卡片、分类栏、浅深色与会话面板见 [界面记录](design/UI-VISUAL-20261028.md)，设备列表与连接设置就地切换见 [导航调整](design/DEVICE-SETTINGS-NAVIGATION-20261028.md)，其余页面返回及原生控件复验见 [统一返回](design/UI-NAVIGATION-20261028.md)；连接设置留白及列对齐见 [修正记录](design/SETTINGS-ALIGNMENT-20261028.md)；布局图不计为真实连接、更新或同步通过。
 
 - [ ] Android 原 25 Mbps 的大帧缺失：继续定位局域网、Windows 接收与模拟器转发中的具体丢点，补齐持续动态画面验收；临时 6 Mbps 的两种主题 UI 短测不替代默认画质或长期验收。[接口、帧号与原生复验](design/HOST-API-EOF-20261028.md)
-- [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界，Windows 视频等待卡片在 RTSP 建立后的实际取消、首帧前其余错误路径，并定位模拟器复验中的一次自然查找失败；本地组件未初始化的受控路径修复不能据此确定那次失败的根因。[逐项规范](design/UI-FLOW-SPEC.md)、[添加准备与重试](design/ANDROID-ADD-READINESS-20261028.md)、[Windows 当前连接与保存边界](design/WINDOWS-PAIRING-PERSISTENCE-20261028.md)
+- [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界及首帧前其余真实错误路径，定位模拟器复验的一次自然查找失败、Windows 一次未定因的 PIN 不匹配；受控错误注入不能代替真实身份／硬件失败验收。[逐项规范](design/UI-FLOW-SPEC.md)、[添加准备与重试](design/ANDROID-ADD-READINESS-20261028.md)、[Windows 保存边界](design/WINDOWS-PAIRING-PERSISTENCE-20261028.md)、[当前视频等待取消与控件证据](design/WINDOWS-CONNECTION-CONTROLS-20261028.md)
 - [ ] 更新流程：完成 Windows 实际下载、应用更新／安装取消，以及双端安装成功后的配置保留；下载完成后的未保存保护、当前操作等待及单按钮接续已分别通过控件测试和 Android 模拟器真实 APK 校验。[逐项规范](design/UI-FLOW-SPEC.md)、[安装交接证据与边界](design/UPDATE-DRAFT-HANDOFF-20261028.md)、[Android 页面生命周期证据](design/ANDROID-UPDATE-LIFECYCLE-20261027.md)
 - [ ] 同步流程：完成 Windows 实际窗口中的 HTTPS 及其余网络／文件失败边界；补齐传输／本机应用阶段被终止后的结果核对、自动同步实际计时及 OPPO 验收。[当前 HTTP 真实跨端证据](design/REAL-WEBDAV-CROSS-CLIENT-20261028.md)、[中断提示](design/ANDROID-SYNC-INTERRUPTION-20261028.md)、[Android 提交顺序](design/ANDROID-SYNC-COMMIT-20261028.md)、[Windows 提交与控件](design/WINDOWS-SYNC-COMMIT-20261028.md)
 - [ ] 会话控制：双端实测屏幕切换、窗口移屏、安全注意序列、快捷键实际送达、声音播放与真实缩放输入。[Windows 会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[Android 浅深会话复验](design/HOST-API-EOF-20261028.md)

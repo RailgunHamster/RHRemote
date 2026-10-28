@@ -177,6 +177,44 @@ impl Driver {
             json!({"delivered":true,"controls":controls,"focused":focused,"expanded":expanded,"modal":if request.window=="main"{Self::context(ui)}else{""},"eventTarget":"application widgets","systemInputInjected":false,"windowActive":active,"nativeWindowHandle":native_handle,"monitor":monitor,"physicalPosition":position,"windowActivationRequested":request.activate_window}),
         )
     }
+    fn activate_button(
+        &mut self, request: &Request, ui: &MainWindow, toolbar: &StreamToolbar,
+        picker: &StreamPicker, controller: &Controller,
+    ) -> Result<Value, String> {
+        let samples = self.sample(request, ui, toolbar, picker)?;
+        if request.expected_pending.is_some_and(|expected| toolbar.get_pending() != expected) {
+            return Err("视频等待状态已变化，按钮未执行".into());
+        }
+        let prefix = format!("action|{}|{}|", request.action_id, request.argument);
+        let matches: Vec<_> = samples.iter().filter(|item| item["kind"] == "button"
+            && item["id"].as_str().is_some_and(|id| id.starts_with(&prefix))).collect();
+        if matches.len() != 1 { return Err("当前没有唯一对应的可见按钮".into()); }
+        let button = matches[0];
+        let id = button["id"].as_str().ok_or("按钮标识无效")?;
+        if button["enabled"] != true { return Err("该按钮当前不可用".into()); }
+        if request.window == "main" && Self::blocked(ui, id) {
+            return Err("请先处理当前对话框，按钮未执行".into());
+        }
+        let state = controller.state();
+        let mut target = request.clone(); target.control = id.into();
+        let label = button["label"].clone();
+        let pending = toolbar.get_pending();
+        self.issue(&target, "activate", ui, toolbar, picker);
+        let window = match request.window.as_str() {
+            "toolbar" => toolbar.window(), "picker" => picker.window(), _ => ui.window(),
+        };
+        // Drain this widget callback in the same UI turn as lookup. Native input,
+        // window activation and a later caption-based focus request are unnecessary.
+        drop(window.take_snapshot().map_err(|e| format!("按钮执行绘制失败：{e}"))?);
+        let after = self.sample(request, ui, toolbar, picker)?;
+        let mut result = self.complete(request, ui, toolbar, picker, after)?;
+        result["activatedControl"] = json!(id);
+        result["activatedLabel"] = label;
+        result["toolbarPendingBefore"] = json!(pending);
+        result["connectionPhaseBefore"] = state["connection"]["phase"].clone();
+        result["connectionFirstFrameBefore"] = state["connection"]["firstFrame"].clone();
+        Ok(result)
+    }
     pub fn tick(
         &mut self,
         ui: &MainWindow,
@@ -294,6 +332,11 @@ impl Driver {
         {
             self.bridge
                 .finish(&request.id, Err("当前没有该会话窗口".into()));
+            return;
+        }
+        if request.operation == "activate" {
+            let result = self.activate_button(&request, ui, toolbar, picker, controller);
+            self.bridge.finish(&request.id, result);
             return;
         }
         let phase = if request.operation == "key" {

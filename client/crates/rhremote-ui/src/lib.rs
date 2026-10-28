@@ -9,6 +9,8 @@ mod view_state;
 mod ui_test;
 mod ui_keyboard;
 mod ui_driver;
+#[cfg(test)]
+mod ui_driver_tests;
 mod preview_capture;
 mod preview_placement;
 mod network;

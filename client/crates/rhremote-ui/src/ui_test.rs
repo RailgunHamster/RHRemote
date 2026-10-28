@@ -13,6 +13,9 @@ pub(crate) struct Request {
     pub operation: String,
     pub window: String,
     pub control: String,
+    pub action_id: String,
+    pub argument: String,
+    pub expected_pending: Option<bool>,
     pub key: String,
     pub shift: bool,
     pub repeat: bool,
@@ -21,7 +24,7 @@ pub(crate) struct Request {
 }
 impl Request {
     fn parse(operation: &str, args: &Value) -> Result<Self, String> {
-        if !["inspect", "focus", "key", "scroll"].contains(&operation) {
+        if !["inspect", "focus", "key", "scroll", "activate"].contains(&operation) {
             return Err("未知界面测试操作".into());
         }
         let window = args["window"].as_str().unwrap_or("main");
@@ -29,6 +32,22 @@ impl Request {
             return Err("window 须为 main / toolbar / picker".into());
         }
         let control = args["control"].as_str().unwrap_or("");
+        let action_id = args["actionId"].as_str().unwrap_or("");
+        let argument = args["argument"].as_str().unwrap_or("");
+        if operation == "activate" {
+            if action_id.is_empty() || action_id.len() > 128 || !action_id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-')) {
+                return Err("actionId 须为可见按钮的动作标识".into());
+            }
+            if !args["argument"].is_null() && !args["argument"].is_string() || argument.len() > 512 || argument.contains(['|', '\0', '\r', '\n']) {
+                return Err("argument 须为有效的按钮参数".into());
+            }
+            if !control.is_empty() || !args["key"].is_null() || args["shift"] == true || args["repeat"] == true {
+                return Err("activate 通过动作定位按钮，不能同时指定控件或按键".into());
+            }
+        }
+        if !args["expectedPending"].is_null() && (operation != "activate" || window != "toolbar" || !args["expectedPending"].is_boolean()) {
+            return Err("expectedPending 仅支持 toolbar 的 activate 布尔条件".into());
+        }
         if ["focus", "scroll"].contains(&operation) && (control.is_empty() || control.len() > 512) {
             return Err("请填写 inspect 返回的 control 标识".into());
         }
@@ -55,6 +74,9 @@ impl Request {
             operation: operation.into(),
             window: window.into(),
             control: control.into(),
+            action_id: action_id.into(),
+            argument: argument.into(),
+            expected_pending: args["expectedPending"].as_bool(),
             key: key.into(),
             shift: args["shift"] == true,
             repeat: args["repeat"] == true,
@@ -63,7 +85,7 @@ impl Request {
         })
     }
     fn signature(&self) -> Value {
-        json!({"operation":self.operation,"window":self.window,"control":self.control,"key":self.key,"shift":self.shift,"repeat":self.repeat,"activateWindow":self.activate_window,"pixels":self.pixels})
+        json!({"operation":self.operation,"window":self.window,"control":self.control,"actionId":self.action_id,"argument":self.argument,"expectedPending":self.expected_pending,"key":self.key,"shift":self.shift,"repeat":self.repeat,"activateWindow":self.activate_window,"pixels":self.pixels})
     }
 }
 struct Record {
@@ -223,6 +245,15 @@ pub(crate) fn isolated(data: &Path, default: &Path, mode: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn semantic_activation_rejects_ambiguous_parameters_and_keeps_the_pending_guard_in_its_identity() {
+        let plain = Request::parse("activate", &json!({"window":"toolbar","actionId":"stream.disconnect"})).unwrap();
+        let guarded = Request::parse("activate", &json!({"window":"toolbar","actionId":"stream.disconnect","expectedPending":true})).unwrap();
+        assert_ne!(plain.signature(), guarded.signature());
+        for args in [json!({}), json!({"actionId":"bad|id"}), json!({"actionId":"x","argument":7}), json!({"actionId":"x","argument":"bad|argument"}), json!({"actionId":"x","control":"old-caption"}), json!({"actionId":"x","key":"Enter"}), json!({"actionId":"x","expectedPending":true}), json!({"actionId":"x","window":"toolbar","expectedPending":"true"}), json!({"actionId":"x","activateWindow":true})] {
+            assert!(Request::parse("activate", &args).is_err(), "{args}");
+        }
+    }
+    #[test]
     fn activation_is_explicit_main_focus_only_and_part_of_the_request_identity() {
         let passive=Request::parse("focus",&json!({"control":"page"})).unwrap();assert!(!passive.activate_window);
         let active=Request::parse("focus",&json!({"control":"page","activateWindow":true})).unwrap();assert!(active.activate_window);
@@ -239,6 +270,7 @@ mod tests {
         let b = Bridge::new(false);
         for id in [
             "view.ui.inspect",
+            "view.ui.activate",
             "view.ui.focus",
             "view.ui.key",
             "view.ui.result",
