@@ -30,10 +30,16 @@ impl MainView {
         fallback: impl FnOnce(&str) -> Profile,
     ) {
         let logical_width = ui.window().size().width as f32 / ui.window().scale_factor();
-        ui.set_form_inset(
-            ((logical_width - if logical_width < 980.0 { 64.0 } else { 184.0 } - 800.0) / 2.0)
-                .max(24.0),
-        );
+        let compact = logical_width < 980.0;
+        let device_context = matches!(
+            state["page"].as_str(),
+            Some("devices" | "settings" | "profile-copy" | "device-info")
+        ) && state["streaming"] != true && state["connecting"] != true;
+        let navigation_width = if compact { 64.0 } else { 184.0 };
+        let list_width = if device_context {
+            if compact { 224.0 } else { 276.0 }
+        } else { 0.0 };
+        ui.set_form_inset(((logical_width - navigation_width - list_width - 800.0) / 2.0).max(24.0));
         let next = state["revision"].as_u64().unwrap_or(0);
         ui.set_compact(ui.window().size().width as f32 / ui.window().scale_factor() < 980.0);
         ui.set_update_primary_text(

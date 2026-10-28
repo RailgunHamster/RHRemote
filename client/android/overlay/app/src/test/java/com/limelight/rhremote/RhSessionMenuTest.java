@@ -100,7 +100,8 @@ public class RhSessionMenuTest {
     }
     @Test public void tabWrapsAndSkipsDisabledAndHiddenControls()throws Exception{
         create(false);toggle();assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("统计：关").hasFocus());
-        button("统计：关").setEnabled(false);assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("还原缩放").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
+        button("统计：关").setEnabled(false);assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("滚动模式").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
+        button("滚动模式").setEnabled(false);press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("还原缩放").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
     }
     @Test public void escapeCollapsesControlsWithoutOpeningExitOrSendingARemoteEscape()throws Exception{
         create(false);toggle();assertTrue(button("操作").requestFocusFromTouch());assertTrue(key(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ESCAPE,0));assertTrue(controls.state().getBoolean("controls"));assertTrue(key(KeyEvent.ACTION_UP,KeyEvent.KEYCODE_ESCAPE,0));assertFalse(controls.state().getBoolean("controls"));assertFalse(controls.state().getBoolean("exitPrompt"));assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());

@@ -6,10 +6,10 @@
 
 ## P0 双端 UI 完整验收
 
-当前先整理两端完整界面效果与可见预览，再继续下列业务流程。最新卡片、分类栏、浅深色与会话面板见 [界面记录](design/UI-VISUAL-20261028.md)；布局图不计为真实连接、更新或同步通过。
+当前先整理两端完整界面效果与可见预览，再继续下列业务流程。最新卡片、分类栏、浅深色与会话面板见 [界面记录](design/UI-VISUAL-20261028.md)，设备列表与连接设置就地切换见 [导航调整](design/DEVICE-SETTINGS-NAVIGATION-20261028.md)；布局图不计为真实连接、更新或同步通过。
 
 - [ ] Android 原 25 Mbps 的大帧缺失：继续定位局域网、Windows 接收与模拟器转发中的具体丢点，补齐持续动态画面验收；临时 6 Mbps 的两种主题 UI 短测不替代默认画质或长期验收。[接口、帧号与原生复验](design/HOST-API-EOF-20261028.md)
-- [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界，原生视频窗口首帧前的可见反馈、取消和其余错误路径，并定位模拟器复验中的一次自然查找失败；本地组件未初始化的受控路径已修复，不能据此确定那次失败的根因。[逐项规范](design/UI-FLOW-SPEC.md)、[添加准备与重试](design/ANDROID-ADD-READINESS-20261028.md)
+- [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界，原生视频窗口首帧前的可见反馈、取消和其余错误路径，并定位模拟器复验中的一次自然查找失败；本地组件未初始化的受控路径已修复，不能据此确定那次失败的根因。[逐项规范](design/UI-FLOW-SPEC.md)、[添加准备与重试](design/ANDROID-ADD-READINESS-20261028.md) Windows 已定位并修正原生 API 初始空阶段被当成结束的误判，仍需新包真实连接复验。[证据与边界](design/WINDOWS-NATIVE-INITIAL-PHASE-20261028.md)
 - [ ] 更新流程：完成 Windows 实际下载、应用更新／安装取消，以及双端安装成功后的配置保留。[逐项规范](design/UI-FLOW-SPEC.md)、[Android 页面生命周期证据](design/ANDROID-UPDATE-LIFECYCLE-20261027.md)
 - [ ] 同步流程：完成 Windows 实际窗口中的 HTTPS 流程、真实 WebDAV 服务跨客户端同步和其余网络／文件失败边界；补齐传输／本机应用阶段被终止后的结果核对；Android 排队阶段实际结束进程后的提示和自动同步暂停已通过。[Windows 后台与布局证据](design/WINDOWS-SYNC-20261028.md)、[Android 同步与网络证据](design/ANDROID-SYNC-LIFECYCLE-20261028.md)、[中断提示](design/ANDROID-SYNC-INTERRUPTION-20261028.md)、[提交顺序](design/ANDROID-SYNC-COMMIT-20261028.md)、[Windows 提交与控件](design/WINDOWS-SYNC-COMMIT-20261028.md)
 - [ ] 会话控制：双端实测屏幕切换、窗口移屏、安全注意序列、快捷键实际送达、声音播放与真实缩放输入。[Windows 会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[Android 浅深会话复验](design/HOST-API-EOF-20261028.md)

@@ -58,7 +58,7 @@ public class RhFormFlowTest {
         button("取消").performClick();assertEquals(before,RhShared.canonical(RhShared.read(activity)));
     }
     @Test public void saveBarAndCategoryNavigationRemainOutsideTheScrollableBody()throws Exception{
-        profile();for(int[] size:new int[][]{{360,800},{640,360},{1008,672}}){layout(size[0],size[1]);Button save=button("保存"),back=button("返回设备");assertFalse(inScroll(save));assertFalse(inScroll(back));int[] location=new int[2];save.getLocationInWindow(location);assertTrue(location[1]>=0&&location[1]+save.getHeight()<=size[1]);assertTrue(save.getHeight()>=48);}
+        profile();for(int[] size:new int[][]{{360,800},{640,360},{1008,672}}){layout(size[0],size[1]);Button save=button("保存"),back=button(size[0]>=700?"概览":"‹ 概览");assertFalse(inScroll(save));assertFalse(inScroll(back));int[] location=new int[2];save.getLocationInWindow(location);assertTrue(location[1]>=0&&location[1]+save.getHeight()<=size[1]);assertTrue(save.getHeight()>=48);}
     }
     @Test public void webdavInputIsRetainedOnFailureAndLeavingUsesADecision()throws Exception{
         home.perform("app.settings.tab",RhActions.obj("tab","sync"));layout(360,800);
@@ -79,4 +79,23 @@ public class RhFormFlowTest {
         try{home.perform("sync.edit",RhActions.obj("key","username","value","ignored"));fail("Busy edit accepted");}catch(IllegalStateException expected){}
         busy.setBoolean(home,false);
     }
+    void addClaw(){ComputerDetails d=new ComputerDetails();d.uuid="claw";d.name="claw";d.manualAddress=new ComputerDetails.AddressTuple("192.0.2.3",47989);home.update(d);}
+    void choose(String uuid,int width){if(width>=700)described("选择设备 "+(uuid.equals("host")?"winserver":"claw")).performClick();else{Spinner chooser=(Spinner)described("切换远程设备");List<ComputerDetails> ordered=RhShared.ordered(activity,Arrays.asList(host("host","winserver"),host("claw","claw")));int index=ordered.get(0).uuid.equals(uuid)?0:1;chooser.setSelection(index);Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();}}
+    ComputerDetails host(String uuid,String name){ComputerDetails d=new ComputerDetails();d.uuid=uuid;d.name=name;return d;}
+    @Test public void deviceListAndNarrowChooserProtectIndependentDraftsAndKeepCategory()throws Exception{
+        addClaw();
+        for(int width:new int[]{1008,360}){
+            home.perform("device.settings.open",RhActions.obj("uuid","host"));home.perform("settings.tab",RhActions.obj("tab","audio"));layout(width,800);
+            String before=RhShared.canonical(RhShared.read(activity));home.perform("settings.input",RhActions.obj("key","volume","value","42"));choose("claw",width);
+            assertEquals("unsaved-device",home.state().getJSONObject("navigationPrompt").getString("kind"));assertEquals("host",home.state().getString("selected"));
+            if(width<700)assertEquals("winserver",((Spinner)described("切换远程设备")).getSelectedItem().toString());
+            home.perform("navigation.resolve",RhActions.obj("choice","stay"));assertEquals("42",home.state().getJSONObject("settingsInputs").getString("volume"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+            choose("claw",width);home.perform("navigation.resolve",RhActions.obj("choice","discard"));layout(width,800);assertEquals("claw",home.state().getString("selected"));assertEquals("audio",home.state().getString("profileTab"));assertFalse(home.state().getBoolean("settingsDirty"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+            int savedVolume=width>=700?75:74;home.perform("settings.input",RhActions.obj("key","volume","value",Integer.toString(savedVolume)));choose("host",width);home.perform("navigation.resolve",RhActions.obj("choice","save"));layout(width,800);assertEquals(savedVolume,RhProfile.load(activity,"claw").volume);assertEquals(100,RhProfile.load(activity,"host").volume);assertEquals("host",home.state().getString("selected"));assertEquals("audio",home.state().getString("profileTab"));
+            String saved=RhShared.canonical(RhShared.read(activity));home.perform("settings.input",RhActions.obj("key","volume","value","unfinished"));choose("claw",width);try{home.perform("navigation.resolve",RhActions.obj("choice","save"));fail("Invalid volume saved");}catch(RhSettingsDraft.Invalid expected){}
+            assertEquals("host",home.state().getString("selected"));assertEquals("unfinished",home.state().getJSONObject("settingsInputs").getString("volume"));assertEquals(saved,RhShared.canonical(RhShared.read(activity)));
+            button(width>=700?"概览":"‹ 概览").performClick();home.perform("navigation.resolve",RhActions.obj("choice","discard"));assertEquals("devices",home.state().getString("page"));assertEquals("host",home.state().getString("selected"));
+        }
+    }
+
 }

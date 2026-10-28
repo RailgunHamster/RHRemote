@@ -295,6 +295,10 @@ fn forms(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Resul
         ui.set_app_version(env!("CARGO_PKG_VERSION").into());
         ui.set_selected_uuid("fixture-winserver".into());
         ui.set_selected_name("winserver".into());
+        let selected=DeviceRow{uuid:"fixture-winserver".into(),name:"winserver".into(),host_name:"winserver".into(),address:"192.0.2.1".into(),status:"在线".into(),paired:true,online:true,..Default::default()};
+        ui.set_selected_device(selected.clone());
+        ui.set_devices(model(vec![selected,DeviceRow{uuid:"fixture-self".into(),name:"RailgunHamster".into(),status:"本机".into(),is_self:true,..Default::default()},DeviceRow{uuid:"fixture-claw".into(),name:"claw".into(),status:"离线".into(),paired:true,..Default::default()}]));
+        ui.set_device_total(3);ui.set_device_online(2);
         ui.set_client_name("Windows · 预览".into());
         let is_profile = ["video", "audio", "input", "network", "advanced"].contains(&scene);
         ui.set_page(
@@ -383,7 +387,8 @@ fn forms(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Resul
         let width = if narrow { 720. } else { 1180. };
         ui.window()
             .set_size(LogicalSize::new(width, if narrow { 560. } else { 780. }));
-        ui.set_form_inset(((width - if narrow { 64. } else { 184. } - 800.) / 2.).max(24.));
+        let list_width=if is_profile || scene=="device-info" {if narrow {224.} else {276.}}else{0.};
+        ui.set_form_inset(((width - if narrow { 64. } else { 184. } - list_width - 800.) / 2.).max(24.));
         capture(&ui, out, &format!("form-{scene}-{size}-{theme}"), images)?;
         scroll_bottom(&ui, ui.global::<UiTest>(), "scroll|form")?;
         capture(

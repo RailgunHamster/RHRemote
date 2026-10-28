@@ -180,6 +180,23 @@ impl Flow {
     }
     fn click(&mut self, label: &str, id: &str, arg: &str) -> Value {
         let element = self.button(label, id, arg);
+        self.activate(element, label, id, arg)
+    }
+    fn choose_device(&mut self, uuid: &str) -> Value {
+        let key = format!("device|{uuid}");
+        let element = ElementHandle::find_by_accessible_label(
+            &self.ui,
+            if uuid == "host" {
+                "选择设备 winserver"
+            } else {
+                "选择设备 claw"
+            },
+        )
+        .find(|e| e.accessible_id().is_some_and(|id| id == key.as_str()))
+        .unwrap();
+        self.activate(element, uuid, "device.settings.open", uuid)
+    }
+    fn activate(&mut self, element: ElementHandle, label: &str, id: &str, arg: &str) -> Value {
         let p = element.absolute_position();
         let s = element.size();
         let window = self.ui.window().size();
@@ -276,12 +293,12 @@ fn controller_bound_forms_save_validate_cancel_and_copy_through_real_controls() 
         assert_eq!(f.controller.state()["settingsInputs"]["fps"], "unfinished");
         assert_eq!(f.saved(), original);
         f.capture(&format!("{tag}-invalid-profile"));
-        f.click("返回设备", "navigation.back", "");
+        f.click("概览", "device.select", "host");
         assert!(f.ui.get_navigation_prompt());
         f.click("继续编辑", "navigation.resolve", "stay");
         assert!(!f.ui.get_navigation_prompt());
         f.input("settings.input", "fps=24");
-        f.click("返回设备", "navigation.back", "");
+        f.click("概览", "device.select", "host");
         f.click("保存并继续", "navigation.resolve", "save");
         assert_eq!(f.ui.get_page(), "devices");
         assert_eq!(f.ui.get_device_query(), "100.64.0.1");
@@ -308,7 +325,7 @@ fn controller_bound_forms_save_validate_cancel_and_copy_through_real_controls() 
         assert_eq!(f.saved(), saved);
         f.click("连接设置", "device.settings.open", "host");
         f.input("settings.input", "fps=25");
-        f.click("返回设备", "navigation.back", "");
+        f.click("概览", "device.select", "host");
         f.click("放弃更改", "navigation.resolve", "discard");
         assert_eq!(f.saved(), saved);
         assert_eq!(f.ui.get_selected_uuid(), "host");
@@ -430,4 +447,59 @@ fn changing_category_starts_at_the_top_and_retains_the_controller_draft() {
             .is_some()
     );
     assert_eq!(f.controller.state()["settingsInputs"]["fps"], "25");
+}
+
+#[test]
+fn device_settings_keep_the_list_and_guard_cross_device_drafts() {
+    backend();
+    for (width, height, tag) in [(1180., 780., "wide"), (720., 560., "compact")] {
+        for dark in [false, true] {
+            let mut f = Flow::new(width, height);
+            f.ui.global::<crate::Palette>().set_dark(dark);
+            f.click("连接设置", "device.settings.open", "host");
+            f.click("音频", "settings.tab", "audio");
+            let before = f.saved();
+            f.input("settings.input", "volume=42");
+            f.choose_device("claw");
+            assert!(f.ui.get_navigation_prompt());
+            f.click("继续编辑", "navigation.resolve", "stay");
+            assert_eq!(f.ui.get_selected_uuid(), "host");
+            assert_eq!(f.controller.state()["settingsInputs"]["volume"], "42");
+            assert_eq!(f.saved(), before);
+            f.choose_device("claw");
+            f.click("放弃更改", "navigation.resolve", "discard");
+            assert_eq!(f.ui.get_page(), "settings");
+            assert_eq!(f.ui.get_selected_uuid(), "claw");
+            assert_eq!(f.ui.get_profile_tab(), "audio");
+            assert!(!f.ui.get_settings_dirty());
+            assert_eq!(f.saved(), before);
+            f.capture(&format!("navigation-{tag}-{dark}-claw-audio"));
+            f.input("settings.input", "volume=75");
+            f.choose_device("host");
+            f.click("保存并继续", "navigation.resolve", "save");
+            assert_eq!(f.ui.get_selected_uuid(), "host");
+            assert_eq!(f.ui.get_profile_tab(), "audio");
+            assert_eq!(f.controller.profile("claw").volume, 75);
+            assert_eq!(f.controller.profile("host").volume, 100);
+            let saved = f.saved();
+            f.input("settings.input", "volume=unfinished");
+            f.choose_device("claw");
+            assert_eq!(
+                f.click("保存并继续", "navigation.resolve", "save")["ok"],
+                false
+            );
+            assert_eq!(f.ui.get_selected_uuid(), "host");
+            assert_eq!(
+                f.controller.state()["settingsInputs"]["volume"],
+                "unfinished"
+            );
+            assert!(!f.ui.get_settings_error().is_empty());
+            assert_eq!(f.saved(), saved);
+            f.click("概览", "device.select", "host");
+            f.click("放弃更改", "navigation.resolve", "discard");
+            assert_eq!(f.ui.get_page(), "devices");
+            assert_eq!(f.ui.get_selected_uuid(), "host");
+            assert_eq!(f.saved(), saved);
+        }
+    }
 }

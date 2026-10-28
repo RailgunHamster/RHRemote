@@ -30,7 +30,7 @@ public final class RhDeviceBrowser extends LinearLayout {
     private final TextView[] values=new TextView[8];
     private List<ComputerDetails> devices=Collections.emptyList();
     private String selected="",query="";
-    private boolean wide,detailOpen,updatingSearch;
+    private boolean wide,detailOpen,updatingSearch,listOnly;
     private int widthBucket=-1;
 
     public RhDeviceBrowser(Activity activity,Actions actions) {
@@ -104,8 +104,9 @@ public final class RhDeviceBrowser extends LinearLayout {
     private ComputerDetails chosen(){for(ComputerDetails d:devices)if(d.uuid.equals(selected))return d;return null;}
 
     public void showDetail(boolean value){detailOpen=value;applyMode();}
-    public boolean isDetailOpen(){return !wide&&detailOpen;}
-    private void applyMode(){listPane.setVisibility(wide||!detailOpen?VISIBLE:GONE);detail.setVisibility(wide||detailOpen?VISIBLE:GONE);findViewWithTag("browser-divider").setVisibility(wide?VISIBLE:GONE);back.setVisibility(wide?GONE:VISIBLE);LayoutParams params=(LayoutParams)listPane.getLayoutParams();params.width=wide?dp(272):0;params.weight=wide?0:1;listPane.setLayoutParams(params);}
+    public void setListOnly(boolean value){if(listOnly==value)return;listOnly=value;widthBucket=-1;applyMode();}
+    public boolean isDetailOpen(){return !listOnly&&!wide&&detailOpen;}
+    private void applyMode(){if(listOnly){listPane.setVisibility(VISIBLE);detail.setVisibility(GONE);back.setVisibility(GONE);findViewWithTag("browser-divider").setVisibility(VISIBLE);LayoutParams params=(LayoutParams)listPane.getLayoutParams();params.width=0;params.weight=1;listPane.setLayoutParams(params);return;}listPane.setVisibility(wide||!detailOpen?VISIBLE:GONE);detail.setVisibility(wide||detailOpen?VISIBLE:GONE);findViewWithTag("browser-divider").setVisibility(wide?VISIBLE:GONE);back.setVisibility(wide?GONE:VISIBLE);LayoutParams params=(LayoutParams)listPane.getLayoutParams();params.width=wide?dp(272):0;params.weight=wide?0:1;listPane.setLayoutParams(params);}
     @Override protected void onMeasure(int widthSpec,int heightSpec){int bucket=MeasureSpec.getSize(widthSpec)>=dp(700)?1:0;if(bucket!=widthBucket){widthBucket=bucket;wide=bucket==1;applyMode();}super.onMeasure(widthSpec,heightSpec);}
 
     public void update(List<ComputerDetails> devices,String selected,String query){
@@ -128,7 +129,7 @@ public final class RhDeviceBrowser extends LinearLayout {
         for(ComputerDetails d:devices){if(d.state==ComputerDetails.State.ONLINE)online++;String name=RhShared.displayName(activity,d.uuid,d.name),address=address(d);
             if(!needle.isEmpty()&&!(name+"\n"+d.name+"\n"+address+"\n"+RhNetwork.savedSummary(activity,d)).toLowerCase(Locale.ROOT).contains(needle))continue;
             visible.add(d.uuid);LinearLayout cell=rows.get(d.uuid);
-            if(cell==null){cell=row();cell.setPadding(dp(12),dp(12),dp(12),dp(12));cell.setMinimumHeight(dp(92));ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_monitor);icon.setColorFilter(accent);icon.setPadding(dp(7),dp(7),dp(7),dp(7));icon.setBackground(background(page,0,8));LayoutParams iconParams=new LayoutParams(dp(36),dp(36));iconParams.setMarginEnd(dp(12));cell.addView(icon,iconParams);LinearLayout names=column();for(int i=0;i<3;i++){TextView text=text("",i==0?14:12,i==0?ink:muted,i==0);text.setSingleLine(true);text.setEllipsize(TextUtils.TruncateAt.END);text.setPadding(0,dp(2),0,dp(2));names.addView(text);}cell.addView(names,new LayoutParams(0,-2,1));final String uuid=d.uuid;cell.setOnClickListener(v->send("device.select","uuid",uuid));rows.put(d.uuid,cell);}
+            if(cell==null){cell=row();cell.setPadding(dp(12),dp(12),dp(12),dp(12));cell.setMinimumHeight(dp(92));ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_monitor);icon.setColorFilter(accent);icon.setPadding(dp(7),dp(7),dp(7),dp(7));icon.setBackground(background(page,0,8));LayoutParams iconParams=new LayoutParams(dp(36),dp(36));iconParams.setMarginEnd(dp(12));cell.addView(icon,iconParams);LinearLayout names=column();for(int i=0;i<3;i++){TextView text=text("",i==0?14:12,i==0?ink:muted,i==0);text.setSingleLine(true);text.setEllipsize(TextUtils.TruncateAt.END);text.setPadding(0,dp(2),0,dp(2));names.addView(text);}cell.addView(names,new LayoutParams(0,-2,1));final String uuid=d.uuid;cell.setOnClickListener(v->send(listOnly?"device.settings.open":"device.select","uuid",uuid));rows.put(d.uuid,cell);}
             cell.setBackground(background(d.uuid.equals(selected)?soft:surface,0,8));cell.setContentDescription("选择设备 "+name);LinearLayout names=(LinearLayout)cell.getChildAt(1);
             ((TextView)names.getChildAt(0)).setText(name);((TextView)names.getChildAt(1)).setText(address);TextView status=(TextView)names.getChildAt(2);
             status.setText(d.state==ComputerDetails.State.UNKNOWN?"正在检查":d.state!=ComputerDetails.State.ONLINE?"离线":RhNetwork.connectInsteadOfPair(d)?"● "+RhNetwork.pairingLabel(d):"● 待配对");status.setTextColor(d.state==ComputerDetails.State.ONLINE?green:muted);
@@ -139,5 +140,5 @@ public final class RhDeviceBrowser extends LinearLayout {
         count.setText(devices.size()+" 台设备 · "+online+" 台在线");
     }
 
-    public JSONObject layoutState(){return RhActions.obj("mode",wide?"split":detailOpen?"detail":"list","selected",selected,"query",query,"width",getWidth(),"height",getHeight());}
+    public JSONObject layoutState(){return RhActions.obj("mode",listOnly?"settings-split":wide?"split":detailOpen?"detail":"list","selected",selected,"query",query,"width",getWidth(),"height",getHeight());}
 }

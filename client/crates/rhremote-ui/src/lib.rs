@@ -450,14 +450,22 @@ mod tests {
         );
     }
     #[test]
-    fn android_product_action_ids_exist_in_shared_catalog() {
+    fn android_product_action_ids_exist_in_the_shared_or_android_catalog() {
         let catalog = rhremote_core::catalog();
-        let ids: std::collections::HashSet<_> = catalog
+        let mut ids: std::collections::HashSet<_> = catalog
             .as_array()
             .unwrap()
             .iter()
             .map(|a| a["id"].as_str().unwrap())
             .collect();
+        // Android appends touch-only actions to its loaded shared catalogue.
+        // Read the actual registration instead of maintaining an exception list.
+        let android_api = include_str!(
+            "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhActions.java"
+        );
+        for registration in android_api.split("catalog.put(obj(\"id\",\"").skip(1) {
+            ids.insert(registration.split('"').next().unwrap());
+        }
         for source in [
             include_str!(
                 "../../../android/overlay/app/src/main/java/com/limelight/rhremote/RhHome.java"
