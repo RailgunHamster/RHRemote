@@ -1,7 +1,6 @@
 package com.limelight.rhremote;
 import android.content.Context;
 import org.json.*;
-import com.limelight.nvstream.jni.MoonBridge;
 import java.io.IOException;
 
 public final class RhDisplay {
@@ -20,9 +19,15 @@ public final class RhDisplay {
         data=next;error="";return state();
     }catch(Exception e){error=e.getMessage()==null?"主机屏幕组件不可用":e.getMessage();throw e;}}
     public void select(String id,boolean send)throws Exception {
+        commitSelection(prepareSelection(id),send);
+    }
+    /** The worker prepares a candidate; a live session commits it after local input succeeds. */
+    JSONObject prepareSelection(String id)throws Exception {
         if(id==null||id.isEmpty()||id.length()>512)throw new IllegalArgumentException("displayId required");
         String mode=id.equals("auto")?"auto":id.equals("virtual")?"virtual":"physical";
-        JSONObject result=request.call("/v1/display/prepare",RhActions.obj("mode",mode,"displayId",mode.equals("physical")?id:"","width",profile.width,"height",profile.height)).getJSONObject("result");
+        return request.call("/v1/display/prepare",RhActions.obj("mode",mode,"displayId",mode.equals("physical")?id:"","width",profile.width,"height",profile.height)).getJSONObject("result");
+    }
+    void commitSelection(JSONObject result,boolean send)throws Exception {
         if(send)apply(result.optJSONObject("selected"));data=result;error="";
     }
     /** NvHTTP expects a raw query: pre-encoding here would make HttpUrl.Builder.query() escape the percent signs. */
@@ -47,7 +52,7 @@ public final class RhDisplay {
     public void applyCurrent()throws Exception {apply(data.optJSONObject("selected"));}
     private void apply(JSONObject selected)throws Exception {
         if(selected==null)return;int index=selected.optInt("captureIndex");if(index<1||index>12)throw new IllegalStateException("Sunshine supports monitors 1 through 12");
-        RhShortcuts.send(RhActions.obj("keys",new JSONArray().put(17).put(18).put(16).put(111+index)),(key,action,mods)->MoonBridge.sendKeyboardInput(key,action,mods,(byte)0));
+        RhShortcuts.send(RhActions.obj("keys",new JSONArray().put(17).put(18).put(16).put(111+index)),RhShortcuts::sendNative);
         RhStatistics.event("remote_display_select",-1,RhActions.obj("captureIndex",index));
     }
 }

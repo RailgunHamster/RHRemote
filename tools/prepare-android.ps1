@@ -487,4 +487,6 @@ if($LASTEXITCODE -ne 0){throw 'Android initial display adaptation failed.'}
 if($LASTEXITCODE -ne 0){throw 'Android host frame trace adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-android-launch-cancellation.py') $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android launch ownership adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-android-checked-input.py') $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Android checked keyboard adaptation failed.'}
 Write-Output 'Android RHRemote source prepared. Upstream originals retained locally; no host or device settings changed.'

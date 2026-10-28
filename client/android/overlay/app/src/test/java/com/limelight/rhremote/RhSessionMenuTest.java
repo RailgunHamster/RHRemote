@@ -17,8 +17,15 @@ import static org.junit.Assert.*;
 
 /** The production session controller and dialogs, without a native connection or OS input. */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=28,shadows=RhAdmissionTest.Controls.class)
+@Config(sdk=28,shadows={RhAdmissionTest.Controls.class,RhSessionMenuTest.Keyboard.class})
 public class RhSessionMenuTest {
+    @org.robolectric.annotation.Implements(value=com.limelight.nvstream.jni.MoonBridge.class,isInAndroidSdk=false)
+    public static class Keyboard {
+        static final java.util.List<Integer> events=new java.util.ArrayList<>();
+        static int rejectKey;
+        @org.robolectric.annotation.Implementation protected static void __staticInitializer__(){}
+        @org.robolectric.annotation.Implementation protected static int rhSendKeyboardInputChecked(short key,byte direction,byte modifiers,byte flags){events.add((int)direction);return direction==3&&(key&255)==rejectKey?-2:0;}
+    }
     public static class KeyProbeGame extends Game {
         final java.util.List<String> remoteKeys=new java.util.ArrayList<>();
         @Override public boolean handleKeyDown(KeyEvent event){remoteKeys.add("down:"+event.getKeyCode());return true;}
@@ -26,6 +33,7 @@ public class RhSessionMenuTest {
     }
     Game game;RhStreamControls controls;
     void create(boolean dark){
+        Keyboard.rejectKey=0;
         game=Robolectric.buildActivity(KeyProbeGame.class).get();game.setIntent(new Intent().putExtra(Game.EXTRA_PC_NAME,"Fixture workstation").putExtra(Game.EXTRA_PC_UUID,"fixture"));
         RhShared.theme(game,dark);FrameLayout root=new FrameLayout(game);TextView stats=new TextView(game);stats.setId(R.id.performanceOverlay);root.addView(stats);View surface=new View(game);surface.setId(R.id.surfaceView);surface.setFocusableInTouchMode(true);root.addView(surface);game.setContentView(root);assertTrue(surface.requestFocusFromTouch());
         RhProfile profile=RhProfile.load(game,"fixture");RhTouchController touch=new RhTouchController(new RhTouchController.TouchSink(){public void button(byte b,boolean down){throw new AssertionError("No remote input expected");}public void position(short x,short y,short w,short h){throw new AssertionError();}public void relative(short x,short y){throw new AssertionError();}public void scroll(short value){throw new AssertionError();}public void horizontalScroll(short value){throw new AssertionError();}},surface,profile);
@@ -41,6 +49,32 @@ public class RhSessionMenuTest {
     boolean key(int action,int code,int modifiers){long time=android.os.SystemClock.uptimeMillis();return game.dispatchKeyEvent(new KeyEvent(time,time,action,code,0,modifiers,KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,InputDevice.SOURCE_KEYBOARD));}
     void toggle()throws Exception{controls.perform("stream.controls.toggle",RhActions.obj());layout();}
     RhStreamPanel panel()throws Exception{Field field=RhStreamControls.class.getDeclaredField("panel");field.setAccessible(true);return (RhStreamPanel)field.get(controls);}
+    @Test public void aFailedDisplaySwitchKeepsThePreviousMonitorSelectedAndCanRetry()throws Exception{
+        create(false);toggle();Keyboard.events.clear();RhProfile profile=RhProfile.load(game,"fixture");
+        org.json.JSONObject old=RhActions.obj("id","old","name","原屏幕","available",true,"width",1920,"height",1080,"captureIndex",1),bad=RhActions.obj("id","bad","name","不可切换屏幕","available",true,"width",1920,"height",1080,"captureIndex",13);
+        RhDisplay display=new RhDisplay(profile,(path,body)->RhActions.obj("result",RhActions.obj("selected",body.optString("displayId").equals("bad")?bad:old,"displays",new org.json.JSONArray().put(old).put(bad))));display.select("old",false);
+        Field current=RhStreamControls.class.getDeclaredField("display");current.setAccessible(true);current.set(controls,display);controls.perform("stream.controls.tab",RhActions.obj("tab","displays"));
+        controls.perform("stream.display.select",RhActions.obj("displayId","bad"));long until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
+        while(controls.state().optBoolean("displayBusy")){assertTrue("Display operation did not finish",System.nanoTime()<until);Thread.sleep(10);Shadows.shadowOf(Looper.getMainLooper()).idle();}layout();
+        assertFalse(controls.state().getString("displayError").isEmpty());assertEquals("old",display.state().getJSONObject("selected").getString("id"));assertNotNull(button("原屏幕 · 1920×1080  ✓"));assertTrue(button("不可切换屏幕 · 1920×1080").isEnabled());assertTrue(button("断开").isEnabled());
+        assertTrue(Keyboard.events.isEmpty());controls.perform("stream.display.select",RhActions.obj("displayId","old"));until=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(3);while(controls.state().optBoolean("displayBusy")){assertTrue(System.nanoTime()<until);Thread.sleep(10);Shadows.shadowOf(Looper.getMainLooper()).idle();}assertEquals("",controls.state().getString("displayError"));assertEquals(8,Keyboard.events.size());
+    }
+    @Test public void aPendingDisplayCandidateCannotReplaceTheCurrentScreenOrSendInputAfterDisposal()throws Exception{
+        create(false);toggle();Keyboard.events.clear();java.util.concurrent.CountDownLatch reached=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);java.util.concurrent.atomic.AtomicReference<Thread> worker=new java.util.concurrent.atomic.AtomicReference<>();
+        org.json.JSONObject old=RhActions.obj("id","old","name","原屏幕","available",true,"width",1920,"height",1080,"captureIndex",1),next=RhActions.obj("id","next","name","下一屏幕","available",true,"width",1920,"height",1080,"captureIndex",2);
+        RhDisplay display=new RhDisplay(RhProfile.load(game,"fixture"),(path,body)->{boolean pending=body.optString("displayId").equals("next");if(pending){worker.set(Thread.currentThread());reached.countDown();assertTrue(release.await(3,java.util.concurrent.TimeUnit.SECONDS));}return RhActions.obj("result",RhActions.obj("selected",pending?next:old,"displays",new org.json.JSONArray().put(old).put(next)));});display.select("old",false);Field current=RhStreamControls.class.getDeclaredField("display");current.setAccessible(true);current.set(controls,display);controls.perform("stream.controls.tab",RhActions.obj("tab","displays"));
+        try{controls.perform("stream.display.select",RhActions.obj("displayId","next"));assertTrue(reached.await(2,java.util.concurrent.TimeUnit.SECONDS));layout();assertEquals("old",display.state().getJSONObject("selected").getString("id"));assertNotNull(findText(game.findViewById(android.R.id.content),"正在切换屏幕…"));assertFalse(button("刷新屏幕").isEnabled());assertTrue(button("断开").isEnabled());controls.dispose();}
+        finally{release.countDown();}
+        assertNotNull(worker.get());worker.get().join(3000);assertFalse("Prepared result has not reached its late callback",worker.get().isAlive());Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertTrue(Keyboard.events.isEmpty());assertEquals("old",display.state().getJSONObject("selected").getString("id"));
+    }
+    @Test public void transportRejectionCannotReportAShortcutAsSentOrCommitANewMonitor()throws Exception{
+        create(false);Keyboard.events.clear();controls.perform("stream.shortcut",RhActions.obj("shortcut","ctrl-alt-right"));assertTrue(controls.state().getJSONObject("lastShortcut").optBoolean("accepted"));Keyboard.events.clear();Keyboard.rejectKey=37;
+        try{controls.perform("stream.shortcut",RhActions.obj("shortcut","ctrl-alt-left"));fail("Transport error was discarded");}catch(IllegalStateException expected){assertTrue(expected.getMessage().contains("-2"));}
+        assertEquals("快捷键发送失败",controls.state().getJSONObject("controlAction").getString("message"));assertEquals("ctrl-alt-left",controls.state().getJSONObject("lastShortcut").getString("shortcut"));assertFalse(controls.state().getJSONObject("lastShortcut").optBoolean("accepted"));assertEquals(java.util.Arrays.asList(3,3,3,4,4,4),Keyboard.events);
+        RhDisplay display=new RhDisplay(RhProfile.load(game,"fixture"),(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("id",body.optString("displayId"),"captureIndex",2))));display.select("old",false);Keyboard.rejectKey=113;
+        try{display.select("next",true);fail("Rejected input committed selection");}catch(IllegalStateException expected){assertTrue(expected.getMessage().contains("-2"));}assertEquals("old",display.state().getJSONObject("selected").getString("id"));
+    }
     org.json.JSONObject screens(){org.json.JSONArray values=new org.json.JSONArray().put(RhActions.obj("id","physical","name","LG","width",1920,"height",1080,"available",true)).put(RhActions.obj("id","virtual","virtual",true,"width",2520,"height",1680,"available",true));return RhActions.obj("displays",values,"selected",values.optJSONObject(0));}
     void screens(RhStreamPanel panel,org.json.JSONObject data,boolean busy){panel.update(false,false,false,100,data,busy,"");panel.updateControls(true,false,1,busy,"displays",busy?"正在读取屏幕…":"屏幕列表已刷新","");layout();}
     @Test public void refreshingAFocusedMonitorKeepsNavigationLocalAndRestoresItsRow()throws Exception{

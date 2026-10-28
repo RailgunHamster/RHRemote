@@ -7,6 +7,10 @@ import com.limelight.nvstream.input.KeyboardPacket;
 
 public final class RhShortcuts {
     public interface Sender { void send(short key,byte action,byte modifiers); }
+    static void sendNative(short key,byte action,byte modifiers){
+        int result=com.limelight.nvstream.jni.MoonBridge.rhSendKeyboardInputChecked(key,action,modifiers,(byte)0);
+        if(result!=0)throw new IllegalStateException("远程输入通道不可用（错误码 "+result+"）");
+    }
     public static JSONArray catalog(Context context)throws Exception {
         try(InputStream in=context.getAssets().open("rhremote-shortcuts.json")){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[2048];int n;while((n=in.read(b))!=-1){if(out.size()+n>32768)throw new IOException("shortcut catalog too large");out.write(b,0,n);}return new JSONArray(new String(out.toByteArray(),StandardCharsets.UTF_8));}
     }

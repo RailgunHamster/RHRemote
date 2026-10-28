@@ -221,14 +221,18 @@ public final class RhStreamPanel {
         if(local&&!ownsVisible(root.findFocus()))tabs.get(value).requestFocusFromTouch();
     }
     public void update(boolean trackpad,boolean panning,boolean audioEnabled,int level,JSONObject display,boolean busy,String failure){
+        update(trackpad,panning,audioEnabled,level,display,busy,failure,"");
+    }
+    public void update(boolean trackpad,boolean panning,boolean audioEnabled,int level,JSONObject display,boolean busy,String failure,String operation){
         View focused=root.findFocus();boolean local=ownsVisible(focused);String focusId=monitorIds.get(focused);
         if(focusId==null&&focused==handle&&tab.equals("displays")&&!pendingMonitorFocus.isEmpty())focusId=pendingMonitorFocus;
         if(focusId==null)pendingMonitorFocus="";
         mode.setText(trackpad?"触控板":"直接点击");pan.setText(panning?"移动画面：开":"移动画面");audio.setText(audioEnabled?"声音：开":"声音：关");
-        if(!trackingVolume){volume.setProgress(level);volumeLabel.setText("音量 "+level+"%");}refresh.setEnabled(!busy);refresh.setText(busy?"正在读取…":"刷新屏幕");
+        boolean selecting=operation.equals("stream.display.select");
+        if(!trackingVolume){volume.setProgress(level);volumeLabel.setText("音量 "+level+"%");}refresh.setEnabled(!busy);refresh.setText(busy&&!selecting?"正在读取…":"刷新屏幕");
         for(int i=0;i<screenGrid.getChildCount();i++)screenGrid.getChildAt(i).setEnabled(!busy);
         JSONObject selected=display.optJSONObject("selected");String error=failure.isEmpty()?display.optString("error"):failure;
-        displayStatus.setText(busy?"正在读取屏幕…":selected==null?(!error.isEmpty()?"屏幕列表未加载":"选择要查看的屏幕"):monitorName(selected)+" · "+selected.optInt("width")+"×"+selected.optInt("height"));
+        displayStatus.setText(busy?(selecting?"正在切换屏幕…":"正在读取屏幕…"):selected==null?(!error.isEmpty()?"屏幕列表未加载":"选择要查看的屏幕"):monitorName(selected)+" · "+selected.optInt("width")+"×"+selected.optInt("height"));
         displayStatus.setTextColor(Color.parseColor(mutedColor));
         JSONArray monitors=display.optJSONArray("displays");String fingerprint=String.valueOf(monitors)+":"+(selected==null?"":selected.optString("id"))+":"+busy;
         if(fingerprint.equals(monitorFingerprint)){retainLocalFocus(local);return;}monitorFingerprint=fingerprint;monitorList.removeAllViews();monitorAvailability.clear();monitorIds.clear();int count=monitors==null?0:monitors.length();Button focusRow=null;
