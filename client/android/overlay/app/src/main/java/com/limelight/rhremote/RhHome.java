@@ -729,9 +729,17 @@ public final class RhHome implements RhActions.Target {
     private void submitState(Button button,boolean enabled){button.setEnabled(enabled);button.setAlpha(1f);}
     private void refreshSyncFooter(){if(syncSave==null||!pageId.equals("global-settings")||!settingsTab.equals("sync"))return;boolean dirty=syncDirty();submitState(syncSave,dirty&&!syncBusy);syncCancel.setEnabled(dirty&&!syncBusy);syncCancel.setAlpha(dirty&&!syncBusy?1f:0.45f);syncNotice.setText(dirty?"有未保存的更改":sync.state().optBoolean("hasPassword")?"设置已保存":"未配置");syncErrorView.setText(syncError);syncErrorView.setVisibility(syncError.isEmpty()?View.GONE:View.VISIBLE);}
     private String syncProgressText(boolean compact){String phase=syncWork.phase();return phase.equals("applying")?(compact?"正在应用…":"正在应用本机配置…"):phase.equals("recording")?(compact?"正在保存…":"正在保存同步状态…"):"同步中…";}
+    static String syncSummary(org.json.JSONObject state,boolean busy,String error){
+        if(busy)return "同步进行中";
+        org.json.JSONArray conflicts=state.optJSONArray("conflicts");if(conflicts!=null&&conflicts.length()>0)return "配置存在冲突，请选择保留项";
+        if(state.optBoolean("automaticBlocked"))return "上次同步结果待确认 · 自动同步已暂停";
+        if(error!=null&&!error.isEmpty())return "同步失败，请查看下方提示";
+        if(!state.optBoolean("hasPassword"))return "请先保存 WebDAV 设置。";
+        return state.optLong("lastSyncMs")>0?"上次完成："+android.text.format.DateFormat.format("yyyy-MM-dd HH:mm",state.optLong("lastSyncMs")):"尚未同步";
+    }
     private void showSync(){
-        ensureSyncDraft();org.json.JSONObject s=sync.state();
-        label(!s.optBoolean("hasPassword")?"请先保存 WebDAV 设置。":s.optLong("lastSyncMs")>0?"上次同步："+android.text.format.DateFormat.format("yyyy-MM-dd HH:mm",s.optLong("lastSyncMs")):"尚未同步");
+        ensureSyncDraft();org.json.JSONObject s=syncWork.state();
+        label(syncSummary(s,syncBusy,syncError));
         RhActionRow commands=actionRow();Button run=button(syncBusy?syncProgressText(true):"立即同步",true,()->invoke("sync.run",RhActions.obj())),clear=button("移除同步设置",false,()->invoke("sync.clear",RhActions.obj()));run.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));clear.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));commands.addView(run);commands.addView(clear);content.addView(commands);
         org.json.JSONArray conflicts=s.optJSONArray("conflicts");if(conflicts!=null&&conflicts.length()>0){
             label(conflicts.length()+" 项配置存在冲突。选择保留哪一端的冲突项，其余改动会合并。");RhActionRow choices=actionRow();Button keepLocal=button("冲突项保留本机",false,()->invoke("sync.resolve",RhActions.obj("resolution","local"))),keepRemote=button("冲突项保留远端",false,()->invoke("sync.resolve",RhActions.obj("resolution","remote")));keepLocal.setEnabled(!syncBusy);keepRemote.setEnabled(!syncBusy);choices.addView(keepLocal);choices.addView(keepRemote);content.addView(choices);

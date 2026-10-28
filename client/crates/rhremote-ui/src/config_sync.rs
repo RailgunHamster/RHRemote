@@ -21,6 +21,7 @@ struct Local {
     last_sync_ms: u64,
     base: Option<SharedConfig>,
     pending_apply: bool,
+    pending_transfer: bool,
 }
 struct Pending {
     local: SharedConfig,
@@ -239,8 +240,8 @@ impl ConfigSync {
             .as_ref()
             .map(|p| conflict_items(&p.local, &p.remote, &conflicts))
             .unwrap_or_default();
-        let blocked=self.local.pending_apply||self.awaiting.is_some();
-        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":conflicts,"conflictItems":items,"awaitingLocalApply":self.awaiting.is_some(),"automaticBlocked":blocked,"phase":if self.awaiting.is_some(){"applying"}else if blocked{"interrupted"}else if self.local.last_sync_ms>0{"completed"}else{"idle"},"error":if blocked{"上次同步结果尚未确认，自动同步已暂停，请手动同步核对"}else{""}})
+        let blocked=self.local.pending_transfer||self.local.pending_apply||self.awaiting.is_some();
+        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":conflicts,"conflictItems":items,"awaitingLocalApply":self.awaiting.is_some(),"outcomeUncertain":self.local.pending_transfer,"automaticBlocked":blocked,"phase":if self.awaiting.is_some(){"applying"}else if self.pending.is_some(){"conflict"}else if blocked{"interrupted"}else if self.local.last_sync_ms>0{"completed"}else{"idle"},"error":if blocked{"上次同步结果尚未确认，自动同步已暂停，请手动同步核对"}else{""}})
     }
     pub fn configure(&mut self, args: &Value) -> Result<Value, String> {
         let address = args["url"].as_str().ok_or("url required")?.trim();
@@ -260,6 +261,7 @@ impl ConfigSync {
             next.base = None;
             next.last_sync_ms = 0;
             next.pending_apply=false;
+            next.pending_transfer=false;
         }
         next.url = address.into();
         next.username = user.into();
@@ -311,6 +313,9 @@ impl ConfigSync {
         );
         let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(15)).build();
         self.exchange_negotiated(&agent, address.as_str(), &auth, local, resolution)
+            .map_err(|error| if self.local.pending_transfer {
+                format!("{error}。远端写入结果未确认，自动同步已暂停，请手动同步核对")
+            } else {error})
     }
     fn exchange_negotiated(&mut self, agent:&ureq::Agent, address:&str, auth:&str, local:SharedConfig, resolution:Resolution)->Result<Value,String> {
         let locking=match self.locking {Some(value)=>value,None=>{let value=dav::supported(agent,address,auth)?;self.locking=Some(value);value}};
@@ -424,6 +429,8 @@ impl ConfigSync {
                 let _ = fs::remove_file(file.path());
             }
         }
+        let previously_pending=self.local.pending_transfer;
+        self.record_transfer_started()?;
         let request = agent
             .put(address)
             .set("Authorization", auth)
@@ -434,10 +441,17 @@ impl ConfigSync {
             request.set("If-None-Match", "*")
         };
         let request = if let Some(lease)=lease {request.set("If",&lease.condition())}else{request};
-        let response = request
-            .send_json(serde_json::to_value(&merged).unwrap())
-            .map_err(http_error)?;
+        let response = match request.send_json(serde_json::to_value(&merged).unwrap()) {
+            Ok(response)=>response,
+            Err(error)=>{
+                if let ureq::Error::Status(code,_) = &error {
+                    self.record_rejected_transfer(*code,previously_pending)?;
+                }
+                return Err(http_error(error));
+            }
+        };
         if !(200..300).contains(&response.status()) {
+            self.record_rejected_transfer(response.status(),previously_pending)?;
             return Err(http_error(ureq::Error::Status(response.status(), response)));
         }
         self.transferred(merged)
@@ -445,6 +459,7 @@ impl ConfigSync {
     fn transferred(&mut self, merged: SharedConfig) -> Result<Value, String> {
         let mut next = self.local.clone();
         next.pending_apply = true;
+        next.pending_transfer = false;
         self.awaiting = Some(AwaitingApply {
             shared: merged.clone(),
             account: next.clone(),
@@ -453,6 +468,29 @@ impl ConfigSync {
         self.local = next;
         self.pending = None;
         Ok(json!({"shared":merged,"sync":self.state(),"conflicts":[]}))
+    }
+    // Persist before any PUT bytes can leave the process. A missing response cannot
+    // distinguish a rejected request from an accepted write on the server.
+    fn record_transfer_started(&mut self)->Result<(),String>{
+        let mut next=self.local.clone();next.pending_transfer=true;
+        self.record_transfer_state(next)
+    }
+    fn record_transfer_state(&mut self,next:Local)->Result<(),String>{
+        let path=self.directory.join("webdav-local.json");
+        atomic(&path,&next)?;
+        let persisted:Local=serde_json::from_slice(&fs::read(path).map_err(|_|"同步任务状态无法读取，请重试")?)
+            .map_err(|_|"同步任务状态无效，请重试")?;
+        if persisted!=next{return Err("同步任务状态未能保存，请检查存储后重试".into());}
+        self.local=next;Ok(())
+    }
+    fn record_rejected_transfer(&mut self,code:u16,previously_pending:bool)->Result<(),String>{
+        // Explicit client rejections did not accept this PUT. They cannot settle an
+        // earlier request whose response was lost. Timeouts and 5xx remain uncertain.
+        if !previously_pending && matches!(code,400|401|403|404|405|409|412|413|415|423){
+            let mut next=self.local.clone();next.pending_transfer=false;
+            self.record_transfer_state(next)?;
+        }
+        Ok(())
     }
     #[cfg(test)]
     pub(super) fn transferred_for_test(&mut self, shared: SharedConfig) -> Result<Value, String> {
@@ -495,6 +533,7 @@ impl ConfigSync {
         next.base = Some(shared.clone());
         next.last_sync_ms = rhremote_core::now_ms();
         next.pending_apply = false;
+        next.pending_transfer = false;
         atomic(&path, &next)?;
         let persisted: Local =
             serde_json::from_slice(&fs::read(path).map_err(|_| "同步完成状态无法读取，请重试")?)
@@ -584,6 +623,30 @@ mod tests {
     fn commit_transfer_keeps_the_original_base_until_local_application() {
         let mut sync=fixture();let base=config();sync.local.base=Some(base.clone());sync.local.last_sync_ms=1;atomic(&sync.directory.join("webdav-local.json"),&sync.local).unwrap();let mut remote=base.clone();remote.devices[0].display_name="远端新名".into();
         sync.transferred(remote).unwrap();assert_eq!(sync.local.base,Some(base));assert_eq!(sync.local.last_sync_ms,1);cleanup(sync);
+    }
+    #[test]
+    fn transfer_intent_survives_a_cold_start_without_advancing_success(){
+        let mut sync=fixture();sync.local.automatic=true;sync.local.last_sync_ms=17;atomic(&sync.directory.join("webdav-local.json"),&sync.local).unwrap();
+        sync.record_transfer_started().unwrap();let cold=ConfigSync::new(sync.directory.clone()).unwrap();
+        assert_eq!(cold.state()["automaticBlocked"],true,"An interrupted PUT cannot silently resume automatic synchronization");
+        assert_eq!(cold.local.last_sync_ms,17);assert!(cold.local.base.is_none());cleanup(sync);
+    }
+    #[test]
+    fn a_rejected_put_cannot_settle_a_previous_unknown_write(){
+        let mut sync=fixture();sync.record_transfer_started().unwrap();
+        sync.record_rejected_transfer(401,false).unwrap();assert_eq!(sync.state()["automaticBlocked"],false);
+        sync.record_transfer_started().unwrap();sync.record_rejected_transfer(412,true).unwrap();
+        assert_eq!(sync.state()["outcomeUncertain"],true);
+        sync.record_rejected_transfer(500,false).unwrap();assert_eq!(sync.state()["automaticBlocked"],true);
+        let merged=config();sync.transferred(merged.clone()).unwrap();
+        let cold=ConfigSync::new(sync.directory.clone()).unwrap();assert_eq!(cold.state()["outcomeUncertain"],false);assert_eq!(cold.state()["automaticBlocked"],true);
+        let file=preferences(&sync,&merged);sync.applied(&merged,&file).unwrap();
+        let cold=ConfigSync::new(sync.directory.clone()).unwrap();assert_eq!(cold.state()["automaticBlocked"],false);cleanup(sync);
+    }
+    #[test]
+    fn unrecordable_transfer_intent_stops_before_put(){
+        let mut sync=fixture();let pending=sync.directory.join("webdav-local.pending.json");fs::create_dir(&pending).unwrap();fs::write(pending.join("blocker"),b"test-owned blocker").unwrap();
+        assert!(sync.record_transfer_started().is_err());assert!(!sync.local.pending_transfer);assert_eq!(sync.local.last_sync_ms,0);cleanup(sync);
     }
     #[test]
     fn commit_cold_retry_does_not_treat_the_old_local_name_as_a_new_edit() {
@@ -806,7 +869,9 @@ mod tests {
         assert!(result.unwrap_err().contains("最终目录"));
         assert!(sync.local.base.is_none());
         assert_eq!(sync.local.last_sync_ms, 0);
-        assert!(!sync.directory.join("webdav-local.json").exists());
+        // A redirect is not confirmation of whether the first URL applied the PUT.
+        assert_eq!(sync.state()["outcomeUncertain"],true);
+        assert_eq!(ConfigSync::new(sync.directory.clone()).unwrap().state()["automaticBlocked"],true);
         fs::remove_dir_all(sync.directory).unwrap();
     }
     #[test]

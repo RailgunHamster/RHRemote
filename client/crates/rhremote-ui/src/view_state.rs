@@ -8,6 +8,27 @@ use serde_json::Value;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
+fn sync_summary(state:&Value)->&'static str{
+    let sync=&state["sync"];
+    if state["syncBusy"]==true {"同步进行中"}
+    else if sync["conflicts"].as_array().is_some_and(|items|!items.is_empty()) {"配置存在冲突，请选择保留项"}
+    else if sync["automaticBlocked"]==true {"上次同步结果待确认 · 自动同步已暂停"}
+    else if state["syncError"].as_str().is_some_and(|error|!error.is_empty()) {"同步失败，请查看下方提示"}
+    else if sync["hasPassword"]!=true {"请先保存 WebDAV 设置"}
+    else if sync["lastSyncMs"].as_u64().unwrap_or(0)>0 {"上次同步已完成"}
+    else {"尚未同步"}
+}
+#[cfg(test)]
+#[test]
+fn sync_summary_prioritizes_the_current_outcome_over_an_old_success(){
+    let mut state=serde_json::json!({"sync":{"hasPassword":true,"lastSyncMs":42,"automaticBlocked":true},"syncError":"结果未确认"});
+    assert_eq!(sync_summary(&state),"上次同步结果待确认 · 自动同步已暂停");
+    state["sync"]["conflicts"]=serde_json::json!(["deviceOrder"]);assert_eq!(sync_summary(&state),"配置存在冲突，请选择保留项");
+    state["syncBusy"]=serde_json::json!(true);assert_eq!(sync_summary(&state),"同步进行中");
+    state["syncBusy"]=serde_json::json!(false);state["sync"]["conflicts"]=serde_json::json!([]);state["sync"]["automaticBlocked"]=serde_json::json!(false);assert_eq!(sync_summary(&state),"同步失败，请查看下方提示");
+    state["syncError"]=serde_json::json!("");assert_eq!(sync_summary(&state),"上次同步已完成");
+}
+
 pub(crate) struct MainView {
     revision: u64,
     profile_model: Rc<VecModel<SettingRow>>,
@@ -133,14 +154,7 @@ impl MainView {
             ui.set_sync_busy(state["syncBusy"] == true);
             ui.set_sync_progress_text(match state["sync"]["phase"].as_str(){Some("applying")=>"正在应用…",Some("restoring")=>"正在刷新…",Some("recording")=>"正在保存…",_=>"同步中…"}.into());
             form_models::update_sync_conflicts(ui, &state["sync"]["conflictItems"]);
-            ui.set_sync_last(
-                if state["sync"]["lastSyncMs"].as_u64().unwrap_or(0) > 0 {
-                    "上次同步已完成"
-                } else {
-                    "尚未同步"
-                }
-                .into(),
-            );
+            ui.set_sync_last(sync_summary(state).into());
             ui.set_updates_managed(state["updates"]["managed"] == true);
             ui.set_updates_busy(state["updatesBusy"] == true);
             ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());

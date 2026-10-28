@@ -27,7 +27,7 @@ final class RhSyncWork {
     private String phase="idle",error="";
     private RhSyncWork(Context application){
         context=application;sync=new RhSync(application);journal=context.getSharedPreferences("rhremote.sync.operations",Context.MODE_PRIVATE);
-        try{if(journal.getBoolean("pending",false)){interrupted=true;phase="interrupted";error=INTERRUPTED;operation=journal.getLong("operationId",0);lastAttempt=journal.getLong("startedAtMs",0);}}
+        try{if(journal.getBoolean("pending",false)||sync.outcomeUncertain()){interrupted=true;phase="interrupted";error=INTERRUPTED;operation=journal.getLong("operationId",0);lastAttempt=journal.getLong("startedAtMs",0);}}
         catch(ClassCastException invalid){interrupted=true;phase="interrupted";error="上次同步状态无法读取，自动同步已暂停，请手动同步核对";}
     }
     synchronized boolean busy(){return running;}
@@ -35,8 +35,8 @@ final class RhSyncWork {
     synchronized long lastAttempt(){return lastAttempt;}
     synchronized String error(){return error;}
     synchronized String phase(){return phase;}
-    synchronized boolean canAutomaticallySync(){return !running&&!interrupted;}
-    synchronized JSONObject state(){JSONObject value=sync.state();try{value.put("operationId",operation);value.put("phase",phase);value.put("busy",running);value.put("error",error);value.put("lastAttemptMs",lastAttempt);value.put("interrupted",interrupted);value.put("automaticBlocked",interrupted);}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
+    synchronized boolean canAutomaticallySync(){return !running&&!interrupted&&!sync.outcomeUncertain();}
+    synchronized JSONObject state(){JSONObject value=sync.state();try{value.put("operationId",operation);value.put("phase",phase);value.put("busy",running);value.put("error",error);value.put("lastAttemptMs",lastAttempt);value.put("interrupted",interrupted);value.put("automaticBlocked",interrupted||sync.outcomeUncertain());}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
     synchronized void attach(Listener value){listener=value;}
     synchronized void detach(Listener value){if(listener==value)listener=null;}
     private void changed(){
@@ -62,7 +62,7 @@ final class RhSyncWork {
         boolean recorded;
         synchronized(this){
             if(running)throw new IllegalStateException("同步进行中，请稍后保存");
-            if(automatic&&interrupted)throw new IllegalStateException(INTERRUPTED);
+            if(automatic&&(interrupted||sync.outcomeUncertain()))throw new IllegalStateException(INTERRUPTED);
             long next=operation+1,now=System.currentTimeMillis();
             recorded=journal.edit().putBoolean("pending",true).putLong("operationId",next).putLong("startedAtMs",now).commit();
             if(recorded){running=true;interrupted=false;error="";phase="syncing";operation=next;lastAttempt=now;}
@@ -73,14 +73,14 @@ final class RhSyncWork {
         if(!recorded)throw new java.io.IOException(error());
         try{worker.execute(()->{
             JSONObject result=null;String failure="",nextPhase="completed";boolean uncertain=false;
-            try{result=sync.run(captured,resolution);}catch(Exception invalid){failure=RhSync.failureMessage(invalid);uncertain=sync.state().optBoolean("awaitingLocalApply");}
+            try{result=sync.run(captured,resolution);}catch(Exception invalid){failure=RhSync.failureMessage(invalid);uncertain=sync.state().optBoolean("awaitingLocalApply")||sync.outcomeUncertain();if(sync.outcomeUncertain())failure+="。远端写入结果未确认，自动同步已暂停，请手动同步核对";}
             if(failure.isEmpty()&&result!=null){
                 if(result.has("shared")){
                     try{progress("applying");RhShared.apply(context,result.getJSONObject("shared"));}
                     catch(Exception invalid){failure="同步已传输，但本机配置应用失败。自动同步已暂停，请检查存储后重试";uncertain=true;}
                     if(failure.isEmpty())try{progress("recording");sync.applied(result.getJSONObject("shared"));}
                     catch(Exception invalid){failure="配置已应用，但同步完成状态保存失败。自动同步已暂停，请检查存储后重试";uncertain=true;}
-                }else nextPhase="conflict";
+                }else{nextPhase="conflict";uncertain=sync.outcomeUncertain();if(uncertain)failure=INTERRUPTED;}
             }
             finish(failure,nextPhase,uncertain);
         });}catch(RuntimeException rejected){
@@ -97,7 +97,7 @@ final class RhSyncWork {
         Runnable completed=()->{
             synchronized(this){
                 running=false;
-                if(uncertain){interrupted=true;error=failure;phase="error";}
+                if(uncertain){interrupted=true;error=failure;phase=completedPhase.equals("conflict")?"conflict":"error";}
                 else if(!recorded){interrupted=true;error="同步结果的状态未能保存，自动同步已暂停，请手动同步核对";phase="interrupted";}
                 else{interrupted=false;error=failure;phase=error.isEmpty()?completedPhase:"error";}
                 revision++;

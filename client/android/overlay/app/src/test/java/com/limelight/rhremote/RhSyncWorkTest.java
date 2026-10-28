@@ -30,6 +30,13 @@ public class RhSyncWorkTest {
         Network.result=RhActions.obj("conflicts",new JSONArray().put("deviceOrder"));Network.captured=null;Network.failure=null;Network.runs=0;
     }
     void complete(){queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    @Test public void syncSummaryCannotPresentAnOldSuccessAsTheCurrentOutcome()throws Exception{
+        JSONObject state=RhActions.obj("hasPassword",true,"lastSyncMs",42,"automaticBlocked",true,"conflicts",new JSONArray());
+        assertEquals("上次同步结果待确认 · 自动同步已暂停",RhHome.syncSummary(state,false,"结果未确认"));
+        state.put("conflicts",new JSONArray().put("deviceOrder"));assertEquals("配置存在冲突，请选择保留项",RhHome.syncSummary(state,false,"结果未确认"));
+        assertEquals("同步进行中",RhHome.syncSummary(state,true,""));state.put("conflicts",new JSONArray()).put("automaticBlocked",false);assertEquals("同步失败，请查看下方提示",RhHome.syncSummary(state,false,"HTTP 401"));
+        assertTrue(RhHome.syncSummary(state,false,"").startsWith("上次完成："));
+    }
     RhSyncWork coldOwner()throws Exception{java.lang.reflect.Field shared=RhSyncWork.class.getDeclaredField("shared");shared.setAccessible(true);shared.set(null,null);return RhSyncWork.shared(activity);}
     @Test public void aColdOwnerReportsTheInterruptedOperationWithoutReplayingIt()throws Exception{
         work.start(RhShared.read(activity),"review",queued::add);long attempted=work.lastAttempt(),operation=work.state().getLong("operationId");

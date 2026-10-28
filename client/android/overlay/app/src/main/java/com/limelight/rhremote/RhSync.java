@@ -20,7 +20,8 @@ public final class RhSync {
     private volatile JSONArray conflicts=new JSONArray();
     private Boolean locking;
     public RhSync(Context c){context=c.getApplicationContext();file=new File(c.getFilesDir(),"webdav-local.json");try{local=new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8));}catch(Exception e){local=new JSONObject();}}
-    public JSONObject state(){JSONObject l=local;JSONArray found=conflicts;return RhActions.obj("url",l.optString("url"),"username",l.optString("username"),"automatic",l.optBoolean("automatic"),"intervalMinutes",l.optInt("intervalMinutes",5),"hasPassword",l.has("ciphertext"),"lastSyncMs",l.optLong("lastSyncMs"),"conflicts",found,"conflictItems",review(pendingLocal,pendingRemote,found),"awaitingLocalApply",awaitingApply!=null);}
+    boolean outcomeUncertain(){return local.optBoolean("pendingTransfer");}
+    public JSONObject state(){JSONObject l=local;JSONArray found=conflicts;return RhActions.obj("url",l.optString("url"),"username",l.optString("username"),"automatic",l.optBoolean("automatic"),"intervalMinutes",l.optInt("intervalMinutes",5),"hasPassword",l.has("ciphertext"),"lastSyncMs",l.optLong("lastSyncMs"),"conflicts",found,"conflictItems",review(pendingLocal,pendingRemote,found),"awaitingLocalApply",awaitingApply!=null,"outcomeUncertain",l.optBoolean("pendingTransfer"));}
     private static String deviceName(JSONObject config,String uuid){if(config!=null){JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++){JSONObject value=rows.optJSONObject(i);if(value!=null&&uuid.equals(value.optString("uuid")))return value.optString("displayName").isEmpty()?value.optString("name","设备"):value.optString("displayName");}}return "设备";}
     private static JSONObject device(JSONObject config,String uuid){JSONArray rows=config.optJSONArray("devices");if(rows!=null)for(int i=0;i<rows.length();i++)if(uuid.equals(rows.optJSONObject(i).optString("uuid")))return rows.optJSONObject(i);return new JSONObject();}
     private static String summary(JSONObject config,String key){
@@ -47,7 +48,7 @@ public final class RhSync {
     public void configure(JSONObject args)throws Exception{
         String address=args.getString("url").trim(),user=args.getString("username").trim(),password=args.optString("password");endpoint(address);int intervalMinutes=interval(args,local.optInt("intervalMinutes",5));if(user.isEmpty()||user.contains(":")||user.contains("\n")||user.contains("\r"))throw new IOException("WebDAV 用户名无效");
         JSONObject next=new JSONObject(local.toString());boolean same=address.equals(next.optString("url"))&&user.equals(next.optString("username"));if(password.isEmpty()&&(!same||!next.has("ciphertext")))throw new IOException("请填写 WebDAV 密码");
-        if(!same){next.remove("base");next.remove("lastSyncMs");}
+        if(!same){next.remove("base");next.remove("lastSyncMs");next.remove("pendingTransfer");}
         if(!password.isEmpty()){Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.ENCRYPT_MODE,key());next.put("iv",Base64.encodeToString(cipher.getIV(),Base64.NO_WRAP));next.put("ciphertext",Base64.encodeToString(cipher.doFinal(password.getBytes(StandardCharsets.UTF_8)),Base64.NO_WRAP));}
         next.put("url",address);next.put("username",user);next.put("automatic",args.optBoolean("automatic"));next.put("intervalMinutes",intervalMinutes);RhShared.write(file,next);local=next;clearPending();clearApplied();locking=null;
     }
@@ -94,11 +95,27 @@ public final class RhSync {
         if(found.length()>0){pendingLocal=new JSONObject(ours.toString());pendingRemote=new JSONObject(remote.toString());pendingEtag=etag;conflicts=found;return RhActions.obj("conflicts",found);}
         RhShared.validate(merged);
         if(remote!=null){File dir=new File(context.getFilesDir(),"sync-backups");if(!dir.exists()&&!dir.mkdirs())throw new IOException("backup directory unavailable");RhShared.write(new File(dir,"remote-"+System.currentTimeMillis()+".json"),remote);File[] files=dir.listFiles((d,n)->n.startsWith("remote-"));if(files!=null){Arrays.sort(files,Comparator.comparing(File::getName));for(int i=0;i<files.length-20;i++)files[i].delete();}}
-        byte[] bytes=merged.toString().getBytes(StandardCharsets.UTF_8);HttpURLConnection put=open(url,"PUT",auth);try{put.setRequestProperty("Content-Type","application/json");put.setRequestProperty(etag==null?"If-None-Match":"If-Match",etag==null?"*":etag);if(lease!=null)put.setRequestProperty("If",lease.condition());put.setDoOutput(true);put.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=put.getOutputStream()){out.write(bytes);}int code=put.getResponseCode();if(code<200||code>=300)throw new IOException("WebDAV HTTP "+code);}finally{put.disconnect();}
-        appliedAccount=new JSONObject(l.toString());awaitingApply=new JSONObject(merged.toString());clearPending();return RhActions.obj("shared",merged,"conflicts",new JSONArray());
+        boolean previouslyPending=outcomeUncertain();recordTransferStarted();
+        byte[] bytes=merged.toString().getBytes(StandardCharsets.UTF_8);HttpURLConnection put=open(url,"PUT",auth);try{put.setRequestProperty("Content-Type","application/json");put.setRequestProperty(etag==null?"If-None-Match":"If-Match",etag==null?"*":etag);if(lease!=null)put.setRequestProperty("If",lease.condition());put.setDoOutput(true);put.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=put.getOutputStream()){out.write(bytes);}int code=put.getResponseCode();if(code<200||code>=300){recordRejectedTransfer(code,previouslyPending);throw new IOException("WebDAV HTTP "+code);}}finally{put.disconnect();}
+        appliedAccount=new JSONObject(local.toString());awaitingApply=new JSONObject(merged.toString());clearPending();return RhActions.obj("shared",merged,"conflicts",new JSONArray());
         }
     }
     private void clearApplied(){awaitingApply=null;appliedAccount=null;}
+    /** A PUT may be committed even when its response never arrives. Record before output. */
+    private void recordTransferStarted()throws Exception{
+        JSONObject next=new JSONObject(local.toString());next.put("pendingTransfer",true);recordTransferState(next);
+    }
+    private void recordTransferState(JSONObject next)throws Exception{
+        RhShared.write(file,next);
+        JSONObject persisted=new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8));
+        if(!RhShared.canonical(next).equals(RhShared.canonical(persisted)))throw new IOException("同步任务状态未能保存，请检查存储后重试");
+        local=next;
+    }
+    private void recordRejectedTransfer(int code,boolean previouslyPending)throws Exception{
+        if(!previouslyPending&&Arrays.asList(400,401,403,404,405,409,412,413,415,423).contains(code)){
+            JSONObject next=new JSONObject(local.toString());next.remove("pendingTransfer");recordTransferState(next);
+        }
+    }
     /** A confirmed PUT is not a local merge base until its exact configuration is durable. */
     void applied(JSONObject shared)throws Exception{
         JSONObject expected=awaitingApply,account=appliedAccount;
@@ -106,7 +123,7 @@ public final class RhSync {
         if(!RhShared.canonical(expected).equals(RhShared.canonical(RhShared.normalize(shared)))||!RhShared.canonical(account).equals(RhShared.canonical(local)))throw new IOException("同步结果或账户已变化，请重新同步");
         if(!RhShared.canonical(expected).equals(RhShared.canonical(RhShared.read(context))))throw new IOException("本机配置尚未完整应用，请重新同步");
         if(!context.getSharedPreferences("rhremote.global",0).edit().putBoolean("dark",expected.getBoolean("dark")).commit())throw new IOException("同步主题未能保存，请重试");
-        JSONObject next=new JSONObject(account.toString());next.put("base",expected);next.put("lastSyncMs",System.currentTimeMillis());RhShared.write(file,next);
+        JSONObject next=new JSONObject(account.toString());next.put("base",expected);next.put("lastSyncMs",System.currentTimeMillis());next.remove("pendingTransfer");RhShared.write(file,next);
         JSONObject persisted=new JSONObject(new String(new AtomicFile(file).readFully(),StandardCharsets.UTF_8));
         if(!RhShared.canonical(next).equals(RhShared.canonical(persisted)))throw new IOException("同步完成状态未能保存，请重试");
         local=next;clearApplied();

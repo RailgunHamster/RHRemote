@@ -24,6 +24,7 @@ public class RhSyncCommitTest {
     @Implements(value=RhSync.class,isInAndroidSdk=false)
     public static class MemoryHttp {
         static JSONObject server;static int revision,puts;static long appliedThread;static java.util.concurrent.CountDownLatch reached,release;
+        static boolean losePutResponse;static int rejectedPut;
         @RealObject RhSync real;
         @Implementation protected void applied(JSONObject shared)throws Exception{
             appliedThread=Thread.currentThread().getId();if(reached!=null){reached.countDown();if(!release.await(5,java.util.concurrent.TimeUnit.SECONDS))throw new IOException("Test acknowledgement gate timed out");}
@@ -36,8 +37,10 @@ public class RhSyncCommitTest {
                 final ByteArrayOutputStream request=new ByteArrayOutputStream();
                 @Override public int getResponseCode()throws IOException{
                     if(upload){
+                        if(rejectedPut!=0)return rejectedPut;
                         if(!("\"revision-"+revision+"\"").equals(getRequestProperty("If-Match")))return 412;
                         try{server=new JSONObject(new String(request.toByteArray(),StandardCharsets.UTF_8));}catch(JSONException invalid){throw new IOException(invalid);}revision++;puts++;
+                        if(losePutResponse)throw new SocketTimeoutException("Test server applied the PUT but its response was lost");
                     }
                     return 200;
                 }
@@ -61,7 +64,7 @@ public class RhSyncCommitTest {
     static String alias(JSONObject value)throws Exception{return value.getJSONArray("devices").getJSONObject(0).getString("displayName");}
     JSONObject persistedAccount()throws Exception{return new JSONObject(new String(new AtomicFile(account).readFully(),StandardCharsets.UTF_8));}
     @Before public void setup()throws Exception{
-        AtomicFailure.silentlyDiscardAccount=false;MemoryHttp.appliedThread=0;MemoryHttp.reached=null;MemoryHttp.release=null;
+        AtomicFailure.silentlyDiscardAccount=false;MemoryHttp.appliedThread=0;MemoryHttp.reached=null;MemoryHttp.release=null;MemoryHttp.losePutResponse=false;MemoryHttp.rejectedPut=0;
         activity=Robolectric.buildActivity(Activity.class).setup().get();original=RhShared.read(activity);original.put("devices",new JSONArray().put(RhActions.obj("uuid","host","name","workstation","displayName","本机旧名","address","192.0.2.10","swapButtons",false,"addresses",new JSONArray())));RhShared.apply(activity,original);original=RhShared.read(activity);
         account=new File(activity.getFilesDir(),"webdav-local.json");RhShared.write(account,RhActions.obj("url","https://sync.example.test/folder/","username","test","ciphertext","unused-test-value","base",original,"lastSyncMs",1));
         MemoryHttp.server=copy(original);MemoryHttp.server.getJSONArray("devices").getJSONObject(0).put("displayName","远端新名");MemoryHttp.revision=1;MemoryHttp.puts=0;
@@ -69,6 +72,28 @@ public class RhSyncCommitTest {
     @Test public void aConfirmedPutDoesNotAdvanceTheLocalBaseBeforeItsConfigurationIsApplied()throws Exception{
         RhSync sync=new RhSync(activity);JSONObject transferred=sync.run(original,"review");assertEquals("远端新名",alias(transferred.getJSONObject("shared")));assertEquals(1,MemoryHttp.puts);
         assertEquals("本机旧名",alias(persistedAccount().getJSONObject("base")));assertEquals(1,persistedAccount().getLong("lastSyncMs"));assertEquals("本机旧名",alias(RhShared.read(activity)));
+    }
+    @Test public void aLostWriteResponseMustPauseAutomaticSyncAndSurviveAColdStart()throws Exception{
+        MemoryHttp.losePutResponse=true;RhSyncWork work=RhSyncWork.shared(activity);List<Runnable> queued=new ArrayList<>();work.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(1,MemoryHttp.puts);assertEquals("本机旧名",alias(persistedAccount().getJSONObject("base")));assertEquals(1,persistedAccount().getLong("lastSyncMs"));
+        assertFalse("A transport error after PUT may already have changed the remote document",work.canAutomaticallySync());
+        java.lang.reflect.Field field=RhSyncWork.class.getDeclaredField("shared");field.setAccessible(true);field.set(null,null);RhSyncWork cold=RhSyncWork.shared(activity);assertEquals("interrupted",cold.phase());assertFalse(cold.canAutomaticallySync());
+        // Even a missing operation journal cannot erase the persisted PUT barrier.
+        activity.getSharedPreferences("rhremote.sync.operations",0).edit().clear().commit();field.set(null,null);cold=RhSyncWork.shared(activity);assertEquals("interrupted",cold.phase());assertFalse(cold.canAutomaticallySync());
+        MemoryHttp.losePutResponse=false;queued.clear();cold.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("completed",cold.phase());assertTrue(cold.canAutomaticallySync());assertEquals("远端新名",alias(RhShared.read(activity)));assertFalse(persistedAccount().optBoolean("pendingTransfer"));
+    }
+    @Test public void aKnownRejectionDoesNotBlockAutomaticSyncButCannotSettleAnEarlierUnknownWrite()throws Exception{
+        MemoryHttp.rejectedPut=401;RhSyncWork work=RhSyncWork.shared(activity);List<Runnable> queued=new ArrayList<>();work.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(work.error().contains("401"));assertFalse(work.error().contains("结果未确认"));assertTrue(work.canAutomaticallySync());assertEquals(0,MemoryHttp.puts);
+        MemoryHttp.rejectedPut=0;MemoryHttp.losePutResponse=true;work.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();assertFalse(work.canAutomaticallySync());
+        MemoryHttp.rejectedPut=412;work.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(work.error().contains("412"));assertTrue(work.error().contains("结果未确认"));assertFalse(work.canAutomaticallySync());assertEquals(1,MemoryHttp.puts);
+    }
+    @Test public void aSilentFailureToRecordTransferIntentCannotSendThePut()throws Exception{
+        AtomicFailure.silentlyDiscardAccount=true;RhSyncWork work=RhSyncWork.shared(activity);List<Runnable> queued=new ArrayList<>();work.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals(0,MemoryHttp.puts);assertTrue(work.error().contains("任务状态未能保存"));assertEquals(1,persistedAccount().getLong("lastSyncMs"));assertTrue(work.canAutomaticallySync());
+    }
+    @Test public void conflictsAfterAnUnknownWriteKeepBothReviewAndTheAutomaticSyncBarrier()throws Exception{
+        MemoryHttp.losePutResponse=true;RhSyncWork work=RhSyncWork.shared(activity);List<Runnable> queued=new ArrayList<>();work.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();
+        JSONObject changed=copy(original);changed.getJSONArray("devices").getJSONObject(0).put("displayName","本机另一个名称");MemoryHttp.losePutResponse=false;work.start(changed,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("conflict",work.phase());assertTrue(work.state().getJSONArray("conflicts").length()>0);assertFalse(work.canAutomaticallySync());assertEquals(1,MemoryHttp.puts);
+        work.start(changed,"remote",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();assertEquals("completed",work.phase());assertTrue(work.canAutomaticallySync());assertEquals("远端新名",alias(RhShared.read(activity)));
     }
     @Test public void retryAfterAColdStartMustNotPublishTheOldLocalNameOverTheConfirmedRemoteEdit()throws Exception{
         new RhSync(activity).run(original,"review");RhSync restarted=new RhSync(activity);JSONObject retried=restarted.run(original,"review");

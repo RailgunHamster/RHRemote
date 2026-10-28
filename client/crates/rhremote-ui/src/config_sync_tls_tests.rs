@@ -296,10 +296,14 @@ fn https_conditional_failure_and_upload_redirect_never_advance_sync_state() {
         assert!(error.contains(reason), "{error}");
         assert_eq!(sync.local.base, Some(base.clone()));
         assert_eq!(sync.local.last_sync_ms, 42);
-        assert_eq!(
-            before,
-            fs::read(sync.directory.join("webdav-local.json")).unwrap()
-        );
+        if reason=="412"{
+            assert_eq!(before,fs::read(sync.directory.join("webdav-local.json")).unwrap());
+            assert_eq!(sync.state()["automaticBlocked"],false);
+        }else{
+            // A 3xx response is never followed and is not a confirmed rejection.
+            assert_eq!(sync.state()["outcomeUncertain"],true);
+            assert_eq!(ConfigSync::new(sync.directory.clone()).unwrap().state()["automaticBlocked"],true);
+        }
     }
     let requests = server.requests.lock().unwrap();
     assert_eq!(requests.len(), 4);
