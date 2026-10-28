@@ -260,23 +260,27 @@ component DeviceContextHeader inherits Rectangle {
     in property <string> name;
     in property <string> address;
     in property <string> uuid;
-    in property <bool> compact;
+    in property <length> content-inset:24px;
     in property <bool> settings-open;
-    height:136px;background:Palette.surface;
+    height:144px;background:Palette.surface;
     VerticalLayout {spacing:0px;
-        Rectangle {height:88px;background:Palette.page;
-            VerticalLayout {padding:16px;padding-left:root.compact ? 20px : 24px;padding-right:20px;spacing:8px;
-                HorizontalLayout {spacing:10px;
+        context-info:=Rectangle {height:88px;background:Palette.page;
+            VerticalLayout {padding:16px;padding-left:root.content-inset;padding-right:root.content-inset;spacing:8px;
+                device-title-row:=HorizontalLayout {height:32px;spacing:10px;
                     Text{text:root.name;font-size:24px;font-weight:600;color:Palette.ink;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;vertical-alignment:center;}
-                    Rectangle {width:68px;height:26px;border-radius:13px;background:Palette.surface;
-                        Text{text:root.device.is-self ? "本机" : root.device.online ? "在线" : "离线";color:root.device.is-self ? Palette.blue : root.device.online ? #369c81 : Palette.muted;font-size:11px;horizontal-alignment:center;vertical-alignment:center;}
+                    VerticalLayout {width:68px;spacing:0px;
+                        Rectangle{vertical-stretch:1;}
+                        device-state:=Rectangle {width:68px;height:26px;border-radius:13px;background:Palette.surface;
+                            Text{text:root.device.is-self ? "本机" : root.device.online ? "在线" : "离线";color:root.device.is-self ? Palette.blue : root.device.online ? #369c81 : Palette.muted;font-size:11px;horizontal-alignment:center;vertical-alignment:center;}
+                        }
+                        Rectangle{vertical-stretch:1;}
                     }
                 }
-                Text{text:root.device.name==root.device.host-name ? root.address : root.device.host-name;color:Palette.muted;font-size:12px;overflow:elide;}
+                Text{text:root.device.name==root.device.host-name ? root.address : root.device.host-name;height:16px;color:Palette.muted;font-size:12px;overflow:elide;vertical-alignment:center;}
             }
         }
-        Rectangle {height:48px;
-            HorizontalLayout {padding-left:root.compact ? 20px : 24px;padding-right:20px;spacing:8px;
+        context-tabs:=Rectangle {height:56px;
+            HorizontalLayout {padding-top:9px;padding-bottom:9px;padding-left:root.content-inset;padding-right:root.content-inset;spacing:8px;
                 TabButton{text:"概览";action-id:"device.select";argument:root.uuid;chosen:!root.settings-open;}
                 TabButton{text:"连接设置";action-id:"device.settings.open";argument:root.uuid;chosen:root.settings-open;}
                 Rectangle{horizontal-stretch:1;}
@@ -646,9 +650,9 @@ export component MainWindow inherits Window {
             spacing:0px;
             if root.page=="devices" && !root.streaming && !root.connecting: Rectangle {background:Palette.surface;
                     if root.selected-uuid!="": VerticalLayout {spacing:0px;
-                        DeviceContextHeader{device:root.selected-device;name:root.selected-name;address:root.network-address;uuid:root.selected-uuid;compact:root.compact;}
+                        DeviceContextHeader{device:root.selected-device;name:root.selected-name;address:root.network-address;uuid:root.selected-uuid;content-inset:root.form-inset;}
                         ScrollView {test-id:"scroll|details";content-width:self.width;vertical-stretch:1;
-                            VerticalLayout {padding:root.compact ? 20px : 28px;spacing:20px;alignment:start;
+                            VerticalLayout {padding:root.compact ? 20px : 28px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:20px;alignment:start;
                                 Rectangle {height:root.compact ? 132px : 148px;border-radius:10px;border-width:1px;border-color:Palette.line;
                                     HorizontalLayout {padding:20px;spacing:24px;
                                         if !root.compact: Rectangle {width:144px;border-radius:8px;background:Palette.page;
@@ -713,9 +717,9 @@ export component MainWindow inherits Window {
                 }
             }
             if root.page=="settings": VerticalLayout {spacing:0px;vertical-stretch:0;
-                DeviceContextHeader{device:root.selected-device;name:root.selected-name;address:root.network-address;uuid:root.selected-uuid;compact:root.compact;settings-open:true;}
+                DeviceContextHeader{device:root.selected-device;name:root.selected-name;address:root.network-address;uuid:root.selected-uuid;content-inset:root.form-inset;settings-open:true;}
                 Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:profile-header.preferred-height;
-                    profile-header:=VerticalLayout {padding:10px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:8px;
+                    profile-header:=VerticalLayout {padding:9px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:8px;
                         HorizontalLayout {spacing:8px;
                         TabButton{text:"画面";action-id:"settings.tab";argument:"video";chosen:root.profile-tab=="video";}
                         TabButton{text:"音频";action-id:"settings.tab";argument:"audio";chosen:root.profile-tab=="audio";}
@@ -725,6 +729,7 @@ export component MainWindow inherits Window {
                         Rectangle{horizontal-stretch:1;}
                     }
                     }
+                    Rectangle{y:parent.height - 1px;height:1px;background:Palette.line;}
                 }
             }
             if root.page=="global-settings": VerticalLayout {padding-left:root.form-inset;padding-right:root.form-inset;padding-top:16px;spacing:12px;vertical-stretch:0;

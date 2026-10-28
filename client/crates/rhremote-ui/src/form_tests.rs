@@ -14,6 +14,81 @@ fn click(ui:&impl ComponentHandle,label:&str){
 }
 
 #[test]
+fn device_header_and_profile_tabs_have_balanced_gutters_at_each_scale() {
+    use i_slint_backend_testing::{AccessibleRole, TestingBackend, TestingBackendOptions};
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true, threading: false, renderer_name: Some("software".into()),
+    }))).unwrap();
+    let region = |ui: &MainWindow, id: &str| {
+        ElementHandle::find_by_element_id(ui, id).next().unwrap_or_else(|| panic!("Missing layout region {id}"))
+    };
+    let button = |ui: &MainWindow, label: &str, id: &str| {
+        ElementHandle::find_by_accessible_label(ui, label)
+            .find(|e| e.accessible_role() == Some(AccessibleRole::Button) && e.accessible_id().is_some_and(|value| value.starts_with(&format!("action|{id}|"))))
+            .unwrap_or_else(|| panic!("Missing actual button {label}"))
+    };
+    for dark in [false, true] {
+        for (width, height, size) in [(720., 560., "compact"), (1180., 780., "wide"), (1920., 1080., "large")] {
+            for scale in [1., 1.25, 1.5, 2.] {
+                for page in ["devices", "settings"] {
+                    let ui = MainWindow::new().unwrap();
+                    ui.global::<crate::Palette>().set_dark(dark);
+                    ui.set_compact(width < 980.);
+                    ui.set_page(page.into());
+                    ui.set_selected_uuid("alignment-host".into());
+                    ui.set_selected_name("winserver".into());
+                    let navigation = if width < 980. { 64. + 224. } else { 184. + 276. };
+                    ui.set_form_inset(((width - navigation - 800.) / 2.0_f32).max(24.));
+                    ui.window().dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
+                    ui.window().set_size(LogicalSize::new(width, height));
+                    ui.show().unwrap();
+                    ui.window().take_snapshot().unwrap();
+                    let tabs = region(&ui, "DeviceContextHeader::context-tabs");
+                    let overview = button(&ui, "概览", "device.select");
+                    let settings = button(&ui, "连接设置", "device.settings.open");
+                    let centered = |item: &ElementHandle, area: &ElementHandle, label: &str| {
+                        let top = item.absolute_position().y - area.absolute_position().y;
+                        let bottom = area.absolute_position().y + area.size().height - item.absolute_position().y - item.size().height;
+                        assert!(top >= 6. && bottom >= 6. && (top - bottom).abs() <= 1.,
+                            "{size}/{page}/{scale}/{dark} {label}: unbalanced or touching boundary, top={top}, bottom={bottom}");
+                    };
+                    if let Some(directory) = std::env::var_os("RHREMOTE_ALIGNMENT_EVIDENCE") {
+                        let frame = ui.window().take_snapshot().unwrap();
+                        let name = format!("{size}-{page}-{scale}-{dark}");
+                        let image = std::path::PathBuf::from(&directory).join(format!("{name}.png"));
+                        assert!(!image.exists());
+                        image::save_buffer(image, frame.as_bytes(), frame.width(), frame.height(), image::ColorType::Rgba8).unwrap();
+                        let bounds = serde_json::json!({"size":size,"page":page,"scale":scale,"dark":dark,
+                            "tabRegion":{"y":tabs.absolute_position().y,"height":tabs.size().height},
+                            "settingsButton":{"x":settings.absolute_position().x,"y":settings.absolute_position().y,"height":settings.size().height}});
+                        std::fs::write(std::path::PathBuf::from(directory).join(format!("{name}.json")), serde_json::to_vec_pretty(&bounds).unwrap()).unwrap();
+                    }
+                    centered(&overview, &tabs, "概览");
+                    centered(&settings, &tabs, "连接设置");
+                    assert!((overview.absolute_position().x - navigation - ui.get_form_inset()).abs() <= 1.,
+                        "The header and form must share their content column at {width}");
+                    if page == "settings" {
+                        let categories = region(&ui, "MainWindow::profile-header");
+                        for label in ["画面", "音频", "输入", "网络", "高级"] {
+                            centered(&button(&ui, label, "settings.tab"), &categories, label);
+                        }
+                        let first = button(&ui, "画面", "settings.tab");
+                        assert!((first.absolute_position().x - overview.absolute_position().x).abs() <= 1.,
+                            "The two tab rows must use the same left gutter at {width}");
+                    }
+                    let title = region(&ui, "DeviceContextHeader::device-title-row");
+                    let status = region(&ui, "DeviceContextHeader::device-state");
+                    let offset = (status.absolute_position().y + status.size().height / 2.) -
+                        (title.absolute_position().y + title.size().height / 2.);
+                    assert!(offset.abs() <= 1., "Device status is not vertically centered: {offset}");
+                    ui.hide().unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn sync_actions_are_visible_before_account_fields_in_both_window_sizes(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("sync".into());ui.set_sync_has_password(true);
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();

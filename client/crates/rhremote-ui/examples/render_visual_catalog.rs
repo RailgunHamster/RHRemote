@@ -269,9 +269,9 @@ fn connections(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) ->
     Ok(())
 }
 
-fn forms(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Result<()> {
+fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Value>) -> Result<()> {
     let theme = if dark { "dark" } else { "light" };
-    let size = if narrow { "compact" } else { "wide" };
+    let size = if large { "large" } else if narrow { "compact" } else { "wide" };
     let catalog = rhremote_core::settings_catalog();
     let profile = serde_json::to_value(rhremote_core::Profile::default())?;
     for scene in [
@@ -384,9 +384,9 @@ fn forms(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) -> Resul
                 .collect(),
         ));
         ui.show()?;
-        let width = if narrow { 720. } else { 1180. };
+        let width = if large { 1920. } else if narrow { 720. } else { 1180. };
         ui.window()
-            .set_size(LogicalSize::new(width, if narrow { 560. } else { 780. }));
+            .set_size(LogicalSize::new(width, if large { 1080. } else if narrow { 560. } else { 780. }));
         let list_width=if is_profile || scene=="device-info" {if narrow {224.} else {276.}}else{0.};
         ui.set_form_inset(((width - if narrow { 64. } else { 184. } - list_width - 800.) / 2.).max(24.));
         capture(&ui, out, &format!("form-{scene}-{size}-{theme}"), images)?;
@@ -422,8 +422,9 @@ fn main() -> Result<()> {
             toolbars(out, dark, narrow, &mut images)?;
             pickers(out, dark, narrow, &mut images)?;
             connections(out, dark, narrow, &mut images)?;
-            forms(out, dark, narrow, &mut images)?;
+            forms(out, dark, narrow, false, &mut images)?;
         }
+        forms(out, dark, false, true, &mut images)?;
     }
     fs::write(
         out.join("catalog.json"),

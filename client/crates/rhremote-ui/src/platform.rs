@@ -581,7 +581,15 @@ mod recovery_transport_tests {
         assert_eq!(waiting["phase"], "reconnecting");
         assert_eq!(waiting["streaming"], false);
         assert_eq!(cancelled["cancelled"], true);
+        // Disconnect acknowledges submission; the coordinator clears recovery asynchronously.
+        let until = Instant::now() + Duration::from_secs(3);
+        while p.cleanup.pending() {
+            p.cleanup.reap();
+            assert!(Instant::now() < until, "Owned cancellation did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(p.recovery.lock().unwrap().is_none());
+        // This shell has no graceful-teardown API; native_cleanup tests cover that protocol.
         assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
         fs::remove_dir_all(root).unwrap();
     }
