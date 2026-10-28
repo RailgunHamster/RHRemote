@@ -28,7 +28,7 @@ public class RhSessionMenuTest {
     void create(boolean dark){
         game=Robolectric.buildActivity(KeyProbeGame.class).get();game.setIntent(new Intent().putExtra(Game.EXTRA_PC_NAME,"Fixture workstation").putExtra(Game.EXTRA_PC_UUID,"fixture"));
         RhShared.theme(game,dark);FrameLayout root=new FrameLayout(game);TextView stats=new TextView(game);stats.setId(R.id.performanceOverlay);root.addView(stats);View surface=new View(game);surface.setId(R.id.surfaceView);surface.setFocusableInTouchMode(true);root.addView(surface);game.setContentView(root);assertTrue(surface.requestFocusFromTouch());
-        RhProfile profile=RhProfile.load(game,"fixture");RhTouchController touch=new RhTouchController(new RhTouchController.TouchSink(){public void button(byte b,boolean down){throw new AssertionError("No remote input expected");}public void position(short x,short y,short w,short h){throw new AssertionError();}public void relative(short x,short y){throw new AssertionError();}public void scroll(short value){throw new AssertionError();}},surface,profile);
+        RhProfile profile=RhProfile.load(game,"fixture");RhTouchController touch=new RhTouchController(new RhTouchController.TouchSink(){public void button(byte b,boolean down){throw new AssertionError("No remote input expected");}public void position(short x,short y,short w,short h){throw new AssertionError();}public void relative(short x,short y){throw new AssertionError();}public void scroll(short value){throw new AssertionError();}public void horizontalScroll(short value){throw new AssertionError();}},surface,profile);
         controls=RhStreamControls.install(game,touch,new PreferenceConfiguration(),profile,null);assertNotNull(controls);controls.markConnected();controls.markFirstFrame();Shadows.shadowOf(Looper.getMainLooper()).idle();
         try{Field owner=Game.class.getDeclaredField("rhControls");owner.setAccessible(true);owner.set(game,controls);}catch(Exception failure){throw new AssertionError(failure);}
         layout();
@@ -40,7 +40,42 @@ public class RhSessionMenuTest {
     void layout(){View root=game.findViewById(android.R.id.content);for(int i=0;i<3;i++){root.measure(View.MeasureSpec.makeMeasureSpec(1080,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(720,View.MeasureSpec.EXACTLY));root.layout(0,0,1080,720);}}
     boolean key(int action,int code,int modifiers){long time=android.os.SystemClock.uptimeMillis();return game.dispatchKeyEvent(new KeyEvent(time,time,action,code,0,modifiers,KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,InputDevice.SOURCE_KEYBOARD));}
     void toggle()throws Exception{controls.perform("stream.controls.toggle",RhActions.obj());layout();}
+    RhStreamPanel panel()throws Exception{Field field=RhStreamControls.class.getDeclaredField("panel");field.setAccessible(true);return (RhStreamPanel)field.get(controls);}
+    org.json.JSONObject screens(){org.json.JSONArray values=new org.json.JSONArray().put(RhActions.obj("id","physical","name","LG","width",1920,"height",1080,"available",true)).put(RhActions.obj("id","virtual","virtual",true,"width",2520,"height",1680,"available",true));return RhActions.obj("displays",values,"selected",values.optJSONObject(0));}
+    void screens(RhStreamPanel panel,org.json.JSONObject data,boolean busy){panel.update(false,false,false,100,data,busy,"");panel.updateControls(true,false,1,busy,"displays",busy?"正在读取屏幕…":"屏幕列表已刷新","");layout();}
+    @Test public void refreshingAFocusedMonitorKeepsNavigationLocalAndRestoresItsRow()throws Exception{
+        create(false);toggle();RhStreamPanel panel=panel();panel.setTab("displays");org.json.JSONObject data=screens();screens(panel,data,false);assertTrue(button("LG · 1920×1080  ✓").requestFocusFromTouch());
+        screens(panel,data,true);assertTrue("Busy refresh lost local focus",button("收起").hasFocus());screens(panel,data,false);assertTrue("Refresh lost monitor identity",button("LG · 1920×1080  ✓").hasFocus());press(KeyEvent.KEYCODE_A,0);assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
+    }
+    @Test public void reorderingMonitorRowsKeepsTheirIdentityAndMissingRowsStayLocal()throws Exception{
+        create(false);toggle();RhStreamPanel panel=panel();panel.setTab("displays");org.json.JSONObject data=screens();screens(panel,data,false);assertTrue(button("虚拟屏 · 2520×1680").requestFocusFromTouch());
+        org.json.JSONArray values=data.getJSONArray("displays");org.json.JSONObject reordered=RhActions.obj("displays",new org.json.JSONArray().put(values.getJSONObject(1)).put(values.getJSONObject(0)),"selected",values.getJSONObject(0));screens(panel,reordered,false);assertTrue("Focused monitor was replaced by its row position",button("虚拟屏 · 2520×1680").hasFocus());
+        screens(panel,RhActions.obj("displays",new org.json.JSONArray().put(values.getJSONObject(0)),"selected",values.getJSONObject(0)),false);assertTrue("Missing monitor returned focus to the remote surface",button("收起").hasFocus());
+    }
+    @Test public void refreshCompletionDoesNotStealFocusFromAnotherCategoryOrTheVideo()throws Exception{
+        create(false);toggle();RhStreamPanel panel=panel();panel.setTab("displays");org.json.JSONObject data=screens();screens(panel,data,false);assertTrue(button("LG · 1920×1080  ✓").requestFocusFromTouch());screens(panel,data,true);assertTrue(button("声音").requestFocusFromTouch());panel.setTab("audio");screens(panel,data,false);assertTrue(button("声音").hasFocus());
+        assertTrue(game.findViewById(R.id.surfaceView).requestFocusFromTouch());screens(panel,data,true);screens(panel,data,false);assertTrue("A background refresh stole video focus",game.findViewById(R.id.surfaceView).hasFocus());
+    }
+    @Test public void refreshCompletionAfterCollapseDoesNotRestoreAHiddenMonitor()throws Exception{
+        create(false);toggle();RhStreamPanel panel=panel();panel.setTab("displays");org.json.JSONObject data=screens();screens(panel,data,false);assertTrue(button("LG · 1920×1080  ✓").requestFocusFromTouch());screens(panel,data,true);toggle();screens(panel,data,false);assertTrue(game.findViewById(R.id.surfaceView).hasFocus());assertFalse(controls.state().getBoolean("controls"));
+    }
+    @Test public void disablingAFocusedInputOperationKeepsTypingLocal()throws Exception{
+        create(false);toggle();assertTrue(button("统计：关").requestFocusFromTouch());panel().updateControls(true,false,1,true,"input","正在发送快捷键…","");layout();assertTrue(button("收起").hasFocus());press(KeyEvent.KEYCODE_A,0);assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());assertFalse(button("统计：关").isEnabled());
+    }
+    @Test public void changingCategoryFromAFocusedBodyControlDoesNotReturnKeysToTheVideo()throws Exception{
+        create(false);toggle();assertTrue(button("统计：关").requestFocusFromTouch());panel().setTab("audio");layout();assertTrue("Hidden page kept or lost focus",button("声音").hasFocus());press(KeyEvent.KEYCODE_A,0);assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
+    }
+    @Test public void videoTransformUpdatesTheOpenPanelWithoutAnotherControlAction()throws Exception{
+        create(false);toggle();Field field=RhStreamControls.class.getDeclaredField("touch");field.setAccessible(true);RhTouchController touch=(RhTouchController)field.get(controls);touch.inject(RhActions.obj("gesture","pinch","factor",1.5));
+        assertEquals(1.5,controls.state().getJSONObject("zoom").getDouble("scale"),.001);assertNotNull("Live zoom label is stale",findText(game.findViewById(android.R.id.content),"缩放 150%"));touch.resetZoom();assertNotNull(findText(game.findViewById(android.R.id.content),"缩放 100%"));
+    }
+    @Test public void aHiddenZoomLabelDoesNotPublishViewChangesUntilShown()throws Exception{
+        create(false);Field field=RhStreamControls.class.getDeclaredField("touch");field.setAccessible(true);RhTouchController touch=(RhTouchController)field.get(controls);TextView label=(TextView)findText(game.findViewById(android.R.id.content),"缩放 100%");assertNotNull(label);int[] changes={0};label.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){changes[0]++;}public void afterTextChanged(android.text.Editable value){}});
+        touch.inject(RhActions.obj("gesture","pinch","factor",1.5));assertEquals(0,changes[0]);toggle();assertEquals("缩放 150%",label.getText().toString());assertEquals(1,changes[0]);panel().setTab("audio");touch.inject(RhActions.obj("gesture","pinch","factor",1.2));assertEquals(1,changes[0]);panel().setTab("input");assertEquals("缩放 180%",label.getText().toString());assertEquals(2,changes[0]);controls.dispose();touch.resetZoom();assertEquals("Disposed controls retained the transform callback",2,changes[0]);
+    }
+    View findText(View view,String text){if(view instanceof TextView&&text.contentEquals(((TextView)view).getText()))return view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){View found=findText(((ViewGroup)view).getChildAt(i),text);if(found!=null)return found;}return null;}
     void press(int code,int modifiers){key(KeyEvent.ACTION_DOWN,code,modifiers);key(KeyEvent.ACTION_UP,code,modifiers);Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    @Test public void scrollModeSwitchAndApiStayInSyncAndPanExitsTheMode()throws Exception{create(false);toggle();Button control=(Button)button("滚动模式");control.performClick();assertTrue(controls.state().getBoolean("scrollMode"));controls.perform("stream.scroll.set",RhActions.obj("enabled",true));assertTrue(controls.state().getBoolean("scrollMode"));controls.perform("stream.pan.toggle",RhActions.obj());assertFalse(controls.state().getBoolean("scrollMode"));assertTrue(controls.state().getBoolean("pan"));assertFalse(((android.widget.Switch)control).isChecked());controls.perform("stream.scroll.set",RhActions.obj("enabled",true));assertFalse(controls.state().getBoolean("pan"));assertTrue(((android.widget.Switch)control).isChecked());}
     @Test public void tabAndDirectionNavigationStayInsideLocalControlsAndEnterUsesTheirAction()throws Exception{
         create(false);toggle();assertTrue(button("操作").requestFocusFromTouch());
         press(KeyEvent.KEYCODE_TAB,0);assertTrue("Tab should focus the next category",button("屏幕").hasFocus());

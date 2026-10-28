@@ -16,11 +16,12 @@ import static org.junit.Assert.*;
 public class RhTouchControllerTest {
     private View surface;private RhTouchController touch;private Spy output;
     private static class Spy implements RhTouchController.TouchSink {
-        final List<String> buttons=new ArrayList<>();int scroll,relative,positions;
+        final List<String> buttons=new ArrayList<>();int scroll,horizontal,relative,positions;
         public void button(byte b,boolean down){buttons.add(b+(down?":D":":U"));}
         public void position(short x,short y,short w,short h){positions++;}
         public void relative(short x,short y){relative++;}
         public void scroll(short d){scroll+=d;}
+        public void horizontalScroll(short d){horizontal+=d;}
     }
     private void main(Runnable action){InstrumentationRegistry.getInstrumentation().runOnMainSync(action);}
     private void create(boolean swap){main(()->{surface=new View(InstrumentationRegistry.getInstrumentation().getTargetContext());surface.layout(0,0,1000,700);RhProfile p=RhProfile.load(surface.getContext(),"rhremote-input-tests");p.swapButtons=swap;p.trackpad=false;output=new Spy();touch=new RhTouchController(output,surface,p);});}
@@ -33,4 +34,7 @@ public class RhTouchControllerTest {
     @Test public void twoFingerScrollCancelsSingleFingerClick(){create(false);event(MotionEvent.ACTION_DOWN,100,100);event(MotionEvent.ACTION_POINTER_DOWN|(1<<8),100,100,300,100);event(MotionEvent.ACTION_MOVE,100,180,300,180);event(MotionEvent.ACTION_POINTER_UP|(1<<8),100,180,300,180);event(MotionEvent.ACTION_UP,100,180);assertTrue(output.buttons.isEmpty());assertTrue(output.scroll>0);}
     @Test public void pinchChangesOnlyTheLocalViewTransform(){create(false);event(MotionEvent.ACTION_DOWN,100,100);event(MotionEvent.ACTION_POINTER_DOWN|(1<<8),100,100,300,100);event(MotionEvent.ACTION_MOVE,50,100,350,100);assertTrue(surface.getScaleX()>1.45f);assertTrue(output.buttons.isEmpty());assertEquals(0,output.scroll);main(()->touch.resetZoom());assertEquals(1f,surface.getScaleX(),.001f);assertEquals(0f,surface.getTranslationX(),.001f);}
     @Test public void apiDragSendsPositionsOverTimeThenReleases(){create(false);main(()->{try{touch.inject(RhActions.obj("gesture","drag","x",100,"y",100,"toX",500,"toY",100));}catch(Exception e){throw new RuntimeException(e);}});assertEquals(1,output.positions);SystemClock.sleep(310);main(()->{});assertEquals(13,output.positions);assertEquals(Arrays.asList("1:D","1:U"),output.buttons);}
+    @Test public void scrollModeTapUsesMiddleAndCancellationReleasesIt(){create(true);main(()->touch.setScrollMode(true));event(MotionEvent.ACTION_DOWN,100,100);event(MotionEvent.ACTION_UP,100,100);main(()->touch.setScrollMode(false));SystemClock.sleep(130);main(()->{});assertEquals(Arrays.asList("2:D","2:U"),output.buttons);}
+    @Test public void scrollModeSwipeSendsBothWheelAxesWithoutDragging(){create(false);main(()->touch.setScrollMode(true));event(MotionEvent.ACTION_DOWN,200,200);event(MotionEvent.ACTION_MOVE,400,400);event(MotionEvent.ACTION_UP,400,400);assertTrue(output.scroll>0);assertTrue(output.horizontal<0);assertEquals(0,output.relative);assertTrue(output.buttons.isEmpty());main(()->{output.scroll=output.horizontal=0;});event(MotionEvent.ACTION_DOWN,400,400);event(MotionEvent.ACTION_MOVE,200,200);event(MotionEvent.ACTION_UP,200,200);assertTrue(output.scroll<0);assertTrue(output.horizontal>0);assertTrue(output.buttons.isEmpty());}
+    @Test public void scrollModeStillAllowsPinchWithoutClickingOrScrolling(){create(false);main(()->touch.setScrollMode(true));event(MotionEvent.ACTION_DOWN,100,100);event(MotionEvent.ACTION_POINTER_DOWN|(1<<8),100,100,300,100);event(MotionEvent.ACTION_MOVE,50,100,350,100);event(MotionEvent.ACTION_POINTER_UP|(1<<8),50,100,350,100);event(MotionEvent.ACTION_UP,50,100);assertTrue(surface.getScaleX()>1.45f);assertTrue(output.buttons.isEmpty());assertEquals(0,output.scroll);assertEquals(0,output.horizontal);}
 }

@@ -31,6 +31,7 @@ public final class RhActions {
         if(target!=null)home=new WeakReference<>(target);if(started)return;
         try {
             try(InputStream in=context.getAssets().open("rhremote-actions.json")){catalog=new JSONArray(new String(read(in,32768),StandardCharsets.UTF_8));}
+            catalog.put(obj("id","stream.scroll.set","label","滚动模式","args",obj("enabled","boolean"),"platforms",new JSONArray().put("android")));
             File path=new File(context.getFilesDir(),"rhremote-control-token.txt");
             if(path.exists()){try(InputStream in=new FileInputStream(path)){token=new String(read(in,128),StandardCharsets.US_ASCII).trim();}}
             else{byte[] bytes=new byte[32];new SecureRandom().nextBytes(bytes);StringBuilder s=new StringBuilder();for(byte b:bytes)s.append(String.format(Locale.ROOT,"%02x",b&255));token=s.toString();try(OutputStream out=context.openFileOutput(path.getName(),Context.MODE_PRIVATE)){out.write(token.getBytes(StandardCharsets.US_ASCII));}}

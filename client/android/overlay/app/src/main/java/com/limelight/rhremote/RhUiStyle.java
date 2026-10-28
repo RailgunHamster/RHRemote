@@ -13,6 +13,7 @@ final class RhUiStyle {
     static int failure(boolean dark){return android.graphics.Color.parseColor(dark?"#f28b9c":"#b04452");}
     static void buttonText(Button button,int normalText,int disabledText){button.setTextColor(new ColorStateList(new int[][]{{-android.R.attr.state_enabled},{}},new int[]{disabledText,normalText}));}
     static void button(Button button,int normalText,int disabledText,Drawable normal,Drawable disabled,Drawable focused){
+        button.setDefaultFocusHighlightEnabled(false);
         buttonText(button,normalText,disabledText);
         StateListDrawable backgrounds=new StateListDrawable();
         backgrounds.addState(new int[]{-android.R.attr.state_enabled},disabled);

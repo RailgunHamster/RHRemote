@@ -12,6 +12,7 @@ import android.view.View;
 import android.view.ViewParent;
 import android.view.WindowInsets;
 import android.widget.*;
+import com.limelight.R;
 import org.json.*;
 import java.util.*;
 
@@ -26,6 +27,7 @@ public final class RhStreamPanel {
     private final ScrollView scroll;
     private final Map<String, Button> tabs=new LinkedHashMap<>();
     private final Map<Button,Boolean> monitorAvailability=new IdentityHashMap<>();
+    private final Map<Button,String> monitorIds=new IdentityHashMap<>();
     private final Map<Long,View> localKeys=new HashMap<>();
     private final TextView displayStatus, volumeLabel, sessionName, feedback, zoomLabel;
     private final Button feedbackDetails, stats, disconnect;
@@ -35,12 +37,16 @@ public final class RhStreamPanel {
     private final SeekBar volume;
     private final LinearLayout monitorList;
     private final Button mode, pan, audio, refresh;
+    private final Switch scrollModeSwitch;
+    private boolean bindingScrollMode;
     private final GridLayout inputGrid, screenGrid;
     private final View.OnLayoutChangeListener layoutListener;
     private String tab="input";
     private int columns=2, maxBodyHeight;
     private boolean disposed;
     private View returnFocus;
+    private String pendingMonitorFocus="";
+    private int zoomPercent=100,shownZoomPercent=100;
 
     private int dp(int value) { return Math.round(context.getResources().getDisplayMetrics().density*value); }
     private GradientDrawable surface(String fill, String border, int radius) {
@@ -56,6 +62,8 @@ public final class RhStreamPanel {
         handle=button("控制", "stream.controls.toggle", RhActions.obj());
         handle.setTextColor(Color.WHITE);handle.setBackground(surface("#5274e8",null,18));
         handle.setElevation(dp(4));
+        icon(handle,R.drawable.rh_chevron_down);
+        handle.getCompoundDrawablesRelative()[0].setTint(Color.WHITE);
         FrameLayout.LayoutParams handleParams=new FrameLayout.LayoutParams(dp(88),dp(48),Gravity.TOP|Gravity.CENTER_HORIZONTAL);
         handleParams.topMargin=dp(12);root.addView(handle,handleParams);
 
@@ -82,21 +90,26 @@ public final class RhStreamPanel {
         scroll.addView(pages,new ScrollView.LayoutParams(-1,-2));panel.addView(scroll,new LinearLayout.LayoutParams(-1,-2));
 
         inputGrid=new GridLayout(context);inputGrid.setUseDefaultMargins(false);input.addView(inputGrid);
-        mode=gridButton(inputGrid,"直接点击","stream.mode.toggle",RhActions.obj());
-        gridButton(inputGrid,"键盘","stream.keyboard.toggle",RhActions.obj());
-        gridButton(inputGrid,"快捷键","stream.shortcuts.open",RhActions.obj());
-        gridButton(inputGrid,"Ctrl+Alt+Delete","stream.shortcut",RhActions.obj("shortcut","ctrl-alt-delete"));
-        pan=gridButton(inputGrid,"移动画面","stream.pan.toggle",RhActions.obj());
-        gridButton(inputGrid,"还原缩放","stream.zoom.reset",RhActions.obj());
-        stats=gridButton(inputGrid,"统计：关","stream.stats.toggle",RhActions.obj());
-        zoomLabel=text("缩放 100%",13);zoomLabel.setPadding(dp(4),dp(8),dp(4),0);input.addView(zoomLabel);
+        mode=gridButton(inputGrid,"直接点击","stream.mode.toggle",RhActions.obj());icon(mode,R.drawable.rh_mouse);
+        icon(gridButton(inputGrid,"键盘","stream.keyboard.toggle",RhActions.obj()),R.drawable.rh_keyboard);
+        icon(gridButton(inputGrid,"快捷键","stream.shortcuts.open",RhActions.obj()),R.drawable.rh_shortcuts);
+        icon(gridButton(inputGrid,"Ctrl+Alt+Delete","stream.shortcut",RhActions.obj("shortcut","ctrl-alt-delete")),R.drawable.rh_lock);
+        pan=gridButton(inputGrid,"移动画面","stream.pan.toggle",RhActions.obj());icon(pan,R.drawable.rh_pan);
+        icon(gridButton(inputGrid,"还原缩放","stream.zoom.reset",RhActions.obj()),R.drawable.rh_zoom_reset);
+        scrollModeSwitch=new Switch(context);scrollModeSwitch.setText("滚动模式");scrollModeSwitch.setTextColor(Color.parseColor(inkColor));scrollModeSwitch.setTextSize(14);scrollModeSwitch.setContentDescription("滚动模式");scrollModeSwitch.setShowText(false);scrollModeSwitch.setSwitchMinWidth(dp(44));scrollModeSwitch.setMinHeight(dp(48));scrollModeSwitch.setPadding(dp(4),0,dp(4),0);scrollModeSwitch.setDefaultFocusHighlightEnabled(false);scrollModeSwitch.setTag("stream.scroll.set");
+        android.graphics.drawable.StateListDrawable scrollFocus=new android.graphics.drawable.StateListDrawable();scrollFocus.addState(new int[]{-android.R.attr.state_enabled},surface(surfaceColor,null,10));scrollFocus.addState(new int[]{android.R.attr.state_pressed},surface(selectedColor,"#5274e8",10));scrollFocus.addState(new int[]{android.R.attr.state_focused},surface(selectedColor,"#5274e8",10));scrollFocus.addState(new int[]{},surface(surfaceColor,null,10));scrollModeSwitch.setBackground(scrollFocus);
+        scrollModeSwitch.setThumbTintList(new android.content.res.ColorStateList(new int[][]{{android.R.attr.state_checked},{}},new int[]{Color.parseColor(RhShared.dark(context)?"#6f8af1":"#5274e8"),Color.parseColor(mutedColor)}));scrollModeSwitch.setTrackTintList(new android.content.res.ColorStateList(new int[][]{{android.R.attr.state_checked},{}},new int[]{Color.parseColor(selectedLine),Color.parseColor(lineColor)}));
+        scrollModeSwitch.setOnCheckedChangeListener((view,checked)->{if(!bindingScrollMode)actions.send("stream.scroll.set",RhActions.obj("enabled",checked));});LinearLayout.LayoutParams scrollModeLayout=new LinearLayout.LayoutParams(-1,dp(48));scrollModeLayout.topMargin=dp(8);input.addView(scrollModeSwitch,scrollModeLayout);TextView scrollHelp=text("单击中键 · 四向滚动",12);scrollHelp.setTextColor(Color.parseColor(mutedColor));scrollHelp.setPadding(dp(4),0,dp(4),0);input.addView(scrollHelp);
+        LinearLayout viewOptions=new LinearLayout(context);viewOptions.setGravity(Gravity.CENTER_VERTICAL);viewOptions.setPadding(dp(4),dp(12),0,0);
+        zoomLabel=text("缩放 100%",13);viewOptions.addView(zoomLabel,new LinearLayout.LayoutParams(0,dp(44),1));
+        stats=button("统计：关","stream.stats.toggle",RhActions.obj());icon(stats,R.drawable.rh_chart);viewOptions.addView(stats,new LinearLayout.LayoutParams(-2,dp(44)));input.addView(viewOptions);
 
         displayStatus=text("正在读取屏幕…",13);displayStatus.setPadding(dp(4),dp(2),dp(4),dp(12));screens.addView(displayStatus);
         screenGrid=new GridLayout(context);screens.addView(screenGrid);
-        gridButton(screenGrid,"自动选屏","stream.display.select",RhActions.obj("displayId","auto"));
-        gridButton(screenGrid,"虚拟屏","stream.display.select",RhActions.obj("displayId","virtual"));
-        gridButton(screenGrid,"窗口移到左屏","stream.window.move",RhActions.obj("direction","left"));
-        gridButton(screenGrid,"窗口移到右屏","stream.window.move",RhActions.obj("direction","right"));
+        icon(gridButton(screenGrid,"自动选屏","stream.display.select",RhActions.obj("displayId","auto")),R.drawable.rh_monitor);
+        icon(gridButton(screenGrid,"虚拟屏","stream.display.select",RhActions.obj("displayId","virtual")),R.drawable.rh_monitor);
+        icon(gridButton(screenGrid,"窗口移到左屏","stream.window.move",RhActions.obj("direction","left")),R.drawable.rh_move_left);
+        icon(gridButton(screenGrid,"窗口移到右屏","stream.window.move",RhActions.obj("direction","right")),R.drawable.rh_move_right);
         TextView label=text("显示器",12);label.setTextColor(Color.parseColor(mutedColor));label.setPadding(dp(4),dp(14),0,dp(6));screens.addView(label);
         monitorList=new LinearLayout(context);monitorList.setOrientation(LinearLayout.VERTICAL);screens.addView(monitorList);
         refresh=button("刷新屏幕","stream.displays.refresh",RhActions.obj());LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(48));rp.topMargin=dp(8);screens.addView(refresh,rp);
@@ -104,6 +117,7 @@ public final class RhStreamPanel {
         audio=button("声音：关","stream.audio.toggle",RhActions.obj());sound.addView(audio,new LinearLayout.LayoutParams(-1,dp(48)));
         volumeLabel=text("音量 100%",14);volumeLabel.setPadding(dp(4),dp(16),dp(4),dp(4));sound.addView(volumeLabel);
         volume=new SeekBar(context);volume.setMax(100);volume.setContentDescription("串流音量");volume.setTag("stream.audio.volume");sound.addView(volume,new LinearLayout.LayoutParams(-1,dp(52)));
+        android.content.res.ColorStateList accent=android.content.res.ColorStateList.valueOf(Color.parseColor(RhShared.dark(context)?"#6f8af1":"#5274e8"));volume.setProgressTintList(accent);volume.setThumbTintList(accent);volume.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor(lineColor)));
         volume.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
             public void onProgressChanged(SeekBar bar,int value,boolean fromUser){if(fromUser){volumeLabel.setText("音量 "+value+"%");if(!trackingVolume)actions.send("stream.audio.volume",RhActions.obj("volume",value));}}
             public void onStartTrackingTouch(SeekBar bar){trackingVolume=true;}
@@ -119,9 +133,10 @@ public final class RhStreamPanel {
     private LinearLayout page(){LinearLayout p=new LinearLayout(context);p.setOrientation(LinearLayout.VERTICAL);return p;}
     private Button button(String title,String action,JSONObject arguments){
         Button b=new Button(context);b.setText(title);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(android.graphics.Typeface.create("sans-serif-medium",0));b.setAllCaps(false);b.setTextSize(13);b.setMinWidth(0);b.setMinimumWidth(0);b.setMinHeight(0);b.setMinimumHeight(0);
-        b.setMaxLines(2);RhUiStyle.button(b,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(surfaceColor,lineColor,8),surface(surfaceColor,lineColor,8),surface(surfaceColor,selectedLine,8));b.setPadding(dp(8),dp(2),dp(8),dp(2));
+        b.setMaxLines(2);RhUiStyle.button(b,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(RhShared.dark(context)?"#242e41":"#f3f5fa",null,10),surface(surfaceColor,lineColor,10),surface(selectedColor,"#5274e8",10));b.setPadding(dp(12),dp(2),dp(12),dp(2));
         b.setTag(action);b.setOnClickListener(v->actions.send(action,arguments));return b;
     }
+    private void icon(Button button,int resource){android.graphics.drawable.Drawable drawable=context.getDrawable(resource).mutate();drawable.setBounds(0,0,dp(18),dp(18));drawable.setTintList(new android.content.res.ColorStateList(new int[][]{{-android.R.attr.state_enabled},{android.R.attr.state_selected},{}},new int[]{Color.parseColor(mutedColor),Color.parseColor(RhShared.dark(context)?"#6f8af1":"#5274e8"),Color.parseColor(inkColor)}));button.setCompoundDrawablesRelative(drawable,null,null,null);button.setCompoundDrawablePadding(dp(7));}
     private Button gridButton(GridLayout grid,String title,String action,JSONObject args){Button b=button(title,action,args);grid.addView(b);return b;}
     private void gridColumns(GridLayout grid,int count){
         // Remove old explicit specs before changing column count (Android validates them).
@@ -159,6 +174,7 @@ public final class RhStreamPanel {
         if(isExpanded())panel.addFocusables(result,View.FOCUS_FORWARD);
         result.removeIf(view->!ownsVisible(view)||!(view.getTag() instanceof String));return result;
     }
+    private void retainLocalFocus(boolean ownedBefore){if(ownedBefore&&isExpanded()&&!ownsVisible(root.findFocus()))handle.requestFocusFromTouch();}
     /** Own a complete key pair only when its down event starts on a local control. */
     boolean dispatchKeyEvent(KeyEvent event,Runnable escape){
         if(disposed||!event.isFromSource(InputDevice.SOURCE_KEYBOARD)||event.isSystem()&&event.getKeyCode()!=KeyEvent.KEYCODE_ESCAPE)return false;
@@ -190,16 +206,24 @@ public final class RhStreamPanel {
         boolean changed=expanded!=isExpanded();View focused=root.findFocus();boolean local=ownsVisible(focused);
         if(changed&&expanded&&focused!=null&&!local)returnFocus=focused;
         panel.setVisibility(expanded?View.VISIBLE:View.GONE);handle.setText(expanded?"收起":"控制");updateBounds();
+        icon(handle,expanded?R.drawable.rh_chevron_up:R.drawable.rh_chevron_down);handle.getCompoundDrawablesRelative()[0].setTint(Color.WHITE);
+        if(!expanded)pendingMonitorFocus="";
+        renderZoom();
         if(changed&&expanded)handle.requestFocusFromTouch();
         else if(changed&&local&&returnFocus!=null&&returnFocus.getVisibility()==View.VISIBLE&&returnFocus.isEnabled())returnFocus.requestFocusFromTouch();
     }
     public void setTab(String value){
-        if(!tabs.containsKey(value))throw new IllegalArgumentException("tab must be input, displays or audio");tab=value;
+        if(!tabs.containsKey(value))throw new IllegalArgumentException("tab must be input, displays or audio");boolean local=ownsVisible(root.findFocus());if(!tab.equals(value))pendingMonitorFocus="";tab=value;
         input.setVisibility(value.equals("input")?View.VISIBLE:View.GONE);screens.setVisibility(value.equals("displays")?View.VISIBLE:View.GONE);sound.setVisibility(value.equals("audio")?View.VISIBLE:View.GONE);
         for(Map.Entry<String,Button> entry:tabs.entrySet()){boolean selected=entry.getKey().equals(value);Button button=entry.getValue();button.setSelected(selected);RhUiStyle.button(button,Color.parseColor(selected?"#5274e8":mutedColor),Color.parseColor(mutedColor),surface(selected?selectedColor:surfaceColor,selected?selectedLine:null,8),surface(surfaceColor,lineColor,8),surface(selectedColor,"#5274e8",8));}
         scroll.scrollTo(0,0);
+        renderZoom();
+        if(local&&!ownsVisible(root.findFocus()))tabs.get(value).requestFocusFromTouch();
     }
     public void update(boolean trackpad,boolean panning,boolean audioEnabled,int level,JSONObject display,boolean busy,String failure){
+        View focused=root.findFocus();boolean local=ownsVisible(focused);String focusId=monitorIds.get(focused);
+        if(focusId==null&&focused==handle&&tab.equals("displays")&&!pendingMonitorFocus.isEmpty())focusId=pendingMonitorFocus;
+        if(focusId==null)pendingMonitorFocus="";
         mode.setText(trackpad?"触控板":"直接点击");pan.setText(panning?"移动画面：开":"移动画面");audio.setText(audioEnabled?"声音：开":"声音：关");
         if(!trackingVolume){volume.setProgress(level);volumeLabel.setText("音量 "+level+"%");}refresh.setEnabled(!busy);refresh.setText(busy?"正在读取…":"刷新屏幕");
         for(int i=0;i<screenGrid.getChildCount();i++)screenGrid.getChildAt(i).setEnabled(!busy);
@@ -207,25 +231,37 @@ public final class RhStreamPanel {
         displayStatus.setText(busy?"正在读取屏幕…":selected==null?(!error.isEmpty()?"屏幕列表未加载":"选择要查看的屏幕"):monitorName(selected)+" · "+selected.optInt("width")+"×"+selected.optInt("height"));
         displayStatus.setTextColor(Color.parseColor(mutedColor));
         JSONArray monitors=display.optJSONArray("displays");String fingerprint=String.valueOf(monitors)+":"+(selected==null?"":selected.optString("id"))+":"+busy;
-        if(fingerprint.equals(monitorFingerprint))return;monitorFingerprint=fingerprint;monitorList.removeAllViews();monitorAvailability.clear();int count=monitors==null?0:monitors.length();
+        if(fingerprint.equals(monitorFingerprint)){retainLocalFocus(local);return;}monitorFingerprint=fingerprint;monitorList.removeAllViews();monitorAvailability.clear();monitorIds.clear();int count=monitors==null?0:monitors.length();Button focusRow=null;
         for(int i=0;i<count;i++){JSONObject monitor=monitors.optJSONObject(i);if(monitor==null)continue;
             String id=monitor.optString("id");boolean available=monitor.optBoolean("available"),chosen=selected!=null&&id.equals(selected.optString("id"));
             String title=monitorName(monitor)+" · "+monitor.optInt("width")+"×"+monitor.optInt("height")+(available?chosen?"  ✓":"":"  暂不可用");
             Button b=button(title,"stream.display.select",RhActions.obj("displayId",id));b.setEnabled(available&&!busy);monitorAvailability.put(b,available);b.setGravity(Gravity.CENTER_VERTICAL|Gravity.START);
+            monitorIds.put(b,id);if(id.equals(focusId)&&available)focusRow=b;
             b.setSelected(chosen);RhUiStyle.button(b,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(chosen?selectedColor:surfaceColor,chosen?selectedLine:lineColor,8),surface(surfaceColor,lineColor,8),surface(selectedColor,"#5274e8",8));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,dp(56));lp.topMargin=i==0?0:dp(8);monitorList.addView(b,lp);
         }
         if(count==0){TextView empty=text(error.isEmpty()?"暂无屏幕信息，请刷新":"屏幕列表未加载",13);empty.setPadding(dp(4),dp(8),dp(4),dp(8));monitorList.addView(empty);}
+        if(local&&isExpanded()&&tab.equals("displays")&&focusId!=null){
+            if(!busy&&focusRow!=null){pendingMonitorFocus="";focusRow.requestFocusFromTouch();}
+            else{pendingMonitorFocus=busy?focusId:"";handle.requestFocusFromTouch();}
+        }
+        retainLocalFocus(local);
     }
     public void setDeviceName(String name){sessionName.setText(name==null||name.isEmpty()?"远程设备":name);}
     private void enabled(View view,boolean value){view.setEnabled(value);view.setAlpha(value?1f:0.45f);}
     public void updateControls(boolean connected,boolean statistics,float scale,boolean busy,String group,String message,String failure){
-        stats.setText(statistics?"统计：开":"统计：关");stats.setSelected(statistics);RhUiStyle.button(stats,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(statistics?selectedColor:surfaceColor,statistics?selectedLine:lineColor,8),surface(surfaceColor,lineColor,8),surface(selectedColor,"#5274e8",8));mode.setSelected(mode.getText().toString().equals("触控板"));pan.setSelected(pan.getText().toString().equals("移动画面：开"));zoomLabel.setText("缩放 "+Math.round(scale*100)+"%");
+        boolean local=ownsVisible(root.findFocus());stats.setText(statistics?"统计：开":"统计：关");stats.setSelected(statistics);RhUiStyle.button(stats,Color.parseColor(inkColor),Color.parseColor(mutedColor),surface(statistics?selectedColor:surfaceColor,statistics?selectedLine:lineColor,8),surface(surfaceColor,lineColor,8),surface(selectedColor,"#5274e8",8));mode.setSelected(mode.getText().toString().equals("触控板"));pan.setSelected(pan.getText().toString().equals("移动画面：开"));updateZoom(scale);
         for(int i=0;i<inputGrid.getChildCount();i++)enabled(inputGrid.getChildAt(i),connected&&!busy);
         for(int i=0;i<screenGrid.getChildCount();i++)enabled(screenGrid.getChildAt(i),connected&&!busy);
         for(Map.Entry<Button,Boolean> entry:monitorAvailability.entrySet())enabled(entry.getKey(),connected&&!busy&&entry.getValue());
         enabled(audio,connected&&!busy);enabled(volume,connected&&!busy);enabled(refresh,connected&&!busy);
-        boolean visible=tab.equals(group);feedback.setText(visible?(failure.isEmpty()||!message.isEmpty()?message:"操作失败"):"");feedback.setContentDescription(visible?feedback.getText():"");feedback.setTextColor(failure.isEmpty()?Color.parseColor(mutedColor):failureColor);feedbackDetails.setVisibility(visible&&!failure.isEmpty()?View.VISIBLE:View.GONE);
+        enabled(stats,connected&&!busy);updateFeedback(group,message,failure);
+        enabled(scrollModeSwitch,connected&&!busy);
+        retainLocalFocus(local);
     }
+    public void updateFeedback(String group,String message,String failure){boolean visible=tab.equals(group);boolean repeatedVolume=group.equals("audio")&&failure.isEmpty()&&message.contentEquals(volumeLabel.getText());feedback.setText(visible&&!repeatedVolume?(failure.isEmpty()||!message.isEmpty()?message:"操作失败"):"");feedback.setContentDescription(visible?feedback.getText():"");feedback.setTextColor(failure.isEmpty()?Color.parseColor(mutedColor):failureColor);feedbackDetails.setVisibility(visible&&!failure.isEmpty()?View.VISIBLE:View.GONE);}
+    public void updateScrollMode(boolean enabled){bindingScrollMode=true;try{scrollModeSwitch.setChecked(enabled);}finally{bindingScrollMode=false;}}
+    public void updateZoom(float scale){zoomPercent=Math.round(scale*100);renderZoom();}
+    private void renderZoom(){if(isExpanded()&&tab.equals("input")&&zoomPercent!=shownZoomPercent){shownZoomPercent=zoomPercent;zoomLabel.setText("缩放 "+zoomPercent+"%");}}
     private String monitorName(JSONObject monitor){String name=monitor.optString("name");return monitor.optBoolean("virtual")?"虚拟屏":name.isEmpty()?"物理屏幕":name;}
     public JSONObject layoutState(){Rect h=new Rect(),p=new Rect();handle.getHitRect(h);panel.getHitRect(p);return RhActions.obj("expanded",isExpanded(),"tab",tab,"columns",columns,"handle",RhActions.obj("x",h.left,"y",h.top,"width",h.width(),"height",h.height()),"panel",RhActions.obj("x",p.left,"y",p.top,"width",p.width(),"height",p.height()),"scrollable",scroll.canScrollVertically(1)||scroll.canScrollVertically(-1));}
     public void dispose(){disposed=true;for(View view:localKeys.values())view.setPressed(false);localKeys.clear();root.removeOnLayoutChangeListener(layoutListener);root.removeView(panel);root.removeView(handle);}
