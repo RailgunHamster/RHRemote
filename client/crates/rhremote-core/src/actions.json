@@ -53,6 +53,7 @@
  {"id":"sync.resolve","label":"解决同步冲突","args":{"resolution":"local / remote"}},
  {"id":"updates.state","label":"更新状态","args":{}},
  {"id":"updates.primary","label":"更新主按钮","args":{}},
+ {"id":"updates.cancel","label":"取消更新","args":{"operationId":"number"}},
  {"id":"updates.details.toggle","label":"展开或收起更新详情","args":{}},
  {"id":"updates.check","label":"检查更新","args":{}},
  {"id":"updates.download","label":"下载更新","args":{}},

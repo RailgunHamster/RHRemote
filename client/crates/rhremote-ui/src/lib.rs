@@ -32,6 +32,7 @@ mod platform;
 mod recovery;
 mod statistics;
 mod updates;
+mod update_cancel;
 mod ui_rendering;
 mod device_lookup;
 #[cfg(test)]
@@ -60,6 +61,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
             json!({"uuid":uuid,"address":primary.trim(),"addresses":extra.split([',',';','\n']).map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})
         }
         "device.network.diagnose" => json!({"uuid":arg}),
+        "updates.cancel"=>json!({"operationId":arg.parse::<u64>().unwrap_or(0)}),
         "navigation.resolve"|"sync.clear.resolve"=>json!({"choice":arg}),
         "settings.input"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},
@@ -412,7 +414,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             {
                 last_attempt = now;
                 let checked = auto_updates.dispatch("updates.check", json!({}));
-                if checked["ok"] == true && checked["result"]["availableVersion"].is_string() {
+                if checked["ok"] == true && checked["result"]["phase"]!="cancelled" && checked["result"]["availableVersion"].is_string() {
                     auto_updates.dispatch("updates.download", json!({}));
                 }
             }

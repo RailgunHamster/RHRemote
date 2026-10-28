@@ -45,6 +45,7 @@ impl Default for Boundary {
     }
 }
 impl Platform for Boundary {
+    fn cancel_update(&self,_:u64)->Result<(),String>{self.calls.lock().unwrap().push("updates.cancel".into());Ok(())}
     fn execute(&self, id: &str, args: &Value) -> Result<Value, String> {
         match id {
             "sync.state" => Ok(self.sync.lock().unwrap().clone()),
@@ -93,6 +94,24 @@ impl Platform for Boundary {
             _ => Err(format!("Unexpected external operation in view flow: {id}")),
         }
     }
+}
+
+#[test]
+fn update_cancel_uses_the_visible_operation_and_keeps_controls_busy_until_cleanup(){
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    for dark in [false,true] {for(width,height)in[(720.,560.),(1180.,780.)]{
+        let boundary=Arc::new(Boundary::default());*boundary.updates.lock().unwrap()=json!({"managed":true,"phase":"available","availableVersion":"9.0.0"});
+        let (entered,started)=std::sync::mpsc::channel();let (release,wait)=std::sync::mpsc::channel();*boundary.update_gate.lock().unwrap()=Some((entered,wait));
+        let mut f=Flow::with_boundary(width,height,boundary.clone());if f.controller.state()["saved"]["dark"]!=dark{f.input("appearance.toggle","");}f.input("app.settings.tab","updates");
+        let controller=f.controller.clone();let worker=std::thread::spawn(move||controller.dispatch("updates.primary",json!({})));
+        started.recv_timeout(Duration::from_secs(3)).unwrap();f.refresh();let operation=f.controller.state()["updates"]["operationId"].as_u64().unwrap().to_string();
+        f.capture(&format!("cancel-ready-{width}-{dark}"));let result=f.click("取消","updates.cancel",&operation);assert_eq!(result["ok"],true,"{result}");f.capture(&format!("cancel-cleaning-{width}-{dark}"));
+        assert_eq!(f.controller.state()["updates"]["phase"],"cancelling");assert!(f.ui.get_updates_busy());assert!(f.ui.get_update_cancelling());assert_eq!(f.ui.global::<crate::Palette>().get_dark(),dark);
+        let label=f.ui.get_update_primary_text();let item=ElementHandle::find_by_accessible_label(&f.ui,label.as_str()).find(|item|item.accessible_id().is_some_and(|id|id.starts_with("action|updates.primary|"))).unwrap();
+        assert_eq!(item.accessible_enabled(),Some(false));
+        release.send(()).unwrap();assert_eq!(worker.join().unwrap()["ok"],true);f.refresh();assert!(!f.ui.get_updates_busy());assert_eq!(f.controller.state()["updates"]["phase"],"cancelled");
+        assert!(!f.ui.get_update_can_cancel());assert!(!f.ui.get_update_cancelling());assert!(f.controller.take_window_action().is_empty());assert_eq!(&*boundary.calls.lock().unwrap(),&["updates.prepare","updates.cancel"]);
+    }}
 }
 struct Flow {
     ui: MainWindow,

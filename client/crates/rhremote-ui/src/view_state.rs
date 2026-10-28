@@ -51,6 +51,9 @@ impl MainView {
         ui.set_update_install_hint(state["updateInstallHint"].as_str().unwrap_or("").into());
         ui.set_update_phase(state["updates"]["phase"].as_str().unwrap_or("").into());
         ui.set_update_progress(state["updates"]["progress"].as_i64().unwrap_or(0) as i32);
+        ui.set_update_can_cancel(state["updates"]["canCancel"]==true);
+        ui.set_update_cancelling(state["updates"]["cancelRequested"]==true);
+        ui.set_update_operation(state["updates"]["operationId"].as_u64().unwrap_or(0).to_string().into());
         ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
         ui.set_update_details(state["updateDetails"] == true);
         if next != self.revision {

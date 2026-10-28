@@ -42,6 +42,8 @@ public class RhUpdateInstallTest {
     public static class Requests {
         static byte[] bytes;static String feed;static int downloads,checks;static boolean corrupt,failMetadata,failFirstDownloadOpen,failAllDownloads;
         static CountDownLatch entered,release;
+        static CountDownLatch finishCleanup;
+        static boolean gateMetadata,pauseAfterChunk;
         @Implementation protected static HttpURLConnection open(String address)throws IOException {
             boolean metadata=address.endsWith("releases.android.json");if(metadata)checks++;else downloads++;
             if(metadata&&failMetadata)throw new SocketTimeoutException("metadata fixture timeout");
@@ -49,12 +51,17 @@ public class RhUpdateInstallTest {
             return new HttpURLConnection(new URL(address)){
                 @Override public int getResponseCode(){return 200;}
                 @Override public InputStream getInputStream()throws IOException{
-                    if(!metadata&&entered!=null){entered.countDown();try{if(!release.await(5,TimeUnit.SECONDS))throw new IOException("test download gate timed out");}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException(e);}}
-                    byte[] content=metadata?feed.getBytes(StandardCharsets.UTF_8):bytes.clone();if(!metadata&&corrupt)content[0]^=1;return new ByteArrayInputStream(content);
+                    if((!metadata&&!pauseAfterChunk||metadata&&gateMetadata)&&entered!=null){gate();}
+                    byte[] content=metadata?feed.getBytes(StandardCharsets.UTF_8):bytes.clone();if(!metadata&&corrupt)content[0]^=1;
+                    if(!metadata&&pauseAfterChunk)return new InputStream(){final ByteArrayInputStream data=new ByteArrayInputStream(content);boolean first=true,paused;
+                        @Override public int read(byte[] value,int offset,int count)throws IOException{if(!first&&!paused){paused=true;gate();}first=false;return data.read(value,offset,Math.min(count,8));}
+                        @Override public int read()throws IOException{byte[] value=new byte[1];return read(value,0,1)==-1?-1:value[0]&255;}};
+                    return new ByteArrayInputStream(content);
                 }
-                @Override public void connect(){}@Override public void disconnect(){}@Override public boolean usingProxy(){return false;}
+                @Override public void connect(){}@Override public void disconnect(){if((!metadata||gateMetadata)&&release!=null)release.countDown();}@Override public boolean usingProxy(){return false;}
             };
         }
+        static void gate()throws IOException{entered.countDown();try{if(!release.await(5,TimeUnit.SECONDS))throw new IOException("test request gate timed out");if(finishCleanup!=null&&!finishCleanup.await(5,TimeUnit.SECONDS))throw new IOException("test cleanup gate timed out");}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException(e);}}
     }
     public static class NoInstaller extends Activity {
         @Override public void startActivity(Intent intent){if(Intent.ACTION_VIEW.equals(intent.getAction()))throw new ActivityNotFoundException("test missing installer");super.startActivity(intent);}
@@ -70,7 +77,7 @@ public class RhUpdateInstallTest {
     private void archive()throws Exception{for(String name:new String[]{"pending.apk","RHRemote-update.apk",snapshot().getName()})manager.setPackageArchiveInfo(new File(folder,name).getAbsolutePath(),incoming);}
     private String sha(byte[] bytes)throws Exception{StringBuilder value=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();}
     @Before public void setup()throws Exception{
-        Requests.downloads=0;Requests.checks=0;Requests.corrupt=false;Requests.failMetadata=false;Requests.failFirstDownloadOpen=false;Requests.failAllDownloads=false;Requests.entered=null;Requests.release=null;Requests.bytes="test APK fixture bytes".getBytes(StandardCharsets.UTF_8);
+        Requests.downloads=0;Requests.checks=0;Requests.corrupt=false;Requests.failMetadata=false;Requests.failFirstDownloadOpen=false;Requests.failAllDownloads=false;Requests.entered=null;Requests.release=null;Requests.finishCleanup=null;Requests.gateMetadata=false;Requests.pauseAfterChunk=false;Requests.bytes="test APK fixture bytes".getBytes(StandardCharsets.UTF_8);
         // AndroidX retains its static cache while Robolectric allocates a new filesDir per test.
         java.lang.reflect.Field cache=androidx.core.content.FileProvider.class.getDeclaredField("sCache");cache.setAccessible(true);((java.util.Map<?,?>)cache.get(null)).clear();
         activity=Robolectric.buildActivity(Activity.class).setup().get();manager=Shadows.shadowOf(activity.getPackageManager());
@@ -83,6 +90,7 @@ public class RhUpdateInstallTest {
     private void feed(){Requests.feed=RhActions.obj("schemaVersion",1,"android",manifest).toString();}
     @After public void cleanup()throws Exception{
         if(Requests.release!=null)Requests.release.countDown();
+        if(Requests.finishCleanup!=null)Requests.finishCleanup.countDown();
         if(home!=null){long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);do{idle();if(!home.state().getBoolean("updatesBusy"))break;Thread.sleep(10);}while(System.nanoTime()<end);home.dispose();assertFalse("Update worker leaked",home.state().getBoolean("updatesBusy"));}
         assertFalse(RhActions.hasStream());
     }
@@ -322,5 +330,29 @@ public class RhUpdateInstallTest {
     @Test public void automaticDownloadDoesNotOpenPermissionsOrTheInstaller()throws Exception{
         manager.setCanRequestPackageInstalls(false);home=newHome();
         java.lang.reflect.Method method=RhHome.class.getDeclaredMethod("startUpdate",String.class,boolean.class);method.setAccessible(true);method.invoke(home,"updates.check",true);awaitUpdate();assertTrue(home.state().getJSONObject("updates").getBoolean("downloaded"));assertNull(next());
+    }
+    @Test public void cancellingDownloadKeepsAdmissionUntilCleanupThenAllowsOneRetry()throws Exception{
+        page();String before=RhShared.canonical(RhShared.read(activity));Requests.pauseAfterChunk=true;Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);Requests.finishCleanup=new CountDownLatch(1);
+        button(activity.getWindow().getDecorView(),"下载并安装").performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));idle();
+        assertEquals(8,new File(folder,"pending.apk").length());long operation=home.state().getJSONObject("updates").getLong("operationId");Button cancel=button(activity.getWindow().getDecorView(),"取消");assertNotNull(cancel);assertTrue(cancel.isEnabled());cancel.performClick();idle();
+        assertTrue(home.state().getBoolean("updatesBusy"));assertEquals("cancelling",home.state().getJSONObject("updates").getString("phase"));assertFalse(button(activity.getWindow().getDecorView(),"正在取消…").isEnabled());
+        try{home.perform("updates.primary",RhActions.obj());fail("Cleanup cannot admit another worker");}catch(IllegalStateException expected){}
+        Requests.finishCleanup.countDown();awaitUpdate();assertEquals("cancelled",home.state().getJSONObject("updates").getString("phase"));assertEquals(1,Requests.downloads);assertFalse(new File(folder,"pending.apk").exists());assertNull(next());assertEquals(before,RhShared.canonical(RhShared.read(activity)));
+        Requests.pauseAfterChunk=false;Requests.entered=null;Requests.release=null;Requests.finishCleanup=null;button(activity.getWindow().getDecorView(),"下载并安装").performClick();awaitUpdate();assertEquals(2,Requests.downloads);assertInstaller(next());assertNull(next());
+        try{home.perform("updates.cancel",RhActions.obj("operationId",operation));fail("Stale cancellation accepted");}catch(IllegalStateException expected){}
+    }
+    @Test public void cancellingMetadataSurvivesRecreationAndDoesNotTryAnotherMirror()throws Exception{
+        home=newHome();home.perform("app.settings.open",RhActions.obj());Requests.gateMetadata=true;Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);Requests.finishCleanup=new CountDownLatch(1);
+        button(activity.getWindow().getDecorView(),"检查更新").performClick();assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));idle();button(activity.getWindow().getDecorView(),"取消").performClick();recreateHome();
+        assertEquals("cancelling",home.state().getJSONObject("updates").getString("phase"));assertFalse(((Button)activity.getWindow().getDecorView().findViewWithTag("updates.cancel")).isEnabled());
+        Requests.finishCleanup.countDown();awaitUpdate();assertEquals(1,Requests.checks);assertEquals(0,Requests.downloads);assertEquals("cancelled",home.state().getJSONObject("updates").getString("phase"));assertTrue(button(activity.getWindow().getDecorView(),"检查更新").isEnabled());assertNull(next());
+        Requests.gateMetadata=false;Requests.entered=null;Requests.release=null;Requests.finishCleanup=null;button(activity.getWindow().getDecorView(),"检查更新").performClick();awaitUpdate();assertEquals(2,Requests.checks);assertNotNull(button(activity.getWindow().getDecorView(),"下载并安装"));
+    }
+    @Test public void cancellationOfForegroundHandoffKeepsTheVerifiedApk()throws Exception{
+        page();home.paused();home.perform("updates.install",RhActions.obj());long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+        do{idle();if(home.state().getJSONObject("updates").getBoolean("awaitingForeground"))break;Thread.sleep(10);}while(System.nanoTime()<end);
+        assertTrue(home.state().getJSONObject("updates").getBoolean("awaitingForeground"));long operation=home.state().getJSONObject("updates").getLong("operationId");home.perform("updates.cancel",RhActions.obj("operationId",operation));home.resumed();idle();
+        assertFalse(home.state().getBoolean("updatesBusy"));assertTrue(home.state().getJSONObject("updates").getBoolean("downloaded"));assertNull(next());assertEquals(1,Requests.downloads);
+        button(activity.getWindow().getDecorView(),"安装更新").performClick();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);
     }
 }

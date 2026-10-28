@@ -648,6 +648,7 @@ pub struct NativePlatform {
     network: Arc<crate::network::Network>,
     updates: Mutex<crate::updates::Updates>,
     update_snapshot: Arc<Mutex<Value>>,
+    update_cancel: Arc<crate::update_cancel::Control>,
     pub statistics: Arc<Mutex<crate::statistics::Statistics>>,
     pub ui_test: Arc<crate::ui_test::Bridge>,
     retired_launches: Arc<Mutex<Vec<std::thread::JoinHandle<Result<LaunchOutcome, String>>>>>,
@@ -663,6 +664,7 @@ impl NativePlatform {
         let statistics = crate::statistics::Statistics::new(&data);
         let updates=crate::updates::Updates::new();
         let update_snapshot=updates.snapshot();
+        let update_cancel=updates.cancellation();
         let native_data = data.join("engine-state");
         fs::create_dir_all(&native_data).map_err(|e| e.to_string())?;
         fs::write(native_data.join("portable.dat"), b"").map_err(|e| e.to_string())?;
@@ -744,6 +746,7 @@ impl NativePlatform {
             network: Arc::new(crate::network::Network::default()),
             updates: Mutex::new(updates),
             update_snapshot,
+            update_cancel,
             statistics: Arc::new(Mutex::new(statistics)),
             ui_test,
             retired_launches: Arc::new(Mutex::new(Vec::new())),
@@ -1395,6 +1398,8 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    fn begin_update(&self,operation:u64,action:&str,cancellable:bool)->Result<(),String>{self.update_cancel.begin(operation,action,cancellable)}
+    fn cancel_update(&self,operation:u64)->Result<(),String>{self.update_cancel.cancel(operation)}
     fn sync_applied(&self,shared:&rhremote_core::sync_model::SharedConfig,preferences:&std::path::Path)->Result<Option<Value>,String>{self.sync.lock().unwrap().applied(shared,preferences).map(Some)}
     fn probe_device(&self,address:&str,cancel:Arc<AtomicBool>)->Result<Device,String>{
         let body=crate::device_lookup::server_info(address,cancel.clone(),Duration::from_secs(3))?;

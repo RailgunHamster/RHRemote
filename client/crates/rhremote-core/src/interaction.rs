@@ -109,8 +109,8 @@ impl Controller {
         let mut s=self.state.lock().unwrap();
         if id=="sync.run" && args["automatic"]==true && s.sync["automaticBlocked"]==true{return Some(Ok(json!({"skipped":true,"reason":"sync_interrupted"})));}
         if id=="sync.run" && args["automatic"]==true && (automatic_sync_blocked(&s)||s.sync["automatic"]!=true){return Some(Ok(json!({"skipped":true})));}
-        if s.sync_clear_pending && !id.starts_with("view.ui.") && !matches!(id,"sync.clear.resolve"|"sync.clear"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"){return Some(Err("请先确认是否移除同步设置".into()));}
-        if s.pending_navigation.is_some() && !id.starts_with("view.ui.") && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {
+        if s.sync_clear_pending && !id.starts_with("view.ui.") && !matches!(id,"sync.clear.resolve"|"sync.clear"|"settings.catalog"|"updates.state"|"updates.cancel"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"){return Some(Err("请先确认是否移除同步设置".into()));}
+        if s.pending_navigation.is_some() && !id.starts_with("view.ui.") && !matches!(id,"navigation.resolve"|"settings.catalog"|"updates.state"|"updates.cancel"|"statistics.state"|"network.state"|"sync.state"|"view.snapshot"|"view.toolbar.snapshot"|"view.picker.snapshot") {
             return Some(Err("请先处理未保存的更改".into()));
         }
         let primary_installs=id=="updates.primary"&&crate::update_primary_action(&s.updates)=="updates.install";

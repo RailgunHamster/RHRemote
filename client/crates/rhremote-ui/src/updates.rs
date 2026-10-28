@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::Path,
     sync::{Arc, Mutex, mpsc::{self, Sender}},
     time::Duration,
@@ -31,6 +31,7 @@ struct Mirrors {
     preferred: String,
     selected: Mutex<String>,
     test_base: Option<String>,
+    cancel: Arc<crate::update_cancel::Control>,
 }
 // Development fixtures cannot redirect the normal updater to a remote server.
 fn local_test_source(mode: &str, address: &str) -> Option<String> {
@@ -75,6 +76,11 @@ impl Mirrors {
         let normal=Self::asset(provider,asset)?;
         Ok(self.test_base.as_ref().map(|base|format!("{base}{provider}/{}",asset.FileName)).unwrap_or(normal))
     }
+    fn client(&self,seconds:u64)->Result<reqwest::Client,Error>{
+        if rustls::crypto::CryptoProvider::get_default().is_none(){let _=rustls::crypto::ring::default_provider().install_default();}
+        reqwest::Client::builder().https_only(self.test_base.is_none()).timeout(Duration::from_secs(seconds))
+            .user_agent(concat!("RHRemote/",env!("CARGO_PKG_VERSION"))).build().map_err(|_|Error::Other("更新网络初始化失败".into()))
+    }
 }
 impl UpdateSource for Mirrors {
     fn get_release_feed(
@@ -86,23 +92,19 @@ impl UpdateSource for Mirrors {
         let name = format!("releases.{channel}.json");
         filename(&name)?;
         for provider in self.providers() {
+            let token=self.cancel.token();if token.is_cancelled(){return Err(Error::Other("Update operation cancelled".into()));}
             { let mut live=self.live.lock().unwrap(); live["provider"]=json!(provider); live["status"]=json!(format!("正在从 {} 检查更新",provider)); }
-            let result = (|| {
-                let response = ureq::get(&self.feed_address(provider, &name))
-                    .timeout(Duration::from_secs(15))
-                    .call()
-                    .map_err(|_| ())?;
+            let result = crate::update_cancel::run(&token,async {
+                let mut response = self.client(15)?.get(self.feed_address(provider,&name)).send().await
+                    .and_then(reqwest::Response::error_for_status).map_err(|_|Error::Other("更新源请求失败".into()))?;
                 let mut bytes = Vec::new();
-                response
-                    .into_reader()
-                    .take(2 * 1024 * 1024 + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|_| ())?;
-                if bytes.len() > 2 * 1024 * 1024 {
-                    return Err(());
+                while let Some(chunk)=response.chunk().await.map_err(|_|Error::Other("更新信息读取失败".into()))? {
+                    if bytes.len().saturating_add(chunk.len())>2*1024*1024 {return Err(Error::Other("更新信息过大".into()));}
+                    bytes.extend_from_slice(&chunk);
                 }
-                serde_json::from_slice::<VelopackAssetFeed>(&bytes).map_err(|_| ())
-            })();
+                serde_json::from_slice::<VelopackAssetFeed>(&bytes).map_err(|_|Error::Other("更新信息无效".into()))
+            });
+            if token.is_cancelled(){return Err(Error::Other("Update operation cancelled".into()));}
             if let Ok(feed) = result {
                 *self.selected.lock().unwrap() = provider.into();
                 return Ok(feed);
@@ -126,24 +128,18 @@ impl UpdateSource for Mirrors {
             ["gitee", "github"]
         };
         for provider in providers {
+            let token=self.cancel.token();if token.is_cancelled(){return Err(Error::Other("Update operation cancelled".into()));}
             self.live.lock().unwrap()["provider"]=json!(provider);
             let address = self.asset_address(provider, asset)?;
-            let result = (|| -> Result<(), Error> {
-                let response = ureq::get(&address)
-                    .timeout(Duration::from_secs(180))
-                    .call()
-                    .map_err(|_| Error::Other("更新包下载失败".into()))?;
-                let mut source = response.into_reader().take(asset.Size + 1);
+            let result = crate::update_cancel::run(&token,async {
+                let mut response = self.client(180)?.get(&address).send().await.and_then(reqwest::Response::error_for_status)
+                    .map_err(|_|Error::Other("更新包下载失败".into()))?;
                 let mut file = fs::File::create(path)?;
-                let mut bytes = [0u8; 65536];
                 let mut total = 0u64;
-                loop {
-                    let count = source.read(&mut bytes)?;
-                    if count == 0 {
-                        break;
-                    }
-                    file.write_all(&bytes[..count])?;
-                    total += count as u64;
+                while let Some(bytes)=response.chunk().await.map_err(|_|Error::Other("更新包读取失败".into()))? {
+                    total=total.saturating_add(bytes.len() as u64);
+                    if total>asset.Size {return Err(Error::Other("更新包长度不符".into()));}
+                    file.write_all(&bytes)?;
                     if let Some(tx) = &progress {
                         let _ = tx.send(((total * 100 / asset.Size).min(100)) as i16);
                     }
@@ -152,10 +148,14 @@ impl UpdateSource for Mirrors {
                     return Err(Error::Other("更新包长度不符".into()));
                 }
                 Ok(())
-            })();
+            });
             if result.is_ok() {
                 return result;
             }
+            // The source owns this SDK-provided partial file, never the verified
+            // package. Drop the cancelled future/file before removing it.
+            match fs::remove_file(path){Ok(())=>{},Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{},Err(error)=>return Err(error.into())}
+            if token.is_cancelled(){return result;}
         }
         Err(Error::Other("更新包下载失败".into()))
     }
@@ -164,19 +164,22 @@ pub struct Updates {
     manager: Option<UpdateManager>,
     available: Option<UpdateInfo>,
     live: Snapshot,
+    cancel: Arc<crate::update_cancel::Control>,
 }
 impl Updates {
     pub fn new() -> Self {
         let live=Arc::new(Mutex::new(json!({"phase":"idle","status":"尚未检查更新","progress":0,"provider":"","failedAction":""})));
+        let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
         let value=Self {
-            manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new()),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
-            available:None,live,
+            manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new()),cancel:cancel.clone(),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
+            available:None,live,cancel,
         };
         value.refresh();
         if value.state()["pendingRestart"] == true { value.status("downloaded", "更新已下载，可安装更新"); }
         value
     }
     pub fn snapshot(&self) -> Snapshot { self.live.clone() }
+    pub fn cancellation(&self)->Arc<crate::update_cancel::Control>{self.cancel.clone()}
     pub fn state(&self) -> Value { self.live.lock().unwrap().clone() }
     fn status(&self,phase:&str,text:&str) {
         let mut live=self.live.lock().unwrap();live["phase"]=json!(phase);live["status"]=json!(text);
@@ -235,14 +238,17 @@ impl Updates {
             }
             Ok(())
         })();
-        if let Err(error)=result {self.refresh();let mut live=self.live.lock().unwrap();live["phase"]=json!("error");live["status"]=json!(error);live["failedAction"]=json!(if id=="updates.prepare"{"updates.install"}else{id});return Err(error);}
+        self.refresh();
+        if let Err(error)=&result {let mut live=self.live.lock().unwrap();live["phase"]=json!("error");live["status"]=json!(error);live["failedAction"]=json!(if id=="updates.prepare"{"updates.install"}else{id});}
+        if self.cancel.finish(){return Ok(self.state());}
+        result?;
         Ok(self.state())
     }
 }
 /// A single primary action; advanced HTTP actions remain available for diagnostics.
 pub fn primary_label(state:&Value,busy:bool)->String {
     let phase=state["phase"].as_str().unwrap_or("");
-    if busy {return match phase {"checking"=>"检查中…".into(),"downloading"=>format!("下载中 {}%",state["progress"].as_i64().unwrap_or(0)),"verifying"=>"正在校验…".into(),"applying"=>"正在安装…".into(),_=>"正在准备…".into()};}
+    if busy {return match phase {"cancelling"=>"正在取消…".into(),"checking"=>"检查中…".into(),"downloading"=>format!("下载中 {}%",state["progress"].as_i64().unwrap_or(0)),"verifying"=>"正在校验…".into(),"applying"=>"正在安装…".into(),_=>"正在准备…".into()};}
     let ready=state["pendingRestart"]==true;let available=state["availableVersion"].is_string();let failed=phase=="error";
     if rhremote_core::update_primary_action(state)=="updates.check" {if failed{"重新检查"}else{"检查更新"}}
     else if ready {if failed{"重试安装"}else{"重启并安装"}} else if available {if failed{"重试下载并安装"}else{"下载并安装"}} else {"检查更新"}.into()
@@ -250,6 +256,24 @@ pub fn primary_label(state:&Value,busy:bool)->String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Explicit public release network verification; no installation"]
+    fn published_download_cancels_during_transfer_and_retries(){
+        let root=std::path::PathBuf::from(std::env::var_os("RHREMOTE_UPDATE_NETWORK_EVIDENCE_DIR").expect("fresh owned evidence directory required"));
+        assert!(root.is_dir());let partial=root.join("public-update.partial");let retry=root.join("public-update.nupkg");assert!(!partial.exists()&&!retry.exists());
+        let live=Arc::new(Mutex::new(json!({})));let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
+        let source=Arc::new(Mirrors{live,preferred:"gitee".into(),selected:Mutex::new(String::new()),test_base:None,cancel:cancel.clone()});
+        let manifest:Manifest=Default::default();cancel.begin(1,"updates.check",true).unwrap();
+        let feed=source.get_release_feed("win",&manifest,"").unwrap();cancel.finish();
+        let asset=feed.Assets.into_iter().find(|asset|asset.Type=="Full").expect("published full package");
+        fs::write(root.join("selected-public-asset.json"),serde_json::to_vec_pretty(&asset).unwrap()).unwrap();
+        cancel.begin(2,"updates.download",true).unwrap();let (progress,received)=mpsc::channel();let downloader=source.clone();let selected=asset.clone();let owned=partial.clone();
+        let worker=std::thread::spawn(move||downloader.download_release_entry(&selected,&owned,Some(progress)));
+        let first_percent=received.recv_timeout(Duration::from_secs(60)).unwrap();let bytes_before_cancel=fs::metadata(&partial).unwrap().len();assert!(bytes_before_cancel>0&&bytes_before_cancel<asset.Size);
+        let clock=std::time::Instant::now();cancel.cancel(2).unwrap();assert!(worker.join().unwrap().is_err());let cancel_ms=clock.elapsed().as_millis();assert!(cancel.finish());assert!(!partial.exists(),"cancel left the SDK partial file");
+        cancel.begin(3,"updates.download",true).unwrap();source.download_release_entry(&asset,&retry,None).unwrap();assert!(!cancel.finish());assert_eq!(fs::metadata(&retry).unwrap().len(),asset.Size);
+        fs::write(root.join("network-result.json"),serde_json::to_vec_pretty(&json!({"cancelled":true,"firstProgressPercent":first_percent,"bytesBeforeCancel":bytes_before_cancel,"cancelCompletionMs":cancel_ms,"partialRemoved":true,"retryDownloaded":true,"expectedSha256":asset.SHA256,"size":asset.Size,"version":asset.Version,"provider":source.selected.lock().unwrap().clone(),"installed":false})).unwrap()).unwrap();
+    }
     #[test]
     fn update_fixture_requires_explicit_test_mode_and_a_plain_loopback_origin(){
         assert_eq!(local_test_source("1","http://127.0.0.1:48766/"),Some("http://127.0.0.1:48766/".into()));

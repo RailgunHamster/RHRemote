@@ -2454,9 +2454,11 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "socket2",
+ "system-configuration 0.7.0",
  "tokio",
  "tower-service",
  "tracing",
+ "windows-registry",
 ]
 
 [[package]]
@@ -3738,7 +3740,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "rustls",
  "simple-dns",
- "system-configuration",
+ "system-configuration 0.8.0",
  "tokio",
  "tokio-rustls",
  "tracing",
@@ -5451,7 +5453,7 @@ dependencies = [
 
 [[package]]
 name = "rhremote-ui"
-version = "0.2.11-preview.63"
+version = "0.2.11-preview.65"
 dependencies = [
  "base64 0.22.1",
  "embed-resource",
@@ -5460,14 +5462,18 @@ dependencies = [
  "keyring",
  "raw-window-handle",
  "rcgen",
+ "reqwest",
  "rhremote-core",
  "rhremote-transport",
  "roxmltree 0.20.0",
+ "rustls",
  "serde",
  "serde_json",
  "slint",
  "slint-build",
  "tiny_http",
+ "tokio",
+ "tokio-util",
  "ureq 2.12.1",
  "url",
  "velopack",
@@ -6441,6 +6447,17 @@ dependencies = [
  "libc",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "system-configuration"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
+dependencies = [
+ "bitflags 2.13.2",
+ "core-foundation 0.9.4",
+ "system-configuration-sys",
 ]
 
 [[package]]

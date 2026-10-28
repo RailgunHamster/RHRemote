@@ -608,6 +608,9 @@ export component MainWindow inherits Window {
     in property <string> update-install-hint;
     in property <string> update-phase;
     in property <int> update-progress;
+    in property <bool> update-can-cancel;
+    in property <bool> update-cancelling;
+    in property <string> update-operation;
     in property <string> network-summary;
     in property <string> network-current;
     in property <bool> settings-dirty;
@@ -993,6 +996,7 @@ export component MainWindow inherits Window {
                 update-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
                     Text{text:!root.updates-managed ? "此启动方式不支持更新，请使用安装版或便携版。" : root.update-primary-installs ? root.update-install-hint : "";color:Palette.muted;font-size:12px;wrap:word-wrap;min-width:0px;preferred-width:0px;horizontal-stretch:1;vertical-alignment:center;}
                     ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || (root.update-primary-installs && (root.streaming || root.connecting || root.update-install-hint!=""));}
+                    if root.update-can-cancel || root.update-cancelling:ActionButton{text:"取消";action-id:"updates.cancel";argument:root.update-operation;disabled:root.update-cancelling;}
                 }
             }
             if root.page=="connection" || root.page=="pair":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:connection-footer.preferred-height;

@@ -81,7 +81,7 @@ public final class RhHome implements RhActions.Target {
     private TextView updateStatus,updateProvider,updateBytes,updateFailureDetails,updateInstallNotice;
     private boolean updateDetails;private Button updateDetailsToggle;
     private ProgressBar updateProgress;
-    private Button updatePrimary;
+    private Button updateCancel,updatePrimary;
     private TextView updateVersion;
     private final android.os.Handler updateUi=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable updateTick=this::refreshUpdateUi;
@@ -533,7 +533,7 @@ public final class RhHome implements RhActions.Target {
         if(id.equals("sync.run")&&args.optBoolean("automatic")&&syncWork.state().optBoolean("automaticBlocked"))return RhActions.obj("skipped",true,"reason","sync_interrupted");
         if(id.equals("sync.run")&&args.optBoolean("automatic")&&(!sync.state().optBoolean("automatic")||syncBusy||!infoUuid.isEmpty()||draft!=null||pageId.equals("add")||pairing||admission!=null||RhActions.hasStream()||pendingNavigation!=null||syncClearPending||syncDirty()))return RhActions.obj("skipped",true);
         if(id.equals("navigation.back")&&syncClearPending)return perform("sync.clear.resolve",RhActions.obj("choice","cancel"));
-        if(syncClearPending&&!Arrays.asList("sync.clear.resolve","sync.clear","settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先确认是否移除同步设置");
+        if(syncClearPending&&!Arrays.asList("sync.clear.resolve","sync.clear","settings.catalog","updates.state","updates.cancel","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先确认是否移除同步设置");
         if(id.equals("navigation.resolve"))return resolveNavigation(args);
         if(id.equals("navigation.back")){if(pageId.equals("connection")){if(connectionBusy())return RhActions.dispatch("stream.disconnect",RhActions.obj());return perform("connection.dismiss",RhActions.obj());}if(pageId.equals("profile-copy"))return perform("settings.copy.cancel",RhActions.obj());if(pageId.equals("add"))return perform("device.add.cancel",RhActions.obj());if(pendingNavigation!=null)return resolveNavigation(RhActions.obj("choice","stay"));if(draft!=null)return perform("device.select",RhActions.obj("uuid",selected.uuid));if(pageId.equals("devices")&&browser.isDetailOpen()){browser.showDetail(false);return RhActions.obj("accepted",true);}return perform("devices.open",RhActions.obj());}
         if(id.equals("connection.retry")||id.equals("connection.dismiss")){
@@ -544,7 +544,7 @@ public final class RhHome implements RhActions.Target {
             returnToDevice();message("");return RhActions.obj("accepted",true);
         }
         if(navigationLocked()&&Arrays.asList("devices.open","device.select","device.add.open","device.settings.open","device.info.open","app.settings.open","app.settings.tab","appearance.toggle").contains(id))throw new IllegalStateException(navigationHint());
-        if(pendingNavigation!=null&&!Arrays.asList("settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先处理未保存的更改");
+        if(pendingNavigation!=null&&!Arrays.asList("settings.catalog","updates.state","updates.cancel","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先处理未保存的更改");
         boolean leavingInfo=Arrays.asList("devices.open","device.select","device.settings.open","device.add.open","device.info.open","app.settings.open","app.settings.tab","device.connect","device.pair","appearance.toggle","sync.run","sync.resolve","updates.install").contains(id)||id.equals("updates.primary")&&updates.primaryAction().equals("updates.install");
         if(!infoUuid.isEmpty()&&leavingInfo){
             if(id.equals("device.info.open")&&infoUuid.equals(args.optString("uuid")))return RhActions.obj("reused",true);
@@ -562,7 +562,7 @@ public final class RhHome implements RhActions.Target {
             returnToDevice();
         }
 
-        if(addingBusy()&&!Arrays.asList("device.add.cancel","settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id)){
+        if(addingBusy()&&!Arrays.asList("device.add.cancel","settings.catalog","updates.state","updates.cancel","sync.state","statistics.state","network.state").contains(id)){
             if(id.equals("device.add.open"))return RhActions.obj("reused",true);
             if(Arrays.asList("devices.open","device.select","app.settings.open","app.settings.tab","device.settings.open","device.info.open","appearance.toggle").contains(id)){
                 cancelAdding();return id.equals("appearance.toggle")?performInner(id,args):perform(id,args);
@@ -677,6 +677,7 @@ public final class RhHome implements RhActions.Target {
             }
             case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"),id.equals("sync.run")&&args.optBoolean("automatic"));break;
             case "updates.state":return updateWork.state();
+            case "updates.cancel":updateWork.cancel(args.getLong("operationId"));break;
             case "updates.details.toggle":if(!pageId.equals("global-settings")||!settingsTab.equals("updates"))throw new IllegalStateException("请先打开更新页");updateDetails=!updateDetails;refreshUpdateControls();break;
             case "updates.primary":if(updateWork.busy())throw new IllegalStateException("更新操作正在进行");String primaryAction=updates.primaryAction();if(primaryAction.equals("updates.install")&&RhActions.hasStream())throw new IllegalStateException("请先断开当前连接再安装更新");startUpdate(primaryAction);break;
             case "updates.check":case "updates.download":case "updates.install":if(updateWork.busy())throw new IllegalStateException("更新操作正在进行");startUpdate(id);break;
@@ -695,12 +696,12 @@ public final class RhHome implements RhActions.Target {
         updateFailureDetails=text("",13,muted,false);updateFailureDetails.setContentDescription("更新错误详情");summary.addView(updateFailureDetails);
         updateBytes=text("",13,muted,false);updateBytes.setPadding(0,dp(12),0,dp(8));summary.addView(updateBytes);
         updateProgress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);updateProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(blue));updateProgress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(blue));summary.addView(updateProgress,new LinearLayout.LayoutParams(-1,dp(4)));
-        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout commands=row();commands.setGravity(Gravity.END);updateInstallNotice=text("",12,muted,false);commands.addView(updateInstallNotice,new LinearLayout.LayoutParams(0,-2,1));updatePrimary=button("检查更新",true,()->invoke("updates.primary",RhActions.obj()));updatePrimary.setTag("updates.primary");commands.addView(updatePrimary);formFooter.addView(commands);formPadding(scroll.getWidth());
+        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout commands=row();commands.setGravity(Gravity.END);updateInstallNotice=text("",12,muted,false);commands.addView(updateInstallNotice,new LinearLayout.LayoutParams(0,-2,1));updatePrimary=button("检查更新",true,()->invoke("updates.primary",RhActions.obj()));updatePrimary.setTag("updates.primary");commands.addView(updatePrimary);updateCancel=button("取消",false,()->{});updateCancel.setTag("updates.cancel");LinearLayout.LayoutParams cancelLayout=new LinearLayout.LayoutParams(-2,-2);cancelLayout.setMarginStart(dp(8));commands.addView(updateCancel,cancelLayout);formFooter.addView(commands);formPadding(scroll.getWidth());
         refreshUpdateControls();label("安装时在系统界面手动确认；需要安装权限时会先打开对应设置。");
     }
 
     private void refreshUpdateControls(){
-        if(updateStatus==null)return;org.json.JSONObject s=updates.state();String phase=s.optString("phase"),provider=s.optString("provider");
+        if(updateStatus==null)return;org.json.JSONObject s=updateWork.state();String phase=s.optString("phase"),provider=s.optString("provider");
         updateVersion.setText(s.isNull("availableVersion")?"":"可用版本 "+s.optString("availableVersion"));updateVersion.setVisibility(s.isNull("availableVersion")?View.GONE:View.VISIBLE);
         boolean failed=phase.equals("error");updateStatus.setText(failed?"更新失败，请重试。":s.optString("status"));updateStatus.setTextColor(failed?failureColor:ink);
         updateDetailsToggle.setVisibility(failed?View.VISIBLE:View.GONE);updateDetailsToggle.setText(updateDetails?"收起详情":"查看详情");updateFailureDetails.setText(s.optString("status"));updateFailureDetails.setVisibility(failed&&updateDetails?View.VISIBLE:View.GONE);
@@ -709,6 +710,7 @@ public final class RhHome implements RhActions.Target {
         updateBytes.setVisibility(total>0&&(bytes>0||phase.equals("downloading"))?View.VISIBLE:View.GONE);updateBytes.setText(String.format(Locale.ROOT,"%.1f / %.1f MB",bytes/1048576.0,total/1048576.0));
         updateProgress.setVisibility(updateWork.busy()?View.VISIBLE:View.GONE);updateProgress.setIndeterminate(!downloading);if(downloading)updateProgress.setProgress((int)(bytes*100/total));
         String blocked=updates.primaryAction().equals("updates.install")?updateInstallBlockReason():"";updateInstallNotice.setText(blocked);updateInstallNotice.setVisibility(blocked.isEmpty()?View.GONE:View.VISIBLE);boolean enabled=!updateWork.busy()&&blocked.isEmpty();updatePrimary.setText(updates.primaryLabel(updateWork.busy()));updatePrimary.setEnabled(enabled);updatePrimary.setAlpha(enabled?1f:0.65f);
+        boolean cancelling=s.optBoolean("cancelRequested");updateCancel.setVisibility(s.optBoolean("canCancel")||cancelling?View.VISIBLE:View.GONE);updateCancel.setEnabled(!cancelling);long operation=s.optLong("operationId");updateCancel.setOnClickListener(view->invoke("updates.cancel",RhActions.obj("operationId",operation)));
     }
     private void startUpdate(String id){startUpdate(id,false);}
     private void startUpdate(String id,boolean automatic){

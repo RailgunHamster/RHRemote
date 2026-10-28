@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 /// UI and API must retry the operation that failed, even with a cached candidate.
 pub fn update_primary_action(state:&Value)->&'static str {
-    if state["phase"]=="error" && state["failedAction"]=="updates.check" {"updates.check"}
+    if state["phase"]=="error" && state["failedAction"]=="updates.check" || state["phase"]=="cancelled" && state["cancelledAction"]=="updates.check" {"updates.check"}
     else if state["availableVersion"].is_string() || state["pendingRestart"]==true {"updates.install"}
     else {"updates.check"}
 }
@@ -57,9 +57,15 @@ impl Controller {
             && s.sync["conflicts"].as_array().is_none_or(|a|a.is_empty())
             && now.saturating_sub(last_attempt.max(s.sync["lastSyncMs"].as_u64().unwrap_or(0)))>=s.sync["intervalMinutes"].as_u64().unwrap_or(5)*60_000
     }
-    pub(crate) fn dispatch_update(&self, id: &str) -> Result<Value, String> {
+    pub(crate) fn dispatch_update(&self, id: &str, args: &Value) -> Result<Value, String> {
         if id == "updates.state" { return Ok(self.state()["updates"].clone()); }
         let mut s = self.state.lock().unwrap();
+        if id=="updates.cancel" {
+            let operation=args["operationId"].as_u64().filter(|id|*id==s.update_operation).ok_or("更新操作已变化，未执行取消")?;
+            if !s.updates_busy || s.installing_update {return Err("当前没有可取消的更新操作".into());}
+            if !s.update_cancel_requested {self.platform.cancel_update(operation)?;s.update_cancel_requested=true;s.revision+=1;}
+            return Ok(json!({"accepted":true,"operationId":operation,"cleanupPending":true}));
+        }
         if id=="updates.details.toggle" {
             if s.page!="global-settings" || s.settings_tab!="updates" {return Err("请先打开更新页".into());}
             s.update_details=!s.update_details;s.revision+=1;return Ok(json!({"expanded":s.update_details}));
@@ -77,10 +83,13 @@ impl Controller {
             if crate::interaction::dirty(&s) || crate::interaction::sync_dirty(&s) || crate::device_info::dirty(&s) {
                 drop(s);
                 if let Some(result) = self.navigation_gate("updates.install", &json!({})) { return result; }
-                return self.dispatch_update("updates.install");
+                return self.dispatch_update("updates.install",&json!({}));
             }
         }
         let preparing = id == "updates.install" && s.updates["pendingRestart"] != true;
+        let operation=s.update_operation.checked_add(1).ok_or("更新操作编号已耗尽")?;
+        self.platform.begin_update(operation,id,id!="updates.install" || preparing)?;
+        s.update_operation=operation;s.update_cancel_requested=false;
         s.updates_busy = true;
         s.update_details = false;
         s.installing_update = id == "updates.install" && !preparing;
@@ -96,6 +105,12 @@ impl Controller {
         s.updates_busy = false;
         s.installing_update = false;
         s.revision += 1;
+        if s.update_cancel_requested || result.as_ref().is_ok_and(|value|value["phase"]=="cancelled") {
+            let mut cancelled=self.platform.update_state().unwrap_or_else(||result.as_ref().ok().cloned().unwrap_or_else(||s.updates.clone()));
+            cancelled["phase"]=json!("cancelled");cancelled["cancelledAction"]=json!(id);cancelled["failedAction"]=json!("");
+            cancelled["status"]=json!(if cancelled["pendingRestart"]==true{"操作已取消，更新包已保留"}else if id=="updates.check"{"已取消检查更新"}else{"已取消下载，未安装更新"});
+            s.updates=cancelled.clone();return Ok(cancelled);
+        }
         let mut result = match result {
             Ok(v) => v,
             Err(e) => {

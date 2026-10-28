@@ -58,6 +58,7 @@ impl Controller {
                     | "device.add.cancel"
                     | "settings.catalog"
                     | "updates.state"
+                    | "updates.cancel"
                     | "sync.state"
                     | "statistics.state"
                     | "network.state"

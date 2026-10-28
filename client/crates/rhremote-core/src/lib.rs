@@ -246,6 +246,10 @@ pub struct State {
     pub update_details: bool,
     pub updates_busy: bool,
     #[serde(skip)]
+    update_operation: u64,
+    #[serde(skip)]
+    update_cancel_requested: bool,
+    #[serde(skip)]
     installing_update: bool,
 }
 
@@ -266,6 +270,9 @@ pub struct ActionTiming {
     pub queue_wait_us: u128,
 }
 pub trait Platform: Send + Sync {
+    /// Register cancellation before the admitted worker can enter blocking I/O.
+    fn begin_update(&self,_operation:u64,_action:&str,_cancellable:bool)->Result<(),String>{Ok(())}
+    fn cancel_update(&self,_operation:u64)->Result<(),String>{Err("此更新操作不支持取消".into())}
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String>;
     fn connection_requested(&self, _timing: Option<ActionTiming>) {}
     fn update_state(&self) -> Option<Value> { None }
@@ -381,6 +388,8 @@ impl Controller {
                     .execute("updates.state", &json!({}))
                     .unwrap_or(json!({})),
                 updates_busy: false,
+                update_operation: 0,
+                update_cancel_requested: false,
                 update_details: false,
                 installing_update: false,
             }),
@@ -403,12 +412,19 @@ impl Controller {
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
         value["updateInstallHint"]=json!(global_settings::update_installation_blocked(&s).unwrap_or(""));
         value["updatesBusy"]=json!(s.updates_busy || s.installing_update);
+        let update_operation=s.update_operation;
+        let update_cancellable=s.updates_busy && !s.installing_update && !s.update_cancel_requested;
+        let update_cancelling=s.updates_busy && s.update_cancel_requested;
         value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
         value["syncClearPrompt"]=if s.sync_clear_pending{json!({"title":"移除同步设置？","message":"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。"})}else{Value::Null};
         value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
         drop(s);
         // Read progress without taking the updater's network/installation lock.
         if let Some(updates) = self.platform.update_state() { value["updates"] = updates; }
+        value["updates"]["operationId"]=json!(update_operation);
+        value["updates"]["canCancel"]=json!(update_cancellable);
+        value["updates"]["cancelRequested"]=json!(update_cancelling);
+        if update_cancelling {value["updates"]["phase"]=json!("cancelling");value["updates"]["status"]=json!("正在取消更新…");}
         value
     }
     pub fn profile(&self, uuid: &str) -> Profile {
@@ -564,7 +580,7 @@ impl Controller {
         } else if id.starts_with("device.info.") {
             self.dispatch_info(id,args)
         } else if id.starts_with("updates.") {
-            self.dispatch_update(id)
+            self.dispatch_update(id,&args)
         } else if id.starts_with("sync.") || id.starts_with("app.settings.") {
             self.dispatch_global(id, args)
         } else {
@@ -1730,3 +1746,5 @@ mod tests {
 
 #[cfg(test)]
 mod update_install_tests;
+#[cfg(test)]
+mod update_cancel_tests;

@@ -21,12 +21,14 @@ final class RhUpdateWork {
     private final Handler main=new Handler(Looper.getMainLooper());
     private Listener listener;
     private boolean running,installReady,installIntent,resumeInstall;
+    private boolean cancelRequested;
+    private String cancelledAction="";
     private long operation;
 
     private RhUpdateWork(Context context){this.context=context;updates=new RhUpdates(context);}
     synchronized boolean busy(){return running||installReady||resumeInstall;}
     synchronized boolean awaitingInstall(){return !running&&(installReady||resumeInstall);}
-    synchronized JSONObject state(){JSONObject value=updates.state();try{value.put("operationId",operation);value.put("busy",busy());value.put("awaitingForeground",!running&&(installReady||resumeInstall));}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
+    synchronized JSONObject state(){JSONObject value=updates.state();try{value.put("operationId",operation);value.put("busy",busy());value.put("canCancel",busy()&&!cancelRequested);value.put("cancelRequested",running&&cancelRequested);value.put("awaitingForeground",!running&&(installReady||resumeInstall));if(running&&cancelRequested){value.put("phase","cancelling");value.put("status","正在取消更新…");}}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
     synchronized void attach(Listener value){listener=value;}
     synchronized boolean detach(Listener value){if(listener!=value)return false;listener=null;return true;}
     private void changed(){
@@ -37,19 +39,27 @@ final class RhUpdateWork {
         synchronized(this){
             if(busy())throw new IllegalStateException("更新操作正在进行");
             if(!java.util.Arrays.asList("updates.check","updates.download","updates.install").contains(id))throw new IllegalArgumentException("unknown update action");
-            running=true;installIntent=id.equals("updates.install");operation++;updates.pending(id);
+            running=true;installIntent=id.equals("updates.install");operation++;cancelRequested=false;cancelledAction="";updates.beginOperation(operation);updates.pending(id);
         }
         changed();
         try{worker.execute(()->{
             boolean ready=false;
             try{
-                if(id.equals("updates.check")){updates.check();if(automatic&&!updates.state().isNull("availableVersion"))updates.download();}
+                if(id.equals("updates.check")){updates.check();if(!updates.isCancelled()&&automatic&&!updates.state().isNull("availableVersion"))updates.download();}
                 else if(id.equals("updates.install"))ready=updates.prepareInstall();
                 else updates.download();
-            }catch(Exception error){updates.failure(error.getMessage()==null?"更新操作失败，请重试":error.getMessage());}
+            }catch(Exception error){if(!updates.isCancelled())updates.failure(error.getMessage()==null?"更新操作失败，请重试":error.getMessage());}
             final boolean prepared=ready;
-            main.post(()->{synchronized(this){running=false;installReady=prepared&&installIntent;if(prepared&&!installIntent)updates.deferInstall();}changed();});
+            main.post(()->{synchronized(this){running=false;if(cancelRequested){installReady=false;resumeInstall=false;installIntent=false;updates.cancelled(cancelledAction);}else{installReady=prepared&&installIntent;if(prepared&&!installIntent)updates.deferInstall();}}changed();});
         });}catch(RuntimeException rejected){synchronized(this){running=false;installIntent=false;updates.failure("更新任务未能启动，请重试");}changed();throw rejected;}
+    }
+    void cancel(long expected){
+        synchronized(this){
+            if(expected!=operation)throw new IllegalStateException("更新操作已变化，未执行取消");
+            if(!busy())throw new IllegalStateException("当前没有可取消的更新操作");
+            if(!cancelRequested){cancelRequested=true;cancelledAction=updates.cancellationAction(updates.state().optString("phase").equals("checking")?"updates.check":installIntent?"updates.install":"updates.download");updates.requestCancel(operation);installIntent=false;resumeInstall=false;if(!running){installReady=false;updates.cancelled(cancelledAction);}}
+        }
+        changed();
     }
     /** Only an actual foreground entry may consume a return from Android's external UI. */
     synchronized void returned(){if(updates.resumeInstallRequest())resumeInstall=true;}
