@@ -1,5 +1,7 @@
 # RHRemote 客户端交互规范与验收
 
+最新 Windows 会话操作验证见 [实际按键回执、窗口移屏与退出统计](WINDOWS-SESSION-INPUT-20261028.md)：本地 preview.70 完成两轮指定控件到远端的回执和正常退出，保留先前一次 15 秒原生清理超时作为未解决问题。此项不代替完整 UI、Android 实际会话或升级验收。
+
 目标：完整整理 Windows 与 Android 的设备、连接、设置、更新、同步和会话操作流程。视觉沿用已选的 HelpWire D 方向；交互以 HelpWire 的设备列表 → 选中设备 → 连接 / 编辑 → 会话工具栏为主线。Sunshine 的配对协议及 RHRemote 的 WebDAV / 更新功能按相同的表单和状态规则接入，不伪称这些功能来自 HelpWire。
 
 参照：[设备列表](https://kb.helpwire.app/client-management/client-list/)、[编辑资料](https://kb.helpwire.app/client-management/edit-client/)、[添加设备](https://kb.helpwire.app/remote-control/add-client/)、[开始连接](https://kb.helpwire.app/remote-control/install-operator-app/)、[会话菜单](https://kb.helpwire.app/operator-application/operator-menu/)、[连接选项](https://kb.helpwire.app/operator-application/connection-options/)、[断开](https://kb.helpwire.app/remote-control/disconnect-remote-control/)。资料名称编辑的参照行为是编辑后自动保存；复杂连接表单采用明确提交与取消，离开时保护未保存内容。

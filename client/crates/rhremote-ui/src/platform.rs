@@ -1044,7 +1044,7 @@ impl NativePlatform {
     pub fn state(&self) -> Result<Value, String> {
         self.reap_launches();
         for report in self.cleanup.reap() {
-            let _ = self.statistics.lock().unwrap().event("native_cleanup_end", json!({"kind":report.kind,"pid":report.pid,"forced":report.forced,"confirmed":report.confirmed,"error":report.error}));
+            let _ = self.statistics.lock().unwrap().event("native_cleanup_end", json!({"kind":report.kind,"pid":report.pid,"forced":report.forced,"confirmed":report.confirmed,"error":report.error,"control":report.control}));
         }
         let http_state: Option<Value> = self
             .state_agent

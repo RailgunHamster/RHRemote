@@ -257,6 +257,9 @@ fn cancellation_is_nonblocking_and_holds_transport_until_actual_process_exit() {
     assert!(!f.alive());
     assert!(released.load(Ordering::SeqCst));
     assert!(queue.failure().is_none());
+    let trace = result[0].control.as_ref().unwrap();
+    assert!(trace.owned_state_seen && trace.disconnect_acknowledged);
+    assert_eq!(trace.disconnect_requests, 1);
 }
 #[test]
 fn control_port_may_appear_after_cancellation_was_requested() {
@@ -282,6 +285,9 @@ fn wrong_process_id_cannot_receive_disconnect_and_only_owned_child_is_forced() {
     let result = reports(&queue);
     assert!(result[0].forced && !result[0].confirmed);
     assert_eq!(f.commands.load(Ordering::SeqCst), 0);
+    let trace = result[0].control.as_ref().unwrap();
+    assert!(!trace.owned_state_seen && trace.wrong_process_seen);
+    assert_eq!(trace.disconnect_requests, 0);
     assert!(decoy.alive());
     assert!(!f.alive());
     assert!(queue.failure().is_some());

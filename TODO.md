@@ -12,7 +12,7 @@
 - [ ] 连接流程：补齐本机、claw 和 Android 实机的配对与持久化边界及首帧前其余真实错误路径，定位模拟器复验的一次自然查找失败；受控错误注入不能代替真实身份／硬件失败验收。[逐项规范](design/UI-FLOW-SPEC.md)、[添加准备与重试](design/ANDROID-ADD-READINESS-20261028.md)、[Windows 保存边界](design/WINDOWS-PAIRING-PERSISTENCE-20261028.md)、[视频等待取消与控件](design/WINDOWS-CONNECTION-CONTROLS-20261028.md)、[Windows 密钥与真实 PIN 错误复验](design/WINDOWS-PAIRING-KEY-20261028.md)
 - [ ] 更新流程：完成 Windows 主按钮触发的完整真实下载→安装、应用更新／安装取消，以及双端通过系统安装成功后的配置保留。[取消、真实源传输与当前边界](design/UPDATE-CANCELLATION-20261028.md)、[逐项规范](design/UI-FLOW-SPEC.md)、[安装交接证据与边界](design/UPDATE-DRAFT-HANDOFF-20261028.md)、[Android 页面生命周期证据](design/ANDROID-UPDATE-LIFECYCLE-20261027.md)
 - [ ] 同步流程：完成 Windows 实际窗口中的 HTTPS 及其余网络／文件失败边界；补齐服务器已提交后和本机应用阶段的进程终止、Android 真实传输中断、自动同步实际计时及 OPPO 验收。[待确认写入与当前终止验证边界](design/SYNC-UNCONFIRMED-WRITE-20261028.md)、[HTTP 真实跨端证据](design/REAL-WEBDAV-CROSS-CLIENT-20261028.md)、[Android 提交顺序](design/ANDROID-SYNC-COMMIT-20261028.md)、[Windows 提交与控件](design/WINDOWS-SYNC-COMMIT-20261028.md)
-- [ ] 会话控制：完成 Android 真实串流选屏；补齐双端窗口移屏、安全注意序列、快捷键实际送达、声音播放与真实缩放输入。[选屏结果、Windows 实际切换与剩余范围](design/SESSION-DISPLAY-RESULTS-20261028.md)、[Windows 会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[Android 浅深会话复验](design/HOST-API-EOF-20261028.md)
+- [ ] 会话控制：完成 Android 真实串流选屏、窗口移屏、安全注意序列及快捷键实际送达；补齐 Windows 其余快捷键、双端声音播放与真实缩放输入。[Windows 按键与移屏的具体通过范围](design/WINDOWS-SESSION-INPUT-20261028.md)、[选屏与剩余范围](design/SESSION-DISPLAY-RESULTS-20261028.md)、[Android 浅深会话复验](design/HOST-API-EOF-20261028.md)
 - [ ] 全局交互：补齐 Windows 配对／连接／活动会话的其余实际控件、双向 Tab 等键盘路径及 Android 真实外接键盘路由，完成 Windows 配对／活动会话和 Android 准备及诊断完成结果的其余主题边界；双端物理断网和外网恢复仍待验收；定位 Windows UIA 焦点，验证主界面长时遮挡和不同 DPI 双屏切换后的重绘。[Windows 恢复与剩余边界](design/WINDOWS-RECOVERY-UI-20261028.md)、[恢复提示与取消](design/ANDROID-RECOVERY-UI-20261028.md)、[本地按键与旧回调](design/ANDROID-SESSION-KEYBOARD-20261028.md)、[会话焦点与音量输入](design/ANDROID-SESSION-NAVIGATION-20261028.md)、[主题与错误证据](design/UI-ERRORS-20261028.md)、[诊断任务与重建](design/ANDROID-DIAGNOSTIC-LIFECYCLE-20261028.md)、[Tab 验收](design/WINDOWS-TAB-20261027.md)、[Windows 当前预览](design/WINDOWS-PREVIEW48-MAIN-20261028.md)、[会话复验](design/WINDOWS-SESSION-UI-20261027.md)、[上下文与复制预览](design/UI-CONTEXT-20261027.md)、[补画修复](design/WINDOWS-REPAINT-20261027.md)
 - [ ] 最终交付：完成两端正式安装 / 升级的配置保留与全部流程证据，再统一发布；本地界面预览单独提供。
 
@@ -30,7 +30,7 @@
 - [ ] 重复配对与状态刷新：补齐本机、claw 的服务端更新，以及 Android 实机和跨网络的取消／持久化边界。winserver 部署、双端真实重复配对及原身份保留已通过；保留禁用身份、唯一身份与证书校验规则。[UI 验收](design/UI-FLOW-SPEC.md)
 - [ ] 配对取消的剩余验收：完成 Android 实机及本机服务更新后的取消、立即重试和配对持久化验证。[记录](design/PAIRING-CANCELLATION.md)
 - [ ] 首帧前取消的剩余验收：补齐本机服务、Android 实机和跨网络场景，确认按次取消会释放待 RTSP 槽位，立即重连没有残留 409。[记录](design/PENDING-LAUNCH-CANCELLATION.md)
-- [ ] 会话结束可靠性：继续定位 OPPO 中继结束后 Sunshine 10 秒清理超时／重启，以及 Windows 初始 PING 超时，分别验证其修复边界。
+- [ ] 会话结束可靠性：继续定位 OPPO 中继结束后 Sunshine 10 秒清理超时／重启、Windows 初始 PING 超时，以及 Windows 偶发 15 秒原生清理超时；补齐失败时的身份核对、断开确认和退出分段证据。[Windows 实测与统计边界](design/WINDOWS-SESSION-INPUT-20261028.md)
 - [ ] Windows UI 长期运行：完成软件绘制界面长时间运行、多轮连接和退出的稳定性验证，继续跟踪旧呈现崩溃的根因。[运行记录](design/CLIENT-TRACE-LIFECYCLE-20261024.md)、[本轮边界](design/UI-CONTEXT-20261027.md)
 
 ## P1 启动与慢帧优化

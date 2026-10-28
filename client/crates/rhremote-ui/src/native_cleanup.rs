@@ -23,6 +23,24 @@ pub(crate) struct Report {
     pub forced: bool,
     pub confirmed: bool,
     pub error: Option<String>,
+    pub control: Option<ControlTrace>,
+}
+
+// Record admission and acknowledgement separately from actual process exit.
+// Error categories deliberately exclude URLs, response bodies and credentials.
+#[derive(Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ControlTrace {
+    state_requests: u32,
+    owned_state_seen: bool,
+    wrong_process_seen: bool,
+    last_state_result: &'static str,
+    state_http_status: Option<u16>,
+    disconnect_requests: u32,
+    disconnect_acknowledged: bool,
+    last_disconnect_result: &'static str,
+    disconnect_http_status: Option<u16>,
+    elapsed_ms: u64,
 }
 
 #[derive(Clone, Default)]
@@ -53,6 +71,7 @@ impl Task {
                 forced: false,
                 confirmed: false,
                 error: Some("原生清理任务异常结束，服务端清理未确认".into()),
+                control: None,
             }),
             Self::Pairing { job, _lease } => {
                 let confirmed = job.join().unwrap_or(false);
@@ -62,6 +81,7 @@ impl Task {
                     forced: false,
                     confirmed,
                     error: (!confirmed).then(|| "配对取消未确认".into()),
+                    control: None,
                 }
             }
         }
@@ -107,6 +127,7 @@ impl Queue {
                     forced: false,
                     confirmed: true,
                     error: None,
+                    control: None,
                 }
             }) {
             Ok(job) => {
@@ -184,7 +205,9 @@ fn status(context: &Context, pid: u32) -> Option<Value> {
 
 fn stop(child: &mut Child, context: &Context) -> Report {
     let pid = child.id();
-    let deadline = Instant::now() + context.limit;
+    let started = Instant::now();
+    let deadline = started + context.limit;
+    let mut trace = ControlTrace::default();
     let agent = ureq::AgentBuilder::new()
         .try_proxy_from_env(false)
         .redirects(0)
@@ -218,6 +241,7 @@ fn stop(child: &mut Child, context: &Context) -> Report {
                     forced: false,
                     confirmed,
                     error: (!confirmed).then(|| "原生进程已退出，服务端清理未确认".into()),
+                    control: Some(ControlTrace { elapsed_ms: started.elapsed().as_millis() as u64, ..trace }),
                 };
             }
             Err(_) => {
@@ -229,6 +253,7 @@ fn stop(child: &mut Child, context: &Context) -> Report {
                     forced: true,
                     confirmed: false,
                     error: Some("无法确认本次原生进程是否结束".into()),
+                    control: Some(ControlTrace { elapsed_ms: started.elapsed().as_millis() as u64, ..trace }),
                 };
             }
             Ok(None) => {}
@@ -244,26 +269,55 @@ fn stop(child: &mut Child, context: &Context) -> Report {
                 forced: true,
                 confirmed: false,
                 error: Some(error.into()),
+                control: Some(ControlTrace { elapsed_ms: started.elapsed().as_millis() as u64, ..trace }),
             };
         }
         if !dispatched {
-            let state: Option<Value> = agent
+            trace.state_requests += 1;
+            let state = agent
                 .get(&format!("http://127.0.0.1:{}/v1/state", context.port))
                 .set("Authorization", &format!("Bearer {}", context.token))
-                .call()
-                .ok()
-                .and_then(|r| r.into_json().ok());
+                .call();
+            let state: Option<Value> = match state {
+                Ok(response) => match response.into_json() {
+                    Ok(value) => { trace.last_state_result = "decoded"; Some(value) }
+                    Err(_) => { trace.last_state_result = "invalid_json"; None }
+                },
+                Err(ureq::Error::Status(code, _)) => {
+                    trace.last_state_result = "http_error";
+                    trace.state_http_status = Some(code);
+                    None
+                }
+                Err(_) => { trace.last_state_result = "transport_error"; None }
+            };
             if state
                 .as_ref()
                 .is_some_and(|s| s["processId"].as_u64() == Some(u64::from(pid)))
             {
-                dispatched = agent
+                trace.owned_state_seen = true;
+                trace.disconnect_requests += 1;
+                let response = agent
                     .post(&format!("http://127.0.0.1:{}/v1/disconnect", context.port))
                     .set("Authorization", &format!("Bearer {}", context.token))
-                    .send_json(json!({}))
-                    .ok()
-                    .and_then(|r| r.into_json::<Value>().ok())
-                    .is_some_and(|v| v["ok"] == true);
+                    .send_json(json!({}));
+                dispatched = match response {
+                    Ok(response) => match response.into_json::<Value>() {
+                        Ok(value) => {
+                            trace.last_disconnect_result = if value["ok"] == true { "acknowledged" } else { "rejected" };
+                            value["ok"] == true
+                        }
+                        Err(_) => { trace.last_disconnect_result = "invalid_json"; false }
+                    },
+                    Err(ureq::Error::Status(code, _)) => {
+                        trace.last_disconnect_result = "http_error";
+                        trace.disconnect_http_status = Some(code);
+                        false
+                    }
+                    Err(_) => { trace.last_disconnect_result = "transport_error"; false }
+                };
+                trace.disconnect_acknowledged = dispatched;
+            } else if state.is_some() {
+                trace.wrong_process_seen = true;
             }
         }
         std::thread::sleep(Duration::from_millis(25));
