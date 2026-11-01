@@ -14,6 +14,8 @@ sudo apt install ./rhremote-server_0.2.15_ubuntu24.04_amd64.deb
 
 客户端从应用菜单的 **RHRemote-Moonlight** 启动，或运行 `rhremote`。Ubuntu 软件包通过 `apt install ./新版.deb` 覆盖升级，保留用户配置；此安装方式没有接入 Velopack AppImage 自动替换。
 
+升级客户端前先正常退出客户端。升级服务端时先运行 `rhremote-server stop`，安装新版后在同一 X11 环境运行 `rhremote-server start`；软件包不会自动中断正在使用的串流，也不会替换正在运行的进程。
+
 ## 服务端
 
 在登录页选择 **Ubuntu on Xorg**，登录后运行 `rhremote-server open`。它启动当前用户的统一服务并打开 `https://localhost:47990/`。首次使用在网页设置管理账号，然后从客户端添加服务器地址并配对。
