@@ -70,7 +70,7 @@ $android=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionC
 $metadata=[ordered]@{publishedAt=$releaseNotes.publishedAt;channel='stable';sourceCommit=$commit;windowsVersion=$Version;windowsBuildType='release';windowsUiRenderer='software';androidVersion=$Version;androidBuildType='release';androidDebuggable=$false;androidVersionCode=$AndroidVersionCode;androidPackage='com.rhremote.client';androidSignerSha256=$digests[0];androidApkSha256=$apkHash;oppoInstalled=$false;actualCellularVerified=$false}
 $metadata.serverVersion=if($ServerArchive){$ServerVersion}else{$null}
 $metadata.linuxIncluded=[bool]$LinuxDirectory
-if($LinuxDirectory){$metadata.linuxPlatform='ubuntu24.04-x11-amd64';$metadata.linuxBuildType='release';$metadata.linuxUpdateMethod='manual-deb'}
+if($LinuxDirectory){$metadata.linuxPlatform='ubuntu24.04-x11-amd64';$metadata.linuxBuildType='release';$metadata.linuxServerVersion=$Version;$metadata.linuxUpdateMethod='manual-deb'}
 [IO.File]::WriteAllText((Join-Path $out 'build.json'),($metadata|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $source=Join-Path $out "RHRemote-$Version-source.zip"
 & git -C $repo archive --format=zip --output=$source $commit

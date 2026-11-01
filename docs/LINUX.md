@@ -7,7 +7,7 @@
 下载对应的 `.deb` 与同目录的 `SHA256SUMS.txt`，核对校验值，然后安装需要的一端，也可以同时安装两端：
 
 ```sh
-sha256sum --check SHA256SUMS.txt
+sha256sum --check --ignore-missing SHA256SUMS.txt
 sudo apt install ./rhremote-client_0.2.15_ubuntu24.04_amd64.deb
 sudo apt install ./rhremote-server_0.2.15_ubuntu24.04_amd64.deb
 ```
