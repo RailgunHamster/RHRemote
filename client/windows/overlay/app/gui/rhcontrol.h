@@ -43,7 +43,7 @@ struct RhRuntime {
     std::atomic<bool> ownerExited{false},ownerMonitorEnabled{false},sessionActive{false};
     std::atomic<bool> protocolStarted{false};
     std::atomic<quintptr> streamWindow{0};
-    std::atomic<bool> localDisconnect{false},retryEligible{false},routeRetryEligible{false},routeFatal{false},transportReleased{false};
+    std::atomic<bool> localDisconnect{false},retryEligible{false},recoveryAdmissionBusy{false},routeRetryEligible{false},routeFatal{false},transportReleased{false};
     std::atomic<int> terminationCode{0};
     std::shared_ptr<RhLaunchAttempt> pendingLaunch;
     bool launchAdmissionClosed=false;
@@ -69,7 +69,7 @@ struct RhRuntime {
         if(phase=="error"&&!r.routeRetryEligible.load()&&!r.retryEligible.load())r.routeFatal=true;
         if(phase=="transport_closed")r.transportReleased=true;
         const auto path=qEnvironmentVariable("RHREMOTE_SESSION_STATUS");
-        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"processId",QCoreApplication::applicationPid()},{"launchCleanupStatus",r.launchCleanupStatus},{"phase",phase},{"error",detail},{"streaming",r.streaming},{"firstFrame",r.firstFrame.load()},{"retryEligible",r.retryEligible.load()},{"routeRetryEligible",r.routeRetryEligible.load()},{"routeFatal",r.routeFatal.load()},{"terminationCode",r.terminationCode.load()},{"transportReleased",r.transportReleased.load()}}).toJson(QJsonDocument::Compact));file.commit();}}
+        if(!path.isEmpty()){QSaveFile file(path);if(file.open(QIODevice::WriteOnly)){file.write(QJsonDocument(QJsonObject{{"processId",QCoreApplication::applicationPid()},{"launchCleanupStatus",r.launchCleanupStatus},{"phase",phase},{"error",detail},{"streaming",r.streaming},{"firstFrame",r.firstFrame.load()},{"retryEligible",r.retryEligible.load()},{"recoveryAdmissionBusy",r.recoveryAdmissionBusy.load()},{"routeRetryEligible",r.routeRetryEligible.load()},{"routeFatal",r.routeFatal.load()},{"terminationCode",r.terminationCode.load()},{"transportReleased",r.transportReleased.load()}}).toJson(QJsonDocument::Compact));file.commit();}}
     }
     static void terminated(int code){cancelLaunch();auto& r=get();r.terminationCode=code;r.routeFatal=code==ML_ERROR_PROTECTED_CONTENT||code==ML_ERROR_FRAME_CONVERSION;r.retryEligible=r.firstFrame.load()&&!r.localDisconnect.load()&&!r.routeFatal.load();r.routeRetryEligible=!r.firstFrame.load()&&!r.localDisconnect.load()&&(code==ML_ERROR_NO_VIDEO_TRAFFIC||code==ML_ERROR_NO_VIDEO_FRAME||code==ML_ERROR_UNEXPECTED_EARLY_TERMINATION);status("interrupted",QString("串流中断 (%1)").arg(code));}
     static void stageFailed(int stage,int code){cancelLaunch();auto& r=get();r.routeRetryEligible=!r.firstFrame.load()&&!r.localDisconnect.load()&&(stage==STAGE_RTSP_HANDSHAKE||stage==STAGE_CONTROL_STREAM_START||stage==STAGE_VIDEO_STREAM_START||stage==STAGE_AUDIO_STREAM_START||stage==STAGE_INPUT_STREAM_START);status("error",QString("%1 (%2)").arg(QString::fromLocal8Bit(LiGetStageName(stage))).arg(code));}
@@ -158,7 +158,7 @@ class RhControl : public QObject {
             QMutexLocker lock(&r.mutex);auto result=path=="/v1/state"?r.home:QJsonObject();
             result["ownerMonitorEnabled"]=r.ownerMonitorEnabled.load();result["ownerExited"]=r.ownerExited.load();
             result["processId"]=QCoreApplication::applicationPid();result["launchCleanupStatus"]=r.launchCleanupStatus;result["ok"]=true;result["streaming"]=r.streaming;result["activeProfile"]=r.profile;
-            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["routeRetryEligible"]=r.routeRetryEligible.load();result["routeFatal"]=r.routeFatal.load();result["terminationCode"]=r.terminationCode.load();result["transportReleased"]=r.transportReleased.load();return result;
+            result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["recoveryAdmissionBusy"]=r.recoveryAdmissionBusy.load();result["routeRetryEligible"]=r.routeRetryEligible.load();result["routeFatal"]=r.routeFatal.load();result["terminationCode"]=r.terminationCode.load();result["transportReleased"]=r.transportReleased.load();return result;
         }
         if(method!="POST"){status=404;return {{"ok",false},{"error","unknown endpoint"}};}
         bool streaming;QJsonObject profile;{QMutexLocker lock(&r.mutex);streaming=r.streaming;profile=r.profile;}

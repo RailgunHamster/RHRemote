@@ -7,6 +7,8 @@ pub struct Policy {
     started: Option<u64>,
     next: Option<u64>,
     healthy: Option<u64>,
+    admission_attempt: Option<u32>,
+    pub admission_waits: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -96,6 +98,15 @@ pub enum Decision {
     Exhausted,
 }
 impl Policy {
+    pub fn admission_busy(&mut self, now:u64, native_attempt:u32)->bool {
+        if !self.armed || self.attempts==0 || self.admission_attempt==Some(native_attempt)
+            || self.started.is_none_or(|start|now.saturating_sub(start)>=60_000) { return false; }
+        self.admission_attempt=Some(native_attempt);
+        self.admission_waits=self.admission_waits.saturating_add(1);
+        self.attempts-=1;
+        self.next=Some(now.saturating_add(1500));
+        true
+    }
     pub fn armed(&self) -> bool {
         self.armed
     }
@@ -140,6 +151,21 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn admission_busy_does_not_spend_media_attempts_or_extend_the_recovery_deadline(){
+        let mut p=Policy::default();assert!(!p.admission_busy(0,1));
+        p.observe(0,true,true,false);p.observe(100,false,false,true);
+        assert_eq!(p.observe(600,false,false,true),Decision::Launch);
+        assert!(p.admission_busy(700,1));assert_eq!(p.attempts,0);
+        assert!(!p.admission_busy(800,1));assert_eq!(p.admission_waits,1);
+        assert_eq!(p.observe(2199,false,false,true),Decision::Waiting);
+        assert_eq!(p.observe(2200,false,false,true),Decision::Launch);
+        assert!(p.admission_busy(2300,2));
+        assert_eq!(p.observe(3800,false,false,true),Decision::Launch);
+        assert_eq!(p.attempts,1);
+        assert!(!p.admission_busy(60_100,3));
+        assert_eq!(p.observe(60_100,false,false,true),Decision::Exhausted);
+    }
     #[test]
     fn transient_media_loss_retries_the_working_session_before_excluding_its_route(){
         let mut p=Policy::default();assert!(!p.prefer_session_retry());

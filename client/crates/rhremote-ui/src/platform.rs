@@ -1258,6 +1258,14 @@ impl NativePlatform {
                     released = false;
                 }
             }
+            if !terminal && r.pending.is_none() && !rendered && value["retryEligible"]==true
+                && value["recoveryAdmissionBusy"]==true
+                && current_pid.map(u64::from)==value["processId"].as_u64()
+                && current_pid.is_some()
+                && r.policy.admission_busy(rhremote_core::now_ms(),r.attempt)
+            {
+                let _=self.statistics.lock().unwrap().event("recovery_admission_wait",json!({"nativeAttempt":r.attempt,"waits":r.policy.admission_waits}));
+            }
             if !terminal
                 && r.pending.is_none()
                 && (!alive || released)
@@ -1333,6 +1341,7 @@ impl NativePlatform {
                 value["error"] = json!("");
             }
             value["reconnectAttempts"] = json!(r.policy.attempts);
+            value["reconnectAdmissionWaits"] = json!(r.policy.admission_waits);
             value["routeFallbackAttempts"] = json!(r.routes.failed.len());
             value["routeFailures"] = json!(r.routes.failed);
             value["nativeAttempt"] = json!(r.attempt);

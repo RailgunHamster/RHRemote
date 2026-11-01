@@ -305,6 +305,7 @@ Edit-Source 'app/streaming/session.cpp' {param($s)
         auto& runtime=RhRuntime::get();
         if(RhRecoveryBusy::retry(e.getStatusCode(),qEnvironmentVariableIntValue("RHREMOTE_RECOVERY_ATTEMPT"),runtime.localDisconnect.load()||runtime.ownerExited.load())){
             runtime.retryEligible=true;
+            runtime.recoveryAdmissionBusy=true;
             RhStatistics::event("recovery_host_busy",-1,{{"status",e.getStatusCode()}});
         }
 '@
