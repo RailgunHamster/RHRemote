@@ -1,0 +1,94 @@
+#!/usr/bin/python3
+"""Start RHRemote-Sunshine in the current user's X11 desktop session."""
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import time
+
+UNIT = "rhremote-sunshine.service"
+DIRECTORY = Path("/usr/lib/rhremote/server")
+
+
+def config_directory():
+    override = os.environ.get("XDG_CONFIG_HOME", "")
+    base = Path(override) if override and Path(override).is_absolute() else Path.home() / ".config"
+    return base / "sunshine"
+
+
+def prepare():
+    if not os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_TYPE", "x11") != "x11":
+        raise RuntimeError("此版本服务端需要 X11。请在 Ubuntu 登录页选择 Ubuntu on Xorg，再启动 RHRemote-Sunshine。")
+    if not os.access("/dev/uinput", os.W_OK):
+        raise RuntimeError("当前桌面用户无法写入 /dev/uinput。安装后请注销并重新登录，再启动服务端。")
+    directory = config_directory()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory / "sunshine.conf"
+    if not path.exists():
+        values = {
+            "capture": "x11", "sw_preset": "ultrafast", "sw_tune": "zerolatency",
+            "file_apps": str(directory / "apps.json"), "file_state": str(directory / "sunshine_state.json"),
+            "credentials_file": str(directory / "web-credentials.json"),
+            "cert": str(directory / "credentials/cacert.pem"), "pkey": str(directory / "credentials/cakey.pem"),
+            "log_path": str(directory / "sunshine.log"), "upnp": "disabled", "address_family": "both",
+        }
+        with path.open("x", encoding="utf-8") as stream:
+            stream.write("".join(key + " = " + value + "\n" for key, value in values.items()))
+        path.chmod(0o600)
+        apps = directory / "apps.json"
+        if not apps.exists():
+            with apps.open("x", encoding="utf-8") as stream:
+                json.dump({"env": {}, "apps": [{"name": "Desktop", "cmd": "", "image-path": "desktop.png"}]}, stream)
+            apps.chmod(0o600)
+    return directory
+
+
+def listening(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+def start(enable=False):
+    prepare()
+    active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", UNIT]).returncode == 0
+    if not active and (listening(47989) or listening(47990)):
+        raise RuntimeError("Sunshine 端口已被其他服务占用；请先处理已有实例，再启动 RHRemote-Sunshine。")
+    environment = ["DISPLAY=" + os.environ["DISPLAY"], "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""), "XDG_SESSION_TYPE=x11"]
+    subprocess.run(["systemctl", "--user", "set-environment", *environment], check=True)
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now", UNIT] if enable else ["systemctl", "--user", "start", UNIT], check=True)
+
+
+def main():
+    action = sys.argv[1] if len(sys.argv) == 2 else "help"
+    if action == "run":
+        directory = prepare()
+        executable = DIRECTORY / "RHRemoteHost"
+        os.execv(str(executable), [str(executable), "--sunshine-service", "--sunshine-exe", str(DIRECTORY / "sunshine"), "--sunshine-config", str(directory), "--listen", "[::]:47995"])
+    elif action in ["start", "enable", "open"]:
+        start(action == "enable")
+        if action == "open":
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and not listening(47990):
+                time.sleep(0.2)
+            if not listening(47990):
+                raise RuntimeError("服务尚未就绪，请运行 journalctl --user -u rhremote-sunshine -n 50 查看日志。")
+            subprocess.Popen(["xdg-open", "https://localhost:47990/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif action in ["stop", "status", "disable"]:
+        arguments = [action, "--now", UNIT] if action == "disable" else [action, UNIT]
+        raise SystemExit(subprocess.call(["systemctl", "--user", *arguments]))
+    else:
+        print("RHRemote-Sunshine\nUsage: rhremote-server start|stop|status|enable|disable|open\nWeb configuration: https://localhost:47990/")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        print("RHRemote-Sunshine: " + str(error), file=sys.stderr)
+        raise SystemExit(1)

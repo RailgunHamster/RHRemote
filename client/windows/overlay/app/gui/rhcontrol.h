@@ -25,6 +25,7 @@
 #include "rhparentlifetime.h"
 #include "rhlaunchattempt.h"
 #include "rhcontrolaccept.h"
+#include "rhrecoverybusy.h"
 #include <memory>
 #include <stdexcept>
 

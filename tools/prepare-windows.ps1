@@ -300,6 +300,23 @@ Edit-Source 'app/streaming/session.h' {param($s)
     return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    using RhProbeKey=std::tuple<SDL_Window*,int,int,int,int,int>;`n    RhProbeCache<RhProbeKey,IVideoDecoder> m_RhProbeCache;`n    RhWindowBridge m_RhWindowBridge;`n    int m_RhAudioProbeConfig=-1;`n    bool m_RhAudioProbeOk=false;`n    void execInternal();")
 }
 Edit-Source 'app/streaming/session.cpp' {param($s)
+    $s=Replace-Once $s '    } catch (const GfeHttpResponseException& e) {' @'
+    } catch (const GfeHttpResponseException& e) {
+        auto& runtime=RhRuntime::get();
+        if(RhRecoveryBusy::retry(e.getStatusCode(),qEnvironmentVariableIntValue("RHREMOTE_RECOVERY_ATTEMPT"),runtime.localDisconnect.load()||runtime.ownerExited.load())){
+            runtime.retryEligible=true;
+            RhStatistics::event("recovery_host_busy",-1,{{"status",e.getStatusCode()}});
+        }
+'@
+    $s=Replace-Once $s '#include <QScreen>' @'
+#include <QScreen>
+#if defined(Q_OS_LINUX)
+#include <SDL_syswm.h>
+#undef None
+#undef Bool
+#undef Status
+#endif
+'@
     $s="#include `"gui/rhcontrol.h`"`n#include `"gui/rhpreparation.h`"`n"+$s
     $s=Replace-Once $s '        m_StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;' @'
         m_StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;
@@ -397,6 +414,14 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     emit connectionStarted();
 '@
     $s=$s.Replace('        execInternal();',"        execInternal();`n        RhRuntime::stream(false);")
+    $s=Replace-Once $s '        switch (event.type) {' @'
+#if defined(Q_OS_LINUX) && defined(SDL_VIDEO_DRIVER_X11)
+        // SDL may recreate its X11 window when the video renderer changes flags.
+        // Re-read the native identity instead of retaining the pre-render XID.
+        {SDL_SysWMinfo info{};SDL_VERSION(&info.version);if(SDL_GetWindowWMInfo(m_Window,&info)&&info.subsystem==SDL_SYSWM_X11)RhRuntime::get().streamWindow=quintptr(info.info.x11.window);}
+#endif
+        switch (event.type) {
+'@
     $s=Replace-Once $s '        case SDL_QUIT:' '        case SDL_QUIT:
             if(!RhRuntime::get().retryEligible.load()&&!RhRuntime::get().routeRetryEligible.load())RhRuntime::get().localDisconnect=true;'
     $s=Replace-Once $s '    m_InputHandler->setWindow(m_Window);' @'

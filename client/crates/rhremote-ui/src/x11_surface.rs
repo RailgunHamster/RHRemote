@@ -50,7 +50,7 @@ pub(crate) fn owned(state:&Value)->Result<Geometry,String> {
         let position=c.translate_coordinates(xid,geometry.root,0,0).map_err(|e|e.to_string())?.reply().map_err(|e|e.to_string())?;
         if geometry.width==0||geometry.height==0{return Err("native-empty".into());}
         Ok(Geometry{xid,root:geometry.root,x:position.dst_x.into(),y:position.dst_y.into(),width:geometry.width.into(),height:geometry.height.into(),bounds:(0,0,root.width.into(),root.height.into())})
-    })
+    }).map_err(|reason|if matches!(reason.as_str(),"native-hidden"|"native-empty"){reason}else{"native-window-unavailable".into()})
 }
 
 fn xid(window:&slint::Window)->Result<u32,String>{
@@ -90,4 +90,33 @@ pub(crate) fn focus(state:&Value){
         c.send_event(false,owner.root,xproto::EventMask::SUBSTRUCTURE_REDIRECT|xproto::EventMask::SUBSTRUCTURE_NOTIFY,event).map_err(|e|e.to_string())?;
         c.flush().map_err(|e|e.to_string())
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires the isolated X11 acceptance desktop"]
+    fn only_a_mapped_window_with_the_expected_process_is_an_overlay_owner(){
+        let (c,screen)=x11rb::connect(None).unwrap();let root=c.setup().roots[screen].root;
+        let window=c.generate_id().unwrap();
+        c.create_window(x11rb::COPY_DEPTH_FROM_PARENT,window,root,20,30,640,480,0,xproto::WindowClass::INPUT_OUTPUT,0,&xproto::CreateWindowAux::new()).unwrap().check().unwrap();
+        c.change_property32(xproto::PropMode::REPLACE,window,atom(&c,"_NET_WM_PID").unwrap(),xproto::AtomEnum::CARDINAL,&[std::process::id()]).unwrap().check().unwrap();
+        let mut state=json!({"statistics":{"streamWindow":window.to_string(),"streamProcessId":std::process::id()}});
+        assert_eq!(owned(&state).err().unwrap(),"native-hidden");
+        c.map_window(window).unwrap().check().unwrap();
+        let geometry=owned(&state).unwrap();assert_eq!((geometry.width,geometry.height),(640,480));
+        state["statistics"]["streamProcessId"]=json!(std::process::id()+1);
+        assert_eq!(owned(&state).err().unwrap(),"native-window-unavailable");
+        c.destroy_window(window).unwrap().check().unwrap();
+        state["statistics"]["streamProcessId"]=json!(std::process::id());
+        assert_eq!(owned(&state).err().unwrap(),"native-window-unavailable");
+    }
+    #[test]
+    #[ignore = "requires DUMMY0 on the isolated X11 acceptance desktop"]
+    fn isolated_preview_cannot_silently_move_to_another_output(){
+        assert!(verify_output_origin("DUMMY0",(16,16)).is_ok());
+        assert!(verify_output_origin("missing-output",(16,16)).is_err());
+        assert!(verify_output_origin("DUMMY0",(-10000,16)).is_err());
+    }
 }

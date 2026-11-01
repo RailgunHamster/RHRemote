@@ -1954,6 +1954,7 @@ impl LaunchContext {
             )
             .env("RHREMOTE_CONTROL_TOKEN", &self.token)
             .env("RHREMOTE_SESSION_STATUS", &self.session_status)
+            .env("RHREMOTE_RECOVERY_ATTEMPT", args["recoveryAttempt"].as_u64().unwrap_or(0).to_string())
             .env(
                 "RHREMOTE_RESUME_SELECTION",
                 if args["recoveryAttempt"] == 1 {

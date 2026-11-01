@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=RHRemote-Sunshine
+Exec=rhremote-server open
+Icon=rhremote
+Terminal=false
+Categories=Network;RemoteAccess;
