@@ -731,6 +731,7 @@ mod tests {
         let mut sync=fixture();let merged=config();sync.transferred(merged.clone()).unwrap();let file=preferences(&sync,&merged);sync.clear().unwrap();assert!(sync.applied(&merged,&file).unwrap_err().contains("没有等待应用"));assert!(sync.local.base.is_none());cleanup(sync);
     }
     #[test]
+    #[cfg_attr(target_os="linux",ignore="requires an isolated unlocked Secret Service; use tools/test-linux-secret-service.sh")]
     fn windows_vault_roundtrip_never_exposes_password_in_json() {
         let mut sync = fixture();
         let password = "temporary-test-password-DO-NOT-SYNC";

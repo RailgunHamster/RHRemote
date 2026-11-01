@@ -233,7 +233,9 @@ impl Platform for Boundary {
                 self.calls.lock().unwrap().push(id.into());
                 if let Some((entered, released)) = self.update_gate.lock().unwrap().take() {
                     entered.send(()).unwrap();
-                    released.recv_timeout(Duration::from_secs(5)).unwrap();
+                    // The test owns both ends of this gate. Rendering in an
+                    // unoptimized software backend must not expire the worker.
+                    released.recv().unwrap();
                 }
                 let ready = json!({"managed":true,"phase":"downloaded","availableVersion":"9.0.0","pendingRestart":true,"status":"更新已下载，可安装更新"});
                 *self.updates.lock().unwrap() = ready.clone();
