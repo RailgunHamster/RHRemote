@@ -121,6 +121,8 @@ impl Policy {
                 self.attempts = 0;
                 self.started = None;
                 self.next = None;
+                self.admission_attempt = None;
+                self.admission_waits = 0;
             }
             return Decision::Idle;
         }
@@ -165,6 +167,8 @@ mod tests {
         assert_eq!(p.attempts,1);
         assert!(!p.admission_busy(60_100,3));
         assert_eq!(p.observe(60_100,false,false,true),Decision::Exhausted);
+        p.observe(61_000,true,true,false);p.observe(71_000,true,true,false);
+        assert_eq!(p.admission_waits,0);
     }
     #[test]
     fn transient_media_loss_retries_the_working_session_before_excluding_its_route(){

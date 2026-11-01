@@ -1302,7 +1302,7 @@ impl NativePlatform {
                 ) {
                     crate::recovery::Decision::Launch => {
                         r.args["recoveryAttempt"] = json!(r.policy.attempts);
-                        if r.policy.attempts == 1 {
+                        if r.policy.attempts == 1 && r.policy.admission_waits == 0 {
                             let origin = self.statistics.lock().unwrap().now();
                             r.args["connectOriginUs"] = json!(origin as u64);
                         }
