@@ -31,6 +31,8 @@ def main():
     unit="rhremote-headless-"+args.user+".service"
     marker=directory/"setup.json"
     expected={"user":args.user,"display":args.display,"unit":unit}
+    other_displays=[p for p in Path("/tmp/.X11-unix").glob("X*") if not marker.exists() or p.name!="X"+str(args.display)]
+    if other_displays:raise RuntimeError("Headless setup requires a dedicated machine without another graphical session; use the existing Xorg desktop instead")
     if marker.exists():
         if json.loads(marker.read_text())!=expected:raise RuntimeError("Existing headless configuration differs; it was preserved")
         print("Existing RHRemote headless desktop: :"+str(args.display));return

@@ -26,6 +26,10 @@ def config_directory():
 def prepare():
     if not os.environ.get("DISPLAY") or os.environ.get("XDG_SESSION_TYPE", "x11") != "x11":
         raise RuntimeError("此版本服务端需要 X11。请在 Ubuntu 登录页选择 Ubuntu on Xorg，再启动 RHRemote-Sunshine。")
+    if os.environ.get("RHREMOTE_HEADLESS") == "1":
+        display=os.environ["DISPLAY"].split(".",1)[0].removeprefix(":")
+        if any(path.name!="X"+display for path in Path("/tmp/.X11-unix").glob("X*")):
+            raise RuntimeError("独立桌面模式仅支持没有其他图形会话的服务器；桌面版 Ubuntu 请使用现有 Xorg 会话。")
     if not os.access("/dev/uinput", os.W_OK):
         raise RuntimeError("当前桌面用户无法写入 /dev/uinput。安装后请注销并重新登录，再启动服务端。")
     directory = config_directory()

@@ -28,9 +28,9 @@ journalctl --user -u rhremote-sunshine -n 50
 
 服务端配置使用 `~/.config/sunshine`，客户端使用 `${XDG_CONFIG_HOME:-$HOME/.config}/rhremote`。已有 Sunshine 配置不会被初始化模板覆盖。需要自定义服务端配置目录时，在启动前设置绝对路径 `RHREMOTE_SUNSHINE_CONFIG`。安装不会自动停止其他 Sunshine 实例；默认端口已经占用时，应先处理已有实例。
 
-## 无实体显示器的独立桌面
+## 无桌面 Ubuntu Server 的独立桌面
 
-可选的独立 Xorg 桌面使用 dummy 显示驱动，与现有实体屏分离。先安装依赖，再为实际使用远程服务的普通用户执行一次初始化；显示编号必须尚未使用：
+可选的独立 Xorg 桌面使用 dummy 显示驱动，适用于没有其他图形会话的专用服务器。桌面版 Ubuntu 使用已有的 Xorg 会话；本轮不支持独立桌面与其他图形会话同时运行，检测到已有 X11 会话时会拒绝初始化或启动独立桌面服务。先安装依赖，再为实际使用远程服务的普通用户执行一次初始化；显示编号必须尚未使用：
 
 ```sh
 sudo apt install xserver-xorg-video-dummy openbox xauth x11-xserver-utils acl
