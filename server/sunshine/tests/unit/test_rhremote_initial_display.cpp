@@ -19,6 +19,12 @@ namespace {
 
   /** @brief Reject query injection, truncation, noncanonical and unsupported source names. */
   void validate_names() {
+    require(rhremote::valid_x11_display("rhrx11:HDMI-1"));
+    require(rhremote::valid_x11_display("rhrx11:DUMMY0"));
+    for (const auto *name : {"rhrx11:", "rhrx11:bad&other=1", "rhrx11:bad\n", "rhrx11:a/b", "rhrx11:bad name"}) {
+      require(!rhremote::valid_initial_display(name));
+    }
+    require(!rhremote::valid_x11_display("rhrx11:" + std::string(129, 'a')));
     for (const auto *name : {R"(\\.\DISPLAY1)", R"(\\.\DISPLAY25)", R"(\\.\DISPLAY12345678901234567890)"}) {
       require(rhremote::valid_initial_display(name));
     }
@@ -45,6 +51,10 @@ namespace {
 
   /** @brief Reordering uses fresh indices; absent or ambiguous targets never become the primary. */
   void select_fresh_source() {
+    require(rhremote::initial_display_index("rhrx11:HDMI-1", {"DUMMY0", "HDMI-1"}) == 1);
+    require(rhremote::initial_display_index("rhrx11:HDMI-1", {"HDMI-1", "DUMMY0"}) == 0);
+    require(!rhremote::initial_display_index("rhrx11:HDMI-1", {"HDMI-1", "HDMI-1"}));
+    require(!rhremote::initial_display_index("rhrx11:HDMI-1", {"DUMMY0"}));
     const std::string physical = R"(\\.\DISPLAY1)", target = R"(\\.\DISPLAY25)";
     require(rhremote::initial_display_index(target, {physical, target}) == 1);
     require(rhremote::initial_display_index(target, {target, physical}) == 0);

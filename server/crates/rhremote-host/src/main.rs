@@ -6,6 +6,8 @@ mod transport;
 #[cfg(windows)]
 mod console;
 mod displays;
+#[cfg(target_os="linux")]
+mod displays_linux;
 #[cfg(windows)]
 mod native_displays;
 mod runtime;
@@ -13,6 +15,8 @@ mod runtime;
 mod service;
 #[cfg(windows)]
 mod supervisor;
+#[cfg(target_os="linux")]
+mod supervisor_unix;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde_json::{Value, json};
 use std::{
@@ -129,6 +133,8 @@ fn handle(
         ("GET", "/v1/health") => Ok(
             json!({"product":"RHRemote-Sunshine","serviceMode":if service::unified(){"unified"}else{"legacy"},"servicePid":std::process::id(),"sunshine":supervisor::health()}),
         ),
+        #[cfg(target_os="linux")]
+        ("GET", "/v1/health") => Ok(json!({"product":"RHRemote-Sunshine","servicePid":std::process::id(),"sunshine":supervisor_unix::health()})),
         ("GET", "/v1/displays") => {
             let _guard = gate.lock().unwrap();
             displays::run(&helper, json!({"mode":"list"}))
@@ -173,6 +179,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Error>> {
     let options = runtime::parse(&std::env::args().skip(1).collect::<Vec<_>>())?;
+    #[cfg(target_os="linux")]
+    let mut engine=supervisor_unix::Supervisor::start(&options)?;
     let config = options.config;
     let helper = displays::install_helpers()?;
     let clients = Arc::new(auth::SunshineClients::new(
@@ -183,6 +191,8 @@ fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Err
         match tls(&config, clients.clone()) {
             Ok(tls) => break Arc::new(tls),
             Err(_) if options.unified && started.elapsed() < Duration::from_secs(20) => {
+                #[cfg(target_os="linux")]
+                {if engine.stopping(){return Ok(());}engine.check()?;}
                 #[cfg(windows)]
                 if service::STOP.load(Ordering::SeqCst) {
                     return Ok(());
@@ -200,6 +210,8 @@ fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Err
     listener.set_nonblocking(true)?;
     on_ready();
     loop {
+        #[cfg(target_os="linux")]
+        {if engine.stopping(){break;}engine.check()?;}
         #[cfg(windows)]
         if service::STOP.load(Ordering::SeqCst) {
             break;
@@ -223,11 +235,15 @@ fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Err
         let active = active.clone();
         let clients = clients.clone();
         let network = network.clone();
+        #[cfg(target_os="linux")] let error_root=config.join("rhremote-state");
         std::thread::spawn(move || {
             if let Err(error) = handle(socket, tls, gate, helper, clients, network) {
                 use std::io::Write;
+                #[cfg(not(target_os="linux"))]
                 let root = PathBuf::from(std::env::var_os("ProgramData").unwrap_or_default())
                     .join("RHRemoteHost");
+                #[cfg(target_os="linux")] let root=error_root;
+                let _=fs::create_dir_all(&root);
                 let path = root.join("transport-errors.log");
                 if fs::metadata(&path).is_ok_and(|m| m.len() > 65536) {
                     let _ = fs::write(&path, "");
@@ -295,7 +311,7 @@ fn main() {
     }
     if run().is_err() {
         eprintln!(
-            "RHRemoteHost could not start; check its configured Sunshine directory and interactive Windows session."
+            "RHRemoteHost could not start; check its configured Sunshine directory and desktop session."
         );
         std::process::exit(1)
     }

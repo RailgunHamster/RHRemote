@@ -1,0 +1,247 @@
+--- a/app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp
++++ b/app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp
+@@ -32,18 +32,47 @@
+     m_RenderThread(nullptr),
+     m_VsyncThread(nullptr),
+     m_Stopping(false),
++    m_TraceStalls(qEnvironmentVariableIntValue("RHREMOTE_TRACE_STALLS") == 1),
++    m_TraceFrequency(SDL_GetPerformanceFrequency()),
++    m_TraceEvents(0),
++    m_TraceLastVsync(0),
++    m_TraceLastDecoded(0),
++    m_TraceLastRender(0),
++    m_RecoverMissedVsync(qEnvironmentVariableIntValue("RHREMOTE_WAKE_RECOVERY") == 1),
++    m_RecoveryLastVsync(0),
+     m_VsyncSource(nullptr),
+     m_VsyncRenderer(renderer),
+     m_MaxVideoFps(0),
+     m_DisplayFps(0),
+     m_VideoStats(videoStats)
+ {
+-
++    if (m_TraceStalls) {
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
++                    "RHRemote stall trace enabled: clock_frequency=%llu, pacer_limit=256",
++                    static_cast<unsigned long long>(m_TraceFrequency));
++    }
++}
++
++void Pacer::traceStall(const char* stage, Uint64 duration, Uint64 at, int pacingQueue, int renderQueue)
++{
++    // Only anomalies are logged; a bounded budget limits diagnostic overhead.
++    if (m_TraceEvents.fetch_add(1, std::memory_order_relaxed) >= 256) return;
++    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
++                "RHRemote stall: stage=%s qpc=%llu gap_ms=%.3f pacing_q=%d render_q=%d",
++                stage, static_cast<unsigned long long>(at),
++                1000.0 * duration / m_TraceFrequency, pacingQueue, renderQueue);
+ }
+ 
+ Pacer::~Pacer()
+ {
++    // Pair the stop transition and notifications with the mutex used by waiters.
++    // Otherwise a waiter can check false, miss wakeAll(), then sleep indefinitely.
++    m_FrameQueueLock.lock();
+     m_Stopping = true;
++    m_PacingQueueNotEmpty.wakeAll();
++    m_VsyncSignalled.wakeAll();
++    m_RenderQueueNotEmpty.wakeAll();
++    m_FrameQueueLock.unlock();
+ 
+     // Stop the V-sync thread
+     if (m_VsyncThread != nullptr) {
+@@ -118,7 +147,14 @@
+         }
+         else {
+             // Let the VSync source wait in the context of our thread
++            Uint64 sourceWaitStart = me->m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+             me->m_VsyncSource->waitForVsync();
++            if (me->m_TraceStalls) {
++                Uint64 now = SDL_GetPerformanceCounter();
++                if (1000.0 * (now - sourceWaitStart) / me->m_TraceFrequency > 1500.0 / me->m_DisplayFps) {
++                    me->traceStall("vsync-source-wait", now - sourceWaitStart, now, -1, -1);
++                }
++            }
+         }
+ 
+         if (me->m_Stopping) {
+@@ -143,13 +179,21 @@
+ 
+     while (!me->m_Stopping) {
+         // Wait for the renderer to be ready for the next frame
++        Uint64 readyStart = me->m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+         me->m_VsyncRenderer->waitToRender();
++        if (me->m_TraceStalls) {
++            Uint64 now = SDL_GetPerformanceCounter();
++            if (1000.0 * (now - readyStart) / me->m_TraceFrequency > 50.0) {
++                me->traceStall("render-ready-wait", now - readyStart, now, -1, -1);
++            }
++        }
+ 
+         // Acquire the frame queue lock to protect the queue and
+         // the not empty condition
+         me->m_FrameQueueLock.lock();
+ 
+         // Wait for a frame to be ready to render
++        Uint64 queueWaitStart = me->m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+         while (!me->m_Stopping && me->m_RenderQueue.isEmpty()) {
+             me->m_RenderQueueNotEmpty.wait(&me->m_FrameQueueLock);
+         }
+@@ -161,7 +205,15 @@
+         }
+ 
+         AVFrame* frame = me->m_RenderQueue.dequeue();
++        int pacingCount = me->m_PacingQueue.count();
++        int renderCount = me->m_RenderQueue.count();
+         me->m_FrameQueueLock.unlock();
++        if (me->m_TraceStalls) {
++            Uint64 now = SDL_GetPerformanceCounter();
++            if (1000.0 * (now - queueWaitStart) / me->m_TraceFrequency > 50.0) {
++                me->traceStall("render-queue-wait", now - queueWaitStart, now, pacingCount, renderCount);
++            }
++        }
+ 
+         me->renderFrame(frame);
+     }
+@@ -200,7 +252,47 @@
+     // Make sure initialize() has been called
+     SDL_assert(m_MaxVideoFps != 0);
+ 
++    Uint64 lockStart = m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
+     m_FrameQueueLock.lock();
++
++    if (m_TraceStalls) {
++        Uint64 now = SDL_GetPerformanceCounter();
++        if (1000.0 * (now - lockStart) / m_TraceFrequency > 1500.0 / m_DisplayFps) {
++            traceStall("vsync-lock-wait", now - lockStart, now, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        if (m_TraceLastVsync && 1000.0 * (now - m_TraceLastVsync) / m_TraceFrequency > 1500.0 / m_DisplayFps) {
++            traceStall("vsync-gap", now - m_TraceLastVsync, now, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        m_TraceLastVsync = now;
++    }
++
++    if (m_StableCadence.enabled()) {
++        bool lateWake = false;
++        Uint64 recoveryNow = 0;
++        Uint64 recoveryGap = 0;
++        if (m_RecoverMissedVsync) {
++            recoveryNow = SDL_GetPerformanceCounter();
++            recoveryGap = m_RecoveryLastVsync ? recoveryNow - m_RecoveryLastVsync : 0;
++            lateWake = 1000.0 * recoveryGap / m_TraceFrequency > 1500.0 / m_DisplayFps;
++            m_RecoveryLastVsync = recoveryNow;
++        }
++        // Keep the newest frame plus the configured arrival-time reserve.
++        // Bound the delay when the source delivers a burst rather than accumulating it.
++        while (m_PacingQueue.count() > static_cast<int>(m_StableCadence.reserve() + 1)) {
++            AVFrame* oldFrame = m_PacingQueue.dequeue();
++            m_VideoStats->pacerDroppedFrames++;
++            av_frame_free(&oldFrame);
++        }
++        if (!m_StableCadence.shouldRender(m_PacingQueue.count(), lateWake)) {
++            m_FrameQueueLock.unlock();
++            return;
++        }
++        if (lateWake && m_TraceStalls) {
++            traceStall("late-wake-recovery", recoveryGap, recoveryNow, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        enqueueFrameForRenderingAndUnlock(m_PacingQueue.dequeue());
++        return;
++    }
+ 
+     // If the queue length history entries are large, be strict
+     // about dropping excess frames.
+@@ -261,6 +353,18 @@
+     m_MaxVideoFps = maxVideoFps;
+     m_DisplayFps = StreamUtils::getDisplayRefreshRate(window);
+     m_RendererAttributes = m_VsyncRenderer->getRendererAttributes();
++    int reserve = qEnvironmentVariableIntValue("RHREMOTE_PACING_RESERVE");
++    if (reserve == 0) reserve = 1;
++    if (enablePacing && qEnvironmentVariableIntValue("RHREMOTE_STABLE_PACING") == 1 &&
++            m_StableCadence.configure(m_DisplayFps, m_MaxVideoFps, reserve)) {
++        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
++                    "RHRemote stable cadence: %d Hz / %d FPS, arrival reserve %d frame(s)",
++                    m_DisplayFps, m_MaxVideoFps, reserve);
++        m_RecoveryLastVsync = 0;
++        if (m_RecoverMissedVsync) {
++            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "RHRemote late-wake recovery enabled");
++        }
++    }
+ 
+     if (enablePacing) {
+         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+@@ -335,10 +439,23 @@
+     // Count time spent in Pacer's queues
+     Uint32 beforeRender = SDL_GetTicks();
+     m_VideoStats->totalPacerTime += beforeRender - frame->pkt_dts;
++    Uint64 renderStart = m_TraceStalls ? SDL_GetPerformanceCounter() : 0;
++    if (m_TraceStalls) {
++        if (m_TraceLastRender && 1000.0 * (renderStart - m_TraceLastRender) / m_TraceFrequency > 50.0) {
++            traceStall("render-gap", renderStart - m_TraceLastRender, renderStart, -1, -1);
++        }
++        m_TraceLastRender = renderStart;
++    }
+ 
+     // Render it
+     m_VsyncRenderer->renderFrame(frame);
+     Uint32 afterRender = SDL_GetTicks();
++    if (m_TraceStalls) {
++        Uint64 now = SDL_GetPerformanceCounter();
++        if (1000.0 * (now - renderStart) / m_TraceFrequency > 50.0) {
++            traceStall("render-call", now - renderStart, now, -1, -1);
++        }
++    }
+ 
+     m_VideoStats->totalRenderTime += afterRender - beforeRender;
+     m_VideoStats->renderedFrames++;
+@@ -403,6 +520,13 @@
+ 
+     // Queue the frame and possibly wake up the render thread
+     m_FrameQueueLock.lock();
++    if (m_TraceStalls) {
++        Uint64 now = SDL_GetPerformanceCounter();
++        if (m_TraceLastDecoded && 1000.0 * (now - m_TraceLastDecoded) / m_TraceFrequency > 50.0) {
++            traceStall("decoded-gap", now - m_TraceLastDecoded, now, m_PacingQueue.count(), m_RenderQueue.count());
++        }
++        m_TraceLastDecoded = now;
++    }
+     if (m_VsyncSource != nullptr) {
+         dropFrameForEnqueue(m_PacingQueue);
+         m_PacingQueue.enqueue(frame);
+--- a/app/streaming/video/ffmpeg-renderers/pacer/pacer.h
++++ b/app/streaming/video/ffmpeg-renderers/pacer/pacer.h
+@@ -6,6 +6,8 @@
+ #include <QQueue>
+ #include <QMutex>
+ #include <QWaitCondition>
++#include <atomic>
++#include "StableCadence.h"
+ 
+ class IVsyncSource {
+ public:
+@@ -50,6 +52,8 @@
+ 
+     void dropFrameForEnqueue(QQueue<AVFrame*>& queue);
+ 
++    void traceStall(const char* stage, Uint64 duration, Uint64 at, int pacingQueue, int renderQueue);
++
+     QQueue<AVFrame*> m_RenderQueue;
+     QQueue<AVFrame*> m_PacingQueue;
+     QQueue<int> m_PacingQueueHistory;
+@@ -60,7 +64,16 @@
+     QWaitCondition m_VsyncSignalled;
+     SDL_Thread* m_RenderThread;
+     SDL_Thread* m_VsyncThread;
+-    bool m_Stopping;
++    std::atomic<bool> m_Stopping;
++    StableCadence m_StableCadence;
++    const bool m_TraceStalls;
++    const Uint64 m_TraceFrequency;
++    std::atomic<unsigned> m_TraceEvents;
++    Uint64 m_TraceLastVsync;
++    Uint64 m_TraceLastDecoded;
++    Uint64 m_TraceLastRender;
++    const bool m_RecoverMissedVsync;
++    Uint64 m_RecoveryLastVsync;
+ 
+     IVsyncSource* m_VsyncSource;
+     IFFmpegRenderer* m_VsyncRenderer;

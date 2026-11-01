@@ -1,5 +1,17 @@
 use std::path::PathBuf;
 
+fn default_config() -> Result<PathBuf, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let absolute=|name| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from).filter(|v| v.is_absolute());
+        let base=absolute("XDG_CONFIG_HOME").or_else(||absolute("HOME").map(|v|v.join(".config")))
+            .ok_or("HOME or an absolute XDG_CONFIG_HOME is required")?;
+        Ok(base.join("sunshine"))
+    }
+    #[cfg(not(target_os = "linux"))]
+    { Ok(PathBuf::from(r"C:\Program Files\Sunshine\config")) }
+}
+
 pub struct Options {
     pub config: PathBuf,
     pub listen: String,
@@ -9,7 +21,7 @@ pub struct Options {
 
 pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut options = Options {
-        config: PathBuf::from(r"C:\Program Files\Sunshine\config"),
+        config: PathBuf::new(),
         listen: "0.0.0.0:47995".into(),
         unified: false,
         sunshine: None,
@@ -50,6 +62,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     if !options.unified && options.sunshine.is_some() {
         return Err("--sunshine-exe requires --sunshine-service".into());
     }
+    if options.config.as_os_str().is_empty(){options.config=default_config()?;}
     Ok(options)
 }
 

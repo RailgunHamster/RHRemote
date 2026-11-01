@@ -31,11 +31,17 @@ impl Prepare {
     }
 }
 pub fn install_helpers() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    #[cfg(target_os="linux")]
+    {return Ok(std::env::current_exe()?.parent().ok_or("Executable directory missing")?.join("RHRemoteDisplay"));}
+    #[cfg(not(target_os="linux"))]
     Ok(std::env::current_exe()?
         .parent()
         .ok_or("Executable directory missing")?
         .join("scripts/display.ps1"))
 }
+#[cfg(target_os="linux")]
+pub fn run(helper:&Path,request:Value)->Result<Value,String>{crate::displays_linux::run(helper,request)}
+#[cfg(not(target_os="linux"))]
 pub fn run(helper: &Path, request: Value) -> Result<Value, String> {
     let started = std::time::Instant::now();
     if !helper.exists() {

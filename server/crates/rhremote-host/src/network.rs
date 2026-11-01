@@ -81,10 +81,13 @@ impl Probe {
     }
 }
 pub fn information() -> Value {
+    #[cfg(windows)]
     let executable = std::path::PathBuf::from(
         std::env::var_os("ProgramFiles").unwrap_or_else(|| "C:\\Program Files".into()),
     )
     .join("Tailscale/tailscale.exe");
+    #[cfg(not(windows))]
+    let executable = std::path::PathBuf::from("/usr/bin/tailscale");
     let mut command = Command::new(executable);
     command
         .args(["status", "--json"])

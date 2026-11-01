@@ -395,7 +395,7 @@ impl SharedConfig {
             if !valid_id(id)
                 || c.name.is_empty()
                 || c.name.len() > 256
-                || !["windows", "android", "legacy"].contains(&c.platform.as_str())
+                || !["windows", "android", "linux", "legacy"].contains(&c.platform.as_str())
             {
                 return Err("invalid client metadata".into());
             }
@@ -422,9 +422,11 @@ impl Saved {
         self.clients
             .entry(self.client_id.clone())
             .or_insert_with(|| ClientInfo {
-                name: std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into()),
+                name: if platform=="linux"{std::env::var("HOSTNAME").unwrap_or_else(|_|"Linux".into())}else{std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into())},
                 platform: if platform == "android" {
                     "android"
+                } else if platform == "linux" {
+                    "linux"
                 } else {
                     "windows"
                 }

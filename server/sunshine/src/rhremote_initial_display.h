@@ -19,8 +19,22 @@ namespace rhremote {
     busy,  ///< A pending launch or shared capture prevents independent selection.
   };
 
-  /** @brief Check a canonical Windows GDI source name. @param name Requested source. @return Whether it fits CCHDEVICENAME and canonical syntax. */
+  /** @brief Check a bounded X11 output selector. @param name Wire selector. @return Whether its output name is canonical and safe to serialize. */
+  inline bool valid_x11_display(std::string_view name) {
+    constexpr std::string_view prefix = "rhrx11:";
+    if (!name.starts_with(prefix) || name.size() <= prefix.size() || name.size() > prefix.size() + 128) {
+      return false;
+    }
+    return std::all_of(name.begin() + prefix.size(), name.end(), [](char c) {
+      return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == ':';
+    });
+  }
+
+  /** @brief Check a canonical Windows GDI or X11 source selector. @param name Requested source. @return Whether its platform-specific syntax is valid. */
   inline bool valid_initial_display(std::string_view name) {
+    if (valid_x11_display(name)) {
+      return true;
+    }
     constexpr std::string_view prefix = R"(\\.\DISPLAY)";
     if (!name.starts_with(prefix) || name.size() <= prefix.size() || name.size() > 31 || name[prefix.size()] == '0') {
       return false;
@@ -50,8 +64,9 @@ namespace rhremote {
       return std::nullopt;
     }
     std::optional<int> selected;
+    const auto backend_name = valid_x11_display(name) ? name.substr(7) : name;
     for (std::size_t i = 0; i < fresh_names.size(); ++i) {
-      if (fresh_names[i] == name) {
+      if (fresh_names[i] == backend_name) {
         if (selected) {
           return std::nullopt;
         }

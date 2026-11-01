@@ -6,8 +6,12 @@
 #include <QMap>
 #include <QRegularExpression>
 #include <QSettings>
+#ifdef Q_OS_WIN
 #include <QtCore/qt_windows.h>
 #include <tlhelp32.h>
+#else
+#include <dlfcn.h>
+#endif
 
 namespace RhCaptureTools {
 // Use only a capture manifest's documented opt-out; never accept arbitrary
@@ -26,6 +30,7 @@ inline QMap<QByteArray,QByteArray> optOut(const QJsonObject& manifest){
     return result;
 }
 inline void isolate(){
+#ifdef Q_OS_WIN
     if(qEnvironmentVariableIsEmpty("RHREMOTE_CONTROL_PORT")||qEnvironmentVariableIntValue("RHREMOTE_ALLOW_GRAPHICS_CAPTURE")==1)return;
     RhStatistics::Scope trace("client_capture_layer_scan");QJsonArray layers;
     for(const auto root:{"HKEY_LOCAL_MACHINE\\SOFTWARE\\Khronos\\Vulkan\\ImplicitLayers","HKEY_CURRENT_USER\\SOFTWARE\\Khronos\\Vulkan\\ImplicitLayers"}){
@@ -39,8 +44,10 @@ inline void isolate(){
         }
     }
     if(!layers.isEmpty())RhStatistics::event("graphics_capture_opt_out",-1,{{"layers",layers},{"scope","native_process_only"}});
+#endif
 }
 inline bool attached(){
+#ifdef Q_OS_WIN
     HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE,GetCurrentProcessId());
     if(snapshot==INVALID_HANDLE_VALUE)return true;
     MODULEENTRY32W entry{};entry.dwSize=sizeof(entry);bool found=false;unsigned count=0;
@@ -50,5 +57,8 @@ inline bool attached(){
         found=GetProcAddress(module,"RENDERDOC_GetAPI")!=nullptr;FreeLibrary(module);if(found)break;
     }
     CloseHandle(snapshot);return found;
+#else
+    return dlsym(RTLD_DEFAULT,"RENDERDOC_GetAPI")!=nullptr;
+#endif
 }
 }

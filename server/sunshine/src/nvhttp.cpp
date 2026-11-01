@@ -566,7 +566,9 @@ namespace nvhttp {
   bool prepare_initial_display(const args_t &args, rtsp_stream::launch_session_t &session, pt::ptree &tree, const rhremote::launch_peer &peer) {
     const auto name = get_arg(args, "rhrdisplay", "");
 #ifdef _WIN32
-    constexpr bool supported = true;
+    const bool supported = !rhremote::valid_x11_display(name);
+#elif defined(__linux__)
+    const bool supported = rhremote::valid_x11_display(name) && config::video.capture == "x11";
 #else
     constexpr bool supported = false;
 #endif

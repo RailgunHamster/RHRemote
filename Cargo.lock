@@ -5605,6 +5605,7 @@ name = "rhremote-host"
 version = "0.2.3"
 dependencies = [
  "anyhow",
+ "libc",
  "rcgen",
  "rhremote-transport",
  "rustls",

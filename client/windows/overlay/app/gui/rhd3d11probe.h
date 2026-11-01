@@ -1,4 +1,6 @@
 #pragma once
+#include <QtGlobal>
+#ifdef Q_OS_WIN
 #include <d3d11.h>
 #include <dxgi1_5.h>
 #include <wrl/client.h>
@@ -40,3 +42,4 @@ inline void put(IDXGIFactory5* factory,ID3D11Device* device){
     value.factory=factory;value.device=device;value.adapter=description.AdapterLuid;
 }
 }
+#endif

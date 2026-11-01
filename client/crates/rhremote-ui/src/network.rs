@@ -24,10 +24,13 @@ pub struct Network {
     tunnel: Mutex<Option<TransportClient>>,
 }
 fn tailscale() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
     let path = std::path::PathBuf::from(
         std::env::var_os("ProgramFiles").unwrap_or_else(|| "C:\\Program Files".into()),
     )
     .join("Tailscale/tailscale.exe");
+    #[cfg(not(windows))]
+    let path=std::path::PathBuf::from("/usr/bin/tailscale");
     path.is_file().then_some(path)
 }
 fn cli_cancelable(args: &[&str],cancel:&std::sync::atomic::AtomicBool) -> Option<String> {
