@@ -21,7 +21,7 @@ chmod 600 "$fixture/password"
 gnome-keyring-daemon --foreground --components=secrets --unlock --control-directory="$GNOME_KEYRING_CONTROL" < "$fixture/password" > "$fixture/daemon.log" 2>&1 &
 daemon_pid=$!
 for _ in {1..50}; do
-    if dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets | rg -q 'boolean true'; then break; fi
+    if dbus-send --session --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus.NameHasOwner string:org.freedesktop.secrets | grep -q 'boolean true'; then break; fi
     sleep .1
 done
 "$binary" --exact config_sync::tests::windows_vault_roundtrip_never_exposes_password_in_json --include-ignored --nocapture
