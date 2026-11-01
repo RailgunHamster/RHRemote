@@ -101,6 +101,7 @@ def main():
             raise RuntimeError("Built Sunshine web assets are missing")
         shutil.copytree(args.assets, server / "usr/share/rhremote-sunshine")
         common(server, "rhremote-server")
+        (server / "usr/bin").mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "server/linux/rhremote-server", server / "usr/bin/rhremote-server")
         (server / "usr/bin/rhremote-server").chmod(0o755)
         shutil.copyfile(ROOT / "server/linux/rhremote-headless", server / "usr/bin/rhremote-headless")

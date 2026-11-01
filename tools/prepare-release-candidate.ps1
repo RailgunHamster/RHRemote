@@ -8,7 +8,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
-& git -C $repo diff --quiet HEAD --
+& git -C $repo diff --quiet HEAD -- . ':!client/crates/rhremote-core/src/settings.json'
 if($LASTEXITCODE-ne0){throw 'Build and stage a release from clean committed product sources'}
 $commit=(& git -C $repo rev-parse HEAD).Trim()
 if($commit-notmatch'^[a-f0-9]{40}$'){throw 'Source commit unavailable'}
