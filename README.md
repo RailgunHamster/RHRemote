@@ -6,6 +6,7 @@ RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 *
 
 - Windows：Rust + Slint 界面，Moonlight Qt 接收、硬件解码与 SDL 渲染。
 - Android：原生 View + Java，MediaCodec 解码与 Surface 呈现。
+- Ubuntu 24.04 amd64 / X11：Rust + Slint 客户端与统一服务端，分别提供 `.deb` 安装包，见 [Ubuntu 安装与使用](docs/LINUX.md)。
 - 每个客户端实例 × 远程设备独立连接参数；设备支持别名、主副键补偿。
 - 画面、音频、输入、网络、高级五类连接设置；支持静音、音量、触控板、直接点击、捏合缩放与双指滚动。
 - WebDAV 支持 HTTP / HTTPS；自动同步可选 5、15、30、60 分钟。密码及配对密钥留在本机。
@@ -17,7 +18,9 @@ RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 *
 
 Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运行。Android 使用 arm64-v8a APK，包名为 `com.rhremote.client`，可与原版 Moonlight 并存。升级保留同一应用身份和签名，不要先卸载。
 
-当前客户端版本为 v0.2.13，默认从 CNB 更新，可在“设置 → 更新 → 首选更新源”选择 GitHub；首选源失败时自动尝试另一来源。Windows 使用导航、设备列表和详情分栏；Android 按可用宽度切换分栏或列表／详情页面。Android 沿用已有签名，Windows 尚无代码签名证书。待验收项见 [TODO](TODO.md)，Linux 支持另行适配、验证。
+当前客户端版本为 v0.2.15，Windows / Android 默认从 CNB 更新，可在“设置 → 更新 → 首选更新源”选择 GitHub；首选源失败时自动尝试另一来源。Ubuntu 使用 `.deb` 手动覆盖升级。Windows 使用导航、设备列表和详情分栏；Android 按可用宽度切换分栏或列表／详情页面。Android 沿用已有签名，Windows 尚无代码签名证书。待验收项见 [TODO](TODO.md)。
+
+串流中打开顶部 **控制 → 悬浮键盘**，可显示沿屏幕边缘排列的半透明按键：方向键在右下，Tab / Shift+Tab 在左侧，Esc、Backspace、Del、Enter 在边缘，空白区域允许操作远程画面。开关默认关闭，支持 Windows、Android 与 X11 客户端。
 
 开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制栏悬浮在串流窗口顶部，可收起为小开关；Android 顶部固定开关展开“操作 / 屏幕 / 声音”分类面板，按钮按宽度排列为两列或三列，长内容纵向滚动。每个操作都有对应动作接口。
 
