@@ -8,6 +8,8 @@
 
 ## P0 双端 UI 完整验收
 
+- [ ] Linux/X11 输入观察：定位压力测试中单次“向上”按下事件漏记的来源；后续内核与窗口同步采样 100 次按键均完整，尚未复现原样本。[范围与记录](design/UBUNTU-AND-FLOATING-KEYBOARD-20261102.md)
+
 - [ ] Android 页面响应：继续定位首次读取、其他写事务／主线程排队、Game 键盘映射 Binder 调用和原 172 输入分发 ANR，补齐冷缓存／真实硬件解码、持续串流和 OPPO 的 UI 响应。已有身份查询的无关锁等待与快照重复读的已验证范围见[181 记录](design/ANDROID-CONFIG-READ-20261101.md)；该轮预览存在未确定的整页灰色／after 帧差异，补充祖先视图、窗口焦点、绘制状态与布局边界，不能宣称完整像素通过。面板初始化、反馈及仍有 9.6 秒慢首帧的范围见[178 记录](design/ANDROID-SESSION-PANEL-REAL-20261101.md)。复现历史检查页可见性失败并确定根因，现有边界见[169 记录](design/ANDROID-VISIBILITY-OBSERVER-20261031.md)和[162 记录](design/ANDROID-HIDDEN-DIAGNOSTIC-BANNER-20261031.md)。
 
 - [ ] 持续自动码率：继续完成实际链路反馈、会话内编码器调节及实际流量对照。双端每设备配置和连接时预算已随 0.2.11 发布，连接时上限仍不等于持续自适应。[第一阶段](design/AUTO-BITRATE-STARTING-RATE-20261031.md)
