@@ -953,7 +953,7 @@ public final class RhHome implements RhActions.Target {
         updateVersion.setText(s.isNull("availableVersion")?"":"可用版本 "+s.optString("availableVersion"));updateVersion.setVisibility(s.isNull("availableVersion")?View.GONE:View.VISIBLE);
         boolean failed=phase.equals("error");updateStatus.setText(failed?"更新失败，请重试。":s.optString("status"));updateStatus.setTextColor(failed?failureColor:ink);
         updateDetailsToggle.setVisibility(failed?View.VISIBLE:View.GONE);updateDetailsToggle.setText(updateDetails?"收起详情":"查看详情");updateFailureDetails.setText(s.optString("status"));updateFailureDetails.setVisibility(failed&&updateDetails?View.VISIBLE:View.GONE);
-        updateProvider.setText(provider.isEmpty()?"更新源：Gitee / GitHub":"更新源："+provider);
+        updateProvider.setText(provider.isEmpty()?"更新源：CNB / GitHub":"更新源："+provider);
         long total=s.optLong("totalBytes"),bytes=s.optLong("downloadedBytes");boolean downloading=phase.equals("downloading")&&total>0;
         updateBytes.setVisibility(total>0&&(bytes>0||phase.equals("downloading"))?View.VISIBLE:View.GONE);updateBytes.setText(String.format(Locale.ROOT,"%.1f / %.1f MB",bytes/1048576.0,total/1048576.0));
         updateProgress.setVisibility(updateWork.busy()?View.VISIBLE:View.GONE);updateProgress.setIndeterminate(!downloading);if(downloading)updateProgress.setProgress((int)(bytes*100/total));

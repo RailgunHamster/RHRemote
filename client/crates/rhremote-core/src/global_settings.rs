@@ -440,7 +440,7 @@ mod interaction_tests {
         assert_eq!(c.dispatch("updates.primary",json!({"expectedIntent":expected}))["ok"],false);assert_eq!(platform.calls.lock().unwrap().len(),1);let _=std::fs::remove_file(&c.storage);
     }
     #[test] fn update_intent_ignores_progress_notes_and_mirror_but_not_the_selected_package_or_task(){
-        let a=json!({"phase":"available","availableVersion":"9.0.0","candidateId":"package-a"});let mut b=a.clone();b["notes"]=json!("New notes");b["provider"]=json!("gitee");b["progress"]=json!(43);
+        let a=json!({"phase":"available","availableVersion":"9.0.0","candidateId":"package-a"});let mut b=a.clone();b["notes"]=json!("New notes");b["provider"]=json!("cnb");b["progress"]=json!(43);
         assert_eq!(update_primary_intent(&a,4),update_primary_intent(&b,4));assert_ne!(update_primary_intent(&a,4),update_primary_intent(&b,5));b["candidateId"]=json!("package-b");assert_ne!(update_primary_intent(&a,4),update_primary_intent(&b,4));
         for malformed in [Value::Null,json!(4),json!([]),json!({})]{assert!(validate_update_intent("updates.primary",&json!({"expectedIntent":malformed}),&a,4).is_err());}
     }

@@ -533,7 +533,7 @@ fn update_states(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) 
         ),
         (
             "check-failed",
-            json!({"phase":"error","failedAction":"updates.check","availableVersion":"9.0.0","status":"GitHub 与 Gitee 更新源均不可用"}),
+            json!({"phase":"error","failedAction":"updates.check","availableVersion":"9.0.0","status":"GitHub 与 CNB 更新源均不可用"}),
             false,
             "重新检查",
             "",

@@ -16,7 +16,7 @@ import java.util.*;
 
 /** Public release metadata; user initiated installation opens Android's installer. */
 public final class RhUpdates {
-    private static final String GITEE="https://gitee.com/railgunhamster/RHRemote/releases/download/",GITHUB="https://github.com/RailgunHamster/RHRemote/releases/";
+    private static final String CNB="https://cnb.cool/railgunhamster/RHRemote/-/releases/",GITHUB="https://github.com/RailgunHamster/RHRemote/releases/";
     private final Context context;
     private final File directory,apk,receipt;
     private File installationFile;
@@ -110,8 +110,8 @@ public final class RhUpdates {
     public void check()throws Exception{
         checkCancelled();
         pending("updates.check");JSONObject manifest=null;JSONArray failures=new JSONArray();sourceFailures=failures;
-        for(String url:new String[]{GITEE+"latest/releases.android.json",GITHUB+"latest/download/releases.android.json"}){
-            provider=url.startsWith(GITEE)?"Gitee":"GitHub";status("checking","正在从 "+provider+" 检查更新");
+        for(String url:new String[]{CNB+"latest/download/releases.android.json",GITHUB+"latest/download/releases.android.json"}){
+            provider=url.startsWith(CNB)?"CNB":"GitHub";status("checking","正在从 "+provider+" 检查更新");
             HttpURLConnection c=null;try{
                 c=request(url);int response=c.getResponseCode();checkCancelled();if(response!=200)throw new IOException("HTTP "+response);
                 try(InputStream in=c.getInputStream()){
@@ -171,8 +171,8 @@ public final class RhUpdates {
         if(!directory.exists()&&!directory.mkdirs())throw new IOException("更新目录不可用");
         ready=false;prepared=false;downloadedBytes=0;totalBytes=selected.getLong("size");status("downloading","正在下载 APK（0%）");
         File pending=new File(directory,"pending.apk");boolean downloaded=false;String lastError="APK 下载失败，请检查网络后重试";JSONArray failures=new JSONArray();sourceFailures=failures;
-        for(String url:new String[]{GITEE+selected.getString("tag")+"/"+selected.getString("fileName"),GITHUB+"download/"+selected.getString("tag")+"/"+selected.getString("fileName")}){
-            HttpURLConnection c=null;provider=url.startsWith(GITEE)?"Gitee":"GitHub";downloadedBytes=0;
+        for(String url:new String[]{CNB+"download/"+selected.getString("tag")+"/"+selected.getString("fileName"),GITHUB+"download/"+selected.getString("tag")+"/"+selected.getString("fileName")}){
+            HttpURLConnection c=null;provider=url.startsWith(CNB)?"CNB":"GitHub";downloadedBytes=0;
             try{
                 c=request(url);int response=c.getResponseCode();checkCancelled();if(response!=200)throw new IOException("更新源返回 HTTP "+response);
                 long count=0,expected=selected.getLong("size");
