@@ -138,7 +138,7 @@ public final class RhShared {
         }
         for(Iterator<String> it=clients.keys();it.hasNext();) {
             String id=it.next();JSONObject client=clients.getJSONObject(id);only(client,"name","platform");String name=client.getString("name");
-            if(!validId(id)||name.isEmpty()||name.getBytes(StandardCharsets.UTF_8).length>256||!Arrays.asList("windows","android","legacy").contains(client.getString("platform")))throw new IOException("invalid client metadata");
+            if(!validId(id)||name.isEmpty()||name.getBytes(StandardCharsets.UTF_8).length>256||!Arrays.asList("windows","android","linux","legacy").contains(client.getString("platform")))throw new IOException("invalid client metadata");
         }
         int count=0;
         for(Iterator<String> it=profiles.keys();it.hasNext();) {

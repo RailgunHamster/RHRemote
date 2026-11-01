@@ -266,7 +266,7 @@ impl Network {
     }
     fn resolve_inner(&self,device:&Device,profile:&Profile,failed:&[crate::recovery::FailedRoute],cancel:&std::sync::atomic::AtomicBool,mut diagnostic:Option<(std::sync::Arc<std::sync::atomic::AtomicBool>,&mut Vec<std::thread::JoinHandle<()>>)>) -> Result<(String,EffectivePolicy),String>{
         let started = Instant::now();
-        let proxy_settings=rhremote_core::proxy::Settings::load(&crate::proxy::data_directory())?;
+        let proxy_settings=rhremote_core::proxy::Settings::load(&crate::proxy::data_directory()?)?;
         let upstream_proxy=proxy_settings.for_scope("remote");
         let mut candidates = network::addresses(&device.address, &device.addresses)?;
         candidates.retain(|a| upstream_proxy.is_some()&&network::transport_id(a).is_some() || upstream_proxy.is_none()&&network::accepts(&profile.network_mode, a));
@@ -313,14 +313,7 @@ impl Network {
                             *slot =
                                 Some(TransportClient::new().map_err(|e| e.to_string())?);
                         }
-                        let data = std::env::var_os("RHREMOTE_DATA_DIR")
-                            .map(std::path::PathBuf::from)
-                            .unwrap_or_else(|| {
-                                std::path::PathBuf::from(
-                                    std::env::var_os("LOCALAPPDATA").unwrap_or_default(),
-                                )
-                                .join("RHRemote")
-                            });
+                        let data=crate::proxy::data_directory()?;
                         slot.as_mut().unwrap().set_upstream_proxy(upstream_proxy.clone()).map_err(|e|e.to_string())?;
                         let info = slot
                             .as_mut()

@@ -50,6 +50,12 @@ public class RhDisplayTest {
         try{display.acknowledgeInitial("\\\\.\\DISPLAY1");fail("Wrong source must be rejected");}catch(IOException expected){}
         display.acknowledgeInitial(null);display.acknowledgeInitial(""); // Older servers use the legacy hotkey.
     }
+    @Test public void x11OutputRequiresTheExactInitialAcknowledgement()throws Exception{
+        RhDisplay display=new RhDisplay(profile(),(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("id","x11:DUMMY0","gdi","rhrx11:DUMMY0","captureIndex",1),"initialCaptureIndex",1)));
+        display.prepare();okhttp3.HttpUrl url=new okhttp3.HttpUrl.Builder().scheme("https").host("example.com").query("appid=1"+display.launchQuery()).build();assertEquals("rhrx11:DUMMY0",url.queryParameter("rhrdisplay"));
+        for(String ack:new String[]{null,"","rhrx11:missing"})try{display.acknowledgeInitial(ack);fail("Missing or wrong X11 acknowledgement accepted");}catch(IOException expected){}
+        display.acknowledgeInitial("rhrx11:DUMMY0");display.applyInitial();
+    }
     @Test public void malformedPreparedSourceCannotEnterLaunchQuery()throws Exception{
         for(String source:new String[]{"bad","\\\\.\\DISPLAY0","\\\\.\\DISPLAY01","\\\\.\\DISPLAY1&mode=1","\\\\.\\DISPLAY1\u0000"}){
             RhDisplay display=new RhDisplay(profile(),(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("gdi",source))));

@@ -5,12 +5,9 @@ use std::{
     sync::Arc,
 };
 
-pub fn data_directory() -> PathBuf {
-    std::env::var_os("RHREMOTE_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote")
-        })
+pub fn data_directory()->Result<PathBuf,String>{
+    if let Some(value)=std::env::var_os("RHREMOTE_DATA_DIR"){let path=PathBuf::from(value);if !path.is_absolute(){return Err("配置目录必须为绝对路径".into());}return Ok(path);}
+    crate::platform_paths::default_data()
 }
 pub struct SyncRoute {
     pub address: Option<String>,

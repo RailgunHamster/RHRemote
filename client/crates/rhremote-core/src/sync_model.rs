@@ -572,6 +572,14 @@ impl Controller {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linux_client_identity_and_profiles_round_trip_without_changing_other_clients(){
+        let mut saved=crate::Saved::default();saved.initialize_client("linux").unwrap();
+        assert_eq!(saved.clients[&saved.client_id].platform,"linux");
+        let shared=SharedConfig::from_saved(&saved);shared.validate().unwrap();
+        let copy:SharedConfig=serde_json::from_slice(&serde_json::to_vec(&shared).unwrap()).unwrap();copy.validate().unwrap();assert_eq!(copy.clients[&saved.client_id].platform,"linux");
+    }
+
     use super::*;
     use crate::{Device, Platform};
     use serde_json::{Value, json};

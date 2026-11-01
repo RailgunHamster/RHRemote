@@ -36,10 +36,12 @@ public final class RhDisplay {
         if(send)apply(result.optJSONObject("selected"));data=result;error="";
     }
     /** NvHTTP expects a raw query: pre-encoding here would make HttpUrl.Builder.query() escape the percent signs. */
+    private static boolean validX11(String source){return source!=null&&source.matches("rhrx11:[A-Za-z0-9_.:-]{1,128}");}
     public String launchQuery()throws IOException {
         initialBeforeCapture=false;requestedInitialSource="";JSONObject selected=data.optJSONObject("selected");String source=selected==null?"":selected.optString("gdi");
         if(window!=null){requestedInitialSource=window.optString("id");if(!RhWindows.valid(requestedInitialSource))throw new IOException("Invalid window source");return "&rhrdisplay="+requestedInitialSource;}
         if(source.isEmpty())return "";
+        if(validX11(source)){requestedInitialSource=source;return "&rhrdisplay="+source;}
         String prefix="\\\\.\\DISPLAY";
         if(!source.startsWith(prefix)||source.length()<=prefix.length()||source.length()>31||source.charAt(prefix.length())=='0')throw new IOException("Invalid prepared display source");
         for(int i=prefix.length();i<source.length();i++)if(source.charAt(i)<'0'||source.charAt(i)>'9')throw new IOException("Invalid prepared display source");
@@ -49,7 +51,7 @@ public final class RhDisplay {
     /** Suppress the legacy post-start hotkey only after a matching host acknowledgement. */
     public void acknowledgeInitial(String ack)throws IOException {
         initialBeforeCapture=false;
-        if(ack==null||ack.isEmpty()){if(window!=null)throw new IOException("主机未确认窗口采集，已取消连接");RhStatistics.event("initial_display_launch",-1,RhActions.obj("requested",!requestedInitialSource.isEmpty(),"beforeCapture",false));return;}
+        if(ack==null||ack.isEmpty()){if(window!=null||validX11(requestedInitialSource))throw new IOException("主机未确认所选采集源，已取消连接");RhStatistics.event("initial_display_launch",-1,RhActions.obj("requested",!requestedInitialSource.isEmpty(),"beforeCapture",false));return;}
         if(requestedInitialSource.isEmpty()||!ack.equals(requestedInitialSource))throw new IOException("The host acknowledged a different initial display");
         initialBeforeCapture=true;
         RhStatistics.event("initial_display_launch",-1,RhActions.obj("requested",true,"beforeCapture",true));
