@@ -13,6 +13,11 @@ DIRECTORY = Path("/usr/lib/rhremote/server")
 
 
 def config_directory():
+    explicit = os.environ.get("RHREMOTE_SUNSHINE_CONFIG", "")
+    if explicit:
+        if not Path(explicit).is_absolute():
+            raise RuntimeError("RHREMOTE_SUNSHINE_CONFIG 必须是绝对路径。")
+        return Path(explicit)
     override = os.environ.get("XDG_CONFIG_HOME", "")
     base = Path(override) if override and Path(override).is_absolute() else Path.home() / ".config"
     return base / "sunshine"
@@ -58,7 +63,7 @@ def start(enable=False):
     active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", UNIT]).returncode == 0
     if not active and (listening(47989) or listening(47990)):
         raise RuntimeError("Sunshine 端口已被其他服务占用；请先处理已有实例，再启动 RHRemote-Sunshine。")
-    environment = ["DISPLAY=" + os.environ["DISPLAY"], "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""), "XDG_SESSION_TYPE=x11"]
+    environment = ["DISPLAY=" + os.environ["DISPLAY"], "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""), "XDG_SESSION_TYPE=x11", "RHREMOTE_SUNSHINE_CONFIG=" + os.environ.get("RHREMOTE_SUNSHINE_CONFIG", ""), "RHREMOTE_HEADLESS=" + os.environ.get("RHREMOTE_HEADLESS", "0")]
     subprocess.run(["systemctl", "--user", "set-environment", *environment], check=True)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "--user", "enable", "--now", UNIT] if enable else ["systemctl", "--user", "start", UNIT], check=True)

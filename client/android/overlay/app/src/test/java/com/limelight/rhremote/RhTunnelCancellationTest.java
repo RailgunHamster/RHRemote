@@ -18,7 +18,8 @@ public class RhTunnelCancellationTest {
     @Implements(value=RhTunnel.class,isInAndroidSdk=false)
     public static class NativeTransport {
         static CountDownLatch entered,release;static volatile long started,cancelled;static int stops;
-        @Implementation protected static String startNative(String key,String peer,String relay,boolean only,long id){
+        @Implementation protected static String startNative(String key,String peer,String relay,boolean only,long id,String upstreamProxy){
+            assertEquals("",upstreamProxy);
             started=id;entered.countDown();try{release.await(3,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}
             return "{\"ok\":false,\"error\":\"cancelled\"}";
         }

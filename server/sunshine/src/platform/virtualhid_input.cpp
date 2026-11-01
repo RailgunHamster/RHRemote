@@ -29,7 +29,7 @@ using namespace std::literals;
 namespace platf {
   /** @brief Complete absolute X11 pointer motion. @param x Desktop X. @param y Desktop Y. @return Whether the request was completed. */
   bool x11_absolute_mouse(float x, float y);
-}
+}  // namespace platf
 #endif
 
 namespace platf::virtualhid {

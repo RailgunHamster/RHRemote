@@ -26,7 +26,8 @@ public class RhRecoveryTransportTest {
     @Implements(value=RhTunnel.class,isInAndroidSdk=false)
     public static class NativeTransport {
         static CountDownLatch entered,exit;static boolean block;static volatile long started,cancelled;static volatile int starts,stops,port;
-        @Implementation protected static String startNative(String key,String peer,String relay,boolean only,long id){
+        @Implementation protected static String startNative(String key,String peer,String relay,boolean only,long id,String upstreamProxy){
+            assertEquals("",upstreamProxy);
             started=id;starts++;entered.countDown();
             if(block){long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(4);while(exit.getCount()!=0&&System.nanoTime()<end)try{exit.await(20,TimeUnit.MILLISECONDS);}catch(InterruptedException ignored){}return "{\"ok\":false,\"error\":\"cancelled\"}";}
             return RhActions.obj("ok",true,"result",RhActions.obj("address","127.0.0.1","portOffset",port-47989,"path","relay")).toString();

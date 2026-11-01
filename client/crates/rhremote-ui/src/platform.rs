@@ -1262,6 +1262,7 @@ impl NativePlatform {
                 && r.pending.is_none()
                 && (!alive || released)
                 && !rendered
+                && !r.policy.prefer_session_retry()
                 && (value["routeRetryEligible"] == true || r.timeout_requested)
             {
                 let failed = crate::recovery::FailedRoute {

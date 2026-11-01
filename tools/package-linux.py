@@ -74,10 +74,14 @@ def main():
         raise RuntimeError("This package ABI is validated only on Ubuntu 24.04")
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:[+~][A-Za-z0-9.]+)?", args.version):
         raise RuntimeError("Invalid Debian version")
-    args.output.mkdir(parents=True, exist_ok=True)
+    if args.output.exists():
+        raise RuntimeError("Refusing to replace an existing output directory")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     result = []
-    with tempfile.TemporaryDirectory(prefix="rhremote-deb-") as folder:
+    with tempfile.TemporaryDirectory(prefix="rhremote-deb-", dir=args.output.parent) as folder:
         base = Path(folder)
+        output = base / "output"
+        output.mkdir()
         client = base / "client"
         app = client / "usr/lib/rhremote/client"
         binary(args.client, app / "RHRemote")
@@ -86,7 +90,7 @@ def main():
         write(client, "usr/share/applications/rhremote-client.desktop", "[Desktop Entry]\nType=Application\nName=RHRemote-Moonlight\nExec=rhremote\nIcon=rhremote\nTerminal=false\nCategories=Network;RemoteAccess;\nStartupWMClass=RHRemote\n")
         common(client, "rhremote-client")
         depends = dependencies(client, [app / "RHRemote", app / "engine/RHRemote"], ["qml6-module-qtquick", "qml6-module-qtquick-window", "qml6-module-qtquick-controls", "qml6-module-qtquick-templates", "qml6-module-qtquick-layouts", "qml6-module-qtqml-workerscript", "qml6-module-qtqml-models", "libva-wayland2", "libsecret-1-0", "gnome-keyring", "fonts-noto-cjk", "xdg-utils"])
-        result.append(build(client, args.output, "rhremote-client", args.version, "RHRemote-Moonlight remote desktop client", depends))
+        result.append(build(client, output, "rhremote-client", args.version, "RHRemote-Moonlight remote desktop client", depends))
 
         server = base / "server"
         app = server / "usr/lib/rhremote/server"
@@ -104,9 +108,10 @@ def main():
         write(server, "usr/lib/modules-load.d/rhremote-input.conf", "uinput\n")
         write(server, "DEBIAN/postinst", "#!/bin/sh\nset -e\nif command -v udevadm >/dev/null 2>&1; then udevadm control --reload-rules || true; fi\nmodprobe uinput || true\nif [ -e /sys/class/misc/uinput ]; then udevadm trigger --action=change /sys/class/misc/uinput || true; fi\n# User services start only when explicitly requested in the desktop session.\nexit 0\n", True)
         depends = dependencies(server, [app / "RHRemoteHost", app / "sunshine", app / "RHRemoteDisplay"], ["python3", "systemd", "udev", "xdg-utils", "libxrandr2", "libxfixes3", "libxcb-shm0"])
-        result.append(build(server, args.output, "rhremote-server", args.version, "RHRemote-Sunshine remote desktop server", depends))
-    (args.output / "SHA256SUMS.txt").write_text("".join(item["sha256"] + "  " + item["name"] + "\n" for item in result), encoding="ascii")
-    (args.output / "packages.json").write_text(json.dumps({"version": args.version, "platform": "ubuntu24.04-x11-amd64", "assets": result}, indent=2) + "\n")
+        result.append(build(server, output, "rhremote-server", args.version, "RHRemote-Sunshine remote desktop server", depends))
+        (output / "SHA256SUMS.txt").write_text("".join(item["sha256"] + "  " + item["name"] + "\n" for item in result), encoding="ascii")
+        (output / "packages.json").write_text(json.dumps({"version": args.version, "platform": "ubuntu24.04-x11-amd64", "assets": result}, indent=2) + "\n")
+        output.rename(args.output)
     print(json.dumps(result, indent=2))
 
 

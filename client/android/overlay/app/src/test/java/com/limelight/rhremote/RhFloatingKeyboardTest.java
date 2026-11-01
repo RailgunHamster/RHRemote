@@ -15,6 +15,21 @@ import static org.junit.Assert.*;
 @RunWith(org.robolectric.RobolectricTestRunner.class)
 @Config(sdk=28,qualifiers="mdpi")
 public final class RhFloatingKeyboardTest {
+    @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void renderedKeysAreTranslucentAndLeaveTheRemotePictureUncovered()throws Exception{
+        java.io.File directory=new java.io.File("build/reports/rhremote-floating-keyboard");assertTrue(directory.isDirectory()||directory.mkdirs());
+        for(int[] size:new int[][]{{840,560},{360,800}}){
+            setup(size[0],size[1]);
+            try{
+                android.graphics.Bitmap bitmap=android.graphics.Bitmap.createBitmap(size[0],size[1],android.graphics.Bitmap.Config.ARGB_8888);
+                root.draw(new android.graphics.Canvas(bitmap));
+                assertEquals("The picture between keys must remain transparent",0,android.graphics.Color.alpha(bitmap.getPixel(size[0]/2,size[1]/2)));
+                Rect arrow=bounds("arrow-up");int alpha=android.graphics.Color.alpha(bitmap.getPixel(arrow.left+8,arrow.top+8));assertTrue("Key surface must be translucent: "+alpha,alpha>64&&alpha<240);
+                try(java.io.FileOutputStream output=new java.io.FileOutputStream(new java.io.File(directory,"keyboard-"+size[0]+"x"+size[1]+".png"))){assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output));}
+                bitmap.recycle();
+            }finally{keyboard.dispose();}
+        }
+    }
     private FrameLayout root;private RhFloatingKeyboard keyboard;private final List<String> actions=new ArrayList<>();
     private void setup(int width,int height){Activity activity=Robolectric.buildActivity(Activity.class).setup().get();activity.setTheme(R.style.RhTheme);root=new FrameLayout(activity);activity.setContentView(root);keyboard=new RhFloatingKeyboard(activity,root,(id,args)->{assertEquals("stream.shortcut",id);actions.add(args.optString("shortcut"));});keyboard.setEnabled(true);keyboard.update(true,false);for(int pass=0;pass<3;pass++){root.forceLayout();root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
     private Button key(String id){return root.findViewWithTag("floating-key:"+id);}

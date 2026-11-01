@@ -99,6 +99,9 @@ impl Policy {
     pub fn armed(&self) -> bool {
         self.armed
     }
+    pub fn prefer_session_retry(&self) -> bool {
+        self.armed && self.attempts < 3
+    }
     pub fn observe(&mut self, now: u64, alive: bool, rendered: bool, eligible: bool) -> Decision {
         if alive && rendered {
             self.armed = true;
@@ -137,6 +140,18 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transient_media_loss_retries_the_working_session_before_excluding_its_route(){
+        let mut p=Policy::default();assert!(!p.prefer_session_retry());
+        p.observe(0,true,true,false);assert!(p.prefer_session_retry());
+        p.observe(100,false,false,true);assert_eq!(p.observe(600,false,false,true),Decision::Launch);
+        assert!(p.prefer_session_retry());
+        p.observe(1000,false,false,false);assert_eq!(p.observe(2500,false,false,false),Decision::Launch);
+        assert!(p.prefer_session_retry());
+        p.observe(3000,false,false,false);assert_eq!(p.observe(6000,false,false,false),Decision::Launch);
+        assert!(!p.prefer_session_retry(),"Persistent media failure must still allow route fallback after the burst");
+        p.observe(7000,true,true,false);p.observe(17000,true,true,false);assert!(p.prefer_session_retry());
+    }
     #[test]
     fn slow_launch_does_not_consume_the_entire_post_protocol_frame_budget() {
         let mut wait = FirstFrameWait::default();

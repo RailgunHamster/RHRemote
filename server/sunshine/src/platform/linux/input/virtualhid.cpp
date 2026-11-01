@@ -4,9 +4,9 @@
  */
 
 // standard includes
-#include <memory>
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <utility>
 
 // platform includes
