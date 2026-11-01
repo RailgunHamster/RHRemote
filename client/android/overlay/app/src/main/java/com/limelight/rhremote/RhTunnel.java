@@ -11,7 +11,7 @@ public final class RhTunnel {
     private static volatile boolean loaded;
     private static long nextAttempt;
     private static JSONObject state=new JSONObject();
-    private static native String startNative(String key,String peer,String relay,boolean relayOnly,long attemptId);
+    private static native String startNative(String key,String peer,String relay,boolean relayOnly,long attemptId,String upstreamProxy);
     private static native void cancelStartNative(long attemptId);
     private static native void stopNative();
     private static native String identityNative(String key);
@@ -28,7 +28,7 @@ public final class RhTunnel {
         final long attemptId=++nextAttempt;if(attemptId<=0)throw new IOException("Transport attempt counter exhausted");
         try(RhCancellation.Watch cancellation=operation==null?null:operation.watch(()->cancelStartNative(attemptId))){
         if(operation!=null)operation.checkpoint();
-        JSONObject reply=new JSONObject(startNative(new File(context.getFilesDir(),"transport.key").getAbsolutePath(),peer,relay,relayOnly,attemptId));
+        JSONObject reply=new JSONObject(startNative(new File(context.getFilesDir(),"transport.key").getAbsolutePath(),peer,relay,relayOnly,attemptId,java.util.Objects.toString(RhProxy.url(context,"remote"),"")));
         if(operation!=null)operation.checkpoint();
         if(!reply.optBoolean("ok")){
             String message=reply.optString("error","独立连接失败");

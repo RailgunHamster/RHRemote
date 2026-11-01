@@ -167,12 +167,16 @@ pub fn key(path: &Path) -> Result<SecretKey> {
     Ok(secret)
 }
 pub async fn endpoint(secret: SecretKey, relay: &str, relay_only: bool) -> Result<Endpoint> {
+    endpoint_with_proxy(secret,relay,relay_only,None).await
+}
+pub async fn endpoint_with_proxy(secret:SecretKey,relay:&str,relay_only:bool,proxy:Option<&str>)->Result<Endpoint>{
     let url: RelayUrl = relay.parse()?;
     let mut builder = Endpoint::builder(presets::Minimal)
         .secret_key(secret)
         .alpns(vec![ALPN.to_vec()])
         .relay_mode(RelayMode::Custom(url.into()));
-    if relay_only {
+    if let Some(address)=proxy{builder=builder.proxy_url(address.parse()?);}
+    if relay_only || proxy.is_some() {
         builder = builder.clear_ip_transports();
     }
     Ok(builder.bind().await?)
@@ -265,6 +269,7 @@ pub struct ProxyInfo {
 pub struct Client {
     runtime: tokio::runtime::Runtime,
     current: Option<(Endpoint, Proxy, Address, bool)>,
+    upstream_proxy:Option<String>,
     retiring: JoinSet<()>,
 }
 impl Client {
@@ -275,8 +280,13 @@ impl Client {
                 .enable_all()
                 .build()?,
             current: None,
+            upstream_proxy:None,
             retiring: JoinSet::new(),
         })
+    }
+    pub fn set_upstream_proxy(&mut self,proxy:Option<String>)->Result<()> {
+        if let Some(address)=&proxy{let url:RelayUrl=address.parse()?;ensure!(address.len()<=512&&matches!(url.scheme(),"http"|"https")&&url.host_str().is_some()&&url.username().is_empty()&&url.password().is_none()&&url.query().is_none()&&url.fragment().is_none()&&url.path()=="/","Invalid upstream proxy URL");}
+        if self.upstream_proxy!=proxy{self.stop();self.upstream_proxy=proxy;}Ok(())
     }
     pub fn start(
         &mut self,
@@ -303,6 +313,7 @@ impl Client {
             "Connection cancelled"
         );
         remote.validate()?;
+        let relay_only=relay_only||self.upstream_proxy.is_some();
         let reusable = self.current.as_ref().is_some_and(|(_, p, a, r)| {
             a.endpoint_id == remote.endpoint_id
                 && a.relay_url == remote.relay_url
@@ -320,7 +331,7 @@ impl Client {
                 };
                 tokio::pin!(cancelled);
                 let endpoint = tokio::select! {
-                    result=endpoint(secret, &remote.relay_url, relay_only)=>result?,
+                    result=endpoint_with_proxy(secret, &remote.relay_url, relay_only,self.upstream_proxy.as_deref())=>result?,
                     _=&mut cancelled=>bail!("Connection cancelled"),
                 };
                 let result = async {
@@ -569,6 +580,31 @@ async fn serve_connection(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn http_proxy_carries_authenticated_quic_streams_and_datagrams_through_a_local_relay(){
+        use iroh_relay::server::{RelayConfig,Server,ServerConfig};
+        let mut config=ServerConfig::default();config.relay=Some(RelayConfig::new(([127,0,0,1],0)));
+        let relay=Server::spawn(config).await.unwrap();let target=relay.http_addr().unwrap();let relay_url=format!("http://{target}/");
+        let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();let proxy_url=format!("http://{}",listener.local_addr().unwrap());let observed=Arc::new(std::sync::atomic::AtomicUsize::new(0));let count=observed.clone();
+        let proxy=tokio::spawn(async move{let mut jobs=JoinSet::new();loop{tokio::select!{accepted=listener.accept()=>{let(mut local,_)=accepted.unwrap();let count=count.clone();jobs.spawn(async move{let mut request=Vec::new();loop{request.push(local.read_u8().await.unwrap());assert!(request.len()<16384);if request.ends_with(b"\r\n\r\n"){break;}}let request=String::from_utf8(request).unwrap();assert!(request.starts_with(&format!("CONNECT {target} ")),"{request}");count.fetch_add(1,std::sync::atomic::Ordering::SeqCst);let mut remote=tokio::net::TcpStream::connect(target).await.unwrap();local.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await.unwrap();let _=tokio::io::copy_bidirectional(&mut local,&mut remote).await;});},_=jobs.join_next(),if !jobs.is_empty()=>{}}}});
+        let server=endpoint(SecretKey::generate(),&relay_url,true).await.unwrap();let client=endpoint_with_proxy(SecretKey::generate(),&relay_url,false,Some(&proxy_url)).await.unwrap();
+        let expected=client.id();let server_id=server.id();assert_eq!(client.addr().ip_addrs().count(),0);
+        tokio::time::timeout(Duration::from_secs(10),async{tokio::join!(server.online(),client.online());}).await.unwrap();
+        let echo=tokio::spawn(async move{let connection=tokio::time::timeout(Duration::from_secs(10),server.accept()).await.unwrap().unwrap().await.unwrap();assert_eq!(connection.remote_id(),expected);let(mut send,mut recv)=connection.accept_bi().await.unwrap();let bytes=recv.read_to_end(1_048_576).await.unwrap();send.write_all(&bytes).await.unwrap();send.finish().unwrap();let datagram=connection.read_datagram().await.unwrap();connection.send_datagram(datagram).unwrap();connection.closed().await;server.close().await;});
+        let connection=connect(&client,&Address{endpoint_id:server_id.to_string(),relay_url}).await.unwrap();let payload:Vec<_>=(0..1_048_576).map(|n|(n%251)as u8).collect();let(mut send,mut recv)=connection.open_bi().await.unwrap();send.write_all(&payload).await.unwrap();send.finish().unwrap();assert_eq!(tokio::time::timeout(Duration::from_secs(10),recv.read_to_end(1_048_576)).await.unwrap().unwrap(),payload);
+        let packet=bytes::Bytes::from(vec![37;1024]);connection.send_datagram(packet.clone()).unwrap();assert_eq!(tokio::time::timeout(Duration::from_secs(5),connection.read_datagram()).await.unwrap().unwrap(),packet);assert!(observed.load(std::sync::atomic::Ordering::SeqCst)>0);assert!(connection.paths().iter().any(|path|path.is_selected()&&path.is_relay()));
+        connection.close(0u32.into(),b"test complete");client.close().await;echo.await.unwrap();proxy.abort();let _=proxy.await;relay.shutdown().await.unwrap();
+    }
+    #[tokio::test]
+    async fn rejected_http_proxy_never_bypasses_it_or_enables_ip_transports(){
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address=format!("http://{}",listener.local_addr().unwrap());
+        let observer=tokio::spawn(async move{let(mut socket,_)=tokio::time::timeout(Duration::from_secs(5),listener.accept()).await.unwrap().unwrap();let mut request=Vec::new();loop{let byte=socket.read_u8().await.unwrap();request.push(byte);assert!(request.len()<16384);if request.ends_with(b"\r\n\r\n"){break;}}socket.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();String::from_utf8(request).unwrap()});
+        let endpoint=endpoint_with_proxy(SecretKey::generate(),DEFAULT_RELAY,false,Some(&address)).await.unwrap();
+        assert_eq!(endpoint.addr().ip_addrs().count(),0);
+        let request=observer.await.unwrap();assert!(request.starts_with("CONNECT 101.43.203.147:33449 "),"{request}");
+        assert!(tokio::time::timeout(Duration::from_millis(250),endpoint.online()).await.is_err());endpoint.close().await;
+    }
     #[tokio::test]
     async fn only_a_real_dial_deadline_allows_automatic_network_retry() {
         let elapsed = tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())

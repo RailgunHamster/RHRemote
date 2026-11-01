@@ -39,11 +39,13 @@ pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_startNative(
     relay: JString,
     relay_only: jni::sys::jboolean,
     attempt_id: jni::sys::jlong,
+    upstream_proxy: JString,
 ) -> jstring {
     let result = (|| -> anyhow::Result<serde_json::Value> {
         let key: String = env.get_string(&key)?.into();
         let peer: String = env.get_string(&peer)?.into();
         let relay: String = env.get_string(&relay)?.into();
+        let proxy:String=env.get_string(&upstream_proxy)?.into();
         let attempt = ATTEMPTS.get_or_init(Default::default).begin(attempt_id as u64)?;
         let mut slot = CLIENT
             .get_or_init(|| Mutex::new(None))
@@ -52,6 +54,7 @@ pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_startNative(
         if slot.is_none() {
             *slot = Some(Client::new()?);
         }
+        slot.as_mut().unwrap().set_upstream_proxy(if proxy.is_empty(){None}else{Some(proxy)})?;
         let info = slot.as_mut().unwrap().start_cancelable(
             std::path::Path::new(&key),
             Address {
@@ -74,6 +77,7 @@ pub extern "system" fn Java_com_limelight_rhremote_RhTunnel_cancelStartNative(
     _env: JNIEnv,
     _class: JClass,
     attempt_id: jni::sys::jlong,
+    upstream_proxy: JString,
 ) {
     ATTEMPTS.get_or_init(Default::default).cancel(attempt_id as u64);
 }

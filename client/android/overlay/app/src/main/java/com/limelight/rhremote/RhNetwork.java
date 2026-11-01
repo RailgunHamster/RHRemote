@@ -183,12 +183,15 @@ public final class RhNetwork {
         RhStatistics.event("network_resolve_begin",-1,RhActions.obj("routeOrder",new JSONArray(profile.routeOrder)));
         long began=System.nanoTime();JSONObject metadata=metadata(c,source);
         if(options!=null){metadata=new JSONObject(metadata.toString());if(options.has("address"))metadata.put("address",options.getString("address"));if(options.has("addresses"))metadata.put("addresses",options.getJSONArray("addresses"));}
-        List<String> candidates=addresses(metadata);candidates.removeIf(a->!profile.networkMode.equals("auto")&&!kind(a).equals("auto")&&!kind(a).equals(profile.networkMode)&&!(profile.networkMode.equals("internet")&&kind(a).equals("transport")));
+        boolean proxyRemote=RhProxy.url(c,"remote")!=null;
+        List<String> candidates=addresses(metadata);candidates.removeIf(a->!proxyRemote&&!profile.networkMode.equals("auto")&&!kind(a).equals("auto")&&!kind(a).equals(profile.networkMode)&&!(profile.networkMode.equals("internet")&&kind(a).equals("transport")));
+        if(proxyRemote){candidates.removeIf(a->!kind(a).equals("transport"));if(candidates.isEmpty())throw new IOException("远程代理需要此设备的 RHRemote 中继身份，请先在可达网络刷新设备");}
         JSONArray failed=options==null?null:options.optJSONArray("failedRoutes");
         JSONArray attempts=new JSONArray();String selected=null,selectedRemote="",chosenRoute="",chosenPath="unknown";int offset=0,excludedCandidates=0;
         final boolean capture=options!=null&&options.optBoolean("readOnlyDeviceCheck");final java.util.concurrent.ConcurrentHashMap<String,String> evidence=capture?new java.util.concurrent.ConcurrentHashMap<>():null;
         String retainedRelay="";
-        try{for(String route:profile.routeOrder) {
+        try{for(String route:proxyRemote?java.util.Collections.singletonList("relay"):profile.routeOrder) {
+            if(proxyRemote&&!route.equals("relay"))continue;
             checkpoint(operation);
             if(route.equals("punch_direct")||route.equals("relay")) {
                 for(String address:candidates)if(kind(address).equals("transport")) {

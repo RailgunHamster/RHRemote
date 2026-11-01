@@ -8,13 +8,17 @@ def patch(root):
     text=path.read_text(encoding="utf-8")
     text=text.replace('if(RhRuntime::get().ownerExited.load())','if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load())')
     text=text.replace('RhRuntime::get().sessionActive=true;','RhRuntime::beginSession();')
+    runner='    for (;;) {\n#ifdef Q_OS_WIN32\n        if (runnerStopEvent'
+    # Fresh public sources do not contain the earlier Windows runner experiment.
+    loop=runner if runner in text else '    SDL_Event event;\n    for (;;) {'
+    guarded_loop=loop.replace('    for (;;) {','    for (;;) {\n        if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load())goto DispatchDeferredCleanup;',1)
     for before,after in [
         ('void Session::clStageStarting(int stage)\n{', 'void Session::clStageStarting(int stage)\n{\n    if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load())LiInterruptConnection();'),
         ('    QString rtspSessionUrl;', '    if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load()){RhStatistics::event("owner_launch_aborted",-1,{{"stage","before_http_launch"}});return false;}\n    QString rtspSessionUrl;'),
         ('    RhStatistics::event("connection_begin");', '    if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load()){RhStatistics::event("owner_launch_aborted",-1,{{"stage","before_protocol_start"}});return false;}\n    RhStatistics::event("connection_begin");'),
         ('    RhStatistics::event("connection_ready");', '    if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load())return false;\n    RhStatistics::event("connection_ready");'),
         ('void Session::execInternal()\n{', 'void Session::execInternal()\n{\n    RhRuntime::beginSession();\n    if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load()){emit sessionFinished(0);emit readyForDeletion();return;}'),
-        ('    for (;;) {\n#ifdef Q_OS_WIN32\n        if (runnerStopEvent', '    for (;;) {\n        if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load())goto DispatchDeferredCleanup;\n#ifdef Q_OS_WIN32\n        if (runnerStopEvent'),
+        (loop,guarded_loop),
     ]:
         if after in text:continue
         if text.count(before)!=1:raise RuntimeError("Parent lifetime adaptation anchor missing or ambiguous: "+before[:70])

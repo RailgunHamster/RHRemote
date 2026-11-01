@@ -5445,6 +5445,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "iroh",
+ "iroh-relay",
  "jni 0.21.1",
  "serde",
  "serde_json",
@@ -5453,7 +5454,7 @@ dependencies = [
 
 [[package]]
 name = "rhremote-ui"
-version = "0.2.13"
+version = "0.2.14"
 dependencies = [
  "base64 0.22.1",
  "embed-resource",
@@ -5467,16 +5468,19 @@ dependencies = [
  "rhremote-transport",
  "roxmltree 0.20.0",
  "rustls",
+ "rustls-native-certs 0.8.5",
  "serde",
  "serde_json",
  "slint",
  "slint-build",
  "tiny_http",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "ureq 2.12.1",
  "url",
  "velopack",
+ "webpki-roots 1.0.10",
  "windows",
 ]
 

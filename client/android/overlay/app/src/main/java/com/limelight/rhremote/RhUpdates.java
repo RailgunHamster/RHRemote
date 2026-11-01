@@ -21,7 +21,7 @@ public final class RhUpdates {
     private final File directory,apk,receipt;
     private File installationFile;
     private final SharedPreferences preferences,sourcePreferences;
-    private volatile JSONObject available;
+    private volatile JSONObject available,latest;
     private volatile String message="尚未检查更新",phase="idle",provider="";
     private volatile String activeAction="",failedAction="";
     private volatile boolean ready,prepared;
@@ -60,9 +60,9 @@ public final class RhUpdates {
     private void commit(Commit action)throws Exception {Operation value=operation;synchronized(value){checkCancelled();action.run();}}
     /** Package-local injection for device tests; production uses only the fixed HTTPS sources. */
     interface Connections{HttpURLConnection open(String url)throws IOException;}
-    private Connections connections=RhUpdates::open;
+    private Connections connections;
     public RhUpdates(Context c){
-        context=c.getApplicationContext();directory=new File(c.getFilesDir(),"updates");
+        context=c.getApplicationContext();connections=url->{if(RhProxy.url(context,"updates")==null)return open(url);if(!url.startsWith("https://"))throw new IOException("HTTPS required");HttpURLConnection connection=RhProxy.open(context,new URL(url),"updates");connection.setConnectTimeout(7000);connection.setReadTimeout(10000);return connection;};directory=new File(c.getFilesDir(),"updates");
         apk=new File(directory,"RHRemote-update.apk");receipt=new File(directory,"ready.json");
         preferences=context.getSharedPreferences("rhremote.updates",0);sourcePreferences=context.getSharedPreferences("rhremote.update-source",0);restore();pruneInstalledSnapshots();
     }
@@ -77,8 +77,8 @@ public final class RhUpdates {
     private String currentName(){try{return context.getPackageManager().getPackageInfo(context.getPackageName(),0).versionName;}catch(Exception e){return "";}}
     private boolean allowed(){return Build.VERSION.SDK_INT<26||context.getPackageManager().canRequestPackageInstalls();}
     private static Object candidateId(JSONObject candidate){return candidate==null?JSONObject.NULL:new JSONArray().put(candidate.optString("version")).put(candidate.optLong("versionCode")).put(candidate.optString("packageName")).put(candidate.optString("fileName")).put(candidate.optLong("size")).put(candidate.optString("sha256").toLowerCase(java.util.Locale.ROOT));}
-    public JSONObject state(){JSONObject candidate=available;return RhActions.obj("managed",true,"currentVersion",currentName(),"availableVersion",candidate==null?JSONObject.NULL:candidate.optString("version"),"candidateId",candidateId(candidate),
-        "pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,"preferredSource",preferredSource(),"failedAction",failedAction,"cancelledAction",phase.equals("cancelled")?activeAction:"",
+    public JSONObject state(){JSONObject candidate=available,notes=candidate==null?latest:candidate;return RhActions.obj("managed",true,"currentVersion",currentName(),"availableVersion",candidate==null?JSONObject.NULL:candidate.optString("version"),"candidateId",candidateId(candidate),
+        "notes",notes==null?"":notes.optString("notes"),"publishedAt",notes==null?"":notes.optString("publishedAt"),"pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,"preferredSource",preferredSource(),"failedAction",failedAction,"cancelledAction",phase.equals("cancelled")?activeAction:"",
         "downloadedBytes",downloadedBytes,"totalBytes",totalBytes,"sourceFailures",sourceFailures,"installPermissionGranted",allowed(),"installPermissionPending",preferences.getBoolean("permission",false));}
     public String primaryAction(){if(phase.equals("error")&&failedAction.equals("updates.check")||phase.equals("cancelled")&&activeAction.equals("updates.check"))return "updates.check";return available!=null||ready?"updates.install":"updates.check";}
     public String primaryLabel(boolean busy){
@@ -92,7 +92,7 @@ public final class RhUpdates {
     public void failure(String text){failedAction=activeAction;status("error",text==null||text.isEmpty()?"更新操作失败，请重试":text);}
     public void pending(String action){activeAction=action;failedAction="";status(action.equals("updates.check")?"checking":"preparing",action.equals("updates.check")?"正在检查更新":action.equals("updates.download")?"正在准备下载 APK":"正在准备安装更新");}
     private static byte[] read(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>limit)throw new IOException("更新信息过大");out.write(b,0,n);}return out.toByteArray();}
-    private static HttpURLConnection open(String url)throws IOException{if(!url.startsWith("https://"))throw new IOException("HTTPS required");HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection();c.setConnectTimeout(7000);c.setReadTimeout(10000);return c;}
+    private static HttpURLConnection open(String url)throws IOException{if(!url.startsWith("https://"))throw new IOException("HTTPS required");HttpURLConnection c=(HttpURLConnection)new URL(url).openConnection(Proxy.NO_PROXY);c.setConnectTimeout(7000);c.setReadTimeout(10000);return c;}
     private static void name(String value)throws IOException{if(value.isEmpty()||value.equals(".")||value.equals("..")||!value.matches("[A-Za-z0-9._-]+"))throw new IOException("更新文件名无效");}
     private void validate(JSONObject candidate)throws Exception{
         for(String key:new String[]{"version","fileName","tag"})name(candidate.getString(key));
@@ -130,7 +130,7 @@ public final class RhUpdates {
             finally{release(c);}
         }
         if(manifest==null){StringBuilder detail=new StringBuilder("检查更新失败");for(int i=0;i<failures.length();i++){JSONObject item=failures.getJSONObject(i);detail.append(i==0?"：":"；").append(item.getString("provider")).append(' ').append(item.getString("reason"));}failure(detail.toString());throw new IOException(message);}
-        final JSONObject found=manifest;commit(()->{available=found.getLong("versionCode")>currentCode()?found:null;prepared=false;ready=false;});
+        final JSONObject found=manifest;commit(()->{latest=found;available=found.getLong("versionCode")>currentCode()?found:null;prepared=false;ready=false;});
         if(available==null){commit(()->{receipt.delete();apk.delete();preferences.edit().clear().apply();});status("current","已是最新版本");return;}
         totalBytes=available.getLong("size");
         if(apk.isFile()&&apk.length()==totalBytes)try{verifyFile(apk,available);commit(()->{remember();ready=true;downloadedBytes=totalBytes;});}catch(Exception invalid){checkCancelled();receipt.delete();}

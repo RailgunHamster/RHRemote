@@ -265,6 +265,7 @@ Edit-Source 'moonlight-common-c/moonlight-common-c/src/VideoStream.c' {param($s)
 }
 Edit-Source 'moonlight-common-c/moonlight-common-c/src/RtspConnection.c' {param($s)
     $s=$s.Replace("`r`n","`n")
+    $s="#if !defined(_WIN32)`n#include <time.h>`n#endif`n"+$s
     return (Replace-Once $s @'
     if (useEnet) {
         return transactRtspMessageEnet(request, response, expectingPayload, error);
@@ -273,12 +274,23 @@ Edit-Source 'moonlight-common-c/moonlight-common-c/src/RtspConnection.c' {param(
         return transactRtspMessageTcp(request, response, error);
     }
 '@ @'
+#ifdef LC_WINDOWS
     LARGE_INTEGER rhStarted,rhEnded,rhFrequency;
     QueryPerformanceFrequency(&rhFrequency);QueryPerformanceCounter(&rhStarted);
+#else
+    struct timespec rhStarted,rhEnded;
+    clock_gettime(CLOCK_MONOTONIC,&rhStarted);
+#endif
     const bool rhResult=useEnet ? transactRtspMessageEnet(request,response,expectingPayload,error) : transactRtspMessageTcp(request,response,error);
     // Timing metadata only: never log targets, headers, keys or payloads here.
+#ifdef LC_WINDOWS
     QueryPerformanceCounter(&rhEnded);
-    Limelog("RHREMOTE_RTSP %s %llu\n",request->message.request.command,(unsigned long long)((rhEnded.QuadPart-rhStarted.QuadPart)*1000000/rhFrequency.QuadPart));
+    const uint64_t rhElapsed=(rhEnded.QuadPart-rhStarted.QuadPart)*1000000/rhFrequency.QuadPart;
+#else
+    clock_gettime(CLOCK_MONOTONIC,&rhEnded);
+    const uint64_t rhElapsed=((rhEnded.tv_sec-rhStarted.tv_sec)*1000000000LL+rhEnded.tv_nsec-rhStarted.tv_nsec)/1000;
+#endif
+    Limelog("RHREMOTE_RTSP %s %llu\n",request->message.request.command,(unsigned long long)rhElapsed);
     return rhResult;
 '@)
 }
@@ -522,6 +534,8 @@ Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
     if(Test-Path -LiteralPath $target){$original=Join-Path $backup $relative;if(-not(Test-Path -LiteralPath $original)){New-Item -ItemType Directory -Force -Path (Split-Path $original -Parent)|Out-Null;Copy-Item -LiteralPath $target -Destination $original}}
     New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent)|Out-Null;Copy-Item -LiteralPath $_.FullName -Destination $target -Force
 }
+& python (Join-Path $PSScriptRoot 'patch-native-pacer.py') $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Native pacer preparation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-statistics.py') windows $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Windows statistics instrumentation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-tunnel.py') windows $SourceDir

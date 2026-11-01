@@ -1594,6 +1594,7 @@ impl Platform for NativePlatform {
         if cancel.load(Ordering::SeqCst){return Err("已取消添加".into());}Ok(device)
     }
     fn added_device(&self,device:&Device){let mut devices=self.devices.lock().unwrap();if let Some(existing)=devices.iter_mut().find(|d|d.uuid.eq_ignore_ascii_case(&device.uuid)){*existing=device.clone();}else{devices.push(device.clone());}self.device_epoch.fetch_add(1,Ordering::Release);}
+    fn proxy_state(&self)->Option<Value>{Some(rhremote_core::proxy::Settings::load(self.native_data.parent()?).map(|s|s.form()).unwrap_or_else(|error|json!({"error":error})))}
     fn update_state(&self)->Option<Value>{Some(self.update_snapshot.lock().unwrap().clone())}
     fn connection_requested(&self, timing: Option<rhremote_core::ActionTiming>) {
         self.statistics.lock().unwrap().connection_requested(timing);
@@ -1646,6 +1647,8 @@ impl Platform for NativePlatform {
                 let enabled = args["enabled"].as_bool().ok_or("enabled must be boolean")?;
                 self.statistics.lock().unwrap().configure(enabled)
             }
+            "proxy.state" => Ok(rhremote_core::proxy::Settings::load(self.native_data.parent().ok_or("应用配置目录不可用")?)?.form()),
+            "proxy.configure" => {let settings=rhremote_core::proxy::Settings::from_form(args)?;settings.save(self.native_data.parent().ok_or("应用配置目录不可用")?)?;self.update_snapshot.lock().unwrap()["proxy"]=settings.form();self.network.release_transport();Ok(settings.form())},
             "updates.source.set" => self.updates.lock().unwrap().set_source(self.native_data.parent().ok_or("应用配置目录不可用")?,args["source"].as_str().ok_or("请选择更新源")?),
             id if id.starts_with("updates.") => self.updates.lock().unwrap().execute(id),
             "sync.state" => Ok(self.sync.lock().unwrap().state()),

@@ -365,9 +365,34 @@
     }
   },
   {
+    "id": "proxy.state",
+    "label": "代理状态",
+    "args": {}
+  },
+  {
+    "id": "proxy.edit",
+    "label": "编辑代理",
+    "args": {
+      "key": "enabled / protocol / host / port / updates / sync / remote",
+      "value": "boolean or string"
+    }
+  },
+  {
+    "id": "proxy.save",
+    "label": "保存代理",
+    "args": {}
+  },
+  {
+    "id": "proxy.cancel",
+    "label": "放弃代理修改",
+    "args": {}
+  },
+  {
     "id": "updates.source.set",
     "label": "首选更新源",
-    "args": {"source":"cnb / github"}
+    "args": {
+      "source": "cnb / github"
+    }
   },
   {
     "id": "updates.state",

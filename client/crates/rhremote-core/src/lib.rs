@@ -34,6 +34,7 @@ pub use session_ui::is_control_action as is_session_control_action;
 pub mod sync_model;
 pub mod network;
 pub mod bitrate;
+pub mod proxy;
 
 pub const ACTIONS: &str = include_str!("actions.json");
 pub fn settings_catalog() -> Value {
@@ -277,6 +278,9 @@ pub struct State {
     pub toolbar: Value,
     pub ui_rendering: Value,
     pub settings_tab: String,
+    pub proxy: Value,
+    pub proxy_draft: Option<Value>,
+    pub proxy_error: String,
     pub sync: Value,
     #[serde(skip)]
     sync_draft: Option<Value>,
@@ -322,6 +326,7 @@ pub trait Platform: Send + Sync {
     fn observe_devices(&self,args:&Value,_publish:&mut dyn FnMut(DeviceObservation))->Result<Value,String>{self.execute("devices.refresh",args)}
     fn connection_requested(&self, _timing: Option<ActionTiming>) {}
     fn update_state(&self) -> Option<Value> { None }
+    fn proxy_state(&self)->Option<Value>{None}
     /// Called only after the exact shared configuration has been persisted and read back.
     fn sync_applied(&self, _shared:&sync_model::SharedConfig, _preferences:&std::path::Path)->Result<Option<Value>,String>{Ok(None)}
     fn probe_device(&self,address:&str,cancel:Arc<std::sync::atomic::AtomicBool>)->Result<Device,String>{
@@ -437,6 +442,9 @@ impl Controller {
                 sync: platform
                     .execute("sync.state", &json!({}))
                     .unwrap_or(json!({})),
+                proxy: platform.proxy_state().filter(|v|v.get("protocol").is_some()).unwrap_or_else(||proxy::Settings::default().form()),
+                proxy_draft: None,
+                proxy_error: String::new(),
                 sync_busy: false,
                 sync_draft: None,
                 sync_error: String::new(),
@@ -470,6 +478,8 @@ impl Controller {
         value["connection"]["title"]=json!(s.connection.title());
         value["connection"]["busy"]=json!(s.connection.busy());
         value["navigation"]=json!({"locked":connection::navigation_locked(&s),"reason":connection::navigation_hint(&s)});
+        value["proxyDirty"]=json!(s.proxy_draft.as_ref().is_some_and(|v|v!=&s.proxy));
+        value["proxyBusy"]=json!(s.streaming||s.connecting||s.sync_busy||s.updates_busy||s.installing_update||s.diagnostics.busy);
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
         value["syncPasswordReusable"]=json!(interaction::sync_password_reusable(&s));
         value["updateInstallHint"]=json!(global_settings::update_installation_blocked(&s).unwrap_or(""));
@@ -659,7 +669,7 @@ impl Controller {
             self.dispatch_info(id,args)
         } else if id.starts_with("updates.") {
             self.dispatch_update(id,&args)
-        } else if id.starts_with("sync.") || id.starts_with("app.settings.") {
+        } else if id.starts_with("proxy.") || id.starts_with("sync.") || id.starts_with("app.settings.") {
             self.dispatch_global(id, args)
         } else if matches!(id,"device.windows.open"|"device.windows.close"|"device.window.connect") {
             self.dispatch_window_picker(id,args)
@@ -676,6 +686,7 @@ impl Controller {
         // A command can become stale after admission while another API call replaces
         // the draft. Never attach that failure to the newly opened form.
         if response["ok"]!=true&&!interaction::profile_origin_matches(&s,id,profile_origin.as_ref()){return interaction::ignored_profile_action(id);}
+        if response["ok"]!=true && id.starts_with("proxy."){s.proxy_error=response["error"].as_str().unwrap_or("代理设置未保存").into();}
         if response["ok"]!=true && id.starts_with("device.add.") && s.page=="add" && !s.add.busy(){s.add.error=response["error"].as_str().unwrap_or("添加设备失败").into();}
         if response["ok"]!=true && id.starts_with("device.info."){if let Some(d)=s.info_draft.as_mut(){d.error=response["error"].as_str().unwrap_or("设备名称保存失败").into();}}
         if response["ok"]!=true && id.starts_with("settings."){if id.starts_with("settings.copy.")||id=="settings.copy_from"||s.page=="profile-copy"{s.profile_copy_error=response["error"].as_str().unwrap_or("复制配置失败").into();}else{s.settings_error=response["error"].as_str().unwrap_or("设置修改失败").into();}}

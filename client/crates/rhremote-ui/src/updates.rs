@@ -102,8 +102,11 @@ impl Mirrors {
     }
     fn client(&self,seconds:u64)->Result<reqwest::Client,Error>{
         if rustls::crypto::CryptoProvider::get_default().is_none(){let _=rustls::crypto::ring::default_provider().install_default();}
-        reqwest::Client::builder().https_only(self.test_base.is_none()).timeout(Duration::from_secs(seconds))
-            .user_agent(concat!("RHRemote/",env!("CARGO_PKG_VERSION"))).build().map_err(|_|Error::Other("更新网络初始化失败".into()))
+        let value=self.live.lock().unwrap()["proxy"].clone();
+        let settings=if value.is_null(){rhremote_core::proxy::Settings::default()}else{rhremote_core::proxy::Settings::from_form(&value).map_err(Error::Other)?};
+        let mut builder=reqwest::Client::builder().no_proxy().https_only(self.test_base.is_none()).timeout(Duration::from_secs(seconds)).user_agent(concat!("RHRemote/",env!("CARGO_PKG_VERSION")));
+        if let Some(address)=settings.for_scope("updates"){builder=builder.proxy(reqwest::Proxy::all(address).map_err(|_|Error::Other("更新代理地址无效".into()))?);}
+        builder.build().map_err(|_|Error::Other("更新网络初始化失败".into()))
     }
 }
 impl UpdateSource for Mirrors {
@@ -133,6 +136,7 @@ impl UpdateSource for Mirrors {
             if let Ok(feed) = result {
                 *self.selected.lock().unwrap() = provider.into();
                 self.live.lock().unwrap()["checkedPreferredSource"]=json!(providers[0]);
+                let mut live=self.live.lock().unwrap();live["releaseNotes"]=json!(if feed.Assets.len()==1{feed.Assets[0].NotesMarkdown.as_str()}else{""});
                 return Ok(feed);
             }
         }
@@ -217,6 +221,7 @@ impl Updates {
             .and_then(|_|fs::read(&path).ok()).and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok())
             .and_then(|value|value["preferredSource"].as_str().map(str::to_owned)).filter(|source|matches!(source.as_str(),"cnb"|"github")).unwrap_or_else(||"cnb".into());
         self.live.lock().unwrap()["preferredSource"]=json!(source);
+        self.live.lock().unwrap()["proxy"]=rhremote_core::proxy::Settings::load(data).map(|s|s.form()).unwrap_or_else(|error|json!({"error":error}));
     }
     pub fn set_source(&self,data:&Path,source:&str)->Result<Value,String> {
         if !matches!(source,"cnb"|"github"){return Err("请选择 CNB 或 GitHub".into());}
@@ -238,7 +243,7 @@ impl Updates {
         live["managed"]=json!(self.manager.is_some());live["currentVersion"]=json!(env!("CARGO_PKG_VERSION"));
         live["installedVersion"]=json!(self.manager.as_ref().map(|m|m.get_current_version_as_string()));
         live["availableVersion"]=json!(self.available.as_ref().map(|u|u.TargetFullRelease.Version.clone()).or_else(||pending.as_ref().map(|a|a.Version.clone())));
-        live["notes"]=json!(self.available.as_ref().map(|u|u.TargetFullRelease.NotesMarkdown.clone()).unwrap_or_default());
+        let notes=self.available.as_ref().map(|u|u.TargetFullRelease.NotesMarkdown.clone()).or_else(||live["releaseNotes"].as_str().map(str::to_owned)).unwrap_or_default();live["notes"]=json!(notes);
         let target=self.available.as_ref().map(|u|&u.TargetFullRelease).or(pending.as_ref());
         live["candidateId"]=target.map(candidate_id).unwrap_or(Value::Null);
         live["pendingRestart"]=json!(if self.available.is_some() {
@@ -349,6 +354,18 @@ pub fn primary_label(state:&Value,busy:bool)->String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selected_proxy_carries_both_feed_fallback_and_package_download_without_origin_dns(){
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();let port=server.server_addr().to_ip().unwrap().port();
+        let worker=std::thread::spawn(move||{let mut requests=Vec::new();for(status,body)in[(503,b"unavailable".as_slice()),(200,b"{\"Assets\":[]}".as_slice()),(200,b"abc".as_slice())]{let request=server.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();requests.push(request.url().to_owned());request.respond(tiny_http::Response::from_data(body).with_status_code(status)).unwrap();}requests});
+        let settings=rhremote_core::proxy::Settings{enabled:true,port,..Default::default()};
+        let live=Arc::new(Mutex::new(json!({"preferredSource":"cnb","proxy":settings.form()})));let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
+        let source=Mirrors{live,preferred:"cnb".into(),selected:Mutex::new(String::new()),test_base:Some("http://does-not-resolve.invalid/".into()),cancel:cancel.clone()};
+        cancel.begin(1,"updates.check",true).unwrap();source.get_release_feed("win",&Manifest::default(),"").unwrap();cancel.finish();
+        let asset=VelopackAsset{Version:"9.0.0".into(),FileName:"RHRemote-9.0.0-full.nupkg".into(),Size:3,..Default::default()};let fixture=CacheFixture::new();let path=fixture.directory.join(&asset.FileName);
+        cancel.begin(2,"updates.download",true).unwrap();source.download_release_entry(&asset,&path,None).unwrap();cancel.finish();assert_eq!(fs::read(path).unwrap(),b"abc");
+        let requests=worker.join().unwrap();assert!(requests[0].contains("/cnb/releases.win.json"));assert!(requests[1].contains("/github/releases.win.json"));assert!(requests[2].contains("/github/RHRemote-9.0.0-full.nupkg"));
+    }
     #[test]
     fn preferred_source_survives_restart_and_rejects_remote_addresses() {
         let fixture=CacheFixture::new();

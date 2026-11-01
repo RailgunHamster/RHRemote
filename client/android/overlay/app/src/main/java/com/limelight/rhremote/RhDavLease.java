@@ -33,19 +33,22 @@ final class RhDavLease implements AutoCloseable {
             return false;
         } finally {connection.disconnect();}
     }
+    private final OkHttpClient client;
     private final URL url;
     private final String authorization,token;
     private final boolean created;
     private boolean released;
-    private RhDavLease(URL url,String authorization,String token,boolean created){this.url=url;this.authorization=authorization;this.token=token;this.created=created;}
-    static RhDavLease acquire(URL url,String authorization)throws IOException {
+    private RhDavLease(URL url,String authorization,String token,boolean created,OkHttpClient client){this.client=client;this.url=url;this.authorization=authorization;this.token=token;this.created=created;}
+    static RhDavLease acquire(URL url,String authorization)throws IOException {return acquire(url,authorization,java.net.Proxy.NO_PROXY);}
+    static RhDavLease acquire(URL url,String authorization,java.net.Proxy proxy)throws IOException {
+        OkHttpClient client=Clients.NORMAL.newBuilder().proxy(proxy).build();
         Request request=new Request.Builder().url(url).header("Authorization",authorization).header("Depth","0")
             .header("Timeout","Second-60").method("LOCK",RequestBody.create(BODY.getBytes(StandardCharsets.UTF_8),MediaType.get("application/xml; charset=utf-8"))).build();
-        try(Response response=Clients.NORMAL.newCall(request).execute()){
+        try(Response response=client.newCall(request).execute()){
             int code=response.code();if(code!=200&&code!=201)throw new IOException("WebDAV HTTP "+code);
             String token=response.header("Lock-Token");token=token==null?"":token.trim();
             if(!valid(token))throw new IOException("WebDAV 未返回有效的同步保护凭据，请稍后重试");
-            return new RhDavLease(url,authorization,token,code==201);
+            return new RhDavLease(url,authorization,token,code==201,client);
         }
     }
     private static boolean valid(String token){
@@ -58,7 +61,7 @@ final class RhDavLease implements AutoCloseable {
     @Override public void close()throws IOException {
         if(released)return;released=true;
         Request request=new Request.Builder().url(url).header("Authorization",authorization).header("Lock-Token",token).method("UNLOCK",null).build();
-        try(Response response=Clients.RELEASE.newCall(request).execute()){
+        try(Response response=client.newBuilder().callTimeout(3,TimeUnit.SECONDS).build().newCall(request).execute()){
             if(response.code()<200||response.code()>=300)throw new IOException("WebDAV 同步保护未能释放，请稍后手动同步核对");
         }catch(IOException failure){throw new IOException("WebDAV 同步保护未能释放，请稍后手动同步核对",failure);}
     }

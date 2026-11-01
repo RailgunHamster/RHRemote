@@ -263,12 +263,17 @@ impl Network {
     }
     fn resolve_inner(&self,device:&Device,profile:&Profile,failed:&[crate::recovery::FailedRoute],cancel:&std::sync::atomic::AtomicBool,mut diagnostic:Option<(std::sync::Arc<std::sync::atomic::AtomicBool>,&mut Vec<std::thread::JoinHandle<()>>)>) -> Result<(String,EffectivePolicy),String>{
         let started = Instant::now();
+        let proxy_settings=rhremote_core::proxy::Settings::load(&crate::proxy::data_directory())?;
+        let upstream_proxy=proxy_settings.for_scope("remote");
         let mut candidates = network::addresses(&device.address, &device.addresses)?;
-        candidates.retain(|a| network::accepts(&profile.network_mode, a));
+        candidates.retain(|a| upstream_proxy.is_some()&&network::transport_id(a).is_some() || upstream_proxy.is_none()&&network::accepts(&profile.network_mode, a));
+        if upstream_proxy.is_some()&&!candidates.iter().any(|a|network::transport_id(a).is_some()){return Err("远程代理需要此设备的 RHRemote 中继身份，请先在可达网络刷新设备".into());}
         let mut attempts = Vec::new();
         let mut tailnet_paths = std::collections::HashMap::<String, String>::new();
         let mut tailnet_loaded = false;
-        for route in &profile.route_order {
+        let proxy_routes=vec!["relay".to_string()];
+        for route in if upstream_proxy.is_some(){&proxy_routes}else{&profile.route_order} {
+            if upstream_proxy.is_some()&&route!="relay"{continue;}
             if cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("连接已取消".into());
             }
@@ -313,6 +318,7 @@ impl Network {
                                 )
                                 .join("RHRemote")
                             });
+                        slot.as_mut().unwrap().set_upstream_proxy(upstream_proxy.clone()).map_err(|e|e.to_string())?;
                         let info = slot
                             .as_mut()
                             .unwrap()
