@@ -93,8 +93,12 @@ public final class RhHome implements RhActions.Target {
     private boolean updateDetails;private Button updateDetailsToggle;
     private ProgressBar updateProgress;
     private RhBoundAction.Button updateCancel,updatePrimary;
-    private TextView updateVersion;
+    private TextView updateVersion,updateNotes;
     private Spinner updateSource;
+    private org.json.JSONObject proxyDraft;
+    private String proxyError="";
+    private TextView proxyNotice,proxyErrorView;
+    private Button proxySave,proxyCancel;
     private final android.os.Handler updateUi=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable updateTick=this::refreshUpdateUi;
     private boolean pairing;private String pairPin="";
@@ -159,7 +163,7 @@ public final class RhHome implements RhActions.Target {
         String query=navigation.getString("query",""),uuid=navigation.getString("selected",""),tab=navigation.getString("tab","updates");
         if(query.codePointCount(0,query.length())<=128)deviceQuery=query;
         if(computers.containsKey(uuid))browserUuid=uuid;
-        if(Arrays.asList("updates","sync","appearance","about").contains(tab))settingsTab=tab;
+        if(Arrays.asList("updates","proxy","sync","appearance","about").contains(tab))settingsTab=tab;
         renderDevices(false);browser.showDetail(navigation.getBoolean("detail"));
         String destination=navigation.getString("page","");
         try{
@@ -723,7 +727,7 @@ public final class RhHome implements RhActions.Target {
     public org.json.JSONObject state()throws Exception{
         org.json.JSONObject shared=RhShared.read(activity);
         org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(shared,computers.values())){org.json.JSONObject check=RhDeviceCheck.snapshot(activity,shared,d);devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(shared,d.uuid),"online",RhDeviceCheck.online(d,check),"reachabilityStatus",RhDeviceCheck.reachability(d,check),"paired",RhDeviceCheck.paired(d,check),"canConnect",RhDeviceCheck.canConnect(d,check),"pairingStatus",RhDeviceCheck.status(d,check),"primaryAction",RhDeviceCheck.primaryAction(d,check),"primaryLabel",RhDeviceCheck.primaryLabel(d,check),"check",check,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,shared,d.uuid).json());}
-        return RhActions.obj("windows",RhActions.obj("uuid",windowsUuid,"open",windowsDialog!=null,"result",windowList),"navigation",RhActions.obj("locked",navigationLocked(),"reason",navigationHint()),"profileCopy",copyPreview==null?org.json.JSONObject.NULL:new org.json.JSONObject(copyPreview.toString()),"profileCopyNotice",copyNotice,"profileCopyError",copyError,"connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?addOperation.phase():"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy(),"diagnostics",diagnostics.state(),"diagnosticDetailsExpanded",diagnosticDetailsKey.equals(diagnosticKey(diagnostics.state())),"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncClearPrompt",syncClearPending?RhActions.obj("title","移除同步设置？"):org.json.JSONObject.NULL,"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",syncWork.state(),"syncBusy",syncBusy,"updates",updateWork.state(),"updatesBusy",updateWork.busy(),"updateInstallHint",updateInstallBlockReason(),"updateDetails",updateDetails,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing,"syncPasswordReusable",syncPasswordReusable(syncWork.state(),syncDraft));
+        return RhActions.obj("windows",RhActions.obj("uuid",windowsUuid,"open",windowsDialog!=null,"result",windowList),"navigation",RhActions.obj("locked",navigationLocked(),"reason",navigationHint()),"profileCopy",copyPreview==null?org.json.JSONObject.NULL:new org.json.JSONObject(copyPreview.toString()),"profileCopyNotice",copyNotice,"profileCopyError",copyError,"connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?addOperation.phase():"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy(),"diagnostics",diagnostics.state(),"diagnosticDetailsExpanded",diagnosticDetailsKey.equals(diagnosticKey(diagnostics.state())),"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncClearPrompt",syncClearPending?RhActions.obj("title","移除同步设置？"):org.json.JSONObject.NULL,"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"proxy",proxyState(),"proxyDraft",proxyDraft==null?org.json.JSONObject.NULL:proxyDraft,"proxyDirty",proxyDirty(),"proxyError",proxyError,"proxyBusy",proxyBusy(),"sync",syncWork.state(),"syncBusy",syncBusy,"updates",updateWork.state(),"updatesBusy",updateWork.busy(),"updateInstallHint",updateInstallBlockReason(),"updateDetails",updateDetails,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing,"syncPasswordReusable",syncPasswordReusable(syncWork.state(),syncDraft));
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
         if(id.equals("device.windows.open")){if(RhActions.hasStream())throw new IllegalStateException("请先断开当前连接");return perform("device.connect",RhActions.obj("uuid",args.getString("uuid"),"chooseWindow",true));}
@@ -898,7 +902,15 @@ public final class RhHome implements RhActions.Target {
             case "pair.cancel":if(admission!=null){admission.cancel();break;}if(!pairing)throw new IllegalStateException("no active pairing");actions.cancelPair();message("正在取消配对…");break;
             case "appearance.toggle":break;
             case "app.settings.open":pageId="global-settings";showGlobal();break;
-            case "app.settings.tab":String tab=args.getString("tab");if(!Arrays.asList("appearance","sync","updates","about").contains(tab))throw new IllegalArgumentException("unknown tab");settingsTab=tab;pageId="global-settings";showGlobal();break;
+            case "app.settings.tab":String tab=args.getString("tab");if(!Arrays.asList("appearance","proxy","sync","updates","about").contains(tab))throw new IllegalArgumentException("unknown tab");settingsTab=tab;pageId="global-settings";showGlobal();break;
+            case "proxy.state":return proxyState();
+            case "proxy.edit":{
+                if(!pageId.equals("global-settings")||!settingsTab.equals("proxy"))throw new IllegalStateException("请先打开代理设置页");if(proxyBusy())throw new IllegalStateException("请先结束连接、同步或更新操作，再修改代理");
+                String proxyKey=args.getString("key");Object value=args.get("value");if(Arrays.asList("enabled","updates","sync","remote").contains(proxyKey)){if(!(value instanceof Boolean))throw new IllegalArgumentException("代理开关无效");}else if(!Arrays.asList("protocol","host","port").contains(proxyKey)||!(value instanceof String)||((String)value).length()>253)throw new IllegalArgumentException("代理字段无效");
+                if(proxyDraft==null)proxyDraft=proxyState();proxyDraft.put(proxyKey,value);proxyError="";refreshProxyFooter();break;
+            }
+            case "proxy.save":if(proxyBusy())throw new IllegalStateException("请先结束连接、同步或更新操作，再修改代理");try{RhProxy.configure(activity,proxyDraft==null?proxyState():proxyDraft);proxyDraft=null;proxyError="";}catch(Exception error){proxyError=error.getMessage();refreshProxyFooter();throw error;}showGlobal();break;
+            case "proxy.cancel":proxyDraft=null;proxyError="";showGlobal();break;
             case "sync.state":return syncWork.state();
             case "sync.edit":{
                 ensureSyncDraft();String syncKey=args.getString("key");Object value=args.get("value");
@@ -935,8 +947,23 @@ public final class RhHome implements RhActions.Target {
         }return RhActions.obj("accepted",true);
     }
     private void settingsHeading(){LinearLayout heading=row();heading.addView(text("设置",26,ink,true),new LinearLayout.LayoutParams(0,dp(56),1));heading.addView(button("返回设备",false,()->invoke("devices.open",RhActions.obj())));content.addView(heading);scroll.post(()->scroll.scrollTo(0,0));}
-    private void showGlobal(){profileVisible=true;showContent();content.removeAllViews();globalChrome();scroll.setBackgroundColor(page);content.setBackgroundColor(page);if(settingsTab.equals("sync")){showSync();return;}if(settingsTab.equals("updates")){showUpdates();return;}if(settingsTab.equals("appearance"))showAppearance();else showAbout();}
+    private void showGlobal(){profileVisible=true;showContent();content.removeAllViews();globalChrome();scroll.setBackgroundColor(page);content.setBackgroundColor(page);if(settingsTab.equals("proxy")){showProxy();return;}if(settingsTab.equals("sync")){showSync();return;}if(settingsTab.equals("updates")){showUpdates();return;}if(settingsTab.equals("appearance"))showAppearance();else showAbout();}
 
+    private org.json.JSONObject proxyState(){try{return RhProxy.load(activity);}catch(java.io.IOException invalid){return RhProxy.defaults();}}
+    private boolean proxyDirty(){return proxyDraft!=null&&!proxyDraft.toString().equals(proxyState().toString());}
+    private boolean proxyBusy(){return updateWork.busy()||syncBusy||networkBusy()||pairing||admission!=null||connection.busy();}
+    private void refreshProxyFooter(){if(proxyNotice==null)return;boolean dirty=proxyDirty();proxyNotice.setText(dirty?"有未保存的更改":"设置已保存");proxySave.setEnabled(dirty&&!proxyBusy());proxyCancel.setEnabled(dirty&&!proxyBusy());proxyErrorView.setText(proxyError);proxyErrorView.setVisibility(proxyError.isEmpty()?View.GONE:View.VISIBLE);}
+    private void showProxy(){
+        org.json.JSONObject value=proxyDraft==null?proxyState():proxyDraft;boolean busy=proxyBusy();
+        check("启用代理",value.optBoolean("enabled"),enabled->invoke("proxy.edit",RhActions.obj("key","enabled","value",enabled))).setEnabled(!busy);
+        label("代理协议");Spinner protocol=new Spinner(activity);protocol.setContentDescription("代理协议");protocol.setTag("proxy.edit.protocol");protocol.setAdapter(options(new String[]{"HTTP","HTTPS"}));protocol.setSelection(value.optString("protocol").equals("https")?1:0,false);protocol.setEnabled(!busy);protocol.setBackground(bg(surface,line,8));content.addView(protocol,new LinearLayout.LayoutParams(-1,dp(48)));
+        protocol.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> p){}public void onItemSelected(AdapterView<?> p,View v,int position,long row){String next=position==1?"https":"http";org.json.JSONObject current=proxyDraft==null?proxyState():proxyDraft;if(!next.equals(current.optString("protocol")))fromView(protocol,()->invoke("proxy.edit",RhActions.obj("key","protocol","value",next)));}});
+        EditText host=addressField("代理地址",value.optString("host","127.0.0.1")),port=field("代理端口",value.optString("port","7890"),false);host.setEnabled(!busy);port.setEnabled(!busy);port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);watch(host,"proxy.edit","host");watch(port,"proxy.edit","port");
+        label("应用范围");for(String scope:new String[]{"updates","sync","remote"}){String name=scope.equals("updates")?"更新":scope.equals("sync")?"配置同步":"远程连接";check(name,value.optBoolean(scope),enabled->invoke("proxy.edit",RhActions.obj("key",scope,"value",enabled))).setEnabled(!busy);}
+        label("远程连接使用 RHRemote 中继隧道，代理不可用时报告错误。代理设置仅保存在本机，保存后生效。");if(busy)label("请先结束连接、同步或更新操作，再修改代理。");
+        proxyNotice=text("",13,muted,false);content.addView(proxyNotice);proxyErrorView=text("",13,failureColor,false);content.addView(proxyErrorView);
+        RhActionRow commands=actionRow();proxySave=button("保存",true,()->invoke("proxy.save",RhActions.obj()));proxySave.setTag("proxy.save");proxyCancel=button("取消",false,()->invoke("proxy.cancel",RhActions.obj()));proxyCancel.setTag("proxy.cancel");commands.addView(proxySave);commands.addView(proxyCancel);content.addView(commands);refreshProxyFooter();
+    }
     private void showUpdates(){
         org.json.JSONObject state=updates.state();LinearLayout summary=brandCard(state.optString("currentVersion"));
         TextView sourceLabel=text("首选更新源",13,muted,false);sourceLabel.setPadding(0,dp(20),0,dp(8));summary.addView(sourceLabel);
@@ -947,6 +974,7 @@ public final class RhHome implements RhActions.Target {
         updateStatus=text("",15,ink,false);updateStatus.setPadding(0,dp(16),0,dp(12));summary.addView(updateStatus);
         updateDetailsToggle=button("查看详情",false,()->invoke("updates.details.toggle",RhActions.obj()));updateDetailsToggle.setTag("updates.details.toggle");summary.addView(updateDetailsToggle);
         updateFailureDetails=text("",13,muted,false);updateFailureDetails.setContentDescription("更新错误详情");summary.addView(updateFailureDetails);
+        updateNotes=text("",13,muted,false);updateNotes.setContentDescription("更新日志");updateNotes.setPadding(0,dp(12),0,dp(8));summary.addView(updateNotes);
         updateBytes=text("",13,muted,false);updateBytes.setPadding(0,dp(12),0,dp(8));summary.addView(updateBytes);
         updateProgress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);updateProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(blue));updateProgress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(blue));summary.addView(updateProgress,new LinearLayout.LayoutParams(-1,dp(4)));
         formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout commands=row();commands.setGravity(Gravity.END);updateInstallNotice=text("",12,muted,false);commands.addView(updateInstallNotice,new LinearLayout.LayoutParams(0,-2,1));updatePrimary=boundButton("检查更新",true);updatePrimary.setTag("updates.primary");commands.addView(updatePrimary);updateCancel=boundButton("取消",false);updateCancel.setTag("updates.cancel");LinearLayout.LayoutParams cancelLayout=new LinearLayout.LayoutParams(-2,-2);cancelLayout.setMarginStart(dp(8));commands.addView(updateCancel,cancelLayout);formFooter.addView(commands);formPadding(scroll.getWidth());
@@ -957,6 +985,7 @@ public final class RhHome implements RhActions.Target {
         if(updateStatus==null)return;org.json.JSONObject s=updateWork.state();String phase=s.optString("phase"),provider=s.optString("provider");
         if(updateSource!=null){updateSource.setEnabled(!updateWork.busy());int index=s.optString("preferredSource").equals("github")?1:0;if(updateSource.getSelectedItemPosition()!=index)updateSource.setSelection(index,false);}
         updateVersion.setText(s.isNull("availableVersion")?"":"可用版本 "+s.optString("availableVersion"));updateVersion.setVisibility(s.isNull("availableVersion")?View.GONE:View.VISIBLE);
+        updateNotes.setText(s.optString("notes"));updateNotes.setVisibility(s.optString("notes").isEmpty()?View.GONE:View.VISIBLE);
         boolean failed=phase.equals("error");updateStatus.setText(failed?"更新失败，请重试。":s.optString("status"));updateStatus.setTextColor(failed?failureColor:ink);
         updateDetailsToggle.setVisibility(failed?View.VISIBLE:View.GONE);updateDetailsToggle.setText(updateDetails?"收起详情":"查看详情");updateFailureDetails.setText(s.optString("status"));updateFailureDetails.setVisibility(failed&&updateDetails?View.VISIBLE:View.GONE);
         updateProvider.setText(provider.isEmpty()?(s.optString("preferredSource").equals("github")?"GitHub 优先 · CNB 备用":"CNB 优先 · GitHub 备用"):"当前更新源："+provider);
@@ -976,7 +1005,7 @@ public final class RhHome implements RhActions.Target {
     private void globalChrome(){
         formHeader.setVisibility(View.VISIBLE);formHeader.removeAllViews();formHeader.setPadding(dp(20),dp(12),dp(20),dp(8));
         formHeader.addView(pageHeading("设置","navigation.back"));
-        categoryTabs(new String[]{"updates","sync","appearance","about"},new String[]{"更新","配置同步","外观","关于"},settingsTab,"app.settings.tab");formPadding(scroll.getWidth());
+        categoryTabs(new String[]{"updates","proxy","sync","appearance","about"},new String[]{"更新","代理","配置同步","外观","关于"},settingsTab,"app.settings.tab");formPadding(scroll.getWidth());
     }
     private void ensureSyncDraft(){if(syncDraft==null){org.json.JSONObject s=sync.state();syncDraft=RhActions.obj("url",s.optString("url"),"username",s.optString("username"),"password","","automatic",s.optBoolean("automatic"),"intervalMinutes",s.optInt("intervalMinutes",5));}}
     private org.json.JSONObject publicSyncDraft(){if(syncDraft==null)return null;try{org.json.JSONObject s=new org.json.JSONObject(syncDraft.toString());s.remove("password");return s;}catch(Exception impossible){throw new IllegalStateException(impossible);}}

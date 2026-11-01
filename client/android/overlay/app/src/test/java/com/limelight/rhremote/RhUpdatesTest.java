@@ -73,6 +73,11 @@ public class RhUpdatesTest {
             "tag","v0.2.4","size",123,"sha256",new String(new char[64]).replace('\0','a'))).toString();
     }
     private long current()throws Exception{return activity.getPackageManager().getPackageInfo(activity.getPackageName(),0).getLongVersionCode();}
+    @Test public void releaseNotesShowTheirPublicationTime()throws Exception {
+        feed(current()+1);JSONObject manifest=new JSONObject(Requests.feed);manifest.getJSONObject("android").put("notes","发布时间：2026-11-01 18:20 UTC+08:00\n\n代理设置").put("publishedAt","2026-11-01T10:20:00Z");Requests.feed=manifest.toString();updates.check();
+        assertEquals("2026-11-01T10:20:00Z",updates.state().getString("publishedAt"));assertTrue(page().contains("发布时间：2026-11-01 18:20 UTC+08:00"));
+        manifest.getJSONObject("android").put("versionCode",current());Requests.feed=manifest.toString();updates.check();assertTrue(updates.state().isNull("availableVersion"));assertTrue(page().contains("发布时间：2026-11-01 18:20 UTC+08:00"));
+    }
     @Test public void beforeCheckingDoesNotRenderJsonNull()throws Exception {
         String text=page();assertTrue(text,text.contains("尚未检查更新"));assertFalse(text,text.contains("null"));
     }

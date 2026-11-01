@@ -93,7 +93,7 @@ public final class RhSync {
     }
     private void clearPending(){pending=null;}
     private String password(JSONObject l)throws Exception{Cipher cipher=Cipher.getInstance("AES/GCM/NoPadding");cipher.init(Cipher.DECRYPT_MODE,key(),new GCMParameterSpec(128,Base64.decode(l.getString("iv"),Base64.NO_WRAP)));return new String(cipher.doFinal(Base64.decode(l.getString("ciphertext"),Base64.NO_WRAP)),StandardCharsets.UTF_8);}
-    private static HttpURLConnection open(URL url,String method,String authorization)throws IOException{HttpURLConnection c=(HttpURLConnection)url.openConnection();c.setConnectTimeout(10000);c.setReadTimeout(15000);c.setInstanceFollowRedirects(false);c.setRequestMethod(method);c.setRequestProperty("Authorization",authorization);return c;}
+    private HttpURLConnection open(URL url,String method,String authorization)throws IOException{HttpURLConnection c=RhProxy.open(context,url,"sync");c.setConnectTimeout(10000);c.setReadTimeout(15000);c.setInstanceFollowRedirects(false);c.setRequestMethod(method);c.setRequestProperty("Authorization",authorization);return c;}
     static String failureMessage(Exception failure){
         for(Throwable cause=failure;cause!=null;cause=cause.getCause()){
             if(cause instanceof javax.net.ssl.SSLException)return "WebDAV 证书或 TLS 连接验证失败，请检查证书和地址";
@@ -127,8 +127,8 @@ public final class RhSync {
     public synchronized JSONObject run(JSONObject ours,String resolution)throws Exception{
         clearApplied();
         ours=RhShared.normalize(ours);JSONObject l=local;URL url=endpoint(l.getString("url"));String auth="Basic "+Base64.encodeToString((l.getString("username")+":"+password(l)).getBytes(StandardCharsets.UTF_8),Base64.NO_WRAP);
-        if(locking==null)locking=RhDavLease.supported(url,auth,RhSync::open);
-        try(RhDavLease lease=locking?RhDavLease.acquire(url,auth):null){
+        if(locking==null)locking=RhDavLease.supported(url,auth,this::open);
+        try(RhDavLease lease=locking?RhDavLease.acquire(url,auth,RhProxy.route(context,"sync")):null){
         JSONObject remote=null;String etag=null;HttpURLConnection get=open(url,"GET",auth);
         try{int code=get.getResponseCode();if(code==200){etag=get.getHeaderField("ETag");if(etag==null||etag.startsWith("W/"))throw new IOException("WebDAV 服务器未提供强 ETag");try(InputStream in=get.getInputStream()){byte[] bytes=read(in);boolean emptyCreation=bytes.length==0&&lease!=null&&(lease.createdResource()||!l.has("base")&&l.optLong("lastSyncMs")==0);if(!emptyCreation)remote=RhShared.normalize(new JSONObject(new String(bytes,StandardCharsets.UTF_8)));}}else if(code!=404)throw new IOException("WebDAV HTTP "+code);}finally{get.disconnect();}
         PendingReview previous=pending;

@@ -20,6 +20,7 @@ struct Request {
     key: PathBuf,
     remote: Address,
     relay_only: bool,
+    #[serde(default)] upstream_proxy:Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Reply {
@@ -32,12 +33,14 @@ pub(crate) struct Client {
     child: Option<Child>,
     input: Option<ChildStdin>,
     failure: Option<String>,
+    upstream_proxy:Option<String>,
     active: bool,
 }
 impl Client {
     pub fn new() -> Result<Self, String> {
         Ok(Self::default())
     }
+    pub fn set_upstream_proxy(&mut self,proxy:Option<String>)->Result<(),String>{self.upstream_proxy=proxy;Ok(())}
     pub fn start_cancelable(
         &mut self,
         key: &Path,
@@ -72,6 +75,7 @@ impl Client {
             key: key.into(),
             remote,
             relay_only,
+            upstream_proxy:self.upstream_proxy.clone(),
         };
         let written = serde_json::to_writer(&mut input, &request)
             .map_err(|e| e.to_string())
@@ -221,6 +225,7 @@ pub fn run_from_args() -> Option<Result<(), String>> {
         let lock_path = request.key.with_extension("worker.lock");
         let _identity_lease = identity_lease(&lock_path, &cancel, Duration::from_secs(20))?;
         let mut client = rhremote_transport::Client::new().map_err(|e| e.to_string())?;
+        client.set_upstream_proxy(request.upstream_proxy).map_err(|e|e.to_string())?;
         let started = client
             .start_cancelable(&request.key, request.remote, request.relay_only, &cancel)
             .map_err(|e| e.to_string());

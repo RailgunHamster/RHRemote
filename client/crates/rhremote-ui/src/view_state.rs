@@ -213,6 +213,11 @@ impl MainView {
             form_models::update_sync_conflicts(ui, &state["sync"]["conflictItems"]);
             ui.set_sync_last(sync_summary(state).into());
             ui.set_updates_managed(state["updates"]["managed"] == true);
+            let proxy=if state["proxyDraft"].is_object(){&state["proxyDraft"]}else{&state["proxy"]};
+            ui.set_proxy_enabled(proxy["enabled"]==true);ui.set_proxy_protocol_index(if proxy["protocol"]=="https"{1}else{0});
+            ui.set_proxy_host(proxy["host"].as_str().unwrap_or("127.0.0.1").into());ui.set_proxy_port(proxy["port"].as_str().unwrap_or("7890").into());
+            ui.set_proxy_updates(proxy["updates"]==true);ui.set_proxy_sync(proxy["sync"]==true);ui.set_proxy_remote(proxy["remote"]==true);
+            ui.set_proxy_busy(state["proxyBusy"]==true);ui.set_proxy_dirty(state["proxyDirty"]==true);ui.set_proxy_error(state["proxyError"].as_str().unwrap_or("").into());
             ui.set_update_source_index(if state["updates"]["preferredSource"]=="github"{1}else{0});
             ui.set_updates_busy(state["updatesBusy"] == true);
             ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());
@@ -223,6 +228,7 @@ impl MainView {
                     .unwrap_or("")
                     .into(),
             );
+            ui.set_update_notes(state["updates"]["notes"].as_str().unwrap_or("").into());
             ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
             let devices = state["devices"].as_array().cloned().unwrap_or_default();
             ui.set_devices_refreshing(state["devicesRefreshing"]==true);

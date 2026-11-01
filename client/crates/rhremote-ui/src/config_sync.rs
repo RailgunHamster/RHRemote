@@ -362,7 +362,10 @@ impl ConfigSync {
             base64::engine::general_purpose::STANDARD
                 .encode(format!("{}:{password}", self.local.username))
         );
-        let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(15)).build();
+        let proxy=crate::proxy::SyncRoute::new(&self.directory)?;
+        let mut builder=ureq::AgentBuilder::new().try_proxy_from_env(false).redirects(0).timeout(Duration::from_secs(15));
+        if let Some(address)=&proxy.address{builder=builder.proxy(ureq::Proxy::new(address).map_err(|_|"WebDAV 代理地址无效")?);}
+        let agent=builder.build();
         self.exchange_negotiated(&agent, address.as_str(), &auth, local, resolution)
             .map_err(|error| if self.local.pending_transfer {
                 format!("{error}。远端写入结果未确认，自动同步已暂停，请手动同步核对")

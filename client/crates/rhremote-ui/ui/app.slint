@@ -814,7 +814,19 @@ export component MainWindow inherits Window {
     in property <bool> updates-available;
     in property <bool> updates-pending;
     in property <string> update-version;
+    in property <string> update-notes;
     in-out property <int> update-source-index;
+    in-out property <bool> proxy-enabled;
+    in-out property <int> proxy-protocol-index;
+    in-out property <string> proxy-host;
+    in-out property <string> proxy-port;
+    in-out property <bool> proxy-updates;
+    in-out property <bool> proxy-sync;
+    in-out property <bool> proxy-remote;
+    in property <bool> proxy-busy;
+    in property <bool> proxy-dirty;
+    in property <string> proxy-error;
+
     in property <string> update-status;
     in property <bool> update-details;
     in property <string> update-primary-text:"检查更新";
@@ -993,6 +1005,7 @@ export component MainWindow inherits Window {
                         HorizontalLayout{spacing:12px;BackButton{text:"返回";action-id:"devices.open";}Text{text:"设置";font-size:26px;font-weight:600;color:Palette.ink;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}}
                         HorizontalLayout{spacing:8px;
                             TabButton{text:"更新";action-id:"app.settings.tab";argument:"updates";chosen:root.settings-tab=="updates";}
+                            TabButton{text:"代理";action-id:"app.settings.tab";argument:"proxy";chosen:root.settings-tab=="proxy";}
                             TabButton{text:"配置同步";action-id:"app.settings.tab";argument:"sync";chosen:root.settings-tab=="sync";}
                             TabButton{text:"外观";action-id:"app.settings.tab";argument:"appearance";chosen:root.settings-tab=="appearance";}
                             TabButton{text:"关于";action-id:"app.settings.tab";argument:"about";chosen:root.settings-tab=="about";}
@@ -1196,6 +1209,23 @@ export component MainWindow inherits Window {
                             }
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
                         }
+                        if root.settings-tab=="proxy": SettingsCard {
+                            Text{text:"代理";color:Palette.ink;font-size:18px;font-weight:600;}
+                            CheckBox{text:"启用代理";checked <=> root.proxy-enabled;enabled:!root.proxy-busy;toggled=>{Commands.trigger("proxy.edit","enabled="+(self.checked?"true":"false"));}}
+                            HorizontalLayout{spacing:12px;
+                                proxy-protocol:=ComboBox{model:["HTTP","HTTPS"];current-index <=> root.proxy-protocol-index;enabled:!root.proxy-busy;preferred-width:110px;horizontal-stretch:0;accessible-label:"代理协议";selected(value)=>{Commands.trigger("proxy.edit","protocol="+(self.current-index==1?"https":"http"));}}
+                                proxy-host-input:=LineEdit{text <=> root.proxy-host;enabled:!root.proxy-busy;accessible-label:"代理地址";horizontal-stretch:1;edited=>{Commands.trigger("proxy.edit","host="+self.text);}}
+                                proxy-port-input:=LineEdit{text <=> root.proxy-port;enabled:!root.proxy-busy;accessible-label:"代理端口";preferred-width:90px;horizontal-stretch:0;edited=>{Commands.trigger("proxy.edit","port="+self.text);}}
+                            }
+                            Text{text:"应用范围";color:Palette.ink;}
+                            CheckBox{text:"更新";checked <=> root.proxy-updates;enabled:!root.proxy-busy;toggled=>{Commands.trigger("proxy.edit","updates="+(self.checked?"true":"false"));}}
+                            CheckBox{text:"配置同步";checked <=> root.proxy-sync;enabled:!root.proxy-busy;toggled=>{Commands.trigger("proxy.edit","sync="+(self.checked?"true":"false"));}}
+                            CheckBox{text:"远程连接";checked <=> root.proxy-remote;enabled:!root.proxy-busy;toggled=>{Commands.trigger("proxy.edit","remote="+(self.checked?"true":"false"));}}
+                            Text{text:"远程连接使用 RHRemote 中继隧道，代理不可用时报告错误。代理设置仅保存在本机，保存后生效。";color:Palette.muted;wrap:word-wrap;font-size:13px;}
+                            if root.proxy-busy:Text{text:"请先结束连接、同步或更新操作，再修改代理。";color:Palette.muted;wrap:word-wrap;}
+                            if root.proxy-error!="":Text{text:root.proxy-error;color:Palette.failure;wrap:word-wrap;}
+                            HorizontalLayout{spacing:12px;ActionButton{text:"保存";action-id:"proxy.save";disabled:root.proxy-busy||!root.proxy-dirty;}ActionButton{text:"取消";action-id:"proxy.cancel";disabled:root.proxy-busy||!root.proxy-dirty;}Text{text:root.proxy-dirty?"有未保存的更改":"设置已保存";color:Palette.muted;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}}
+                        }
                         if root.settings-tab=="updates": SettingsCard {
                             HorizontalLayout {spacing:16px;
                                 Image {source:@image-url("../../../shared/icons/rhremote.svg");width:48px;height:48px;}
@@ -1209,6 +1239,7 @@ export component MainWindow inherits Window {
                             }
                             Text{text:root.updates-managed ? "首选源不可用时自动尝试另一来源。" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
                             if root.updates-available: Text{text:"可用版本："+root.update-version;color:Palette.ink;}
+                            if root.update-notes!="":Text{text:root.update-notes;color:Palette.muted;wrap:word-wrap;font-size:13px;}
                             if root.updates-busy: Rectangle {height:4px;background:Palette.line;border-radius:2px;
                                 Rectangle {height:parent.height;width:parent.width * (root.update-phase=="downloading" ? root.update-progress / 100 : 0.12);background:Palette.blue;border-radius:2px;}
                             }

@@ -997,3 +997,11 @@ fn prepared_update_shows_why_installation_waits_and_enables_one_button_after_syn
 mod diagnostic_tests;
 #[path="keyboard_workspace_tests.rs"]
 mod keyboard_workspace_tests;
+
+#[test]
+fn published_update_notes_reach_the_bound_windows_view(){
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    let boundary=Arc::new(Boundary::default());let notes="发布时间：2026-11-01 18:20 UTC+08:00\n\n代理设置";
+    *boundary.updates.lock().unwrap()=json!({"managed":true,"phase":"available","availableVersion":"9.0.0","notes":notes});let mut f=Flow::with_boundary(720.,560.,boundary);f.input("app.settings.tab","updates");
+    assert_eq!(f.ui.get_update_notes().as_str(),notes);f.capture("published-update-notes");
+}

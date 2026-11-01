@@ -171,11 +171,24 @@ impl Controller {
         Ok(result)
     }
     pub(crate) fn dispatch_global(&self, id: &str, args: Value) -> Result<Value, String> {
+        if id.starts_with("proxy.") {
+            let mut s=self.state.lock().unwrap();
+            if id=="proxy.state"{return Ok(s.proxy.clone());}
+            if s.page!="global-settings"||s.settings_tab!="proxy"{return Err("请先打开代理设置页".into());}
+            if s.streaming||s.connecting||s.connection.busy()||s.sync_busy||s.updates_busy||s.installing_update||s.diagnostics.busy{return Err("请先结束连接、同步或更新操作，再修改代理".into());}
+            s.proxy_error.clear();
+            match id {
+                "proxy.edit"=>{let key=args["key"].as_str().ok_or("代理字段缺失")?;let value=args["value"].clone();match key{"enabled"|"updates"|"sync"|"remote" if value.is_boolean()=>{},"host"|"protocol"|"port" if value.as_str().is_some_and(|s|s.len()<=253)=>{},_=>return Err("代理字段无效".into())};let mut draft=s.proxy_draft.clone().unwrap_or_else(||s.proxy.clone());draft[key]=value;s.proxy_draft=Some(draft);},
+                "proxy.cancel"=>s.proxy_draft=None,
+                "proxy.save"=>{let settings=crate::proxy::Settings::from_form(s.proxy_draft.as_ref().unwrap_or(&s.proxy))?;let updated=self.platform.execute("proxy.configure",&serde_json::to_value(settings).unwrap())?;s.proxy=updated;s.proxy_draft=None;},
+                _=>return Err("未知代理操作".into()),
+            }s.revision+=1;return Ok(s.proxy.clone());
+        }
         if id == "app.settings.open" || id == "app.settings.tab" {
             let mut s = self.state.lock().unwrap();
             if id == "app.settings.tab" {
                 let tab = args["tab"].as_str().ok_or("tab required")?;
-                if !["appearance", "sync", "updates", "about"].contains(&tab) {
+                if !["appearance", "proxy", "sync", "updates", "about"].contains(&tab) {
                     return Err("unknown settings tab".into());
                 }
                 s.settings_tab = tab.into();

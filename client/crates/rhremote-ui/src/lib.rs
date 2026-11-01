@@ -43,6 +43,7 @@ mod recovery;
 mod statistics;
 mod window_events;
 mod updates;
+mod proxy;
 mod update_cancel;
 mod ui_rendering;
 mod floating_keyboard;
@@ -87,6 +88,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "device.network.diagnose"|"device.network.cancel"|"device.network.details.toggle"=>serde_json::from_str(arg).unwrap_or_else(|_|json!({})),
         "updates.cancel"=>json!({"operationId":arg.parse::<u64>().unwrap_or(0)}),
         "updates.primary" if !arg.is_empty()=>json!({"expectedIntent":arg}),
+        "proxy.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":if matches!(key,"enabled"|"updates"|"sync"|"remote"){json!(value=="true")}else{json!(value)}})},
         "updates.source.set"=>json!({"source":arg.strip_prefix("source=").unwrap_or(arg)}),
         "navigation.resolve"|"sync.clear.resolve"=>json!({"choice":arg}),
         "settings.input"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},

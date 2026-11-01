@@ -7,6 +7,22 @@ use slint::{
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
 #[test]
+fn proxy_tab_keeps_protocol_host_port_and_scopes_aligned_and_scrollable(){
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    for dark in [false,true]{for(width,height)in[(720.,560.),(1180.,780.)]{
+        let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("proxy".into());ui.set_compact(width<980.);ui.set_dark(dark);ui.global::<Palette>().set_dark(dark);ui.set_proxy_host("127.0.0.1".into());ui.set_proxy_port("7890".into());ui.set_proxy_protocol_index(0);ui.set_proxy_updates(true);ui.set_proxy_sync(true);ui.set_proxy_remote(true);ui.set_proxy_dirty(true);ui.window().set_size(LogicalSize::new(width,height));ui.show().unwrap();
+        let sent=Rc::new(RefCell::new(Vec::new()));let calls=sent.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));
+        render(&ui,&format!("proxy-{width}-{dark}-top"));
+        for label in ["代理协议","代理地址","代理端口"]{visible_in_form(&ui,label);}
+        let host=button(&ui,"代理地址");let port=button(&ui,"代理端口");assert!((host.absolute_position().y-port.absolute_position().y).abs()<1.);assert!(host.absolute_position().x+host.size().width<=port.absolute_position().x);
+        click(&ui,"启用代理");assert_eq!(*sent.borrow(),vec![("proxy.edit".to_string(),"enabled=true".to_string())]);sent.borrow_mut().clear();
+        let form=ElementHandle::find_by_element_id(&ui,"MainWindow::form-scroll").next().unwrap();form.scroll(0.,-100000.);render(&ui,&format!("proxy-{width}-{dark}-bottom"));
+        visible_in_form(&ui,"保存");click(&ui,"保存");assert_eq!(*sent.borrow(),vec![("proxy.save".to_string(),String::new())]);
+        ui.set_proxy_busy(true);render(&ui,&format!("proxy-{width}-{dark}-busy"));assert_eq!(button(&ui,"保存").accessible_enabled(),Some(false));
+    }}
+}
+
+#[test]
 fn a_held_conflict_choice_cannot_resolve_a_replacement_review(){
     slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
     for dark in [false,true]{for(width,height)in[(720.,560.),(1180.,780.)]{

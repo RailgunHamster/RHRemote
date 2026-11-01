@@ -19,6 +19,9 @@ serde.workspace = true
 serde_json.workspace = true
 bytes = "1"
 
+[dev-dependencies]
+iroh-relay = { version = "=1.4.1", default-features = false, features = ["server", "tls-ring"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 
