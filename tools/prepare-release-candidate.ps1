@@ -3,6 +3,8 @@ param(
  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='0.2.7',
  [ValidateRange(209,2100000000)][int]$AndroidVersionCode=209,
  [string]$ServerArchive='',
+ [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ServerVersion='0.2.11',
+ [string]$LinuxDirectory='',
  [DateTimeOffset]$PublishedAt=[DateTimeOffset]::UtcNow,
  [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSignerSha256='2f6464fe50d23ef17e4fdab8c1dcc7b6ec4171b890158738653c51854031dadc'
 )
@@ -45,13 +47,30 @@ $apkName="RHRemote-Android-$Version-arm64-v8a.apk"
 Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $out $apkName)
 if($ServerArchive){
  $serverFile=Get-Item -LiteralPath $ServerArchive
- if($serverFile.PSIsContainer-or$serverFile.Name-ne("RHRemote-Sunshine-$Version-win-x64.zip")){throw 'Unexpected server archive identity'}
+ if($serverFile.PSIsContainer-or$serverFile.Name-ne("RHRemote-Sunshine-$ServerVersion-win-x64.zip")){throw 'Unexpected server archive identity'}
  Copy-Item -LiteralPath $serverFile.FullName -Destination (Join-Path $out $serverFile.Name)
+}
+if($LinuxDirectory){
+ $linux=Get-Content -LiteralPath (Join-Path $LinuxDirectory 'packages.json') -Raw|ConvertFrom-Json
+ if($linux.version-cne$Version-or$linux.platform-cne'ubuntu24.04-x11-amd64'-or@($linux.assets).Count-ne2){throw 'Unexpected Linux package identity'}
+ foreach($kind in @('client','server')){
+  $name="rhremote-${kind}_${Version}_ubuntu24.04_amd64.deb"
+  $entry=@($linux.assets|Where-Object name -ceq $name)
+  if($entry.Count-ne1-or$entry[0].sha256-notmatch'^[a-f0-9]{64}$'){throw 'Missing audited Linux package'}
+  $file=Get-Item -LiteralPath (Join-Path $LinuxDirectory $name)
+  if($file.Length-ne$entry[0].bytes-or(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash-ine$entry[0].sha256){throw 'Linux package checksum mismatch'}
+  Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $out $name)
+ }
+ Copy-Item -LiteralPath (Join-Path $LinuxDirectory 'packages.json') -Destination (Join-Path $out 'packages.linux.json')
+ Copy-Item -LiteralPath (Join-Path $repo 'docs/LINUX.md') -Destination (Join-Path $out 'LINUX.md')
 }
 $apkHash=(Get-FileHash -LiteralPath $apk.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 $android=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionCode=$AndroidVersionCode;packageName='com.rhremote.client';tag="v$Version";fileName=$apkName;size=$apk.Length;sha256=$apkHash;notes=$releaseNotes.notes;publishedAt=$releaseNotes.publishedAt}}
 [IO.File]::WriteAllText((Join-Path $out 'releases.android.json'),($android|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
 $metadata=[ordered]@{publishedAt=$releaseNotes.publishedAt;channel='stable';sourceCommit=$commit;windowsVersion=$Version;windowsBuildType='release';windowsUiRenderer='software';androidVersion=$Version;androidBuildType='release';androidDebuggable=$false;androidVersionCode=$AndroidVersionCode;androidPackage='com.rhremote.client';androidSignerSha256=$digests[0];androidApkSha256=$apkHash;oppoInstalled=$false;actualCellularVerified=$false}
+$metadata.serverVersion=if($ServerArchive){$ServerVersion}else{$null}
+$metadata.linuxIncluded=[bool]$LinuxDirectory
+if($LinuxDirectory){$metadata.linuxPlatform='ubuntu24.04-x11-amd64';$metadata.linuxBuildType='release';$metadata.linuxUpdateMethod='manual-deb'}
 [IO.File]::WriteAllText((Join-Path $out 'build.json'),($metadata|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $source=Join-Path $out "RHRemote-$Version-source.zip"
 & git -C $repo archive --format=zip --output=$source $commit
