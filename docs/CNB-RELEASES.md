@@ -1,6 +1,8 @@
 # 更新和发布
 
-客户端默认从公开的 [CNB 仓库](https://cnb.cool/railgunhamster/RHRemote/-/releases)读取更新；请求失败自动尝试 GitHub。Windows 与 Android 使用相同顺序。产品中不提供家庭服务器或 Gitee 更新源。
+客户端默认从公开的 [CNB 仓库](https://cnb.cool/railgunhamster/RHRemote/-/releases)读取更新；请求失败自动尝试 GitHub。Windows、Android 从 0.2.13 起可在“设置 → 更新 → 首选更新源”中选择 GitHub，失败时尝试 CNB。选择保存在本机，不参与 WebDAV 同步；更新过程中禁止切换。产品中不提供家庭服务器或 Gitee 更新源。
+
+同一操作也可通过动作接口调用：`updates.source.set`，参数 `{"source":"github"}` 或 `{"source":"cnb"}`；`updates.state` 返回 `preferredSource`。切换后点击“检查更新”；已经校验的安装包继续保留。
 
 - 最新信息：`https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/releases.win.json`、`releases.android.json`。
 - 安装包固定到元数据对应的版本，例如 `.../-/releases/download/v0.2.12/RHRemote-0.2.12-full.nupkg`；下载后仍校验大小、SHA-256，Android 同时校验包名、版本和签名。

@@ -213,6 +213,7 @@ impl MainView {
             form_models::update_sync_conflicts(ui, &state["sync"]["conflictItems"]);
             ui.set_sync_last(sync_summary(state).into());
             ui.set_updates_managed(state["updates"]["managed"] == true);
+            ui.set_update_source_index(if state["updates"]["preferredSource"]=="github"{1}else{0});
             ui.set_updates_busy(state["updatesBusy"] == true);
             ui.set_updates_available(state["updates"]["availableVersion"].as_str().is_some());
             ui.set_updates_pending(state["updates"]["pendingRestart"] == true);

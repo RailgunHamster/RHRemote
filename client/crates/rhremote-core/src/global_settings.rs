@@ -91,6 +91,12 @@ impl Controller {
         if s.updates_busy {
             return Err("更新操作正在进行".into());
         }
+        if id=="updates.source.set" {
+            if s.closing{return Err("应用正在关闭".into());}
+            let source=args["source"].as_str().filter(|value|matches!(*value,"cnb"|"github")).ok_or("请选择 CNB 或 GitHub")?;
+            let updated=self.platform.execute(id,&json!({"source":source}))?;
+            s.updates=updated.clone();s.revision+=1;return Ok(updated);
+        }
         if let Some(observed)=observed{s.updates=observed;}
         let id = if id == "updates.primary" {
             update_primary_action(&s.updates)

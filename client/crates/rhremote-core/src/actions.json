@@ -365,6 +365,11 @@
     }
   },
   {
+    "id": "updates.source.set",
+    "label": "首选更新源",
+    "args": {"source":"cnb / github"}
+  },
+  {
     "id": "updates.state",
     "label": "更新状态",
     "args": {}
