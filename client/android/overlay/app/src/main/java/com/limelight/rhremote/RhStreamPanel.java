@@ -82,7 +82,10 @@ public final class RhStreamPanel {
         // Prepare controls during session initialization, so the first explicit
         // expansion reuses the same ready tree instead of inflating it on input.
         createContents();
-        ViewCompat.setOnApplyWindowInsetsListener(handle,(view,insets)->{updateBounds(insets.getInsets(WindowInsetsCompat.Type.systemBars()|WindowInsetsCompat.Type.displayCutout()));return insets;});
+        ViewCompat.setOnApplyWindowInsetsListener(handle,(view,insets)->{updateBounds(safeInsets(insets));return insets;});
+        ViewCompat.setWindowInsetsAnimationCallback(handle,new androidx.core.view.WindowInsetsAnimationCompat.Callback(androidx.core.view.WindowInsetsAnimationCompat.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE){
+            @Override public WindowInsetsCompat onProgress(WindowInsetsCompat insets,java.util.List<androidx.core.view.WindowInsetsAnimationCompat> running){updateBounds(safeInsets(insets));return insets;}
+        });
         ViewCompat.requestApplyInsets(handle);warningIndicator();root.post(this::updateBounds);
     }
 
@@ -223,18 +226,20 @@ public final class RhStreamPanel {
         List<View> children=new ArrayList<>();for(int i=0;i<grid.getChildCount();i++)children.add(grid.getChildAt(i));grid.removeAllViews();grid.setColumnCount(count);
         for(int i=0;i<children.size();i++){GridLayout.LayoutParams p=new GridLayout.LayoutParams(GridLayout.spec(i/count),GridLayout.spec(i%count,1f));p.width=0;p.height=dp(52);p.setMargins(i%count==0?0:dp(8),i<count?0:dp(8),0,0);grid.addView(children.get(i),p);}
     }
+    private static Insets safeInsets(WindowInsetsCompat window){return window.getInsets(WindowInsetsCompat.Type.systemBars()|WindowInsetsCompat.Type.displayCutout()|WindowInsetsCompat.Type.ime());}
     private void updateBounds(){
-        WindowInsetsCompat window=ViewCompat.getRootWindowInsets(root);updateBounds(window==null?currentInsets:window.getInsets(WindowInsetsCompat.Type.systemBars()|WindowInsetsCompat.Type.displayCutout()));
+        WindowInsetsCompat window=ViewCompat.getRootWindowInsets(root);updateBounds(window==null?currentInsets:safeInsets(window));
     }
     private void updateBounds(Insets safe){
         currentInsets=safe;
         if(disposed||creatingContents||root.getWidth()==0||root.getHeight()==0)return;
         int top=safe.top,bottom=safe.bottom,left=safe.left,right=safe.right;
         int side=Math.max(left,right);
-        int topMargin=top+dp(8), width=Math.max(dp(160),Math.min(dp(560),root.getWidth()-2*side-dp(24)));
+        int width=Math.max(dp(160),Math.min(dp(560),root.getWidth()-2*side-dp(24)));
         FrameLayout.LayoutParams hp=(FrameLayout.LayoutParams)handle.getLayoutParams();
         // The toggle remains one fixed touch target when its caption changes.
         int handleWidth=Math.max(dp(88),Math.max(labelWidth(handle,"控制"),labelWidth(handle,"收起"))),handleHeight=labelHeight(handle,48);
+        int topMargin=Math.max(top,Math.min(top+dp(8),root.getHeight()-bottom-handleHeight));
         if(hp.width!=handleWidth||hp.height!=handleHeight){hp.width=handleWidth;hp.height=handleHeight;handle.setLayoutParams(hp);}
         if(hp.topMargin!=topMargin){hp.topMargin=topMargin;handle.setLayoutParams(hp);}
         if(panel==null)return;
@@ -394,5 +399,5 @@ public final class RhStreamPanel {
     private void renderZoom(){if(isExpanded()&&tab.equals("displays")&&zoomPercent!=shownZoomPercent){shownZoomPercent=zoomPercent;zoomLabel.setText("缩放 "+zoomPercent+"%");}}
     private String monitorName(JSONObject monitor){String name=monitor.optString("name");return monitor.optBoolean("virtual")?"虚拟屏":name.isEmpty()?"物理屏幕":name;}
     public JSONObject layoutState(){Rect h=new Rect(),p=new Rect();handle.getHitRect(h);if(panel!=null)panel.getHitRect(p);return RhActions.obj("created",panel!=null,"expanded",isExpanded(),"tab",tab,"columns",columns,"handle",RhActions.obj("x",h.left,"y",h.top,"width",h.width(),"height",h.height()),"panel",RhActions.obj("x",p.left,"y",p.top,"width",p.width(),"height",p.height()),"scrollable",panel!=null&&(scroll.canScrollVertically(1)||scroll.canScrollVertically(-1)));}
-    public void dispose(){if(disposed)return;disposed=true;trackingVolume=false;pendingDisplay=null;pendingControls=null;pendingFeedback=false;for(View view:localKeys.values())view.setPressed(false);localKeys.clear();ViewCompat.setOnApplyWindowInsetsListener(handle,null);root.removeOnLayoutChangeListener(layoutListener);if(panel!=null)root.removeView(panel);panel=null;root.removeView(handle);}
+    public void dispose(){if(disposed)return;disposed=true;trackingVolume=false;pendingDisplay=null;pendingControls=null;pendingFeedback=false;for(View view:localKeys.values())view.setPressed(false);localKeys.clear();ViewCompat.setOnApplyWindowInsetsListener(handle,null);ViewCompat.setWindowInsetsAnimationCallback(handle,null);root.removeOnLayoutChangeListener(layoutListener);if(panel!=null)root.removeView(panel);panel=null;root.removeView(handle);}
 }

@@ -4,6 +4,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.MouseButtonPacket;
 
@@ -12,14 +13,18 @@ public final class RhTouchController {
     interface TouchSink {void button(byte button,boolean down);void position(short x,short y,short width,short height);void relative(short x,short y);void scroll(short delta);void horizontalScroll(short delta);}
     private final TouchSink sink;private final View surface;private final boolean swapped;
     private final Handler handler=new Handler(Looper.getMainLooper());
-    private final float slop,scrollScale;private final boolean reverseScroll;private boolean active,multi,drag,secondary,primary,middle,trackpad,panMode,scrollMode;
+    private final float slop,scrollSlop;private final boolean reverseScroll;private boolean active,multi,drag,secondary,primary,middle,trackpad,panMode,scrollMode;
+    // Match Moonlight's absolute two-finger scroll gain: high-res wheel units per
+    // view pixel, not per dp. Dividing by density makes high-density tablets slow.
+    private static final float SCROLL_SCALE=3;
+    private int scrollAxes;
     private float wheelX,wheelY,dragAnchorX,dragAnchorY;private boolean clickScrollMode;
     private int twoFingerMode;private float downX,downY,lastX,lastY,initialDistance,initialScale,centerX,centerY,initialPanX,initialPanY;
     private float scale=1,panX,panY;private long sequence;
     private java.util.function.DoubleConsumer transformListener;
     private final Runnable longPress=()->{if(active&&!multi&&!drag&&!panMode&&!scrollMode){secondary=true;button(false,true);}};
     public RhTouchController(NvConnection c,View view,RhProfile profile){this(new TouchSink(){public void button(byte b,boolean down){if(down)c.sendMouseButtonDown(b);else c.sendMouseButtonUp(b);}public void position(short x,short y,short w,short h){c.sendMousePosition(x,y,w,h);}public void relative(short x,short y){c.sendMouseMove(x,y);}public void scroll(short delta){c.sendMouseHighResScroll(delta);}public void horizontalScroll(short delta){c.sendMouseHighResHScroll(delta);}},view,profile);}
-    RhTouchController(TouchSink output,View view,RhProfile profile){sink=output;surface=view;swapped=profile.swapButtons;trackpad=profile.trackpad;reverseScroll=profile.reverseScroll;float density=view.getResources().getDisplayMetrics().density;slop=12*density;scrollScale=3/density;surface.setPivotX(0);surface.setPivotY(0);}
+    RhTouchController(TouchSink output,View view,RhProfile profile){sink=output;surface=view;swapped=profile.swapButtons;trackpad=profile.trackpad;reverseScroll=profile.reverseScroll;float density=view.getResources().getDisplayMetrics().density;slop=12*density;scrollSlop=ViewConfiguration.get(view.getContext()).getScaledTouchSlop();surface.setPivotX(0);surface.setPivotY(0);}
     private void button(boolean main,boolean down){byte b=(main^swapped)?MouseButtonPacket.BUTTON_LEFT:MouseButtonPacket.BUTTON_RIGHT;sink.button(b,down);}
     private float sx(View source,MotionEvent e,int i){return source==surface?e.getX(i)*scale+surface.getLeft()+panX:e.getX(i);}
     private float sy(View source,MotionEvent e,int i){return source==surface?e.getY(i)*scale+surface.getTop()+panY:e.getY(i);}
@@ -39,9 +44,31 @@ public final class RhTouchController {
     public float scale(){return scale;}
     public org.json.JSONObject viewTransform(){return RhActions.obj("scale",scale,"x",panX,"y",panY);}
     public org.json.JSONObject surfaceSize(){return RhActions.obj("width",surface.getWidth(),"height",surface.getHeight());}
-    public void cancel(){handler.removeCallbacksAndMessages(null);sequence++;if(primary){button(true,false);primary=false;}if(secondary){button(false,false);secondary=false;}if(middle){sink.button(MouseButtonPacket.BUTTON_MIDDLE,false);middle=false;}active=drag=multi=false;wheelX=wheelY=0;}
+    public void cancel(){handler.removeCallbacksAndMessages(null);sequence++;if(primary){button(true,false);primary=false;}if(secondary){button(false,false);secondary=false;}if(middle){sink.button(MouseButtonPacket.BUTTON_MIDDLE,false);middle=false;}active=drag=multi=false;wheelX=wheelY=0;scrollAxes=0;}
     private void middleClick(){sink.button(MouseButtonPacket.BUTTON_MIDDLE,true);middle=true;long token=++sequence;handler.postDelayed(()->{if(sequence==token&&middle){sink.button(MouseButtonPacket.BUTTON_MIDDLE,false);middle=false;}},80);}
-    private void scrollBy(float dx,float dy){float direction=reverseScroll?-1:1;wheelX-=dx*scrollScale*direction;wheelY+=dy*scrollScale*direction;int horizontal=Math.max(-32767,Math.min(32767,(int)wheelX)),vertical=Math.max(-32767,Math.min(32767,(int)wheelY));if(horizontal!=0){sink.horizontalScroll((short)horizontal);wheelX-=horizontal;}if(vertical!=0){sink.scroll((short)vertical);wheelY-=vertical;}}
+    private void scrollBy(float dx,float dy){float direction=reverseScroll?-1:1;wheelX-=dx*SCROLL_SCALE*direction;wheelY+=dy*SCROLL_SCALE*direction;int horizontal=Math.max(-32767,Math.min(32767,(int)wheelX)),vertical=Math.max(-32767,Math.min(32767,(int)wheelY));if(horizontal!=0){sink.horizontalScroll((short)horizontal);wheelX-=horizontal;}if(vertical!=0){sink.scroll((short)vertical);wheelY-=vertical;}}
+    private void scrollTouch(float x,float y){
+        if(!drag){
+            float dx=x-downX,dy=y-downY,distance=(float)Math.hypot(dx,dy);
+            if(distance<=scrollSlop)return;
+            handler.removeCallbacks(longPress);drag=true;
+            // Consume the tap dead zone once. Sending all of it on activation
+            // caused a visible jump, especially on high-density displays.
+            lastX=downX+dx*scrollSlop/distance;lastY=downY+dy*scrollSlop/distance;
+            scrollAxes=Math.abs(dy)>2*Math.abs(dx)?1:Math.abs(dx)>2*Math.abs(dy)?2:3;
+        }
+        scrollBy(scrollAxes==1?0:x-lastX,scrollAxes==2?0:y-lastY);
+        lastX=x;lastY=y;
+    }
+    private void scrollTouchSamples(View source,MotionEvent event){
+        // A slow UI frame may batch several touch samples. Keep their ordering
+        // (and reversals) instead of turning the batch into one large wheel step.
+        for(int i=0;i<event.getHistorySize();i++){
+            float x=event.getHistoricalX(0,i),y=event.getHistoricalY(0,i);
+            scrollTouch(source==surface?x*scale+surface.getLeft()+panX:x,source==surface?y*scale+surface.getTop()+panY:y);
+        }
+        scrollTouch(sx(source,event,0),sy(source,event,0));
+    }
     public void inject(org.json.JSONObject args)throws org.json.JSONException{
         String gesture=args.getString("gesture");if(!java.util.Arrays.asList("tap","secondary","drag","scroll","pinch","swipe").contains(gesture))throw new IllegalArgumentException("unsupported gesture");
         int fingers=args.optInt("fingers",1);if(gesture.equals("swipe")&&(!clickScrollMode||fingers<1||fingers>2))throw new IllegalArgumentException("swipe requires click-scroll mode and one or two fingers");boolean mouseDrag=gesture.equals("drag")||gesture.equals("swipe")&&fingers==2;
@@ -66,18 +93,18 @@ public final class RhTouchController {
             if(multi){if(e.getPointerCount()!=2)return true;float x1=sx(source,e,1),y1=sy(source,e,1),cx=(x+x1)/2,cy=(y+y1)/2;float ratio=(float)Math.hypot(x1-x,y1-y)/Math.max(1,initialDistance);
                 if(twoFingerMode==0){if(Math.abs(ratio-1)>.08f)twoFingerMode=2;else if((scrollMode||clickScrollMode)?Math.hypot(cx-centerX,cy-centerY)>slop:Math.abs(cy-centerY)>slop)twoFingerMode=1;}
                 if(twoFingerMode==2){scale=Math.max(1,Math.min(3,initialScale*ratio));panX=cx-surface.getLeft()-(centerX-surface.getLeft()-initialPanX)*scale/initialScale;panY=cy-surface.getTop()-(centerY-surface.getTop()-initialPanY)*scale/initialScale;transform();}
-                else if(twoFingerMode==1){if(clickScrollMode){if(!primary){position(dragAnchorX,dragAnchorY);button(true,true);primary=true;}drag=true;position(dragAnchorX+cx-centerX,dragAnchorY+cy-centerY);}else if(scrollMode)scrollBy(cx-lastX,cy-lastY);else sink.scroll((short)Math.max(-32767,Math.min(32767,(cy-lastY)*3)));}lastX=cx;lastY=cy;return true;
+                else if(twoFingerMode==1){if(clickScrollMode){if(!primary){position(dragAnchorX,dragAnchorY);button(true,true);primary=true;}drag=true;position(dragAnchorX+cx-centerX,dragAnchorY+cy-centerY);}else if(scrollMode)scrollBy(cx-lastX,cy-lastY);else scrollBy(0,cy-lastY);}lastX=cx;lastY=cy;return true;
             }
-            if(clickScrollMode){if(secondary)return true;if(!drag&&Math.hypot(x-downX,y-downY)<=slop)return true;handler.removeCallbacks(longPress);drag=true;scrollBy(x-lastX,y-lastY);lastX=x;lastY=y;return true;}
-            if(scrollMode){if(!drag&&Math.hypot(x-downX,y-downY)<=slop)return true;drag=true;scrollBy(x-lastX,y-lastY);lastX=x;lastY=y;return true;}
+            if(clickScrollMode){if(!secondary)scrollTouchSamples(source,e);return true;}
+            if(scrollMode){scrollTouchSamples(source,e);return true;}
             if(panMode){panX+=x-lastX;panY+=y-lastY;transform();}
             else if(trackpad){if(Math.hypot(x-downX,y-downY)>slop){handler.removeCallbacks(longPress);drag=true;}if(drag)sink.relative((short)(x-lastX),(short)(y-lastY));}
             else if(!secondary){if(!drag&&Math.hypot(x-downX,y-downY)>slop){handler.removeCallbacks(longPress);position(downX,downY);button(true,true);primary=true;drag=true;}if(drag)position(x,y);}
             lastX=x;lastY=y;return true;
         }
         if(action==MotionEvent.ACTION_POINTER_UP){if(clickScrollMode){cancel();return true;}handler.removeCallbacks(longPress);return true;}
-        if(action==MotionEvent.ACTION_UP&&clickScrollMode&&active&&!multi&&!secondary&&(drag||Math.hypot(x-downX,y-downY)>slop)){handler.removeCallbacks(longPress);scrollBy(x-lastX,y-lastY);active=false;return true;}
-        if(action==MotionEvent.ACTION_UP&&scrollMode){handler.removeCallbacks(longPress);if(active&&!multi){if(drag||Math.hypot(x-downX,y-downY)>slop){scrollBy(x-lastX,y-lastY);}else{if(!trackpad)position(x,y);middleClick();}}active=false;return true;}
+        if(action==MotionEvent.ACTION_UP&&clickScrollMode&&active&&!multi&&!secondary&&(drag||Math.hypot(x-downX,y-downY)>scrollSlop)){handler.removeCallbacks(longPress);scrollTouchSamples(source,e);active=false;return true;}
+        if(action==MotionEvent.ACTION_UP&&scrollMode){handler.removeCallbacks(longPress);if(active&&!multi){if(drag||Math.hypot(x-downX,y-downY)>scrollSlop){scrollTouchSamples(source,e);}else{if(!trackpad)position(x,y);middleClick();}}active=false;return true;}
         if(action==MotionEvent.ACTION_UP){handler.removeCallbacks(longPress);if(active&&!multi&&!drag&&!secondary&&!panMode){if(!trackpad)position(x,y);button(true,true);primary=true;long token=++sequence;handler.postDelayed(()->{if(sequence==token&&primary){button(true,false);primary=false;}},80);}else{if(primary){button(true,false);primary=false;}if(secondary){button(false,false);secondary=false;}}active=false;return true;}
         if(action==MotionEvent.ACTION_CANCEL){cancel();return true;}
         return true;

@@ -65,4 +65,31 @@ public class RhClickScrollModeTest {
     @Test public void unsupportedFingerCountsDoNotPressAnyMouseButton()throws Exception{
         create(false,false);for(int fingers:new int[]{0,3}){try{touch.inject(RhActions.obj("gesture","swipe","fingers",fingers));fail();}catch(IllegalArgumentException expected){}}assertTrue(buttons.isEmpty());
     }
+    @Test @Config(qualifiers="xhdpi") public void highDensitySingleFingerHasTheSameSteadyGainAsDefaultTwoFinger()throws Exception{
+        create(false,false);event(MotionEvent.ACTION_DOWN,200,100);event(MotionEvent.ACTION_MOVE,200,200);vertical.clear();
+        event(MotionEvent.ACTION_MOVE,200,210);assertEquals(30,vertical.stream().mapToInt(Short::intValue).sum());
+        touch.cancel();touch.setClickScrollMode(false);vertical.clear();
+        event(MotionEvent.ACTION_DOWN,200,100);event(MotionEvent.ACTION_POINTER_DOWN|(1<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),200,100,260,100);
+        event(MotionEvent.ACTION_MOVE,200,200,260,200);vertical.clear();event(MotionEvent.ACTION_MOVE,200,210,260,210);
+        assertEquals("The same ten view pixels must produce the same wheel delta",30,vertical.stream().mapToInt(Short::intValue).sum());assertTrue(buttons.isEmpty());
+    }
+    @Test public void scrollActivationConsumesDeadZoneInsteadOfReplayingItAsAJump()throws Exception{
+        create(false,false);float threshold=ViewConfiguration.get(surface.getContext()).getScaledTouchSlop();
+        event(MotionEvent.ACTION_DOWN,200,100);event(MotionEvent.ACTION_MOVE,200,100+threshold-1);assertTrue(vertical.isEmpty());
+        event(MotionEvent.ACTION_MOVE,200,100+threshold+1);assertEquals(3,vertical.stream().mapToInt(Short::intValue).sum());
+        event(MotionEvent.ACTION_MOVE,200,100+threshold+2);assertEquals(6,vertical.stream().mapToInt(Short::intValue).sum());assertTrue(buttons.isEmpty());
+    }
+    @Test public void ordinaryVerticalScrollingIgnoresLateralFingerJitterButDiagonalsRemainAvailable()throws Exception{
+        create(false,false);event(MotionEvent.ACTION_DOWN,200,100);event(MotionEvent.ACTION_MOVE,201,140);event(MotionEvent.ACTION_MOVE,199,180);event(MotionEvent.ACTION_UP,200,180);
+        assertTrue(horizontal.isEmpty());assertFalse(vertical.isEmpty());vertical.clear();
+        event(MotionEvent.ACTION_DOWN,200,100);event(MotionEvent.ACTION_MOVE,240,140);assertTrue(horizontal.get(0)<0);assertTrue(vertical.get(0)>0);assertTrue(buttons.isEmpty());
+    }
+    @Test public void batchedSamplesKeepDirectionChangesAndFractionalWheelMotion()throws Exception{
+        create(false,false);event(MotionEvent.ACTION_DOWN,200,100);event(MotionEvent.ACTION_MOVE,200,140);vertical.clear();
+        long now=android.os.SystemClock.uptimeMillis();MotionEvent batched=MotionEvent.obtain(0,now,MotionEvent.ACTION_MOVE,200,150,0);
+        batched.addBatch(now+1,200,140,1,1,0);try{touch.handle(surface,batched);}finally{batched.recycle();}
+        assertEquals(Arrays.asList((short)30,(short)-30),vertical);vertical.clear();
+        for(int i=1;i<=10;i++)event(MotionEvent.ACTION_MOVE,200,140+i*.1f);
+        assertEquals(3,vertical.stream().mapToInt(Short::intValue).sum());
+    }
 }

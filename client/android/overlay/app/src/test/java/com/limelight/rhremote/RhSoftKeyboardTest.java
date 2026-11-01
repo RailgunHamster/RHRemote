@@ -97,4 +97,19 @@ public class RhSoftKeyboardTest {
         RhSoftKeyboard keyboard=keyboard(backend);keyboard.request(true,(visible,error)->fail("Disposed callback"));assertEquals(1,posted.size());
         keyboard.dispose();advance(3000);assertTrue(posted.isEmpty());activity.finish();
     }
+    @Test @Config(sdk=35) public void showingImeCannotPanTheStreamOrItsControlHandleOffscreen(){
+        android.app.Activity activity=Robolectric.buildActivity(android.app.Activity.class).setup().get();
+        android.view.Window window=activity.getWindow();android.view.View surface=new android.view.View(activity);surface.setFocusableInTouchMode(true);activity.setContentView(surface);
+        int state=android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN;
+        window.setSoftInputMode(state|android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
+        RhSoftKeyboard.WindowBackend backend=new RhSoftKeyboard.WindowBackend(window,surface);backend.request(true);
+        assertEquals(state|android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,window.getAttributes().softInputMode);
+        backend.request(false);backend.request(true);assertEquals(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING,window.getAttributes().softInputMode&android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST);
+        backend.dispose();assertEquals("Restore the owner's adjustment flags at session disposal",state|android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN,window.getAttributes().softInputMode);activity.finish();
+    }
+    @Test public void legacyAndroidUsesResizeForCompatibleImeInsetsInsteadOfPan(){
+        android.app.Activity activity=Robolectric.buildActivity(android.app.Activity.class).setup().get();android.view.View surface=new android.view.View(activity);surface.setFocusableInTouchMode(true);activity.setContentView(surface);
+        RhSoftKeyboard.WindowBackend backend=new RhSoftKeyboard.WindowBackend(activity.getWindow(),surface);backend.request(true);
+        assertEquals(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,activity.getWindow().getAttributes().softInputMode&android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST);backend.dispose();activity.finish();
+    }
 }

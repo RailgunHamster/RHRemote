@@ -98,6 +98,27 @@ public class RhStreamPanelTest {
         assertEquals(28,((FrameLayout.LayoutParams)button(root,"控制").getLayoutParams()).topMargin);assertFalse(panel.isExpanded());assertTrue(actions.isEmpty());panel.dispose();
         androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,shown);assertEquals(2,rootCalls[0]);
     }
+    @Test @Config(sdk=35,qualifiers="mdpi") public void imeInsetsKeepTheControlHandleReachableThroughShowHideAndRotation(){
+        for(int[] size:new int[][]{{360,800,320},{840,360,230}}){
+            org.robolectric.RuntimeEnvironment.setQualifiers("w"+size[0]+"dp-h"+size[1]+"dp-mdpi");
+            setup(size[0],size[1]);panel.setExpanded(false);layout(size[0],size[1]);int[] rootCalls={0};
+            androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{rootCalls[0]++;return insets;});
+            View handle=panel.controlHandle();android.graphics.Rect before=new android.graphics.Rect();assertTrue(handle.getGlobalVisibleRect(before));
+            for(boolean ime:new boolean[]{true,false,true,false}){
+                androidx.core.view.WindowInsetsCompat insets=new androidx.core.view.WindowInsetsCompat.Builder()
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(),androidx.core.graphics.Insets.of(0,24,0,24))
+                    .setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(),androidx.core.graphics.Insets.of(0,0,0,ime?size[2]:0))
+                    .setVisible(androidx.core.view.WindowInsetsCompat.Type.ime(),ime).build();
+                androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,insets);layout(size[0],size[1]);
+                android.graphics.Rect visible=new android.graphics.Rect();assertTrue(handle.getGlobalVisibleRect(visible));
+                assertEquals(handle.getWidth(),visible.width());assertEquals(handle.getHeight(),visible.height());
+                assertTrue("Handle behind the IME",visible.bottom<=size[1]-(ime?size[2]:24));assertTrue(visible.top>=24);
+                assertEquals("Insets must not resize the remote surface",size[1],root.getHeight());
+                actions.clear();handle.performClick();assertEquals(Collections.singletonList("stream.controls.toggle"),actions);
+            }
+            assertEquals(4,rootCalls[0]);panel.dispose();
+        }
+    }
     @Test public void floatingKeyboardSwitchStaysVisibleAboveEveryControlTab()throws Exception{
         for(int[] size:new int[][]{{360,800},{640,360},{840,560}}){
             org.robolectric.RuntimeEnvironment.setQualifiers("w"+size[0]+"dp-h"+size[1]+"dp-mdpi");

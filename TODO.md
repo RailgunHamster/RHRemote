@@ -8,13 +8,16 @@
 
 ## P0 双端 UI 完整验收
 
+- [ ] 会话内左右键实时切换：Windows、Android 控制页增加开关，按远程设备 UUID 保存，切换时释放旧映射下按住的键，验证重连与同步后沿用。
+- [ ] 完整悬浮键盘：将现有少量快捷键扩展为完整 PC 键盘，增加位置固定的悬浮显隐按钮，并由控制页选项决定该按钮是否显示；核对组合键、窄屏布局及输入法安全区域。
+- [ ] Android 输入法浮标的 OPPO 验收：窗口调整方式及 IME 安全区域已修正并通过模拟回归，仍需实机核对输入法动画、横竖屏及浮标可点击。[本轮范围](design/ANDROID-TOUCH-IME-20261102.md)
 - [ ] Linux/X11 输入观察：定位压力测试中单次“向上”按下事件漏记的来源；后续内核与窗口同步采样 100 次按键均完整，尚未复现原样本。[范围与记录](design/UBUNTU-AND-FLOATING-KEYBOARD-20261102.md)
 
 - [ ] Android 页面响应：继续定位首次读取、其他写事务／主线程排队、Game 键盘映射 Binder 调用和原 172 输入分发 ANR，补齐冷缓存／真实硬件解码、持续串流和 OPPO 的 UI 响应。已有身份查询的无关锁等待与快照重复读的已验证范围见[181 记录](design/ANDROID-CONFIG-READ-20261101.md)；该轮预览存在未确定的整页灰色／after 帧差异，补充祖先视图、窗口焦点、绘制状态与布局边界，不能宣称完整像素通过。面板初始化、反馈及仍有 9.6 秒慢首帧的范围见[178 记录](design/ANDROID-SESSION-PANEL-REAL-20261101.md)。复现历史检查页可见性失败并确定根因，现有边界见[169 记录](design/ANDROID-VISIBILITY-OBSERVER-20261031.md)和[162 记录](design/ANDROID-HIDDEN-DIAGNOSTIC-BANNER-20261031.md)。
 
 - [ ] 持续自动码率：继续完成实际链路反馈、会话内编码器调节及实际流量对照。双端每设备配置和连接时预算已随 0.2.11 发布，连接时上限仍不等于持续自适应。[第一阶段](design/AUTO-BITRATE-STARTING-RATE-20261031.md)
 - [ ] 指定窗口剩余部署与实机验收：0.2.11 已发布双端入口、WGC 窗口源、输出比例及输入映射的预览实现；还需升级实际被控服务端，核对真实窗口画面、实体输入、关闭／最小化／跨屏 DPI、独立弹窗和同内容带宽。当前更换目标需断开后重新选择，会话内切换仍未实现。[实现与验证边界](design/WINDOW-STREAMING-AND-CLICK-SCROLL.md)
-- [ ] Android 点击与滚动的 OPPO 验收：新模式和专用模拟器 View 手势测试已随 0.2.11 交付，待恢复 OPPO 后核对实机点击、横纵滚动、双指拖动及缩放。当前没有操作 OPPO。
+- [ ] Android 点击与滚动的 OPPO 验收：单指滚动倍率、启动死区及抖动处理已修正，待恢复 OPPO 后核对实机点击、横纵滚动手感、双指拖动及缩放。当前没有操作 OPPO。[本轮范围](design/ANDROID-TOUCH-IME-20261102.md)
 
 - [ ] 连接与配对剩余等待：定位新实服务样本的 serverinfo／显示查询正文截断，补齐配对后台准备在实体窗口、真实慢线路和中继清理交接中的验收，以及其余连接／保存操作队列边界、冷缓存／较大设备列表的正常启动验收。Android PIN 阶段和重复操作反馈、真实取消及失败页重试的已验证范围见[173 记录](design/ANDROID-PAIRING-FEEDBACK-20261031.md)；Windows 可取消准备、阶段与控件范围见[配对准备](design/WINDOWS-PAIR-PREPARATION-20261031.md)，窗口分离与其余启动边界见[启动记录](design/WINDOWS-STARTUP-CHECKS-20261030.md)。
 - [ ] 未知状态一致性：完成 Android 主动检查的真实多线路／打洞／中继、系统 DNS 取消及退出等待上限、真实 WebDAV 在检查期间改配置的联动验收；继续验证系统服务绑定／mDNS、真实系统切网和 VPN 底层变化时的观察失效，以及其余服务响应错误码分类；较新认证解除旧检查与离线操作的隔离验证范围见[168 记录](design/ANDROID-AUTHENTICATION-REFRESH-20261031.md)。生产定时线程到页面、默认网络受控回调和动作接口的一致性已通过隔离验证，范围见[167 记录](design/ANDROID-NETWORK-OBSERVATIONS-20261031.md)。后台全部地址失败的运行时原因、配对事实保留及无效响应崩溃修复已通过隔离轮询与原生 View 验证，范围见[165 记录](design/ANDROID-DISCOVERY-FAILURES-20261031.md)，不替代真实网络和 OPPO。已通过的认证反馈与旧标志处理见[155 记录](design/DEVICE-STATUS-FEEDBACK-20261031.md)，HTTP／固定证书 HTTPS 来源、回退分类与结果交错见[154 记录](design/ANDROID-DISCOVERY-PROVENANCE-20261031.md)，探测退出、过期提示、宽设置页及单线路耗时对照见[153 记录](design/ANDROID-INSPECTION-LIFETIME-20261031.md)。完成 Windows 实际跨端同步与原生检查联动、真实主机和跨网络的联合验收与耗时对照，补齐后台全部地址失败及其余失败原因；本次网络结果与既有身份错误的分离、按钮和连接接口一致性已通过本地对照，范围见[166 记录](design/WINDOWS-TRUST-REFRESH-20261031.md)。已通过的 13 项隔离原生 HTTP／mTLS 协议对照与 HTTP 401 修复见[151 记录](design/WINDOWS-NATIVE-PROTOCOL-20261031.md)，不替代真实主机验收。Android 入口及 binder 锁见[146 记录](design/ANDROID-DEVICE-CHECK-FLOW-20261031.md)，控件触摸／回车与排队归属见[147 记录](design/ANDROID-DEVICE-ACTION-INTENT-20261031.md)；物理输入及其余动态页面仍保留。Windows 同步／添加和改线的待确认状态见[导入记录](design/WINDOWS-IMPORTED-DEVICE-STATE-20261031.md)，启动路径见[记录](design/WINDOWS-STARTUP-CHECKS-20261030.md)。
