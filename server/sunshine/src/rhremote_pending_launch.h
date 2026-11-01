@@ -171,6 +171,17 @@ namespace rhremote {
       return true;
     }
 
+    /** @brief Retire a claimed slot when its old broadcast context stops, preserving newer HTTP preparation and unclaimed publications. @param now Current monotonic time. @return Whether an old claimed slot was retired. */
+    bool clear_claimed(clock::time_point now = clock::now()) {
+      std::lock_guard lock {mutex_};
+      prune(now);
+      if (!slot_ || !slot_->claimed) {
+        return false;
+      }
+      retire_slot(phase::completed, now);
+      return true;
+    }
+
     /** @brief Cancel this authenticated request, including cancellation before HTTP preparation starts. @param credential Per-request secret. @param owner Actual paired TLS identity. @param now Current monotonic time. @return Idempotent cancellation/handoff outcome. */
     launch_result cancel(std::string_view credential, std::string_view owner, clock::time_point now = clock::now()) {
       std::lock_guard lock {mutex_};

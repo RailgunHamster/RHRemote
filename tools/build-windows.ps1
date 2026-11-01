@@ -2,6 +2,7 @@ param([string]$SourceDir='D:\RHRemoteTools\moonlight-qt-v6.1-source',[string]$Qt
 $ErrorActionPreference='Stop'
 & (Join-Path $PSScriptRoot 'prepare-windows.ps1') -SourceDir $SourceDir
 $repo=Split-Path $PSScriptRoot -Parent;$build=Join-Path $SourceDir 'build/rhremote'
+New-Item -ItemType Directory -Force -Path $build|Out-Null
 $vcvars='C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat'
 if(-not(Test-Path -LiteralPath $vcvars)){throw 'MSVC environment not found.'}
 $cmdFile='D:\RHRemoteTools\build-rhremote-windows.cmd'
@@ -10,6 +11,7 @@ $commands=@"
 call "$vcvars"
 if errorlevel 1 exit /b 1
 cd /d "$build"
+if errorlevel 1 exit /b 1
 "$QtDir\bin\qmake.exe" "$SourceDir\moonlight-qt.pro" "CONFIG+=release" "QMAKE_CXXFLAGS+=/MP4"
 if errorlevel 1 exit /b 1
 nmake /nologo

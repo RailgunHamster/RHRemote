@@ -230,6 +230,31 @@ namespace {
     }
   }
 
+  /** @brief Old broadcast teardown preserves a newer HTTP preparation and unclaimed RTSP publication. */
+  void broadcast_teardown_preserves_new_requests() {
+    registry slots;
+    require(!slots.clear_claimed(origin));
+    const auto old = slots.begin(key('a'), "owner-A", origin);
+    const auto active = session(1);
+    require(slots.publish(active, old.ticket, 10s, origin));
+    require(slots.claim(*active, origin));
+    const auto next = slots.begin(key('b'), "owner-A", origin);
+    require(slots.clear_claimed(origin));
+    require(slots.preparing(next.ticket, origin));
+    require(slots.cancel(key('a'), "owner-A", origin) == result::finished);
+    const auto waiting = session(2);
+    require(slots.publish(waiting, next.ticket, 10s, origin));
+    require(!slots.clear_claimed(origin));
+    require(slots.pending(origin) == waiting);
+    require(slots.claim(*waiting, origin));
+    require(slots.clear_claimed(origin));
+    require(slots.cancel(key('b'), "owner-A", origin) == result::finished);
+    const auto preparing = slots.begin(key('c'), "owner-A", origin);
+    slots.reset(true, origin);
+    require(!slots.preparing(preparing.ticket, origin));
+    require(slots.begin(key('d'), "owner-A", origin).result == result::closed);
+  }
+
   /** @brief Cancellation racing HTTP publication cannot leave a cancelled slot available to RTSP. */
   void race_cancel_and_publish() {
     for (int iteration = 0; iteration < 200; ++iteration) {
@@ -265,6 +290,7 @@ int main() {
   revoke_and_shutdown();
   race_cancel_and_claim();
   race_cancel_and_publish();
+  broadcast_teardown_preserves_new_requests();
 }
 #else
 TEST(RhRemotePendingLaunch, ValidateAndBindOwner) {
@@ -305,5 +331,9 @@ TEST(RhRemotePendingLaunch, RaceCancelAndClaim) {
 
 TEST(RhRemotePendingLaunch, RaceCancelAndPublish) {
   race_cancel_and_publish();
+}
+
+TEST(RhRemotePendingLaunch, BroadcastTeardownPreservesNewRequests) {
+  broadcast_teardown_preserves_new_requests();
 }
 #endif

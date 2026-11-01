@@ -619,13 +619,18 @@ namespace rtsp_stream {
     /**
      * @brief Clear launch sessions.
      * @param all If true, clear all sessions. Otherwise, only clear timed out and stopped sessions.
+     * @param reset_requests Whether explicit shutdown must also revoke pending HTTP preparations.
      * @examples
      * clear(false);
      * @examples_end
      */
-    void clear(bool all = true) {
+    void clear(bool all = true, bool reset_requests = true) {
       if (all) {
-        pending_launches.reset();
+        if (reset_requests) {
+          pending_launches.reset();
+        } else {
+          pending_launches.clear_claimed();
+        }
       }
       auto lg = _session_slots.lock();
 
@@ -1373,7 +1378,9 @@ namespace rtsp_stream {
         server.iterate();
 
         if (broadcast_shutdown_event->peek()) {
-          server.clear();
+          // This event belongs to a retired streaming context. Fresh HTTP
+          // requests and unclaimed RTSP publications have their own lifetimes.
+          server.clear(true, false);
         } else {
           // cleanup all stopped sessions
           server.clear(false);
