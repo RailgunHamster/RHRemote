@@ -6,4 +6,4 @@
 - 修复服务端清理旧串流时误取消新重连请求的问题。桌面客户端恢复已出画面的会话时，先重试原连接路径，再尝试其他路线；暂时繁忙的回复采用有限重试。
 - Ubuntu 软件包采用手动覆盖升级并保留配置；本版没有集成 Linux 自动安装更新。Wayland、Ubuntu 20.04、ARM 与实体 GPU 性能不属于本轮验收范围。
 
-Windows / Android 客户端版本为 0.2.15。附带的 Windows Sunshine 服务端压缩包继续使用 0.2.11，不表示本版已更新 Windows 上部署的服务；本轮服务端修复在 Ubuntu 软件包中提供。
+Windows / Android 客户端版本为 0.2.15。Windows Sunshine 服务端继续沿用已部署的 0.2.11，其安装包保留在 [0.2.14 发布页](https://github.com/RailgunHamster/RHRemote/releases/tag/v0.2.14)。本轮服务端修复在 Ubuntu 软件包中提供。
