@@ -1,0 +1,104 @@
+#!/usr/bin/python3
+"""Create an isolated X11 desktop for a specified non-root RHRemote user."""
+import argparse
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import secrets
+import subprocess
+import time
+
+
+def run(arguments, **options):
+    return subprocess.run(arguments, check=True, **options)
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--user",required=True)
+    parser.add_argument("--display",type=int,default=99)
+    args=parser.parse_args()
+    if os.geteuid()!=0 or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}",args.user) or not 90<=args.display<=199:
+        raise RuntimeError("Run with sudo, an explicit local user and an unused display from 90 to 199")
+    user=pwd.getpwnam(args.user)
+    if user.pw_uid<1000:raise RuntimeError("Choose a normal non-root desktop user")
+    for path in ["/usr/lib/xorg/Xorg","/usr/lib/xorg/modules/drivers/dummy_drv.so","/usr/bin/openbox","/usr/bin/xauth","/usr/bin/xrandr","/usr/bin/setfacl"]:
+        if not Path(path).is_file():raise RuntimeError("Install xserver-xorg-video-dummy, openbox, xauth, x11-xserver-utils and acl first")
+    home=Path(user.pw_dir).resolve();directory=home/".config/rhremote-headless"
+    if not directory.resolve().is_relative_to(home):raise RuntimeError("The headless configuration must remain inside the selected user's home")
+    unit="rhremote-headless-"+args.user+".service"
+    marker=directory/"setup.json"
+    expected={"user":args.user,"display":args.display,"unit":unit}
+    if marker.exists():
+        if json.loads(marker.read_text())!=expected:raise RuntimeError("Existing headless configuration differs; it was preserved")
+        print("Existing RHRemote headless desktop: :"+str(args.display));return
+    if Path("/tmp/.X11-unix/X"+str(args.display)).exists():raise RuntimeError("That X11 display is already in use")
+    configuration=Path("/etc/X11/rhremote-headless-"+args.user+".conf")
+    service=Path("/etc/systemd/system")/unit
+    desktop=home/".config/systemd/user/rhremote-headless-desktop.service"
+    override=home/".config/systemd/user/rhremote-sunshine.service.d/headless.conf"
+    if any(path.exists() for path in [configuration,service,desktop,override]):raise RuntimeError("Existing service/configuration was preserved; choose an unused setup")
+    for path in [home/".config",directory,home/".config/systemd",desktop.parent,override.parent]:
+        if not path.resolve().is_relative_to(home):raise RuntimeError("Configuration path escapes the selected user's home")
+        if not path.exists():path.mkdir(mode=0o700);os.chown(path,user.pw_uid,user.pw_gid)
+    directory.chmod(0o700)
+    authority=directory/"Xauthority";authority.touch(mode=0o600,exist_ok=False)
+    run(["xauth","-f",str(authority)],input=("add :"+str(args.display)+" . "+secrets.token_hex(16)+"\n").encode(),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    os.chown(authority,user.pw_uid,user.pw_gid);authority.chmod(0o600)
+    configuration.write_text('''Section "ServerFlags"
+ Option "AutoAddDevices" "true"
+ Option "AutoEnableDevices" "true"
+ Option "DontVTSwitch" "true"
+ Option "AllowMouseOpenFail" "true"
+EndSection
+Section "Device"
+ Identifier "RHRemoteDummy"
+ Driver "dummy"
+ VideoRam 131072
+EndSection
+Section "Monitor"
+ Identifier "RHRemoteMonitor"
+ HorizSync 5.0-1000.0
+ VertRefresh 5.0-200.0
+ Modeline "1920x1080" 148.50 1920 2008 2052 2200 1080 1084 1089 1125 +HSync +VSync
+ Modeline "1280x720" 74.25 1280 1390 1430 1650 720 725 730 750 +HSync +VSync
+EndSection
+Section "Screen"
+ Identifier "RHRemoteScreen"
+ Device "RHRemoteDummy"
+ Monitor "RHRemoteMonitor"
+ DefaultDepth 24
+ SubSection "Display"
+  Depth 24
+  Modes "1920x1080" "1280x720"
+ EndSubSection
+EndSection
+''')
+    # No shell is used by these units; quote systemd arguments independently.
+    quote=lambda value:'"'+str(value).replace('\\','\\\\').replace('"','\\"').replace('%','%%')+'"'
+    service.write_text("[Unit]\nDescription=RHRemote isolated X11 desktop\nAfter=systemd-udev-settle.service\n[Service]\nExecStart=/usr/lib/xorg/Xorg :"+str(args.display)+" -config "+quote(configuration)+" -auth "+quote(authority)+" -nolisten tcp -noreset -logfile /var/log/rhremote-headless-"+args.user+".log\nRestart=on-failure\n[Install]\nWantedBy=multi-user.target\n")
+    desktop.write_text("[Unit]\nDescription=RHRemote headless window manager\n[Service]\nEnvironment=DISPLAY=:"+str(args.display)+"\nEnvironment=XAUTHORITY="+quote(authority)+"\nExecStartPre=/usr/bin/rhremote-server wait-display\nExecStart=/usr/bin/openbox\nRestart=on-failure\nRestartSec=3\n[Install]\nWantedBy=default.target\n")
+    os.chown(desktop,user.pw_uid,user.pw_gid)
+    override.write_text("[Unit]\nPartOf=\nRequires=rhremote-headless-desktop.service\nAfter=rhremote-headless-desktop.service\n[Service]\nEnvironment=DISPLAY=:"+str(args.display)+"\nEnvironment=XAUTHORITY="+quote(authority)+"\nEnvironment=XDG_SESSION_TYPE=x11\nEnvironment=RHREMOTE_HEADLESS=1\n[Install]\nWantedBy=default.target\n")
+    os.chown(override,user.pw_uid,user.pw_gid)
+    run(["usermod","-aG","input",args.user]);run(["modprobe","uinput"])
+    run(["setfacl","-m","u:"+args.user+":rw","/dev/uinput"])
+    run(["loginctl","enable-linger",args.user]);run(["systemctl","daemon-reload"]);run(["systemctl","enable","--now",unit])
+    environment=["runuser","-u",args.user,"--","env","XDG_RUNTIME_DIR=/run/user/"+str(user.pw_uid),"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/"+str(user.pw_uid)+"/bus","DISPLAY=:"+str(args.display),"XAUTHORITY="+str(authority)]
+    ready=False
+    for _ in range(75):
+        if subprocess.run([*environment,"xrandr","--query"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:ready=True;break
+        time.sleep(.2)
+    if not ready:raise RuntimeError("X11 startup did not complete; inspect the named headless service journal")
+    run([*environment,"xrandr","--output","DUMMY0","--mode","1920x1080","--primary"])
+    run([*environment,"systemctl","--user","daemon-reload"]);run([*environment,"systemctl","--user","enable","--now","rhremote-headless-desktop.service"])
+    marker.write_text(json.dumps(expected)+"\n");os.chown(marker,user.pw_uid,user.pw_gid);marker.chmod(0o600)
+    print("RHRemote headless desktop ready: :"+str(args.display))
+    print("As "+args.user+", set DISPLAY=:"+str(args.display)+", XAUTHORITY="+str(authority)+", XDG_SESSION_TYPE=x11 and RHREMOTE_HEADLESS=1, then run rhremote-server enable.")
+
+
+if __name__=="__main__":
+    try:main()
+    except Exception as error:raise SystemExit("RHRemote headless: "+str(error))

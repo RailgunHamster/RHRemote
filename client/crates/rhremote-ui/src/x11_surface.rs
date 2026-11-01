@@ -105,7 +105,9 @@ mod tests {
         let mut state=json!({"statistics":{"streamWindow":window.to_string(),"streamProcessId":std::process::id()}});
         assert_eq!(owned(&state).err().unwrap(),"native-hidden");
         c.map_window(window).unwrap().check().unwrap();
-        let geometry=owned(&state).unwrap();assert_eq!((geometry.width,geometry.height),(640,480));
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(3);
+        let geometry=loop{match owned(&state){Ok(value)=>break value,Err(reason) if reason=="native-hidden"&&std::time::Instant::now()<deadline=>std::thread::sleep(std::time::Duration::from_millis(10)),Err(reason)=>panic!("Mapped fixture did not become viewable: {reason}")}};
+        assert_eq!((geometry.width,geometry.height),(640,480));
         state["statistics"]["streamProcessId"]=json!(std::process::id()+1);
         assert_eq!(owned(&state).err().unwrap(),"native-window-unavailable");
         c.destroy_window(window).unwrap().check().unwrap();

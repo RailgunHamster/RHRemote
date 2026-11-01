@@ -89,7 +89,7 @@ def main():
         write(client, "usr/bin/rhremote", '#!/bin/sh\nexec /usr/lib/rhremote/client/RHRemote "$@"\n', True)
         write(client, "usr/share/applications/rhremote-client.desktop", "[Desktop Entry]\nType=Application\nName=RHRemote-Moonlight\nExec=rhremote\nIcon=rhremote\nTerminal=false\nCategories=Network;RemoteAccess;\nStartupWMClass=RHRemote\n")
         common(client, "rhremote-client")
-        depends = dependencies(client, [app / "RHRemote", app / "engine/RHRemote"], ["qml6-module-qtquick", "qml6-module-qtquick-window", "qml6-module-qtquick-controls", "qml6-module-qtquick-templates", "qml6-module-qtquick-layouts", "qml6-module-qtqml-workerscript", "qml6-module-qtqml-models", "libva-wayland2", "libsecret-1-0", "gnome-keyring", "fonts-noto-cjk", "xdg-utils"])
+        depends = dependencies(client, [app / "RHRemote", app / "engine/RHRemote"], ["qt6-qpa-plugins", "qml6-module-qtquick", "qml6-module-qtquick-window", "qml6-module-qtquick-controls", "qml6-module-qtquick-templates", "qml6-module-qtquick-layouts", "qml6-module-qtqml-workerscript", "qml6-module-qtqml-models", "libva-wayland2", "libsecret-1-0", "gnome-keyring", "dbus-user-session", "fonts-noto-cjk", "xdg-utils"])
         result.append(build(client, output, "rhremote-client", args.version, "RHRemote-Moonlight remote desktop client", depends))
 
         server = base / "server"
@@ -103,11 +103,13 @@ def main():
         common(server, "rhremote-server")
         shutil.copyfile(ROOT / "server/linux/rhremote-server", server / "usr/bin/rhremote-server")
         (server / "usr/bin/rhremote-server").chmod(0o755)
+        shutil.copyfile(ROOT / "server/linux/rhremote-headless", server / "usr/bin/rhremote-headless")
+        (server / "usr/bin/rhremote-headless").chmod(0o755)
         for source, target in [("rhremote-sunshine.service", "usr/lib/systemd/user/rhremote-sunshine.service"), ("rhremote-server.desktop", "usr/share/applications/rhremote-server.desktop"), ("70-rhremote-input.rules", "usr/lib/udev/rules.d/70-rhremote-input.rules")]:
             write(server, target, (ROOT / "server/linux" / source).read_text())
         write(server, "usr/lib/modules-load.d/rhremote-input.conf", "uinput\n")
-        write(server, "DEBIAN/postinst", "#!/bin/sh\nset -e\nif command -v udevadm >/dev/null 2>&1; then udevadm control --reload-rules || true; fi\nmodprobe uinput || true\nif [ -e /sys/class/misc/uinput ]; then udevadm trigger --action=change /sys/class/misc/uinput || true; fi\n# User services start only when explicitly requested in the desktop session.\nexit 0\n", True)
-        depends = dependencies(server, [app / "RHRemoteHost", app / "sunshine", app / "RHRemoteDisplay"], ["python3", "systemd", "udev", "xdg-utils", "libxrandr2", "libxfixes3", "libxcb-shm0"])
+        write(server, "DEBIAN/postinst", "#!/bin/sh\nset -e\ngetent group input >/dev/null || addgroup --system input\nif command -v udevadm >/dev/null 2>&1; then udevadm control --reload-rules || true; fi\nmodprobe uinput || true\nif [ -e /sys/class/misc/uinput ]; then udevadm trigger --action=change /sys/class/misc/uinput || true; fi\n# User services start only when explicitly requested in the desktop session.\nexit 0\n", True)
+        depends = dependencies(server, [app / "RHRemoteHost", app / "sunshine", app / "RHRemoteDisplay"], ["python3", "systemd", "udev", "xdg-utils", "libxrandr2", "libxfixes3", "libxcb-shm0", "avahi-daemon", "acl"])
         result.append(build(server, output, "rhremote-server", args.version, "RHRemote-Sunshine remote desktop server", depends))
         (output / "SHA256SUMS.txt").write_text("".join(item["sha256"] + "  " + item["name"] + "\n" for item in result), encoding="ascii")
         (output / "packages.json").write_text(json.dumps({"version": args.version, "platform": "ubuntu24.04-x11-amd64", "assets": result}, indent=2) + "\n")

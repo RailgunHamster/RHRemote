@@ -58,6 +58,18 @@ def listening(port):
         return False
 
 
+def wait_display():
+    deadline=time.monotonic()+30
+    while time.monotonic()<deadline:
+        try:
+            if subprocess.run(["xrandr","--query"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=2).returncode==0:
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(.2)
+    raise RuntimeError("X11 桌面尚未就绪，请检查 DISPLAY、XAUTHORITY 和独立桌面服务。")
+
+
 def start(enable=False):
     prepare()
     active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", UNIT]).returncode == 0
@@ -73,8 +85,11 @@ def main():
     action = sys.argv[1] if len(sys.argv) == 2 else "help"
     if action == "run":
         directory = prepare()
+        if os.environ.get("RHREMOTE_HEADLESS") == "1":wait_display()
         executable = DIRECTORY / "RHRemoteHost"
         os.execv(str(executable), [str(executable), "--sunshine-service", "--sunshine-exe", str(DIRECTORY / "sunshine"), "--sunshine-config", str(directory), "--listen", "[::]:47995"])
+    elif action == "wait-display":
+        wait_display()
     elif action in ["start", "enable", "open"]:
         start(action == "enable")
         if action == "open":
