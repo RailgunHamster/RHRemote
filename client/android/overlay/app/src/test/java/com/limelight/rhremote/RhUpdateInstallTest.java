@@ -40,12 +40,15 @@ public class RhUpdateInstallTest {
     }
     @Implements(value=RhUpdates.class,isInAndroidSdk=false)
     public static class Requests {
-        static byte[] bytes;static String feed;static int downloads,checks;static boolean corrupt,failMetadata,failFirstDownloadOpen,failAllDownloads;
+        static byte[] bytes;static String feed;static int downloads,checks;static boolean corrupt,failMetadata,failFirstMetadataOpen,failFirstDownloadOpen,failAllDownloads;
+        static final java.util.List<String> addresses=new java.util.ArrayList<>();
         static CountDownLatch entered,release;
         static CountDownLatch finishCleanup;
         static boolean gateMetadata,pauseAfterChunk;
         @Implementation protected static HttpURLConnection open(String address)throws IOException {
+            addresses.add(address);
             boolean metadata=address.endsWith("releases.android.json");if(metadata)checks++;else downloads++;
+            if(metadata&&failFirstMetadataOpen&&checks==1)throw new SocketTimeoutException("CNB metadata fixture timeout");
             if(metadata&&failMetadata)throw new SocketTimeoutException("metadata fixture timeout");
             if(!metadata&&(failAllDownloads||failFirstDownloadOpen&&downloads==1))throw new UnknownHostException("download fixture DNS");
             return new HttpURLConnection(new URL(address)){
@@ -77,6 +80,7 @@ public class RhUpdateInstallTest {
     private void archive()throws Exception{for(String name:new String[]{"pending.apk","RHRemote-update.apk",snapshot().getName()})manager.setPackageArchiveInfo(new File(folder,name).getAbsolutePath(),incoming);}
     private String sha(byte[] bytes)throws Exception{StringBuilder value=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();}
     @Before public void setup()throws Exception{
+        Requests.addresses.clear();Requests.failFirstMetadataOpen=false;
         Requests.downloads=0;Requests.checks=0;Requests.corrupt=false;Requests.failMetadata=false;Requests.failFirstDownloadOpen=false;Requests.failAllDownloads=false;Requests.entered=null;Requests.release=null;Requests.finishCleanup=null;Requests.gateMetadata=false;Requests.pauseAfterChunk=false;Requests.bytes="test APK fixture bytes".getBytes(StandardCharsets.UTF_8);
         // AndroidX retains its static cache while Robolectric allocates a new filesDir per test.
         java.lang.reflect.Field cache=androidx.core.content.FileProvider.class.getDeclaredField("sCache");cache.setAccessible(true);((java.util.Map<?,?>)cache.get(null)).clear();
@@ -119,6 +123,18 @@ public class RhUpdateInstallTest {
         downloaded();Requests.failMetadata=true;try{updates.check();fail("Metadata request must fail");}catch(IOException expected){}
         assertTrue(updates.state().getBoolean("downloaded"));assertEquals("updates.check",updates.primaryAction());assertEquals("重新检查",updates.primaryLabel(false));
         Requests.failMetadata=false;updates.check();assertEquals("安装更新",updates.primaryLabel(false));assertTrue(updates.prepareInstall());assertEquals(1,Requests.downloads);
+    }
+    @Test public void cnbChecksAndDownloadsWithoutPrivateCredentials()throws Exception{
+        downloaded();
+        assertEquals("CNB",updates.state().getString("provider"));
+        assertEquals("https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/releases.android.json",Requests.addresses.get(0));
+        assertTrue(Requests.addresses.get(1),Requests.addresses.get(1).startsWith("https://cnb.cool/railgunhamster/RHRemote/-/releases/download/"+manifest.getString("tag")+"/"));
+        for(String address:Requests.addresses){assertFalse(address.contains("gitee"));assertFalse(address.contains("token="));assertFalse(address.contains("192.168."));}
+    }
+    @Test public void metadataFailureFallsBackToGitHub()throws Exception{
+        Requests.failFirstMetadataOpen=true;updates.check();
+        assertEquals(2,Requests.checks);assertEquals("GitHub",updates.state().getString("provider"));
+        assertEquals("https://github.com/RailgunHamster/RHRemote/releases/latest/download/releases.android.json",Requests.addresses.get(1));
     }
     @Test public void downloadConnectionFailureFallsBackBeforeReadingAnyBytes()throws Exception{
         Requests.failFirstDownloadOpen=true;downloaded();assertEquals(2,Requests.downloads);assertEquals("GitHub",updates.state().getString("provider"));assertEquals(1,updates.state().getJSONArray("sourceFailures").length());
@@ -308,7 +324,7 @@ public class RhUpdateInstallTest {
         Requests.failMetadata=true;home=newHome();home.perform("app.settings.open",RhActions.obj());
         button(activity.getWindow().getDecorView(),"检查更新").performClick();awaitUpdate();JSONObject state=home.state().getJSONObject("updates");
         assertEquals("error",state.getString("phase"));assertEquals(2,state.getJSONArray("sourceFailures").length());
-        assertTrue(state.getString("status").contains("Gitee SocketTimeoutException"));assertTrue(state.getString("status").contains("GitHub SocketTimeoutException"));
+        assertTrue(state.getString("status").contains("CNB SocketTimeoutException"));assertTrue(state.getString("status").contains("GitHub SocketTimeoutException"));
         assertNull(button(activity.getWindow().getDecorView(),"下载 APK"));assertTrue(button(activity.getWindow().getDecorView(),"重新检查").isEnabled());
     }
     @Test public void failedDownloadRetriesFromTheSamePrimaryWithoutAnExtraCheck()throws Exception{

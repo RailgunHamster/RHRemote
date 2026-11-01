@@ -11,7 +11,7 @@ use velopack::{
     bundle::Manifest, sources::UpdateSource,
 };
 
-const GITEE: &str = "https://gitee.com/railgunhamster/RHRemote/releases/download/";
+const CNB: &str = "https://cnb.cool/railgunhamster/RHRemote/-/releases/";
 const GITHUB: &str = "https://github.com/RailgunHamster/RHRemote/releases/";
 fn filename(name: &str) -> Result<(), Error> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', ':', '\0']) {
@@ -68,16 +68,16 @@ fn local_test_source(mode: &str, address: &str) -> Option<String> {
 impl Mirrors {
     fn providers(&self) -> [&str; 2] {
         if self.preferred == "github" {
-            ["github", "gitee"]
+            ["github", "cnb"]
         } else {
-            ["gitee", "github"]
+            ["cnb", "github"]
         }
     }
     fn feed(provider: &str, name: &str) -> String {
         if provider == "github" {
             format!("{GITHUB}latest/download/{name}")
         } else {
-            format!("{GITEE}latest/{name}")
+            format!("{CNB}latest/download/{name}")
         }
     }
     fn feed_address(&self,provider:&str,name:&str)->String {
@@ -93,7 +93,7 @@ impl Mirrors {
                 name = asset.FileName
             )
         } else {
-            format!("{GITEE}v{}/{name}", asset.Version, name = asset.FileName)
+            format!("{CNB}download/v{}/{name}", asset.Version, name = asset.FileName)
         })
     }
     fn asset_address(&self,provider:&str,asset:&VelopackAsset)->Result<String,Error> {
@@ -134,7 +134,7 @@ impl UpdateSource for Mirrors {
                 return Ok(feed);
             }
         }
-        Err(Error::Other("GitHub 与 Gitee 更新源均不可用".into()))
+        Err(Error::Other("GitHub 与 CNB 更新源均不可用".into()))
     }
     fn download_release_entry(
         &self,
@@ -147,9 +147,9 @@ impl UpdateSource for Mirrors {
         }
         let selected = self.selected.lock().unwrap().clone();
         let providers = if selected == "github" {
-            ["github", "gitee"]
+            ["github", "cnb"]
         } else {
-            ["gitee", "github"]
+            ["cnb", "github"]
         };
         for provider in providers {
             let token=self.cancel.token();if token.is_cancelled(){return Err(Error::Other("Update operation cancelled".into()));}
@@ -197,7 +197,7 @@ impl Updates {
         let live=Arc::new(Mutex::new(json!({"phase":"idle","status":"尚未检查更新","progress":0,"provider":"","failedAction":""})));
         let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
         let value=Self {
-            manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new()),cancel:cancel.clone(),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
+            manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"cnb".into(),selected:Mutex::new(String::new()),cancel:cancel.clone(),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
             available:None,live,cancel,verified:None,directory:OnceLock::new(),
         };
         value.refresh();
@@ -327,6 +327,36 @@ pub fn primary_label(state:&Value,busy:bool)->String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cnb_is_primary_and_packages_are_version_pinned() {
+        let live=Arc::new(Mutex::new(json!({})));
+        let source=Mirrors {live:live.clone(),preferred:"cnb".into(),selected:Mutex::new(String::new()),test_base:None,cancel:Arc::new(crate::update_cancel::Control::new(live))};
+        assert_eq!(source.providers(),["cnb","github"]);
+        assert_eq!(Mirrors::feed("cnb","releases.win.json"),"https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/releases.win.json");
+        let asset=VelopackAsset {Version:"0.2.11".into(),FileName:"RHRemote-0.2.11-full.nupkg".into(),..Default::default()};
+        assert_eq!(Mirrors::asset("cnb",&asset).unwrap(),"https://cnb.cool/railgunhamster/RHRemote/-/releases/download/v0.2.11/RHRemote-0.2.11-full.nupkg");
+        assert!(Mirrors::asset("cnb",&VelopackAsset {FileName:"../escape.nupkg".into(),..asset}).is_err());
+    }
+    #[test]
+    #[ignore = "Explicit public CNB download acceptance; requires RHREMOTE_CNB_ACCEPTANCE_DIR"]
+    fn cnb_public_feed_and_full_package_are_anonymously_usable() {
+        let directory=PathBuf::from(std::env::var_os("RHREMOTE_CNB_ACCEPTANCE_DIR").expect("dedicated download directory"));
+        fs::create_dir_all(&directory).unwrap();
+        let live=Arc::new(Mutex::new(json!({})));
+        let source=Mirrors {live:live.clone(),preferred:"cnb".into(),selected:Mutex::new(String::new()),test_base:None,cancel:Arc::new(crate::update_cancel::Control::new(live))};
+        source.cancel.begin(1,"updates.check",true).unwrap();
+        let feed=source.get_release_feed("win",&Manifest::default(),"").unwrap();
+        source.cancel.finish();
+        assert_eq!(source.selected.lock().unwrap().as_str(),"cnb");
+        let asset=feed.Assets.iter().find(|asset|asset.PackageId=="RHRemote"&&asset.Type=="Full").expect("full package");
+        assert_eq!(asset.SHA256.len(),64);
+        let path=cached_path(&directory,asset).unwrap();
+        source.cancel.begin(2,"updates.download",true).unwrap();
+        source.download_release_entry(asset,&path,None).unwrap();
+        source.cancel.finish();
+        assert!(verify_cached(&directory,asset).unwrap());
+        fs::write(directory.join("conclusion.json"),serde_json::to_vec_pretty(&json!({"provider":"cnb","version":asset.Version,"fileName":asset.FileName,"size":asset.Size,"sha256":asset.SHA256,"authenticated":false,"verified":true,"installed":false})).unwrap()).unwrap();
+    }
     struct CacheFixture{directory:PathBuf,asset:VelopackAsset}
     impl CacheFixture{
         fn new()->Self{
@@ -384,7 +414,7 @@ mod tests {
         let root=std::path::PathBuf::from(std::env::var_os("RHREMOTE_UPDATE_NETWORK_EVIDENCE_DIR").expect("fresh owned evidence directory required"));
         assert!(root.is_dir());let partial=root.join("public-update.partial");let retry=root.join("public-update.nupkg");assert!(!partial.exists()&&!retry.exists());
         let live=Arc::new(Mutex::new(json!({})));let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
-        let source=Arc::new(Mirrors{live,preferred:"gitee".into(),selected:Mutex::new(String::new()),test_base:None,cancel:cancel.clone()});
+        let source=Arc::new(Mirrors{live,preferred:"cnb".into(),selected:Mutex::new(String::new()),test_base:None,cancel:cancel.clone()});
         let manifest:Manifest=Default::default();cancel.begin(1,"updates.check",true).unwrap();
         let feed=source.get_release_feed("win",&manifest,"").unwrap();cancel.finish();
         let asset=feed.Assets.into_iter().find(|asset|asset.Type=="Full").expect("published full package");

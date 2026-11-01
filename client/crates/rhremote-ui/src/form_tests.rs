@@ -216,7 +216,7 @@ fn connection_footer_stays_reachable_and_only_exposes_actions_for_the_current_st
 
 #[test]
 fn the_single_update_action_remains_visible_when_failure_details_are_long(){
-    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("updates".into());ui.set_updates_managed(true);ui.set_update_phase("error".into());ui.set_update_status("Gitee / GitHub：请求超时。".repeat(100).into());ui.set_update_primary_text("重新检查".into());
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("updates".into());ui.set_updates_managed(true);ui.set_update_phase("error".into());ui.set_update_status("CNB / GitHub：请求超时。".repeat(100).into());ui.set_update_primary_text("重新检查".into());
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
     for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
         ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_update_details(true);

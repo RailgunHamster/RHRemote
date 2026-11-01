@@ -1,10 +1,10 @@
-param([ValidateSet('github','gitee')][string]$Provider,[Parameter(Mandatory)][string]$CandidateDirectory,[switch]$Preview,[string]$StableBaseline)
+param([ValidateSet('github','cnb')][string]$Provider='cnb',[Parameter(Mandatory)][string]$CandidateDirectory,[switch]$Preview,[string]$StableBaseline)
 $ErrorActionPreference='Stop';$plan=Get-Content -LiteralPath (Join-Path $CandidateDirectory 'publish-plan.json') -Raw|ConvertFrom-Json
 if(([bool]$plan.preview) -ne [bool]$Preview){throw 'Preview download verification requires the matching plan and switch'}
 if($Preview -and ($Provider -ne 'github' -or $plan.tag -notmatch '^v\d+\.\d+\.\d+-preview\.[1-9]\d*$' -or -not $StableBaseline)){throw 'Preview verification requires GitHub, a preview tag and the stable baseline'}
 Add-Type -AssemblyName System.Net.Http
 $client=New-Object Net.Http.HttpClient;$client.Timeout=[TimeSpan]::FromMinutes(5);$client.DefaultRequestHeaders.UserAgent.ParseAdd('RHRemote-anonymous-release-verifier')
-$base=if($Provider -eq 'github'){'https://github.com/RailgunHamster/RHRemote/releases/download/'+$plan.tag+'/'}else{'https://gitee.com/railgunhamster/RHRemote/releases/download/'+$plan.tag+'/'}
+$base=if($Provider -eq 'github'){'https://github.com/RailgunHamster/RHRemote/releases/download/'+$plan.tag+'/'}else{'https://cnb.cool/railgunhamster/RHRemote/-/releases/download/'+$plan.tag+'/'}
 $results=@()
 try{
  foreach($asset in $plan.artifacts){
@@ -35,12 +35,13 @@ try{
    $results+=@{file=('stable/'+$entry.Name);result='PASS'}
   }
  }else{foreach($feed in @('releases.win.json','releases.android.json')){
-  $url=if($Provider -eq 'github'){'https://github.com/RailgunHamster/RHRemote/releases/latest/download/'+$feed}else{'https://gitee.com/railgunhamster/RHRemote/releases/download/latest/'+$feed}
+  $url=if($Provider -eq 'github'){'https://github.com/RailgunHamster/RHRemote/releases/latest/download/'+$feed}else{'https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/'+$feed}
   $bytes=$client.GetByteArrayAsync($url).GetAwaiter().GetResult();$hash=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-','').ToLowerInvariant()
   if($hash -ne ($plan.artifacts|Where-Object fileName -eq $feed).sha256){throw 'Latest feed differs from immutable version'}
   $results+=@{file=('latest/'+$feed);result='PASS'}
  }}
  $repo=Split-Path $PSScriptRoot -Parent
+ $null=New-Item -ItemType Directory -Force -Path (Join-Path $repo 'results/clients-v2')
  $resultName=if($Preview){$Provider+'-preview-downloads-'+$plan.tag+'.json'}else{$Provider+'-release-downloads.json'}
  [IO.File]::WriteAllText((Join-Path $repo ('results/clients-v2/'+$resultName)),($results|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 }finally{$client.Dispose()}

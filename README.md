@@ -9,15 +9,15 @@ RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 *
 - 每个客户端实例 × 远程设备独立连接参数；设备支持别名、主副键补偿。
 - 画面、音频、输入、网络、高级五类连接设置；支持静音、音量、触控板、直接点击、捏合缩放与双指滚动。
 - WebDAV 支持 HTTP / HTTPS；自动同步可选 5、15、30、60 分钟。密码及配对密钥留在本机。
-- Windows 使用 Velopack 更新，Android 下载 APK 后由用户确认安装；GitHub 与 Gitee 互为下载源。
+- Windows 使用 Velopack 更新，Android 下载 APK 后由用户确认安装；默认使用 CNB，失败时自动尝试 GitHub。
 
 ## 下载
 
-[GitHub 发布页](https://github.com/RailgunHamster/RHRemote/releases) · [Gitee 发布页](https://gitee.com/railgunhamster/RHRemote/releases)
+[CNB 发布页](https://cnb.cool/railgunhamster/RHRemote/-/releases) · [GitHub 发布页](https://github.com/RailgunHamster/RHRemote/releases)
 
 Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运行。Android 使用 arm64-v8a APK，包名为 `com.rhremote.client`，可与原版 Moonlight 并存。升级保留同一应用身份和签名，不要先卸载。
 
-当前客户端版本为 v0.2.10。Windows 使用导航、设备列表和详情分栏；Android 按可用宽度切换分栏或列表／详情页面，设置按钮自动换行并避开系统栏。Android 沿用已有签名，Windows 尚无代码签名证书。此次为界面更新，不能据此宣称首次连接、弱网恢复或持续动态 30 FPS 已完成优化，待验收项见 [TODO](TODO.md)。
+当前客户端版本为 v0.2.12，默认从 CNB 更新，GitHub 作为备用。Windows 使用导航、设备列表和详情分栏；Android 按可用宽度切换分栏或列表／详情页面。Android 沿用已有签名，Windows 尚无代码签名证书。待验收项见 [TODO](TODO.md)，Linux 支持另行适配、验证。
 
 开发中的快捷键与屏幕切换支持 Windows / Android：Ctrl+Alt+Delete、Ctrl+Alt+方向键、Alt+Tab、任务管理器、常见编辑快捷键，以及 Win+Shift+左／右移动远程窗口。Windows 控制栏悬浮在串流窗口顶部，可收起为小开关；Android 顶部固定开关展开“操作 / 屏幕 / 声音”分类面板，按钮按宽度排列为两列或三列，长内容纵向滚动。每个操作都有对应动作接口。
 
