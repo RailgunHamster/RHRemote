@@ -33,7 +33,6 @@ slint = { version = "=1.18.1", default-features = false, features = ["std", "com
 ureq = { version = "2.12", default-features = false, features = ["json", "tls", "native-certs"] }
 url = "2.5"
 base64 = "0.22"
-keyring = { version = "3.6.3", features = ["windows-native"] }
 velopack = { version = "=1.2.110-ge826545", features=["public-utils"] }
 roxmltree = "0.20"
 image = {version="0.25",default-features=false,features=["png"]}
@@ -44,7 +43,11 @@ tokio = { version = "=1.53.1", features = ["rt", "macros", "time"] }
 tokio-util = { version = "=0.7.20", features = ["rt"] }
 
 [target.'cfg(windows)'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
 
 [build-dependencies]
 slint-build = "=1.18.1"

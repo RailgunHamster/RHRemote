@@ -34,14 +34,15 @@ pub use session_ui::is_control_action as is_session_control_action;
 pub mod sync_model;
 pub mod network;
 pub mod bitrate;
+mod desktop_catalog;
 
 pub const ACTIONS: &str = include_str!("actions.json");
 pub fn settings_catalog() -> Value {
     let mut catalog:Value=serde_json::from_str(include_str!("settings.json")).unwrap();
-    let fields=catalog.as_array_mut().unwrap();if !fields.iter().any(|field|field["key"]=="bitrateAuto"){let at=fields.iter().position(|field|field["key"]=="bitrateMbps").unwrap_or(fields.len());fields.insert(at,serde_json::from_str(include_str!("../../../shared/auto-bitrate-setting.json")).unwrap());}catalog
+    let fields=catalog.as_array_mut().unwrap();if !fields.iter().any(|field|field["key"]=="bitrateAuto"){let at=fields.iter().position(|field|field["key"]=="bitrateMbps").unwrap_or(fields.len());fields.insert(at,serde_json::from_str(include_str!("../../../shared/auto-bitrate-setting.json")).unwrap());}desktop_catalog::extend(&mut catalog);catalog
 }
 pub fn catalog() -> Value {
-    serde_json::from_str(ACTIONS).expect("compiled action catalog")
+    let mut catalog=serde_json::from_str(ACTIONS).expect("compiled action catalog");desktop_catalog::extend(&mut catalog);catalog
 }
 pub fn shortcuts() -> Value {
     serde_json::from_str(include_str!("../../../shared/shortcuts.json")).unwrap()

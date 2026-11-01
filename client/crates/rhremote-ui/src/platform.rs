@@ -695,7 +695,7 @@ pub struct NativePlatform {
 }
 impl NativePlatform {
     pub fn new(engine: PathBuf, token: String, data: PathBuf) -> Result<Self, String> {
-        let default_data=PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote");
+        let default_data=crate::platform_paths::default_data()?;
         let ui_test=Arc::new(crate::ui_test::Bridge::new(std::env::var_os("RHREMOTE_DATA_DIR").is_some()&&crate::ui_test::isolated(&data,&default_data,&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default())));
         let statistics = crate::statistics::Statistics::new(&data);
         let updates=crate::updates::Updates::new();

@@ -5,6 +5,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
 mod devices;
 mod device_bootstrap;
+mod platform_paths;
 mod probe_report;
 mod form_models;
 mod view_state;
@@ -167,10 +168,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let data = std::env::var_os("RHREMOTE_DATA_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote")
-        });
-    std::fs::create_dir_all(&data)?;
+        .map(Ok).unwrap_or_else(platform_paths::default_data)?;
+    platform_paths::prepare_data(&data)?;
     let token = if let Ok(value) = std::env::var("RHREMOTE_CONTROL_TOKEN") {
         value
     } else {
@@ -185,7 +184,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         token.clone(),
         data.clone(),
     )?);
-    let controller = Controller::new("windows", data.join("preferences.json"), native.clone())?;
+    let controller = Controller::new(platform_paths::PLATFORM, data.join("preferences.json"), native.clone())?;
     native.statistics.lock().unwrap().mark("preferences_loaded");
     device_bootstrap::restore(&controller.state()["saved"],&*native)?;
     controller.replace_devices_pending(native.devices.lock().unwrap().clone());
@@ -510,14 +509,14 @@ fn native_engine_path(override_path: Option<std::ffi::OsString>, executable: Pat
     override_path
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| executable.parent().unwrap().join("engine/RHRemote.exe"))
+        .unwrap_or_else(|| platform_paths::packaged_engine(&executable))
 }
 #[cfg(test)]
 mod tests {
     #[test]
     fn empty_native_engine_override_uses_packaged_engine() {
         let exe = std::path::PathBuf::from("C:/RHRemote/current/RHRemote.exe");
-        let expected = exe.parent().unwrap().join("engine/RHRemote.exe");
+        let expected = exe.parent().unwrap().join(if cfg!(windows){"engine/RHRemote.exe"}else{"engine/RHRemote"});
         assert_eq!(super::native_engine_path(None, exe.clone()), expected);
         assert_eq!(
             super::native_engine_path(Some(std::ffi::OsString::new()), exe.clone()),
