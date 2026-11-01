@@ -61,7 +61,19 @@ pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous
         if !opacity||shape["applied"]!=true{let _=window.hide();return json!({"visible":false,"error":"悬浮键盘点击区域或透明度未能设置","errorCode":"region","shape":shape,"source":source});}
         return json!({"visible":true,"geometry":fingerprint,"shape":shape,"alpha":166,"keys":keys.iter().map(|k|json!({"id":k.id,"x":k.x,"y":k.y,"width":k.width,"height":k.height})).collect::<Vec<_>>()});
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let owner=match crate::x11_surface::owned(state){Ok(value)=>value,Err(reason)=>{let _=window.hide();return json!({"visible":false,"reason":reason});}};
+        let scale=window.window().scale_factor();
+        let keys=layout(owner.width as f32/scale,owner.height as f32/scale);
+        if keys.is_empty(){let _=window.hide();return json!({"visible":false,"error":"远程窗口太小，无法放置悬浮按键","errorCode":"small"});}
+        window.set_keys(model(&keys));window.set_busy(state["controlAction"]["busy"]==true);
+        let regions=keys.iter().map(|key|((key.x*scale).round()as i16,(key.y*scale).round()as i16,(key.width*scale).round()as u16,(key.height*scale).round()as u16)).collect::<Vec<_>>();
+        let shape=match crate::x11_surface::place(window.window(),owner,(owner.x,owner.y,owner.width as i32,owner.height as i32),&regions,166){Ok(value)=>value,Err(error)=>{let _=window.hide();return json!({"visible":false,"error":error,"errorCode":"region"});}};
+        let _=previous;
+        json!({"visible":true,"geometry":[owner.x,owner.y,owner.width,owner.height],"shape":shape,"alpha":166,"keys":keys.iter().map(|k|json!({"id":k.id,"x":k.x,"y":k.y,"width":k.width,"height":k.height})).collect::<Vec<_>>()})
+    }
+    #[cfg(not(any(windows,target_os = "linux")))]
     {let _=(previous,model(&[]));json!({"visible":false,"error":"悬浮键盘目前需要 Windows","errorCode":"unsupported"})}
 }
 

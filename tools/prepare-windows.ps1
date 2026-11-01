@@ -402,6 +402,8 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     $s=Replace-Once $s '    m_InputHandler->setWindow(m_Window);' @'
 #ifdef Q_OS_WIN32
     {SDL_SysWMinfo info{};SDL_VERSION(&info.version);if(SDL_GetWindowWMInfo(m_Window,&info)&&info.subsystem==SDL_SYSWM_WINDOWS)RhRuntime::get().streamWindow=quintptr(info.info.win.window);}
+#elif defined(Q_OS_LINUX) && defined(SDL_VIDEO_DRIVER_X11)
+    {SDL_SysWMinfo info{};SDL_VERSION(&info.version);if(SDL_GetWindowWMInfo(m_Window,&info)&&info.subsystem==SDL_SYSWM_X11)RhRuntime::get().streamWindow=quintptr(info.info.x11.window);}
 #endif
     m_InputHandler->setWindow(m_Window);
 '@

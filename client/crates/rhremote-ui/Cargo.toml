@@ -51,6 +51,7 @@ windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Graphics_
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust"] }
+x11rb = { version = "0.13.2", features = ["shape", "randr"] }
 
 [build-dependencies]
 slint-build = "=1.18.1"

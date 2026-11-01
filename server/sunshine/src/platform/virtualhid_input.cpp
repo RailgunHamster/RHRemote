@@ -25,6 +25,13 @@
 
 using namespace std::literals;
 
+#if defined(__linux__) && defined(SUNSHINE_BUILD_X11)
+namespace platf {
+  /** @brief Complete absolute X11 pointer motion. @param x Desktop X. @param y Desktop Y. @return Whether the request was completed. */
+  bool x11_absolute_mouse(float x, float y);
+}
+#endif
+
 namespace platf::virtualhid {
   /**
    * @brief Runtime state for one virtual gamepad.
@@ -1013,6 +1020,11 @@ namespace platf {
   }
 
   void abs_mouse(input_t &input, const touch_port_t &touch_port, float x, float y) {
+#if defined(__linux__) && defined(SUNSHINE_BUILD_X11)
+    if (config::video.capture == "x11" && x11_absolute_mouse(x, y)) {
+      return;
+    }
+#endif
     virtualhid::abs_mouse(virtualhid::get_input_context(input), touch_port, x, y);
   }
 

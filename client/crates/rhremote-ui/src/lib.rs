@@ -47,6 +47,8 @@ mod proxy;
 mod update_cancel;
 mod ui_rendering;
 mod floating_keyboard;
+#[cfg(target_os = "linux")]
+mod x11_surface;
 mod device_lookup;
 mod action_queue;
 mod device_probe;

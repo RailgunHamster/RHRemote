@@ -78,7 +78,7 @@ struct RhRuntime {
 
 class RhControl : public QObject {
     Q_OBJECT
-#ifdef Q_OS_WIN32
+#if defined(Q_OS_WIN32) || defined(Q_OS_LINUX)
     std::unique_ptr<RhParentLifetime> parentLifetime;
     static void ownerLost(){
         auto& runtime=RhRuntime::get();runtime.ownerExited=true;runtime.localDisconnect=true;runtime.retryEligible=false;runtime.routeRetryEligible=false;
@@ -244,7 +244,7 @@ class RhControl : public QObject {
     }
 public:
     explicit RhControl(QObject* parent=nullptr):QObject(parent){
-#ifdef Q_OS_WIN32
+#if defined(Q_OS_WIN32) || defined(Q_OS_LINUX)
         const auto owner=qEnvironmentVariable("RHREMOTE_OWNER_PID");
         if(!owner.isEmpty()){
             bool valid=false;const auto pid=owner.toUInt(&valid);
@@ -262,7 +262,7 @@ public:
     }
     void stopServer(){if(server){server->requestInterruption();server->wait();delete server;server=nullptr;}}
     ~RhControl(){
-#ifdef Q_OS_WIN32
+#if defined(Q_OS_WIN32) || defined(Q_OS_LINUX)
         parentLifetime.reset();
 #endif
         RhRuntime::drainLaunch();

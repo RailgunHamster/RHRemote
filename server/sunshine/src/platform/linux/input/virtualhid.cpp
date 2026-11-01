@@ -5,6 +5,8 @@
 
 // standard includes
 #include <memory>
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 // platform includes
@@ -18,6 +20,38 @@
 using namespace std::literals;
 
 namespace platf {
+#ifdef SUNSHINE_BUILD_X11
+  /**
+   * @brief Position the X11 core pointer without mixing absolute and relative uinput axes.
+   * @param x Absolute desktop X coordinate after capture-to-desktop mapping.
+   * @param y Absolute desktop Y coordinate after capture-to-desktop mapping.
+   * @return Whether the X11 pointer request was completed before a following button event.
+   */
+  bool x11_absolute_mouse(float x, float y) {
+    if (!std::isfinite(x) || !std::isfinite(y)) {
+      return false;
+    }
+    // Keep this connection on the input worker. Ubuntu libinput rejects EV_ABS
+    // events from libvirtualhid's relative mouse; keyboard, buttons, scrolling
+    // and relative movement continue through the unchanged uinput device.
+    thread_local std::unique_ptr<Display, decltype(&XCloseDisplay)> display(XOpenDisplay(nullptr), XCloseDisplay);
+    if (!display) {
+      return false;
+    }
+    const auto screen = DefaultScreen(display.get());
+    const auto width = DisplayWidth(display.get(), screen);
+    const auto height = DisplayHeight(display.get(), screen);
+    if (width <= 0 || height <= 0) {
+      return false;
+    }
+    const auto target_x = static_cast<int>(std::lround(std::clamp(x, 0.0f, static_cast<float>(width - 1))));
+    const auto target_y = static_cast<int>(std::lround(std::clamp(y, 0.0f, static_cast<float>(height - 1))));
+    XWarpPointer(display.get(), None, RootWindow(display.get(), screen), 0, 0, 0, 0, target_x, target_y);
+    XSync(display.get(), False);
+    return true;
+  }
+#endif
+
   platform_caps::caps_t get_capabilities() {
     platform_caps::caps_t caps = 0;
     const auto runtime = virtualhid::create_runtime();

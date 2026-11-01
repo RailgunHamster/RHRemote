@@ -5676,6 +5676,7 @@ dependencies = [
  "velopack",
  "webpki-roots 1.0.10",
  "windows",
+ "x11rb",
 ]
 
 [[package]]

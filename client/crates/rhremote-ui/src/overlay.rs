@@ -2,6 +2,8 @@ use serde_json::{Value, json};
 use slint::{ComponentHandle, Model};
 
 pub fn focus_stream(state: &Value) {
+    #[cfg(target_os = "linux")]
+    crate::x11_surface::focus(state);
     #[cfg(windows)]
     unsafe {
         if let Some(owner) = owned_window(state) {
@@ -292,7 +294,14 @@ impl Follower {
             let toggle_width = (72.0 * toolbar.window().scale_factor()) as i32;
             return json!({"visible":true,"expanded":toolbar.get_expanded(),"pending":toolbar.get_pending(),"connectionFailed":toolbar.get_connection_failed(),"detached":detached,"nativeWindowState":native_window_state,"uuid":session.uuid,"attempt":session.attempt,"bodyVisible":toolbar.get_expanded() || toolbar.get_pending() || toolbar.get_connection_failed(),"x":x,"y":y,"width":width,"height":height,"shape":shape,"toggle":{"x":x+(width-toggle_width)/2,"y":y,"width":toggle_width,"height":(28.0*toolbar.window().scale_factor()) as i32},"owner":format!("{}",owner.map_or(0,|window|window.0 as usize))});
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            let owner=match crate::x11_surface::owned(state){Ok(value)=>value,Err(reason)=>{let _=toolbar.hide();return json!({"visible":false,"reason":reason});}};
+            let (x,y,width,height)=placement(owner.x,owner.y,owner.width as i32,toolbar.window().scale_factor(),toolbar.get_expanded(),toolbar.get_pending(),toolbar.get_connection_failed());
+            let shape=match crate::x11_surface::place(toolbar.window(),owner,(x,y,width,height),&[(0,0,width as u16,height as u16)],255){Ok(value)=>value,Err(error)=>{let _=toolbar.hide();return json!({"visible":false,"error":error});}};
+            json!({"visible":true,"expanded":toolbar.get_expanded(),"pending":toolbar.get_pending(),"uuid":session.uuid,"attempt":session.attempt,"bodyVisible":toolbar.get_expanded()||toolbar.get_pending()||toolbar.get_connection_failed(),"x":x,"y":y,"width":width,"height":height,"shape":shape})
+        }
+        #[cfg(not(any(windows,target_os = "linux")))]
         {
             let _ = toolbar.hide();
             json!({"visible":false})
@@ -408,7 +417,14 @@ pub fn follow_picker(picker: &crate::StreamPicker, state: &Value, toolbar: &Valu
         });
         return json!({"visible":true,"kind":state["streamMenu"],"x":x,"y":y,"width":width,"height":height});
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let owner=match crate::x11_surface::owned(state){Ok(value)=>value,Err(reason)=>{let _=picker.hide();return json!({"visible":false,"reason":reason});}};
+        let anchor=(toolbar["x"].as_i64().unwrap_or(owner.x.into())as i32,toolbar["y"].as_i64().unwrap_or(owner.y.into())as i32,toolbar["width"].as_i64().unwrap_or(560)as i32,toolbar["height"].as_i64().unwrap_or(28)as i32);
+        let (x,y,width,height)=picker_placement(anchor,owner.bounds,picker.window().scale_factor(),picker.get_labels().row_count());
+        match crate::x11_surface::place(picker.window(),owner,(x,y,width,height),&[(0,0,width as u16,height as u16)],255){Ok(_)=>json!({"visible":true,"kind":state["streamMenu"],"x":x,"y":y,"width":width,"height":height}),Err(error)=>{let _=picker.hide();json!({"visible":false,"error":error})}}
+    }
+    #[cfg(not(any(windows,target_os = "linux")))]
     {
         let _ = picker.hide();
         json!({"visible":false})
