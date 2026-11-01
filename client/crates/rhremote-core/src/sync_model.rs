@@ -574,10 +574,10 @@ impl Controller {
 mod tests {
     #[test]
     fn linux_client_identity_and_profiles_round_trip_without_changing_other_clients(){
-        let mut saved=crate::Saved::default();saved.initialize_client("linux").unwrap();
-        assert_eq!(saved.clients[&saved.client_id].platform,"linux");
-        let shared=saved.export_shared();shared.validate().unwrap();
-        let copy:SharedConfig=serde_json::from_slice(&serde_json::to_vec(&shared).unwrap()).unwrap();copy.validate().unwrap();assert_eq!(copy.clients[&saved.client_id].platform,"linux");
+        let path=std::env::temp_dir().join(format!("rhremote-linux-client-{}.json",crate::random_token().unwrap()));
+        let controller=crate::Controller::new("linux",path.clone(),Arc::new(Stub)).unwrap();
+        let shared=controller.export_shared();shared.validate().unwrap();assert_eq!(shared.clients.len(),1);assert_eq!(shared.clients.values().next().unwrap().platform,"linux");
+        let copy:SharedConfig=serde_json::from_slice(&serde_json::to_vec(&shared).unwrap()).unwrap();copy.validate().unwrap();assert_eq!(copy.clients,shared.clients);std::fs::remove_file(path).unwrap();
     }
 
     use super::*;
