@@ -94,6 +94,7 @@ public final class RhHome implements RhActions.Target {
     private ProgressBar updateProgress;
     private RhBoundAction.Button updateCancel,updatePrimary;
     private TextView updateVersion;
+    private Spinner updateSource;
     private final android.os.Handler updateUi=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable updateTick=this::refreshUpdateUi;
     private boolean pairing;private String pairPin="";
@@ -925,6 +926,7 @@ public final class RhHome implements RhActions.Target {
             }
             case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"),id.equals("sync.run")&&args.optBoolean("automatic"),args.has("reviewId")?args.getString("reviewId"):null);break;
             case "updates.state":return updateWork.state();
+            case "updates.source.set":updateWork.setSource(args.getString("source"));refreshUpdateControls();break;
             case "updates.cancel":updateWork.cancel(args.getLong("operationId"));break;
             case "updates.details.toggle":if(!pageId.equals("global-settings")||!settingsTab.equals("updates"))throw new IllegalStateException("请先打开更新页");updateDetails=!updateDetails;refreshUpdateControls();break;
             case "updates.primary":if(updateWork.busy())throw new IllegalStateException("更新操作正在进行");String primaryAction=updates.primaryAction();if(primaryAction.equals("updates.install")&&RhActions.hasStream())throw new IllegalStateException("请先断开当前连接再安装更新");startUpdate(primaryAction);break;
@@ -937,6 +939,9 @@ public final class RhHome implements RhActions.Target {
 
     private void showUpdates(){
         org.json.JSONObject state=updates.state();LinearLayout summary=brandCard(state.optString("currentVersion"));
+        TextView sourceLabel=text("首选更新源",13,muted,false);sourceLabel.setPadding(0,dp(20),0,dp(8));summary.addView(sourceLabel);
+        updateSource=new Spinner(activity);updateSource.setContentDescription("首选更新源");updateSource.setTag("updates.source.set");updateSource.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));updateSource.setAdapter(options(new String[]{"CNB","GitHub"}));updateSource.setSelection(state.optString("preferredSource").equals("github")?1:0,false);updateSource.setBackground(bg(surface,line,8));summary.addView(updateSource,new LinearLayout.LayoutParams(-1,dp(48)));
+        updateSource.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){String source=position==1?"github":"cnb";if(!source.equals(updates.preferredSource()))fromView(updateSource,()->invoke("updates.source.set",RhActions.obj("source",source)));}});
         updateVersion=text("",15,ink,true);updateVersion.setPadding(0,dp(22),0,dp(8));summary.addView(updateVersion);
         updateProvider=text("",13,muted,false);summary.addView(updateProvider);
         updateStatus=text("",15,ink,false);updateStatus.setPadding(0,dp(16),0,dp(12));summary.addView(updateStatus);
@@ -950,10 +955,11 @@ public final class RhHome implements RhActions.Target {
 
     private void refreshUpdateControls(){
         if(updateStatus==null)return;org.json.JSONObject s=updateWork.state();String phase=s.optString("phase"),provider=s.optString("provider");
+        if(updateSource!=null){updateSource.setEnabled(!updateWork.busy());int index=s.optString("preferredSource").equals("github")?1:0;if(updateSource.getSelectedItemPosition()!=index)updateSource.setSelection(index,false);}
         updateVersion.setText(s.isNull("availableVersion")?"":"可用版本 "+s.optString("availableVersion"));updateVersion.setVisibility(s.isNull("availableVersion")?View.GONE:View.VISIBLE);
         boolean failed=phase.equals("error");updateStatus.setText(failed?"更新失败，请重试。":s.optString("status"));updateStatus.setTextColor(failed?failureColor:ink);
         updateDetailsToggle.setVisibility(failed?View.VISIBLE:View.GONE);updateDetailsToggle.setText(updateDetails?"收起详情":"查看详情");updateFailureDetails.setText(s.optString("status"));updateFailureDetails.setVisibility(failed&&updateDetails?View.VISIBLE:View.GONE);
-        updateProvider.setText(provider.isEmpty()?"更新源：CNB / GitHub":"更新源："+provider);
+        updateProvider.setText(provider.isEmpty()?(s.optString("preferredSource").equals("github")?"GitHub 优先 · CNB 备用":"CNB 优先 · GitHub 备用"):"当前更新源："+provider);
         long total=s.optLong("totalBytes"),bytes=s.optLong("downloadedBytes");boolean downloading=phase.equals("downloading")&&total>0;
         updateBytes.setVisibility(total>0&&(bytes>0||phase.equals("downloading"))?View.VISIBLE:View.GONE);updateBytes.setText(String.format(Locale.ROOT,"%.1f / %.1f MB",bytes/1048576.0,total/1048576.0));
         updateProgress.setVisibility(updateWork.busy()?View.VISIBLE:View.GONE);updateProgress.setIndeterminate(!downloading);if(downloading)updateProgress.setProgress((int)(bytes*100/total));

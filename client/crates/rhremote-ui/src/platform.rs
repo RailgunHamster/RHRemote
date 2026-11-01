@@ -699,6 +699,7 @@ impl NativePlatform {
         let ui_test=Arc::new(crate::ui_test::Bridge::new(std::env::var_os("RHREMOTE_DATA_DIR").is_some()&&crate::ui_test::isolated(&data,&default_data,&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default())));
         let statistics = crate::statistics::Statistics::new(&data);
         let updates=crate::updates::Updates::new();
+        updates.load_source(&data);
         let update_snapshot=updates.snapshot();
         let update_cancel=updates.cancellation();
         let native_data = data.join("engine-state");
@@ -1645,6 +1646,7 @@ impl Platform for NativePlatform {
                 let enabled = args["enabled"].as_bool().ok_or("enabled must be boolean")?;
                 self.statistics.lock().unwrap().configure(enabled)
             }
+            "updates.source.set" => self.updates.lock().unwrap().set_source(self.native_data.parent().ok_or("应用配置目录不可用")?,args["source"].as_str().ok_or("请选择更新源")?),
             id if id.starts_with("updates.") => self.updates.lock().unwrap().execute(id),
             "sync.state" => Ok(self.sync.lock().unwrap().state()),
             "sync.configure" => self.sync.lock().unwrap().configure(args),

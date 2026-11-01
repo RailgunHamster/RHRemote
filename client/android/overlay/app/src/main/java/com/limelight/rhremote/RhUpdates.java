@@ -20,7 +20,7 @@ public final class RhUpdates {
     private final Context context;
     private final File directory,apk,receipt;
     private File installationFile;
-    private final SharedPreferences preferences;
+    private final SharedPreferences preferences,sourcePreferences;
     private volatile JSONObject available;
     private volatile String message="尚未检查更新",phase="idle",provider="";
     private volatile String activeAction="",failedAction="";
@@ -64,14 +64,21 @@ public final class RhUpdates {
     public RhUpdates(Context c){
         context=c.getApplicationContext();directory=new File(c.getFilesDir(),"updates");
         apk=new File(directory,"RHRemote-update.apk");receipt=new File(directory,"ready.json");
-        preferences=context.getSharedPreferences("rhremote.updates",0);restore();pruneInstalledSnapshots();
+        preferences=context.getSharedPreferences("rhremote.updates",0);sourcePreferences=context.getSharedPreferences("rhremote.update-source",0);restore();pruneInstalledSnapshots();
     }
+    String preferredSource(){return sourcePreferences.getString("preferredSource","cnb").equals("github")?"github":"cnb";}
+    void setSource(String source){
+        if(!source.equals("cnb")&&!source.equals("github"))throw new IllegalArgumentException("请选择 CNB 或 GitHub");
+        if(!sourcePreferences.edit().putString("preferredSource",source).commit())throw new IllegalStateException("更新源未能保存，请重试");
+        provider="";if(available==null&&!ready){failedAction="";sourceFailures=new JSONArray();status("idle","尚未检查更新");}
+    }
+    private String[] sources(){return preferredSource().equals("github")?new String[]{GITHUB,CNB}:new String[]{CNB,GITHUB};}
     private long currentCode()throws Exception{PackageInfo p=context.getPackageManager().getPackageInfo(context.getPackageName(),0);return Build.VERSION.SDK_INT>=28?p.getLongVersionCode():p.versionCode;}
     private String currentName(){try{return context.getPackageManager().getPackageInfo(context.getPackageName(),0).versionName;}catch(Exception e){return "";}}
     private boolean allowed(){return Build.VERSION.SDK_INT<26||context.getPackageManager().canRequestPackageInstalls();}
     private static Object candidateId(JSONObject candidate){return candidate==null?JSONObject.NULL:new JSONArray().put(candidate.optString("version")).put(candidate.optLong("versionCode")).put(candidate.optString("packageName")).put(candidate.optString("fileName")).put(candidate.optLong("size")).put(candidate.optString("sha256").toLowerCase(java.util.Locale.ROOT));}
     public JSONObject state(){JSONObject candidate=available;return RhActions.obj("managed",true,"currentVersion",currentName(),"availableVersion",candidate==null?JSONObject.NULL:candidate.optString("version"),"candidateId",candidateId(candidate),
-        "pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,"failedAction",failedAction,"cancelledAction",phase.equals("cancelled")?activeAction:"",
+        "pendingRestart",ready,"downloaded",ready,"canInstall",candidate!=null,"status",message,"phase",phase,"provider",provider,"preferredSource",preferredSource(),"failedAction",failedAction,"cancelledAction",phase.equals("cancelled")?activeAction:"",
         "downloadedBytes",downloadedBytes,"totalBytes",totalBytes,"sourceFailures",sourceFailures,"installPermissionGranted",allowed(),"installPermissionPending",preferences.getBoolean("permission",false));}
     public String primaryAction(){if(phase.equals("error")&&failedAction.equals("updates.check")||phase.equals("cancelled")&&activeAction.equals("updates.check"))return "updates.check";return available!=null||ready?"updates.install":"updates.check";}
     public String primaryLabel(boolean busy){
@@ -110,7 +117,8 @@ public final class RhUpdates {
     public void check()throws Exception{
         checkCancelled();
         pending("updates.check");JSONObject manifest=null;JSONArray failures=new JSONArray();sourceFailures=failures;
-        for(String url:new String[]{CNB+"latest/download/releases.android.json",GITHUB+"latest/download/releases.android.json"}){
+        for(String base:sources()){
+            String url=base+"latest/download/releases.android.json";
             provider=url.startsWith(CNB)?"CNB":"GitHub";status("checking","正在从 "+provider+" 检查更新");
             HttpURLConnection c=null;try{
                 c=request(url);int response=c.getResponseCode();checkCancelled();if(response!=200)throw new IOException("HTTP "+response);
@@ -171,7 +179,8 @@ public final class RhUpdates {
         if(!directory.exists()&&!directory.mkdirs())throw new IOException("更新目录不可用");
         ready=false;prepared=false;downloadedBytes=0;totalBytes=selected.getLong("size");status("downloading","正在下载 APK（0%）");
         File pending=new File(directory,"pending.apk");boolean downloaded=false;String lastError="APK 下载失败，请检查网络后重试";JSONArray failures=new JSONArray();sourceFailures=failures;
-        for(String url:new String[]{CNB+"download/"+selected.getString("tag")+"/"+selected.getString("fileName"),GITHUB+"download/"+selected.getString("tag")+"/"+selected.getString("fileName")}){
+        for(String base:sources()){
+            String url=base+"download/"+selected.getString("tag")+"/"+selected.getString("fileName");
             HttpURLConnection c=null;provider=url.startsWith(CNB)?"CNB":"GitHub";downloadedBytes=0;
             try{
                 c=request(url);int response=c.getResponseCode();checkCancelled();if(response!=200)throw new IOException("更新源返回 HTTP "+response);

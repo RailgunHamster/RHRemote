@@ -814,6 +814,7 @@ export component MainWindow inherits Window {
     in property <bool> updates-available;
     in property <bool> updates-pending;
     in property <string> update-version;
+    in-out property <int> update-source-index;
     in property <string> update-status;
     in property <bool> update-details;
     in property <string> update-primary-text:"检查更新";
@@ -1201,7 +1202,12 @@ export component MainWindow inherits Window {
                                 VerticalLayout {spacing:5px;Text{text:"RHRemote";color:Palette.ink;font-size:22px;font-weight:600;}Text{text:"Moonlight · "+root.app-version;color:Palette.muted;font-size:13px;}}
                                 Rectangle{horizontal-stretch:1;}
                             }
-                            Text{text:root.updates-managed ? "更新源：CNB · GitHub 备用" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
+                            HorizontalLayout {spacing:16px;
+                                Text{text:"首选更新源";color:Palette.ink;vertical-alignment:center;}
+                                update-source:=ComboBox{model:["CNB","GitHub"];current-index <=> root.update-source-index;preferred-width:180px;horizontal-stretch:0;enabled:!root.updates-busy;accessible-label:"首选更新源";selected(value)=>{Commands.trigger("updates.source.set","source="+(self.current-index==1?"github":"cnb"));}}
+                                Rectangle{horizontal-stretch:1;}
+                            }
+                            Text{text:root.updates-managed ? "首选源不可用时自动尝试另一来源。" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
                             if root.updates-available: Text{text:"可用版本："+root.update-version;color:Palette.ink;}
                             if root.updates-busy: Rectangle {height:4px;background:Palette.line;border-radius:2px;
                                 Rectangle {height:parent.height;width:parent.width * (root.update-phase=="downloading" ? root.update-progress / 100 : 0.12);background:Palette.blue;border-radius:2px;}

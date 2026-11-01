@@ -67,7 +67,7 @@ fn local_test_source(mode: &str, address: &str) -> Option<String> {
 }
 impl Mirrors {
     fn providers(&self) -> [&str; 2] {
-        if self.preferred == "github" {
+        if self.live.lock().unwrap()["preferredSource"].as_str().unwrap_or(&self.preferred) == "github" {
             ["github", "cnb"]
         } else {
             ["cnb", "github"]
@@ -115,7 +115,8 @@ impl UpdateSource for Mirrors {
     ) -> Result<VelopackAssetFeed, Error> {
         let name = format!("releases.{channel}.json");
         filename(&name)?;
-        for provider in self.providers() {
+        let providers=self.providers();
+        for provider in providers {
             let token=self.cancel.token();if token.is_cancelled(){return Err(Error::Other("Update operation cancelled".into()));}
             { let mut live=self.live.lock().unwrap(); live["provider"]=json!(provider); live["status"]=json!(format!("正在从 {} 检查更新",provider)); }
             let result = crate::update_cancel::run(&token,async {
@@ -131,6 +132,7 @@ impl UpdateSource for Mirrors {
             if token.is_cancelled(){return Err(Error::Other("Update operation cancelled".into()));}
             if let Ok(feed) = result {
                 *self.selected.lock().unwrap() = provider.into();
+                self.live.lock().unwrap()["checkedPreferredSource"]=json!(providers[0]);
                 return Ok(feed);
             }
         }
@@ -146,7 +148,9 @@ impl UpdateSource for Mirrors {
             return Err(Error::Other("Invalid update package size".into()));
         }
         let selected = self.selected.lock().unwrap().clone();
-        let providers = if selected == "github" {
+        let preferred=self.providers();
+        let checked=self.live.lock().unwrap()["checkedPreferredSource"].as_str()==Some(preferred[0]);
+        let providers = if !checked {preferred} else if selected == "github" {
             ["github", "cnb"]
         } else {
             ["cnb", "github"]
@@ -194,7 +198,7 @@ pub struct Updates {
 }
 impl Updates {
     pub fn new() -> Self {
-        let live=Arc::new(Mutex::new(json!({"phase":"idle","status":"尚未检查更新","progress":0,"provider":"","failedAction":""})));
+        let live=Arc::new(Mutex::new(json!({"phase":"idle","status":"尚未检查更新","progress":0,"provider":"","preferredSource":"cnb","failedAction":""})));
         let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
         let value=Self {
             manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"cnb".into(),selected:Mutex::new(String::new()),cancel:cancel.clone(),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
@@ -207,6 +211,24 @@ impl Updates {
     pub fn snapshot(&self) -> Snapshot { self.live.clone() }
     pub fn cancellation(&self)->Arc<crate::update_cancel::Control>{self.cancel.clone()}
     pub fn state(&self) -> Value { self.live.lock().unwrap().clone() }
+    pub fn load_source(&self,data:&Path) {
+        let path=data.join("update-source.json");
+        let source=fs::symlink_metadata(&path).ok().filter(|m|m.file_type().is_file()&&m.len()<=1024)
+            .and_then(|_|fs::read(&path).ok()).and_then(|bytes|serde_json::from_slice::<Value>(&bytes).ok())
+            .and_then(|value|value["preferredSource"].as_str().map(str::to_owned)).filter(|source|matches!(source.as_str(),"cnb"|"github")).unwrap_or_else(||"cnb".into());
+        self.live.lock().unwrap()["preferredSource"]=json!(source);
+    }
+    pub fn set_source(&self,data:&Path,source:&str)->Result<Value,String> {
+        if !matches!(source,"cnb"|"github"){return Err("请选择 CNB 或 GitHub".into());}
+        fs::create_dir_all(data).map_err(|e|e.to_string())?;
+        let temporary=data.join("update-source.json.tmp");
+        let mut file=fs::File::create(&temporary).map_err(|e|e.to_string())?;
+        file.write_all(serde_json::to_vec(&json!({"schemaVersion":1,"preferredSource":source})).unwrap().as_slice()).and_then(|_|file.sync_all()).map_err(|e|e.to_string())?;
+        drop(file);
+        fs::rename(&temporary,data.join("update-source.json")).map_err(|e|e.to_string())?;
+        {let mut live=self.live.lock().unwrap();live["preferredSource"]=json!(source);live["provider"]=json!("");if !live["availableVersion"].is_string()&&live["pendingRestart"]!=true{live["phase"]=json!("idle");live["status"]=json!("尚未检查更新");live["failedAction"]=json!("");}}
+        Ok(self.state())
+    }
     fn status(&self,phase:&str,text:&str) {
         let mut live=self.live.lock().unwrap();live["phase"]=json!(phase);live["status"]=json!(text);
     }
@@ -327,6 +349,37 @@ pub fn primary_label(state:&Value,busy:bool)->String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preferred_source_survives_restart_and_rejects_remote_addresses() {
+        let fixture=CacheFixture::new();
+        let updates=Updates::new();
+        assert_eq!(updates.set_source(&fixture.directory,"github").unwrap()["preferredSource"],"github");
+        let restored=Updates::new();restored.load_source(&fixture.directory);
+        assert_eq!(restored.state()["preferredSource"],"github");
+        for invalid in ["gitee","http://192.168.0.1/","https://example.org/",""]{assert!(restored.set_source(&fixture.directory,invalid).is_err());}
+        let again=Updates::new();again.load_source(&fixture.directory);
+        assert_eq!(again.state()["preferredSource"],"github");
+    }
+    #[test]
+    fn preferred_github_requests_it_first_and_falls_back_to_cnb() {
+        let server=tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let base=format!("http://{}/",server.server_addr());
+        let worker=std::thread::spawn(move||{
+            let mut paths=Vec::new();
+            for status in [503,200] {
+                let request=server.recv_timeout(Duration::from_secs(5)).unwrap().expect("expected update request");
+                paths.push(request.url().to_string());
+                request.respond(tiny_http::Response::from_string("{\"Assets\":[]}").with_status_code(status)).unwrap();
+            }
+            paths
+        });
+        let live=Arc::new(Mutex::new(json!({"preferredSource":"github"})));
+        let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));cancel.begin(1,"updates.check",true).unwrap();
+        let source=Mirrors {live,preferred:"cnb".into(),selected:Mutex::new(String::new()),test_base:Some(base),cancel};
+        source.get_release_feed("win",&Manifest::default(),"").unwrap();
+        assert_eq!(worker.join().unwrap(),["/github/releases.win.json","/cnb/releases.win.json"]);
+        assert_eq!(*source.selected.lock().unwrap(),"cnb");
+    }
     #[test]
     fn cnb_is_primary_and_packages_are_version_pinned() {
         let live=Arc::new(Mutex::new(json!({})));

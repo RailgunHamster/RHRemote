@@ -49,6 +49,7 @@ public class RhUpdatesTest {
     @Before public void setup() {
         Requests.feed=null;Requests.count=0;Requests.failFirst=false;
         activity=Robolectric.buildActivity(Activity.class).setup().get();
+        activity.getSharedPreferences("rhremote.update-source",0).edit().clear().commit();
         home=new RhHome(activity,new RhHome.Actions(){
             public void connect(com.limelight.nvstream.http.ComputerDetails d){}
             public void add(String address){}public void advanced(){}
@@ -74,6 +75,24 @@ public class RhUpdatesTest {
     private long current()throws Exception{return activity.getPackageManager().getPackageInfo(activity.getPackageName(),0).getLongVersionCode();}
     @Test public void beforeCheckingDoesNotRenderJsonNull()throws Exception {
         String text=page();assertTrue(text,text.contains("尚未检查更新"));assertFalse(text,text.contains("null"));
+    }
+    @Test public void sourceSelectionApiAndViewStayInSync()throws Exception {
+        home.perform("updates.source.set",RhActions.obj("source","github"));
+        assertTrue(page().contains("首选更新源"));
+        android.widget.Spinner choice=ReflectionHelpers.getField(home,"updateSource");
+        assertEquals(1,choice.getSelectedItemPosition());
+        assertEquals("github",new RhUpdates(activity).state().getString("preferredSource"));
+        home.perform("updates.source.set",RhActions.obj("source","cnb"));
+        assertEquals(0,choice.getSelectedItemPosition());
+    }
+    @Test public void changingSourceDuringAnAdmittedUpdateIsRejected()throws Exception {
+        java.util.concurrent.atomic.AtomicReference<Runnable> pending=new java.util.concurrent.atomic.AtomicReference<>();
+        RhUpdateWork work=ReflectionHelpers.getField(home,"updateWork");
+        work.start("updates.check",false,pending::set);
+        try{home.perform("updates.source.set",RhActions.obj("source","github"));fail("Source changed during update");}catch(IllegalStateException expected){}
+        assertEquals("cnb",updates.state().getString("preferredSource"));
+        pending.get().run();org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertFalse(work.busy());
     }
     @Test public void currentReleaseShowsLatestWithoutNull()throws Exception {
         feed(current());updates.check();assertTrue(updates.state().isNull("availableVersion"));

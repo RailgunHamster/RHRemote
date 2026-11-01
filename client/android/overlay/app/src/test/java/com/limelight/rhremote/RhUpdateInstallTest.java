@@ -80,6 +80,7 @@ public class RhUpdateInstallTest {
     private void archive()throws Exception{for(String name:new String[]{"pending.apk","RHRemote-update.apk",snapshot().getName()})manager.setPackageArchiveInfo(new File(folder,name).getAbsolutePath(),incoming);}
     private String sha(byte[] bytes)throws Exception{StringBuilder value=new StringBuilder();for(byte b:MessageDigest.getInstance("SHA-256").digest(bytes))value.append(String.format(java.util.Locale.ROOT,"%02x",b&255));return value.toString();}
     @Before public void setup()throws Exception{
+        RuntimeEnvironment.getApplication().getSharedPreferences("rhremote.update-source",0).edit().clear().commit();
         Requests.addresses.clear();Requests.failFirstMetadataOpen=false;
         Requests.downloads=0;Requests.checks=0;Requests.corrupt=false;Requests.failMetadata=false;Requests.failFirstDownloadOpen=false;Requests.failAllDownloads=false;Requests.entered=null;Requests.release=null;Requests.finishCleanup=null;Requests.gateMetadata=false;Requests.pauseAfterChunk=false;Requests.bytes="test APK fixture bytes".getBytes(StandardCharsets.UTF_8);
         // AndroidX retains its static cache while Robolectric allocates a new filesDir per test.
@@ -130,6 +131,20 @@ public class RhUpdateInstallTest {
         assertEquals("https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/releases.android.json",Requests.addresses.get(0));
         assertTrue(Requests.addresses.get(1),Requests.addresses.get(1).startsWith("https://cnb.cool/railgunhamster/RHRemote/-/releases/download/"+manifest.getString("tag")+"/"));
         for(String address:Requests.addresses){assertFalse(address.contains("gitee"));assertFalse(address.contains("token="));assertFalse(address.contains("192.168."));}
+    }
+    @Test public void preferredGithubIsSavedAndUsedForMetadataAndApk()throws Exception{
+        updates.setSource("github");downloaded();
+        assertEquals("github",new RhUpdates(activity).state().getString("preferredSource"));
+        assertEquals("GitHub",updates.state().getString("provider"));
+        assertTrue(Requests.addresses.get(0).startsWith("https://github.com/"));assertTrue(Requests.addresses.get(1).startsWith("https://github.com/"));
+    }
+    @Test public void githubPreferenceFallsBackToCnbAndRejectsArbitrarySources()throws Exception{
+        updates.setSource("github");
+        Requests.failFirstMetadataOpen=true;updates.check();
+        assertEquals("CNB",updates.state().getString("provider"));assertEquals(2,Requests.checks);
+        assertTrue(Requests.addresses.get(0).startsWith("https://github.com/"));assertTrue(Requests.addresses.get(1).startsWith("https://cnb.cool/"));
+        try{updates.setSource("http://192.168.0.1/");fail("Unexpected arbitrary source");}catch(IllegalArgumentException expected){}
+        assertEquals("github",new RhUpdates(activity).state().getString("preferredSource"));
     }
     @Test public void metadataFailureFallsBackToGitHub()throws Exception{
         Requests.failFirstMetadataOpen=true;updates.check();

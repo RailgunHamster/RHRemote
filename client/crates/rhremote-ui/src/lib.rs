@@ -87,6 +87,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "device.network.diagnose"|"device.network.cancel"|"device.network.details.toggle"=>serde_json::from_str(arg).unwrap_or_else(|_|json!({})),
         "updates.cancel"=>json!({"operationId":arg.parse::<u64>().unwrap_or(0)}),
         "updates.primary" if !arg.is_empty()=>json!({"expectedIntent":arg}),
+        "updates.source.set"=>json!({"source":arg.strip_prefix("source=").unwrap_or(arg)}),
         "navigation.resolve"|"sync.clear.resolve"=>json!({"choice":arg}),
         "settings.input"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},

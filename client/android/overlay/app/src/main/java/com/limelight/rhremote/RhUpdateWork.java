@@ -27,6 +27,7 @@ final class RhUpdateWork {
 
     private RhUpdateWork(Context context){this.context=context;updates=new RhUpdates(context);}
     synchronized boolean busy(){return running||installReady||resumeInstall;}
+    synchronized void setSource(String source){if(busy())throw new IllegalStateException("更新操作正在进行");updates.setSource(source);}
     synchronized boolean awaitingInstall(){return !running&&(installReady||resumeInstall);}
     private String intent(JSONObject value){return new org.json.JSONArray().put(updates.primaryAction()).put(operation).put(value.opt("availableVersion")).put(value.optBoolean("pendingRestart")).put(value.opt("candidateId")).toString();}
     synchronized JSONObject state(){JSONObject value=updates.state();try{value.put("operationId",operation);value.put("busy",busy());value.put("canCancel",busy()&&!cancelRequested);value.put("cancelRequested",running&&cancelRequested);value.put("awaitingForeground",!running&&(installReady||resumeInstall));if(running&&cancelRequested){value.put("phase","cancelling");value.put("status","正在取消更新…");}value.put("intent",intent(value));}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
