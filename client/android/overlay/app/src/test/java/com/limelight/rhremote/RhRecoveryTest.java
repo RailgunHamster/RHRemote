@@ -59,10 +59,49 @@ public class RhRecoveryTest {
         },executor);
     }
     private void idle(){org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    @Test public void negotiationDoesNotConsumeTheVideoFrameDeadline(){
+        recovery=make(Runnable::run);
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(16));
+        assertFalse("A pending native connection is not a missing decoded frame",RhActions.hasStream());
+        assertNull("Do not stop native negotiation with the video watchdog",cleanup);
+    }
+    @Test public void videoDeadlineStartsAtNativeReadyAndDuplicateReadyDoesNotExtendIt(){
+        recovery=make(Runnable::run);
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(16));
+        assertNull(cleanup);
+        recovery.connected();
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(14));
+        assertFalse(RhActions.hasStream());assertNull(cleanup);
+        recovery.connected();
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(2));
+        assertTrue("Missing frames still have the original LAN deadline",RhActions.hasStream());
+        assertNotNull(cleanup);
+    }
+    @Test public void cancelledNegotiationIgnoresALateNativeReadyCallback(){
+        recovery=make(Runnable::run);recovery.cancel();idle();
+        if(cleanup!=null){cleanup.accept(true);cleanup=null;}idle();
+        recovery.connected();
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(40));
+        assertFalse(RhActions.hasStream());assertNull(cleanup);assertEquals(0,resolutions);
+    }
+    @Test public void aFrameBeforeNativeReadyDoesNotAcquireANewVideoDeadline(){
+        recovery=make(Runnable::run);recovery.frame();recovery.connected();
+        org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(40));
+        assertFalse(RhActions.hasStream());assertNull(cleanup);assertEquals(0,resolutions);
+    }
     private android.app.AlertDialog feedback(){
         android.app.Dialog dialog=org.robolectric.shadows.ShadowDialog.getLatestDialog();
         assertTrue("Recovery must retain visible progress after the session controls are removed",dialog instanceof android.app.AlertDialog&&dialog.isShowing());
         return (android.app.AlertDialog)dialog;
+    }
+    @Test public void blockedActionsDistinguishRecoveryFromCancelledCleanup()throws Exception{
+        recovery=make(Runnable::run);assertTrue(recovery.stageFailed(1,-1));idle();
+        for(String action:new String[]{"device.connect","device.pair","updates.install","device.network.diagnose"}){
+            JSONObject response=RhActions.dispatch(action,RhActions.obj());assertFalse(response.toString(),response.getBoolean("ok"));assertEquals("正在恢复连接，请先取消当前连接",response.getString("error"));
+        }
+        recovery.cancel();idle();assertTrue("Pending cleanup must keep ownership",RhActions.hasStream());
+        assertEquals("正在清理，请稍候",RhActions.dispatch("device.connect",RhActions.obj()).getString("error"));assertEquals(0,resolutions);
+        cleanup.accept(true);cleanup=null;idle();assertFalse(RhActions.hasStream());
     }
     @Test public void recoveryShowsItsCleanupAndLetsTheActualButtonCancelWithoutResolving()throws Exception{
         recovery=make(Runnable::run);assertTrue(recovery.stageFailed(1,-1));idle();
@@ -158,7 +197,7 @@ public class RhRecoveryTest {
     }
     @Test public void wanLaunchCanPassTheOldFifteenSecondLimitButRemainsBounded()throws Exception{
         Field field=RhNetwork.class.getDeclaredField("last");field.setAccessible(true);field.set(null,RhActions.obj("route","relay","remoteAddress","rhr:host"));
-        recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{throw new java.io.IOException("stop fixture");},Runnable::run);
+        recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{throw new java.io.IOException("stop fixture");},Runnable::run);recovery.connected();
         org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(20));assertFalse(RhActions.hasStream());assertNull(cleanup);
         org.robolectric.Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(11));assertTrue(RhActions.hasStream());assertNotNull(cleanup);
     }
@@ -186,6 +225,48 @@ public class RhRecoveryTest {
         recovery=make(Runnable::run);assertTrue(recovery.stageFailed(1,-1));idle();
         assertFalse(recovery.stageFailed(0,401));idle();cleanup.accept(true);cleanup=null;idle();
         assertEquals(0,resolutions);assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+    }
+    @Test public void anOldLaunchConflictCannotReplaceTheRtspFailureBeingRecovered(){
+        RhActions.clearConnectionError();recovery=make(Runnable::run);recovery.handleStageFailure("RTSP handshake",1,-1);idle();android.app.AlertDialog current=feedback();
+        recovery.handleStageFailure("Desktop",0,409);idle();assertEquals("Old cleanup callback replaced the connection error","",RhActions.lastConnectionError());assertTrue("Old callback closed current recovery",current.isShowing());assertFalse(activity.isFinishing());
+        cleanup.accept(true);cleanup=null;idle();assertEquals(1,resolutions);assertNotNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+    }
+    @Test public void failedRecoveryKeepsTheOriginalStageInTheHomeError(){
+        RhActions.clearConnectionError();recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{
+            resolutions++;throw new java.io.IOException("内置连接组件不可用，请更新应用后重试");
+        },Runnable::run);
+        recovery.handleStageFailure("RTSP handshake",1,-1);idle();cleanup.accept(true);cleanup=null;idle();
+        String error=RhActions.lastConnectionError();assertTrue(error,error.contains("RTSP handshake"));assertTrue(error,error.contains("错误码 -1"));assertTrue(error,error.contains("自动恢复未完成"));assertTrue(error,error.contains("内置连接组件不可用"));assertEquals(1,resolutions);assertFalse(RhActions.hasStream());assertNull(Shadows.shadowOf(activity).getNextStartedActivity());
+    }
+    @Test public void successorIntentKeepsTheInitialFailureButAReceivedFrameRetiresIt()throws Exception{
+        recovery=make(Runnable::run);recovery.handleStageFailure("RTSP handshake",1,-1);idle();cleanup.accept(true);cleanup=null;idle();
+        Intent next=Shadows.shadowOf(activity).getNextStartedActivity();assertNotNull(next);JSONObject saved=new JSONObject(next.getStringExtra(RhRecovery.EXTRA));assertTrue(saved.toString(),saved.optString("initialFailure").contains("RTSP handshake"));
+        // This is a new, independently admitted attempt with the previous diagnostic context.
+        recovery.cancel();idle();assertFalse(RhActions.hasStream());activity.setIntent(next);recovery=new RhRecovery(activity,profile,done->cleanup=done,(intent,p,failed,operation)->{throw new java.io.IOException("stop fixture");},Runnable::run);
+        assertTrue(recovery.state().optString("initialFailure").contains("RTSP handshake"));recovery.frame();assertEquals("",recovery.state().optString("initialFailure"));
+    }
+    @Test public void aCancelledConnectionCannotPublishALateStageFailure(){
+        RhActions.clearConnectionError();recovery=make(Runnable::run);recovery.background();assertNotNull(cleanup);
+        recovery.handleStageFailure("Desktop",0,409);idle();assertEquals("Cancelled connection published a new error","",RhActions.lastConnectionError());assertEquals(0,resolutions);assertTrue(RhActions.hasStream());cleanup.accept(true);cleanup=null;idle();assertFalse(RhActions.hasStream());
+    }
+    @Test public void theFirstLaunchConflictStillStopsAndRetainsTheCleanupLease(){
+        RhActions.clearConnectionError();recovery=make(Runnable::run);recovery.handleStageFailure("Desktop",0,409);idle();assertTrue(RhActions.lastConnectionError().contains("409"));assertEquals(0,resolutions);assertTrue(RhActions.hasStream());assertNotNull(cleanup);cleanup.accept(true);cleanup=null;idle();assertFalse(RhActions.hasStream());assertNull(org.robolectric.Shadows.shadowOf(activity).getNextStartedActivity());
+    }
+    @Test public void anOwnedHostConflictExplainsInitialDisplayAdmissionAndKeepsCleanupBlocking(){
+        RhActions.clearConnectionError();recovery=make(Runnable::run);recovery.noteProtocolFailure(409,"Another launch or stream is using this host; disconnect it before choosing an initial display");recovery.handleStageFailure("Desktop",0,409);idle();
+        assertTrue(RhActions.lastConnectionError(),RhActions.lastConnectionError().contains("初始屏幕"));assertTrue(RhActions.lastConnectionError().contains("结束相关会话"));assertEquals(0,resolutions);assertTrue(RhActions.hasStream());assertNotNull(cleanup);cleanup.accept(true);cleanup=null;idle();assertFalse(RhActions.hasStream());
+    }
+    @Test public void theActualGameCallbackBridgeKeepsTheConflictWithItsRecoveryOwner()throws Exception{
+        RhActions.clearConnectionError();recovery=make(Runnable::run);Game listener=new Game();assertFalse(listener.rhNoteProtocolFailure(409,"Launch ownership admission rejected"));
+        Field owner=Game.class.getDeclaredField("rhRecovery");owner.setAccessible(true);owner.set(listener,recovery);
+        assertTrue(listener.rhNoteProtocolFailure(409,"Another launch or stream is using this host; disconnect it before choosing an initial display"));listener.stageFailed("Desktop",0,409);idle();assertTrue(RhActions.lastConnectionError().contains("初始屏幕"));assertNotNull(cleanup);
+    }
+    @Test public void aRetiredHttpReplyCannotPoisonTheNextRecoveryOrAFrameConfirmedSession(){
+        RhActions.clearConnectionError();recovery=make(Runnable::run);recovery.handleStageFailure("RTSP handshake",1,-1);idle();
+        recovery.noteProtocolFailure(409,"Another launch or stream is using this host; disconnect it before choosing an initial display");recovery.handleStageFailure("Desktop",0,409);idle();assertEquals("",RhActions.lastConnectionError());assertTrue(feedback().isShowing());
+    }
+    @Test public void aReceivedFrameClearsStartupProtocolContext(){
+        RhActions.clearConnectionError();recovery=make(Runnable::run);recovery.noteProtocolFailure(409,"Another launch or stream is using this host; disconnect it before choosing an initial display");recovery.frame();recovery.handleStageFailure("Desktop",0,409);idle();assertTrue(RhActions.lastConnectionError().contains("会话状态冲突"));assertFalse(RhActions.lastConnectionError().contains("初始屏幕"));
     }
     @Test public void failedCleanupStopsWithoutResolving(){
         recovery=make(Runnable::run);assertTrue(recovery.stageFailed(1,-1));idle();cleanup.accept(false);idle();

@@ -12,20 +12,33 @@ mod global_settings;
 mod sync_commit_tests;
 pub use global_settings::update_primary_action;
 mod interaction;
+pub use interaction::is_profile_form_action;
 mod add_device;
 mod device_info;
+pub mod window_source;
+mod device_refresh;
+mod device_check;
+mod diagnostics;
+pub use diagnostics::{DiagnosticTask,DiagnosticState};
+pub use device_check::{DeviceCheck,CheckOutcome,CheckSource,CheckPhase};
+#[cfg(test)]
+mod device_trust_tests;
+mod device_import;
 mod connection;
 mod profile_copy;
+pub use profile_copy::{Field as ProfileField, fields as profile_fields};
 mod session_ui;
 mod preview;
 pub use preview::PreviewRequest;
 pub use session_ui::is_control_action as is_session_control_action;
 pub mod sync_model;
 pub mod network;
+pub mod bitrate;
 
 pub const ACTIONS: &str = include_str!("actions.json");
 pub fn settings_catalog() -> Value {
-    serde_json::from_str(include_str!("settings.json")).unwrap()
+    let mut catalog:Value=serde_json::from_str(include_str!("settings.json")).unwrap();
+    let fields=catalog.as_array_mut().unwrap();if !fields.iter().any(|field|field["key"]=="bitrateAuto"){let at=fields.iter().position(|field|field["key"]=="bitrateMbps").unwrap_or(fields.len());fields.insert(at,serde_json::from_str(include_str!("../../../shared/auto-bitrate-setting.json")).unwrap());}catalog
 }
 pub fn catalog() -> Value {
     serde_json::from_str(ACTIONS).expect("compiled action catalog")
@@ -52,6 +65,8 @@ pub struct Profile {
     pub height: u32,
     pub fps: u32,
     pub bitrate_mbps: u32,
+    #[serde(skip_serializing_if="bitrate::is_manual")]
+    pub bitrate_auto: bool,
     pub codec: String,
     pub swap_buttons: bool,
     pub trackpad: bool,
@@ -87,6 +102,7 @@ impl Default for Profile {
             height: 1080,
             fps: 30,
             bitrate_mbps: 25,
+            bitrate_auto: false,
             codec: "HEVC".into(),
             swap_buttons: false,
             trackpad: false,
@@ -161,10 +177,16 @@ pub struct Device {
     #[serde(default)]
     pub is_self: bool,
 }
+/// A reachability observation may leave authenticated pairing state unknown.
+#[derive(Clone,Debug)]
+pub struct DeviceObservation {pub device:Device,pub pairing_verified:bool,pub check:Option<DeviceCheck>}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Saved {
     pub device_order_initialized: bool,
+    /// Local membership established by an applied shared document. Kept outside
+    /// SharedConfig so a legacy identity cache is imported only where appropriate.
+    pub device_membership_authoritative: bool,
     pub profiles: BTreeMap<String, Profile>,
     pub dark: bool,
     pub devices: Vec<sync_model::SharedDevice>,
@@ -179,13 +201,23 @@ pub struct Saved {
 pub struct State {
     pub platform: String,
     pub devices: Vec<Device>,
+    pub devices_refreshing: bool,
+    pub devices_refresh_error: String,
+    pub devices_pending: Vec<String>,
+    pub device_checks: BTreeMap<String,DeviceCheck>,
+    /// Last unresolved identity or authentication failure in this process.
+    /// Current reachability remains separately available in device_checks.
+    pub device_trust_checks: BTreeMap<String,DeviceCheck>,
     pub saved: Saved,
     pub page: String,
     pub selected: String,
+    pub window_picker: window_source::WindowPicker,
     pub device_query: String,
     pub add: add_device::AddState,
     pub info_draft: Option<device_info::InfoDraft>,
     pub draft: Option<Profile>,
+    #[serde(skip)]
+    profile_draft_id: String,
     pub draft_display_name: String,
     pub draft_address: String,
     pub draft_addresses: String,
@@ -193,8 +225,13 @@ pub struct State {
     pub settings_inputs: BTreeMap<String,String>,
     pub settings_error: String,
     pub settings_error_field: String,
+    pub settings_error_request: u64,
     #[serde(skip)]
     pending_navigation: Option<interaction::PendingNavigation>,
+    #[serde(skip)]
+    decision_generation: u64,
+    #[serde(skip)]
+    sync_clear_request_id: String,
     pub sync_clear_pending: bool,
     pub profile_tab: String,
     pub profile_sources_expanded: bool,
@@ -215,7 +252,11 @@ pub struct State {
     pub volume: u32,
     pub statistics: Value,
     pub network: Value,
+    pub diagnostics: DiagnosticState,
     pub controls: bool,
+    pub floating_keyboard: bool,
+    pub floating_keyboard_request: u64,
+    pub floating_keyboard_error: String,
     pub controls_tab: String,
     pub control_action: session_ui::ControlAction,
     pub control_requests: usize,
@@ -270,10 +311,15 @@ pub struct ActionTiming {
     pub queue_wait_us: u128,
 }
 pub trait Platform: Send + Sync {
+    /// Local task construction only; all I/O and cleanup run on its own worker.
+    fn prepare_diagnostic(&self,_device:&Device,_profile:&Profile)->Option<Result<Box<dyn DiagnosticTask>,String>>{None}
+    /// Construct a cancellable authenticated window-list request without starting a stream.
+    fn prepare_windows(&self,_device:&Device,_profile:&Profile)->Option<Result<Box<dyn DiagnosticTask>,String>>{None}
     /// Register cancellation before the admitted worker can enter blocking I/O.
     fn begin_update(&self,_operation:u64,_action:&str,_cancellable:bool)->Result<(),String>{Ok(())}
     fn cancel_update(&self,_operation:u64)->Result<(),String>{Err("此更新操作不支持取消".into())}
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String>;
+    fn observe_devices(&self,args:&Value,_publish:&mut dyn FnMut(DeviceObservation))->Result<Value,String>{self.execute("devices.refresh",args)}
     fn connection_requested(&self, _timing: Option<ActionTiming>) {}
     fn update_state(&self) -> Option<Value> { None }
     /// Called only after the exact shared configuration has been persisted and read back.
@@ -329,18 +375,25 @@ impl Controller {
             state: Mutex::new(State {
                 platform: platform_name.into(),
                 devices: vec![],
+                devices_refreshing: false,
+                devices_refresh_error: String::new(),
+                devices_pending: Vec::new(),
+                device_checks:BTreeMap::new(),
+                device_trust_checks:BTreeMap::new(),
                 saved,
                 page: "devices".into(),
                 selected: String::new(),
+                window_picker: window_source::WindowPicker::default(),
                 device_query: String::new(),
                 add: add_device::AddState::default(),
                 info_draft: None,
                 draft: None,
+                profile_draft_id: String::new(),
                 draft_display_name: String::new(),
                 draft_address: String::new(),
                 draft_addresses: String::new(),
                 draft_relay: String::new(),
-                settings_inputs:BTreeMap::new(),settings_error:String::new(),settings_error_field:String::new(),pending_navigation:None,sync_clear_pending:false,
+                settings_inputs:BTreeMap::new(),settings_error:String::new(),settings_error_field:String::new(),settings_error_request:0,pending_navigation:None,decision_generation:0,sync_clear_request_id:String::new(),sync_clear_pending:false,
                 profile_tab: "video".into(),
                 profile_sources_expanded: false,
                 profile_copy: None,
@@ -358,7 +411,11 @@ impl Controller {
                 volume: 100,
                 statistics: Value::Null,
                 network: Value::Null,
+                diagnostics: DiagnosticState::default(),
                 controls: false,
+                floating_keyboard: false,
+                floating_keyboard_request: 0,
+                floating_keyboard_error: String::new(),
                 controls_tab: "input".into(),
                 control_action: Default::default(),
                 control_requests: 0,
@@ -404,24 +461,30 @@ impl Controller {
     pub fn state(&self) -> Value {
         let s=self.state.lock().unwrap();
         let mut value = serde_json::to_value(&*s).unwrap();
+        if s.connection.operation=="pair" && s.connection.phase!="pairing" {value["pairPin"]=json!("");}
+        value["floatingKeyboardSession"]=json!(s.stream_epoch);
+        value["profileDraftId"]=json!(if s.draft.is_some(){s.profile_draft_id.as_str()}else{""});
         value["settingsDirty"]=json!(interaction::dirty(&s));
         value["infoDirty"]=json!(device_info::dirty(&s));
+        diagnostics::enrich(&s,&mut value);
         value["connection"]["title"]=json!(s.connection.title());
         value["connection"]["busy"]=json!(s.connection.busy());
         value["navigation"]=json!({"locked":connection::navigation_locked(&s),"reason":connection::navigation_hint(&s)});
         value["syncDirty"]=json!(interaction::sync_dirty(&s));
+        value["syncPasswordReusable"]=json!(interaction::sync_password_reusable(&s));
         value["updateInstallHint"]=json!(global_settings::update_installation_blocked(&s).unwrap_or(""));
         value["updatesBusy"]=json!(s.updates_busy || s.installing_update);
         let update_operation=s.update_operation;
         let update_cancellable=s.updates_busy && !s.installing_update && !s.update_cancel_requested;
         let update_cancelling=s.updates_busy && s.update_cancel_requested;
         value["syncDraft"]=s.sync_draft.clone().map(|mut d|{d.as_object_mut().unwrap().remove("password");d}).unwrap_or(Value::Null);
-        value["syncClearPrompt"]=if s.sync_clear_pending{json!({"title":"移除同步设置？","message":"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。"})}else{Value::Null};
-        value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
+        value["syncClearPrompt"]=if s.sync_clear_pending{json!({"requestId":s.sync_clear_request_id,"title":"移除同步设置？","message":"仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。"})}else{Value::Null};
+        value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"requestId":pending.request_id,"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
         drop(s);
         // Read progress without taking the updater's network/installation lock.
         if let Some(updates) = self.platform.update_state() { value["updates"] = updates; }
         value["updates"]["operationId"]=json!(update_operation);
+        value["updates"]["intent"]=json!(global_settings::update_primary_intent(&value["updates"],update_operation));
         value["updates"]["canCancel"]=json!(update_cancellable);
         value["updates"]["cancelRequested"]=json!(update_cancelling);
         if update_cancelling {value["updates"]["phase"]=json!("cancelling");value["updates"]["status"]=json!("正在取消更新…");}
@@ -454,8 +517,18 @@ impl Controller {
             s.selected = devices.iter().find(|d| !d.is_self).or_else(|| devices.first())
                 .map(|d| d.uuid.clone()).unwrap_or_default();
         }
+        let present:std::collections::HashSet<_>=devices.iter().map(|device|device.uuid.clone()).collect();
+        s.devices_pending.retain(|uuid|present.contains(uuid)&&!devices.iter().any(|device|&device.uuid==uuid&&device.is_self));
+        s.device_checks.retain(|uuid,_|present.contains(uuid));
+        s.device_trust_checks.retain(|uuid,_|present.contains(uuid));
         s.devices = devices;
         s.revision += 1;
+    }
+    /// Bootstrap local records without claiming that their network or pairing
+    /// state has already been checked. This is not a public control action.
+    pub fn replace_devices_pending(&self,devices:Vec<Device>){
+        self.replace_devices(devices);let mut state=self.state.lock().unwrap();
+        state.devices_pending=state.devices.iter().filter(|device|!device.is_self).map(|device|device.uuid.clone()).collect();state.revision+=1;
     }
     pub fn stream_state(&self, streaming: bool, statistics: Value) {
         self.stream_state_for(self.stream_epoch(), streaming, statistics);
@@ -522,6 +595,7 @@ impl Controller {
     }
     pub fn toolbar_state(&self, value: Value) {
         let mut s = self.state.lock().unwrap();
+        session_ui::keyboard_feedback(&mut s, &value["floatingKeyboard"]);
         if s.toolbar != value {
             s.toolbar = value;
             s.revision += 1;
@@ -544,6 +618,8 @@ impl Controller {
         s.connect_in_flight=false;
         s.stream_epoch+=1;
         if error.is_empty() && device.paired {
+            s.devices_pending.retain(|uuid|uuid!=&device.uuid);
+            s.clear_device_checks(&device.uuid);
             s.page="devices".into();s.connecting=false;
             s.connection.phase="paired".into();s.connection.error.clear();s.status="配对完成".into();
         } else {
@@ -570,12 +646,14 @@ impl Controller {
         if !catalog().as_array().unwrap().iter().any(|a| a["id"] == id) {
             return json!({"ok":false,"error":"unknown action","action":id});
         }
+        let profile_origin=args.get("draftId").cloned();
+        if !interaction::profile_origin_matches(&self.state.lock().unwrap(),id,profile_origin.as_ref()){return interaction::ignored_profile_action(id);}
         let result = if let Some(result)=self.update_installation_gate(id,&args){result} else if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
             let clear_pending=self.state.lock().unwrap().sync_clear_pending;
             let action=if clear_pending {"sync.clear.resolve"} else {match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>{let s=self.state.lock().unwrap();if !s.connection.busy(){"connection.dismiss"}else if s.connection.operation=="pair"{"pair.cancel"}else{"stream.disconnect"}},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"}};
             let result=self.dispatch(action,if clear_pending{json!({"choice":"cancel"})}else if page=="decision"{json!({"choice":"stay"})}else{json!({})});if result["ok"]==true{Ok(result["result"].clone())}else{Err(result["error"].as_str().unwrap_or("返回失败").into())}
-        } else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if is_session_control_action(id){self.dispatch_session_control(id,args)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if let Some(result)=self.profile_copy_gate(id){result} else if id.starts_with("settings.copy."){self.dispatch_profile_copy(id,args)} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
+        } else if let Some(result)=self.window_picker_gate(id){result} else if let Some(result)=self.diagnostic_gate(id){result} else if let Some(result)=self.connection_gate(id) {result} else if id.starts_with("connection.") {self.connection_action(id)} else if is_session_control_action(id){self.dispatch_session_control(id,args)} else if let Some(result)=self.navigation_gate(id,&args) {result} else if matches!(id,"device.network.diagnose"|"device.network.cancel"|"device.network.details.toggle"){self.dispatch_diagnostic(id,args)} else if let Some(result)=self.profile_copy_gate(id){result} else if id.starts_with("settings.copy."){self.dispatch_profile_copy(id,args)} else if let Some(result)=self.add_gate(id,&args){result} else if id.starts_with("device.add.") {
             self.dispatch_add(id,args)
         } else if id.starts_with("device.info.") {
             self.dispatch_info(id,args)
@@ -583,6 +661,10 @@ impl Controller {
             self.dispatch_update(id,&args)
         } else if id.starts_with("sync.") || id.starts_with("app.settings.") {
             self.dispatch_global(id, args)
+        } else if matches!(id,"device.windows.open"|"device.windows.close"|"device.window.connect") {
+            self.dispatch_window_picker(id,args)
+        } else if id=="devices.refresh" {
+            self.refresh_devices(args)
         } else {
             self.dispatch_inner(id, args, timing)
         };
@@ -591,6 +673,9 @@ impl Controller {
             Err(error) => json!({"ok":false,"action":id,"error":error}),
         };
         let mut s = self.state.lock().unwrap();
+        // A command can become stale after admission while another API call replaces
+        // the draft. Never attach that failure to the newly opened form.
+        if response["ok"]!=true&&!interaction::profile_origin_matches(&s,id,profile_origin.as_ref()){return interaction::ignored_profile_action(id);}
         if response["ok"]!=true && id.starts_with("device.add.") && s.page=="add" && !s.add.busy(){s.add.error=response["error"].as_str().unwrap_or("添加设备失败").into();}
         if response["ok"]!=true && id.starts_with("device.info."){if let Some(d)=s.info_draft.as_mut(){d.error=response["error"].as_str().unwrap_or("设备名称保存失败").into();}}
         if response["ok"]!=true && id.starts_with("settings."){if id.starts_with("settings.copy.")||id=="settings.copy_from"||s.page=="profile-copy"{s.profile_copy_error=response["error"].as_str().unwrap_or("复制配置失败").into();}else{s.settings_error=response["error"].as_str().unwrap_or("设置修改失败").into();}}
@@ -600,6 +685,7 @@ impl Controller {
     }
     fn dispatch_inner(&self, id: &str, mut args: Value, timing: Option<ActionTiming>) -> Result<Value, String> {
         let mut s = self.state.lock().unwrap();
+        interaction::ensure_profile_origin(&s,id,&args)?;
         if s.sync_busy
             && matches!(
                 id,
@@ -635,6 +721,12 @@ impl Controller {
                     return Err("搜索内容不能超过 128 字符".into());
                 }
                 s.device_query = query.into();
+            }
+            "devices.filter.clear" => {
+                if args["expectedQuery"].as_str() != Some(s.device_query.as_str()) {
+                    return Err("搜索内容已变化，请重新操作".into());
+                }
+                s.device_query.clear();
             }
             "device.move" => {
                 if s.page != "devices" {
@@ -677,33 +769,23 @@ impl Controller {
                 let all=network::addresses(&primary,&extra)?;
                 let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;
                 let host=next.devices.iter_mut().find(|d|d.uuid==uuid).ok_or("unknown device")?;
+                let changed=host.address!=primary || host.addresses!=all.iter().filter(|a|!a.eq_ignore_ascii_case(&primary)).cloned().collect::<Vec<_>>();
                 host.address=primary.clone();host.addresses=all.into_iter().filter(|a|!a.eq_ignore_ascii_case(&primary)).collect();
                 let extras=host.addresses.clone();
                 self.persist(&next)?;
                 s.saved=next;
                 let host=s.devices.iter_mut().find(|d|d.uuid==uuid).unwrap();host.address=primary;host.addresses=extras;
+                if changed {s.clear_device_checks(uuid);if !s.devices_pending.contains(&uuid.to_owned()){s.devices_pending.push(uuid.to_owned());}}
                 s.status="连接地址已保存".into();
                 let rows=s.devices.clone();drop(s);
                 self.platform.execute("devices.restore", &json!({"devices":rows}))?;
                 return Ok(json!({"saved":true}));
             }
-            "device.network.diagnose" => {
-                let uuid=args["uuid"].as_str().ok_or("uuid required")?;
-                let mut device=connection_device(&s,uuid)?;
-                if s.selected==uuid && s.draft.is_some(){device.address=s.draft_address.trim().into();device.addresses=s.draft_addresses.split([',',';','，','\n']).map(str::trim).filter(|s|!s.is_empty()).map(str::to_owned).collect();}
-                if let Some(primary)=args.get("address").and_then(Value::as_str){device.address=primary.into();}
-                if let Some(extra)=args.get("addresses"){device.addresses=serde_json::from_value(extra.clone()).map_err(|_|"addresses requires an array")?;}
-                network::addresses(&device.address,&device.addresses)?;
-                let mut profile=if s.selected==uuid{s.draft.clone().unwrap_or_else(||s.saved.effective_profile(uuid))}else{s.saved.effective_profile(uuid)};
-                if s.selected==uuid && s.draft.is_some(){profile.relay_url=s.draft_relay.trim().into();profile.validate()?;}
-                args["device"]=json!(device);args["profile"]=json!(profile);
-                drop(s);let result=self.platform.execute(id,&args)?;
-                let mut s=self.state.lock().unwrap();s.network=result.clone();s.revision+=1;return Ok(result);
-            }
             "devices.open" | "settings.cancel" => {
                 if s.page=="connection" {s.status.clear();}
                 s.page = "devices".into();
                 interaction::clear(&mut s);
+                device_import::select_available(&mut s);
             }
             "device.settings.open" => {
                 let uuid = args["uuid"]
@@ -714,7 +796,9 @@ impl Controller {
                 if !s.devices.iter().any(|d| d.uuid == uuid) {
                     return Err("unknown device".into());
                 }
+                let draft_id=random_token()?;
                 s.settings_inputs.clear();s.settings_error.clear();s.settings_error_field.clear();
+                s.profile_draft_id=draft_id;
                 s.draft = Some(s.saved.effective_profile(&uuid));
                 let host=s.saved.devices.iter().find(|d|d.uuid==uuid).map(|d|(d.address.clone(),d.addresses.clone())).unwrap_or_else(||{let d=s.devices.iter().find(|d|d.uuid==uuid).unwrap();(d.address.clone(),d.addresses.clone())});
                 s.draft_address=host.0;s.draft_addresses=host.1.join(", ");s.draft_relay=s.draft.as_ref().unwrap().relay_url.clone();
@@ -745,12 +829,14 @@ impl Controller {
             "settings.input" => {
                 if s.draft.is_none(){return Err("请先打开连接设置".into());}
                 let key=args["key"].as_str().ok_or("key required")?;let value=args["value"].as_str().filter(|v|v.len()<=4096).ok_or("输入内容过长")?;
+                if key=="bitrateMbps"&&s.draft.as_ref().is_some_and(|p|p.bitrate_auto){return Err("请先关闭自动码率再修改手动值".into());}
                 if key=="displayName"{s.draft_display_name=value.into();}else if settings_catalog().as_array().unwrap().iter().any(|f|f["key"]==key&&f["type"]=="number"){s.settings_inputs.insert(key.into(),value.into());}else{return Err("unknown editable field".into());}
                 s.settings_error.clear();s.settings_error_field.clear();
             }
             "settings.step" => {
                 if s.draft.is_none(){return Err("请先打开连接设置".into());}
                 let key=args["key"].as_str().ok_or("key required")?;let meta=settings_catalog().as_array().unwrap().iter().find(|f|f["key"]==key&&f["type"]=="number").cloned().ok_or("unknown numeric field")?;
+                if key=="bitrateMbps"&&s.draft.as_ref().is_some_and(|p|p.bitrate_auto){return Err("请先关闭自动码率再修改手动值".into());}
                 let base=serde_json::to_value(s.draft.as_ref().unwrap()).unwrap()[key].as_i64().unwrap();let number=s.settings_inputs.get(key).and_then(|v|v.trim().parse::<i64>().ok()).unwrap_or(base);
                 let sign=match args["direction"].as_str(){Some("up")=>1,Some("down")=>-1,_=>return Err("direction required".into())};
                 let value=(number+sign*meta["step"].as_i64().unwrap_or(1)).clamp(meta["min"].as_i64().unwrap(),meta["max"].as_i64().unwrap());s.settings_inputs.insert(key.into(),value.to_string());s.settings_error.clear();
@@ -766,6 +852,8 @@ impl Controller {
                 let current = s.draft.as_ref().ok_or("open device settings first")?;
                 let mut value = serde_json::to_value(current).unwrap();
                 let key = args["key"].as_str().ok_or("key required")?;
+                if key=="bitrateMbps"&&current.bitrate_auto{return Err("请先关闭自动码率再修改手动值".into());}
+                if key=="bitrateAuto"&&args["value"]==true{if let Some(number)=s.settings_inputs.get("bitrateMbps").and_then(|text|text.trim().parse::<u32>().ok()).filter(|n|(1..=300).contains(n)){value["bitrateMbps"]=json!(number);s.settings_inputs.remove("bitrateMbps");}}
                 if key == "displayName" {
                     let name = sync_model::display_name(
                         args["value"]
@@ -783,7 +871,7 @@ impl Controller {
                     value["width"] = v[0].clone();
                     value["height"] = v[1].clone();
                     s.settings_inputs.remove("width");s.settings_inputs.remove("height");
-                } else if value.get(key).is_some() {
+                } else if value.get(key).is_some() || key=="bitrateAuto" {
                     value[key] = args["value"].clone();s.settings_inputs.remove(key);
                 } else {
                     return Err("unknown profile option".into());
@@ -818,7 +906,10 @@ impl Controller {
                 let mut next = s.saved.clone();
                 next.devices = sync_model::from_state(&s).devices;
                 let (primary,extra)=interaction::endpoints(&mut s)?;
-                let network_changed=s.devices.iter().find(|d|d.uuid==s.selected).is_none_or(|d|d.address!=primary||d.addresses!=extra);
+                let previous_endpoints=s.saved.devices.iter().find(|d|d.uuid==s.selected).map(|d|(&d.address,&d.addresses))
+                    .or_else(||s.devices.iter().find(|d|d.uuid==s.selected).map(|d|(&d.address,&d.addresses)));
+                let network_changed=previous_endpoints.is_none_or(|(address,addresses)|address!=&primary||addresses!=&extra)
+                    || !device_import::same_route(&s.saved.effective_profile(&s.selected),&p);
                 let name=match sync_model::display_name(args.get("displayName").and_then(Value::as_str).unwrap_or(&s.draft_display_name)){Ok(v)=>v,Err(e)=>{s.profile_tab="advanced".into();s.settings_error_field="displayName".into();return Err(e);}};
                 if let Some(d) = next.devices.iter_mut().find(|d| d.uuid == s.selected) {
                     d.display_name = name.clone();d.address=primary.clone();d.addresses=extra.clone();
@@ -830,6 +921,7 @@ impl Controller {
                     d.display_name = name;d.address=primary;d.addresses=extra;
                 }
                 s.saved = next;
+                if network_changed {s.clear_device_checks(&selected);if !s.devices_pending.contains(&selected){s.devices_pending.push(selected);}}
                 interaction::clear(&mut s);
                 s.page = "devices".into();
                 s.status = "连接设置已保存".into();
@@ -847,6 +939,17 @@ impl Controller {
             "stream.controls.toggle" => {
                 s.controls = !s.controls;
                 s.stream_menu.clear();
+            }
+            "stream.keyboard.floating.set" => {
+                if !s.streaming || s.connection.stopping {return Err("没有可操作的串流".into());}
+                if s.control_action.busy {return Err("上一项会话操作尚未完成".into());}
+                let enabled=args["enabled"].as_bool().ok_or("enabled boolean required")?;
+                if enabled {
+                    s.floating_keyboard_request=s.floating_keyboard_request.checked_add(1).ok_or("keyboard request exhausted")?;
+                }
+                s.floating_keyboard=enabled;
+                s.floating_keyboard_error.clear();
+                s.controls=false;s.stream_menu.clear();
             }
             "stream.controls.tab" => {
                 if !s.streaming || !s.controls {return Err("请先展开活动串流的控制栏".into());}
@@ -867,7 +970,7 @@ impl Controller {
             "stream.menu.close" => s.stream_menu.clear(),
             "stream.shortcuts.list" => return Ok(shortcuts()),
             "stream.shortcuts.open" | "stream.displays.open" => {if !s.streaming {return Err("没有可操作的串流".into());}s.controls=true;s.controls_tab=if id=="stream.shortcuts.open"{"input"}else{"displays"}.into();s.stream_menu=if id=="stream.shortcuts.open"{"shortcuts"}else{""}.into();},
-            "view.snapshot" | "view.toolbar.snapshot" | "view.picker.snapshot" => {
+            "view.snapshot" | "view.toolbar.snapshot" | "view.picker.snapshot" | "view.keyboard.snapshot" => {
                 return preview::request(&mut s,id,&args);
             }
             "window.minimize"
@@ -875,6 +978,7 @@ impl Controller {
             | "window.close"
             => {
                 if id == "window.close" {
+                    if diagnostics::defer_close(&mut s){return Ok(json!({"cleanupPending":true,"diagnostic":true}));}
                     s.stream_epoch += 1;
                     drop(s);
                     let result = self.platform.execute("engine.close", &json!({}));
@@ -908,6 +1012,7 @@ impl Controller {
                     }
                 }
                 if id == "device.connect" || id == "device.pair" {
+                    if s.window_picker.busy{return Err("窗口列表请求尚未清理，请稍候".into());}
                     if s.control_requests>0{return Err("上一项会话操作正在结束，请稍候".into());}
                     if s.page == "pair" {
                         return Err("请先完成或取消当前配对".into());
@@ -920,7 +1025,10 @@ impl Controller {
                     if d.is_self {
                         return Err("this is the local device; its configuration remains available for editing and sync".into());
                     }
-
+                    let check=s.device_trust_checks.get(&uuid).or_else(||s.device_checks.get(&uuid));
+                    if check.is_some_and(|check|check.blocks_connection()){return Err("设备身份检查未通过，请检查连接地址".into());}
+                    if id=="device.connect" && check.is_some_and(|check|check.repair_required()){return Err(check.unwrap().hint().into());}
+                    if s.devices_pending.contains(&uuid) && (id=="device.connect"&&!d.paired || id=="device.pair"&&!d.online){return Err("设备状态尚未确认，请先检查连接".into());}
                     if id == "device.connect" && !d.paired {
                         return Err("device must be paired first".into());
                     }
@@ -928,9 +1036,17 @@ impl Controller {
                     args["device"] = serde_json::to_value(&d).unwrap();
                     args["profile"] =
                         serde_json::to_value(s.saved.effective_profile(&uuid)).unwrap();
+                    if id=="device.connect" {
+                        if let Some(window)=args.get("window").cloned(){
+                            if s.window_picker.uuid!=uuid||!s.window_picker.rows.iter().any(|row|row==&window&&row["available"]==true)||!window_source::valid(window["id"].as_str().unwrap_or("")){return Err("请重新选择窗口".into());}
+                            let (width,height)=window_source::resolution(&window,args["profile"]["width"].as_u64().unwrap_or(1920) as u32,args["profile"]["height"].as_u64().unwrap_or(1080) as u32)?;
+                            args["profile"]["width"]=json!(width);args["profile"]["height"]=json!(height);
+                        }
+                    }
                     if id == "device.connect" {
                         session_ui::clear(&mut s);s.controls_tab="input".into();
                         s.connection.begin(&d);
+                        s.connection.window=args.get("window").cloned();
                         s.page = "connection".into();
                         // An ended stream's firstFrame must not describe this attempt.
                         s.statistics = Value::Null;
@@ -952,10 +1068,10 @@ impl Controller {
                             return Err("PIN must contain four digits".into());
                         }
                         args["pin"] = json!(pin);
-                        s.connection.begin(&d);s.connection.operation="pair".into();s.connection.phase="pairing".into();
+                        s.connection.begin(&d);s.connection.operation="pair".into();s.connection.phase="preparing".into();
                         s.pair_pin = pin;
                         s.page = "pair".into();
-                        s.connecting=true;s.connect_in_flight=true;s.stream_epoch+=1;s.status="等待主机确认配对".into();s.revision+=1;
+                        s.connecting=true;s.connect_in_flight=true;s.stream_epoch+=1;s.status="正在准备配对连接".into();s.revision+=1;
                     }
                 }
                 if id=="stream.disconnect" {session_ui::clear(&mut s);}
@@ -995,26 +1111,6 @@ impl Controller {
                 };
                 let mut s = self.state.lock().unwrap();
                 match id {
-                    "devices.refresh" => {
-                        if let Some(devices) = result.get("devices") {
-                            s.devices = serde_json::from_value(devices.clone())
-                                .map_err(|e| e.to_string())?;
-                            let saved_devices = s.saved.devices.clone();
-                            for d in &mut s.devices {
-                                d.display_name = saved_devices
-                                    .iter()
-                                    .find(|h| h.uuid == d.uuid)
-                                    .map(|h| h.display_name.clone())
-                                    .unwrap_or_default();
-                            }
-                            s.devices.sort_by_key(|d| {
-                                saved_devices
-                                    .iter()
-                                    .position(|h| h.uuid == d.uuid)
-                                    .unwrap_or(usize::MAX)
-                            });
-                        }
-                    }
                     "device.connect" => {
                         s.connect_in_flight = false;
                         s.stream_epoch += 1;
@@ -1403,6 +1499,7 @@ mod tests {
             }
             let before=c.state()["saved"].clone();
             assert_eq!(c.dispatch(action,json!({"uuid":"a","pin":"1234"}))["ok"],true,"{action}");
+            if action=="device.network.diagnose"{let until=std::time::Instant::now()+std::time::Duration::from_secs(2);while c.state()["diagnostics"]["busy"]==true&&std::time::Instant::now()<until{std::thread::sleep(std::time::Duration::from_millis(2));}assert_eq!(c.state()["diagnostics"]["busy"],false);}
             let requests=capture.0.lock().unwrap();
             assert_eq!(requests.len(),1);
             assert_eq!(requests[0]["address"],"100.73.139.109");
@@ -1550,6 +1647,25 @@ mod tests {
         assert!(c.profile("a").swap_buttons);
         assert!(!c.profile("b").swap_buttons);
         let _ = fs::remove_file(&c.storage);
+    }
+    #[test]
+    fn automatic_bitrate_is_per_device_keeps_manual_edits_and_obeys_form_lifetime() {
+        let c=controller();
+        let act=|id:&str,args:Value|{let result=c.dispatch(id,args);assert_eq!(result["ok"],true,"{id}: {result}");};
+        act("device.settings.open",json!({"uuid":"a"}));
+        act("settings.input",json!({"key":"bitrateMbps","value":"41"}));
+        act("settings.set",json!({"key":"bitrateAuto","value":true}));
+        assert_eq!(c.state()["draft"]["bitrateMbps"],41);
+        for(id,args)in[("settings.input",json!({"key":"bitrateMbps","value":"13"})),("settings.step",json!({"key":"bitrateMbps","direction":"up"})),("settings.set",json!({"key":"bitrateMbps","value":13}))]{assert_eq!(c.dispatch(id,args)["ok"],false);}
+        act("settings.tab",json!({"tab":"audio"}));act("settings.tab",json!({"tab":"video"}));
+        assert_eq!(c.state()["draft"]["bitrateAuto"],true);act("settings.cancel",json!({}));assert!(!c.profile("a").bitrate_auto);
+        act("device.settings.open",json!({"uuid":"a"}));act("settings.input",json!({"key":"bitrateMbps","value":"invalid"}));
+        act("settings.set",json!({"key":"bitrateAuto","value":true}));act("settings.set",json!({"key":"bitrateAuto","value":false}));
+        assert_eq!(c.state()["settingsInputs"]["bitrateMbps"],"invalid");assert_eq!(c.dispatch("settings.save",json!({}))["ok"],false);
+        act("settings.set",json!({"key":"bitrateAuto","value":true}));act("settings.save",json!({}));
+        assert!(c.profile("a").bitrate_auto);assert!(!c.profile("b").bitrate_auto);assert_eq!(c.profile("a").bitrate_mbps,25);
+        let reloaded=Controller::new("test",c.storage.clone(),Arc::new(Stub)).unwrap();assert!(reloaded.profile("a").bitrate_auto);
+        let _=fs::remove_file(&c.storage);
     }
     #[test]
     fn invalid_settings_are_rejected_without_changing_draft() {

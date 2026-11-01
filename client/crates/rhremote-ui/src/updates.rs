@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::Write,
-    path::Path,
-    sync::{Arc, Mutex, mpsc::{self, Sender}},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock, mpsc::{self, Sender}},
     time::Duration,
 };
 use velopack::{
@@ -21,6 +21,30 @@ fn filename(name: &str) -> Result<(), Error> {
     }
 }
 type Snapshot = Arc<Mutex<Value>>;
+// Identity follows the selected package, independent of mirror/progress/notes.
+fn candidate_id(asset: &VelopackAsset) -> Value {
+    json!([asset.PackageId,asset.Version,asset.Type,asset.FileName,asset.Size,
+        asset.SHA1.to_ascii_lowercase(),asset.SHA256.to_ascii_lowercase()])
+}
+fn cached_path(directory:&Path,asset:&VelopackAsset)->Result<PathBuf,String>{
+    filename(&asset.FileName).map_err(|e|e.to_string())?;
+    if !asset.FileName.ends_with(".nupkg"){return Err("更新包文件名无效".into());}
+    Ok(directory.join(&asset.FileName))
+}
+fn verify_cached(directory:&Path,asset:&VelopackAsset)->Result<bool,String>{
+    let digest=if !asset.SHA256.is_empty(){(&asset.SHA256,64)}else{(&asset.SHA1,40)};
+    if asset.Size==0 || asset.Size>2*1024*1024*1024 || digest.0.len()!=digest.1 || !digest.0.bytes().all(|b|b.is_ascii_hexdigit()) {
+        return Err("更新包缺少有效的校验信息".into());
+    }
+    let path=cached_path(directory,asset)?;
+    let metadata=match fs::symlink_metadata(&path){Ok(value)=>value,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>return Ok(false),Err(e)=>return Err(e.to_string())};
+    if !metadata.file_type().is_file(){return Err("更新缓存不是普通文件".into());}
+    if metadata.len()!=asset.Size{return Ok(false);}
+    let (sha1,sha256)=velopack::misc::calculate_sha1_sha256(&path).map_err(|e|e.to_string())?;
+    Ok(if asset.SHA256.len()==64 {sha256.eq_ignore_ascii_case(&asset.SHA256)}
+       else if asset.SHA256.is_empty()&&asset.SHA1.len()==40 {sha1.eq_ignore_ascii_case(&asset.SHA1)}
+       else {return Err("更新包缺少有效的校验信息".into());})
+}
 fn download_progress(live:&mut Value,percent:i16){
     let percent=percent.clamp(0,100);live["progress"]=json!(percent);
     live["phase"]=json!(if percent==100{"verifying"}else{"downloading"});
@@ -165,6 +189,8 @@ pub struct Updates {
     available: Option<UpdateInfo>,
     live: Snapshot,
     cancel: Arc<crate::update_cancel::Control>,
+    verified: Option<Value>,
+    directory: OnceLock<PathBuf>,
 }
 impl Updates {
     pub fn new() -> Self {
@@ -172,7 +198,7 @@ impl Updates {
         let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
         let value=Self {
             manager: UpdateManager::new(Mirrors {live:live.clone(),preferred:"gitee".into(),selected:Mutex::new(String::new()),cancel:cancel.clone(),test_base:local_test_source(&std::env::var("RHREMOTE_TEST_MODE").unwrap_or_default(),&std::env::var("RHREMOTE_TEST_UPDATE_SOURCE").unwrap_or_default())},None,None).ok(),
-            available:None,live,cancel,
+            available:None,live,cancel,verified:None,directory:OnceLock::new(),
         };
         value.refresh();
         if value.state()["pendingRestart"] == true { value.status("downloaded", "更新已下载，可安装更新"); }
@@ -191,25 +217,66 @@ impl Updates {
         live["installedVersion"]=json!(self.manager.as_ref().map(|m|m.get_current_version_as_string()));
         live["availableVersion"]=json!(self.available.as_ref().map(|u|u.TargetFullRelease.Version.clone()).or_else(||pending.as_ref().map(|a|a.Version.clone())));
         live["notes"]=json!(self.available.as_ref().map(|u|u.TargetFullRelease.NotesMarkdown.clone()).unwrap_or_default());
-        live["pendingRestart"]=json!(pending.is_some());
+        let target=self.available.as_ref().map(|u|&u.TargetFullRelease).or(pending.as_ref());
+        live["candidateId"]=target.map(candidate_id).unwrap_or(Value::Null);
+        live["pendingRestart"]=json!(if self.available.is_some() {
+            target.is_some_and(|selected|self.verified.as_ref()==Some(&candidate_id(selected)))
+        }else{pending.is_some()});
     }
     fn check(&mut self)->Result<(),String> {
         self.status("checking","正在检查更新");
         self.available=match self.manager.as_ref().ok_or("更新管理器不可用")?.check_for_updates().map_err(|e|e.to_string())? {
             UpdateCheck::UpdateAvailable(update)=>Some(*update),_=>None,
         };
+        self.verified=None;
+        if let Some(selected)=self.available.as_ref().map(|u|&u.TargetFullRelease) {
+            let directory=self.packages_dir()?;
+            self.status("verifying","正在核对缓存更新包");
+            if verify_cached(&directory,selected)?{self.verified=Some(candidate_id(selected));}
+            self.check_cancelled()?;
+        }
         self.refresh();
         let pending=self.state()["pendingRestart"]==true;
         self.status(if pending{"downloaded"}else if self.available.is_some(){"available"}else{"current"},if pending{"更新已下载，可安装更新"}else if self.available.is_some(){"发现新版本"}else{"已是最新版本"});
         Ok(())
     }
-    fn download(&self)->Result<(),String> {
+    fn packages_dir(&self)->Result<PathBuf,String>{
+        if let Some(directory)=self.directory.get(){return Ok(directory.clone());}
+        let directory=velopack::locator::auto_locate_app_manifest(velopack::locator::LocationContext::FromCurrentExe)
+            .map(|locator|locator.get_packages_dir()).map_err(|e|e.to_string())?;
+        let _=self.directory.set(directory.clone());Ok(directory)
+    }
+    fn check_cancelled(&self)->Result<(),String>{
+        if self.cancel.token().is_cancelled(){Err("Update operation cancelled".into())}else{Ok(())}
+    }
+    fn download(&mut self)->Result<(),String> {
         let update=self.available.as_ref().ok_or("请先检查更新")?;
+        let directory=self.packages_dir()?;
+        let target=&update.TargetFullRelease;
+        self.status("verifying","正在核对缓存更新包");
+        self.check_cancelled()?;
+        // The pinned SDK trusts an existing final filename. Verify it first;
+        // only discard this exact updater-owned cache after it fails verification.
+        if verify_cached(&directory,target)? {
+            self.check_cancelled()?;
+            self.verified=Some(candidate_id(target));self.refresh();self.status("downloaded","更新已下载，可安装更新");return Ok(());
+        }else{
+            self.check_cancelled()?;
+            let path=cached_path(&directory,target)?;
+            match fs::remove_file(&path){Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(e)=>return Err(e.to_string())}
+        }
+        self.check_cancelled()?;
         self.status("downloading","正在下载更新（0%）");self.live.lock().unwrap()["progress"]=json!(0);
         let (tx,rx)=mpsc::channel::<i16>();let live=self.live.clone();
         let progress=std::thread::spawn(move||{for percent in rx {download_progress(&mut live.lock().unwrap(),percent);}});
         let result=self.manager.as_ref().unwrap().download_updates(update,Some(tx)).map_err(|e|e.to_string());
-        let _=progress.join();result?;self.refresh();self.status("downloaded","更新已下载，可安装更新");Ok(())
+        let _=progress.join();result?;
+        self.check_cancelled()?;
+        self.status("verifying","正在校验更新包");
+        if !verify_cached(&directory,target)?{return Err("更新缓存与所选安装包不一致，请重试下载".into());}
+        self.check_cancelled()?;
+        self.verified=Some(candidate_id(target));
+        self.refresh();self.status("downloaded","更新已下载，可安装更新");Ok(())
     }
     pub fn execute(&mut self,id:&str)->Result<Value,String> {
         if id=="updates.state" {return Ok(self.state());}
@@ -220,7 +287,7 @@ impl Updates {
                 "updates.check"=>self.check()?,
                 "updates.download"=>self.download()?,
                 "updates.prepare"=>{
-                    if self.manager.as_ref().unwrap().get_update_pending_restart().is_none(){
+                    if self.state()["pendingRestart"]!=true {
                         if self.available.is_none(){self.check()?;}
                         if self.available.is_none(){return Ok(());}
                         self.download()?;
@@ -230,7 +297,11 @@ impl Updates {
                 },
                 "updates.install"=>{
                     let manager=self.manager.as_ref().unwrap();
-                    let pending=manager.get_update_pending_restart().ok_or("更新包尚未准备好，请重新下载")?;
+                    let pending=self.available.as_ref().map(|u|u.TargetFullRelease.clone()).or_else(||manager.get_update_pending_restart()).ok_or("更新包尚未准备好，请重新下载")?;
+                    if self.available.is_some() && !verify_cached(&self.packages_dir()?,&pending)? {
+                        self.verified=None;
+                        return Err("更新缓存与所选安装包不一致，请重试下载".into());
+                    }
                     self.status("applying","正在重启 RHRemote 并安装更新");
                     manager.wait_exit_then_apply_updates(pending,false,true,Vec::<String>::new()).map_err(|e|e.to_string())?;
                 },
@@ -256,6 +327,57 @@ pub fn primary_label(state:&Value,busy:bool)->String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct CacheFixture{directory:PathBuf,asset:VelopackAsset}
+    impl CacheFixture{
+        fn new()->Self{
+            let directory=std::env::temp_dir().join(format!("rhremote-update-cache-{}",rhremote_core::random_token().unwrap()));fs::create_dir(&directory).unwrap();
+            let file="RHRemote-9.0.0-full.nupkg";fs::write(directory.join(file),b"selected package").unwrap();
+            let (sha1,sha256)=velopack::misc::calculate_sha1_sha256(directory.join(file)).unwrap();
+            Self{directory,asset:VelopackAsset{PackageId:"RHRemote".into(),Version:"9.0.0".into(),Type:"Full".into(),FileName:file.into(),Size:16,SHA1:sha1,SHA256:sha256,..Default::default()}}
+        }
+    }
+    impl Drop for CacheFixture{fn drop(&mut self){let _=fs::remove_dir_all(&self.directory);}}
+    #[test] fn selected_package_identity_ignores_notes_but_catches_equal_version_replacements(){
+        let fixture=CacheFixture::new();let mut replacement=fixture.asset.clone();replacement.NotesMarkdown="New description".into();replacement.SHA256=replacement.SHA256.to_ascii_lowercase();
+        assert_eq!(candidate_id(&fixture.asset),candidate_id(&replacement));
+        replacement.SHA256="0".repeat(64);assert_ne!(candidate_id(&fixture.asset),candidate_id(&replacement));
+        replacement=fixture.asset.clone();replacement.FileName="other.nupkg".into();assert_ne!(candidate_id(&fixture.asset),candidate_id(&replacement));
+    }
+    #[test] fn cached_package_with_same_name_and_size_must_match_the_selected_digest(){
+        let fixture=CacheFixture::new();assert!(verify_cached(&fixture.directory,&fixture.asset).unwrap());
+        fs::write(fixture.directory.join(&fixture.asset.FileName),b"obsolete package").unwrap();
+        assert_eq!(fs::metadata(fixture.directory.join(&fixture.asset.FileName)).unwrap().len(),fixture.asset.Size);
+        assert!(!verify_cached(&fixture.directory,&fixture.asset).unwrap());
+        fs::write(fixture.directory.join(&fixture.asset.FileName),b"selected package").unwrap();assert!(verify_cached(&fixture.directory,&fixture.asset).unwrap());
+    }
+    #[test] fn cached_package_validation_preserves_sha1_fallback_and_rejects_unsafe_files(){
+        let mut fixture=CacheFixture::new();fixture.asset.SHA256.clear();assert!(verify_cached(&fixture.directory,&fixture.asset).unwrap());
+        fixture.asset.SHA1.clear();assert!(verify_cached(&fixture.directory,&fixture.asset).is_err());
+        fixture.asset.FileName="../outside.nupkg".into();assert!(verify_cached(&fixture.directory,&fixture.asset).is_err());
+        fixture.asset.FileName="directory.nupkg".into();fs::create_dir(fixture.directory.join("directory.nupkg")).unwrap();assert!(verify_cached(&fixture.directory,&fixture.asset).is_err());
+    }
+    #[cfg(windows)]
+    #[test] fn actual_sdk_replaces_a_wrong_equal_length_cache_and_reuses_the_verified_selected_package(){
+        use std::sync::atomic::{AtomicUsize,Ordering};
+        struct Source{calls:Arc<AtomicUsize>}
+        impl UpdateSource for Source{
+            fn get_release_feed(&self,_:&str,_:&Manifest,_:&str)->Result<VelopackAssetFeed,Error>{unreachable!()}
+            fn download_release_entry(&self,_:&VelopackAsset,path:&Path,_:Option<Sender<i16>>)->Result<(),Error>{self.calls.fetch_add(1,Ordering::SeqCst);fs::write(path,b"selected package")?;Ok(())}
+        }
+        let fixture=CacheFixture::new();let current=fixture.directory.join("current");fs::create_dir(&current).unwrap();fs::write(fixture.directory.join("Update.exe"),b"not executed").unwrap();
+        fs::write(current.join("sq.version"),"<package><metadata><id>RHRemote</id><version>1.0.0</version><title>Fixture</title><authors>Fixture</authors><mainExe>fixture.exe</mainExe></metadata></package>").unwrap();
+        let calls=Arc::new(AtomicUsize::new(0));let mut config=velopack::locator::create_config_from_root_dir(&fixture.directory);config.PackagesDir=fixture.directory.clone();
+        let manager=UpdateManager::new(Source{calls:calls.clone()},None,Some(config)).unwrap();
+        let live=Arc::new(Mutex::new(json!({})));let cancel=Arc::new(crate::update_cancel::Control::new(live.clone()));
+        let directory=OnceLock::new();directory.set(fixture.directory.clone()).unwrap();
+        let mut updates=Updates{manager:Some(manager),available:Some(UpdateInfo{TargetFullRelease:fixture.asset.clone(),..Default::default()}),live,cancel,verified:None,directory};
+        fs::write(fixture.directory.join(&fixture.asset.FileName),b"obsolete package").unwrap();updates.refresh();assert_eq!(updates.state()["pendingRestart"],false);
+        updates.cancel.begin(1,"updates.install",true).unwrap();updates.execute("updates.prepare").unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst),1);assert_eq!(updates.state()["pendingRestart"],true);assert!(verify_cached(&fixture.directory,&fixture.asset).unwrap());
+        updates.cancel.begin(2,"updates.download",true).unwrap();updates.execute("updates.download").unwrap();assert_eq!(calls.load(Ordering::SeqCst),1,"The verified selected file should not download again");
+        updates.available.as_mut().unwrap().TargetFullRelease.SHA256="0".repeat(64);updates.refresh();assert_eq!(updates.state()["pendingRestart"],false);
+        updates.cancel.begin(3,"updates.install",false).unwrap();assert!(updates.execute("updates.install").unwrap_err().contains("缓存与所选安装包不一致"));assert_ne!(updates.state()["phase"],"applying");
+    }
     #[test]
     #[ignore = "Explicit public release network verification; no installation"]
     fn published_download_cancels_during_transfer_and_retries(){

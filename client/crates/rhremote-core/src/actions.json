@@ -1,99 +1,774 @@
 [
- {"id":"navigation.back","label":"返回上一页","args":{}},
- {"id":"navigation.resolve","label":"处理未保存的更改","args":{"choice":"save / discard / stay"}},
- {"id":"settings.input","label":"编辑设置字段","args":{"key":"numeric setting key | displayName","value":"raw string"}},
- {"id":"settings.step","label":"调整数字设置","args":{"key":"numeric setting key","direction":"up / down"}},
- {"id":"devices.open","label":"设备","args":{}},
- {"id":"device.select","label":"选择设备","args":{"uuid":"string"}},
- {"id":"devices.filter","label":"搜索设备","args":{"query":"string; up to 128 characters; local view only"}},
- {"id":"statistics.configure","label":"测试模式逐帧统计","args":{"enabled":"boolean; local only; change while disconnected"}},
- {"id":"statistics.state","label":"测试统计文件状态","args":{}},
- {"id":"statistics.complete","label":"确认统计分析完成","platforms":["android"],"args":{"runId":"closed statistics run ID","sha256":"SHA-256 of exported native.jsonl; prune before next recording"}},
- {"id":"devices.refresh","label":"刷新设备","args":{}},
- {"id":"device.move","label":"调整设备顺序","args":{"uuid":"string","direction":"up / down"}},
- {"id":"device.add.open","label":"添加电脑","args":{}},
- {"id":"device.add.input","label":"输入待添加的设备地址","args":{"address":"raw IP or hostname"}},
- {"id":"device.add.submit","label":"添加","args":{"address":"string"}},
- {"id":"device.add.cancel","label":"取消添加","args":{}},
- {"id":"device.info.open","label":"编辑设备资料","args":{"uuid":"string"}},
- {"id":"device.info.input","label":"编辑显示名称","args":{"displayName":"raw string; empty uses hostname"}},
- {"id":"device.info.reset","label":"恢复原名","args":{}},
- {"id":"device.info.save","label":"完成资料编辑","args":{}},
- {"id":"device.info.cancel","label":"取消资料编辑","args":{}},
- {"id":"device.settings.open","label":"连接设置","args":{"uuid":"string"}},
- {"id":"settings.set","label":"画质、编码、输入和统计选项","args":{"key":"string","value":"any"}},
- {"id":"settings.route.move","label":"调整连接路径顺序","args":{"route":"route id","direction":"up / down"}},
- {"id":"settings.route.toggle","label":"启用或停用连接路径","args":{"route":"route id"}},
- {"id":"settings.copy_from","label":"复制其他客户端的配置到当前草稿","args":{"clientId":"string"}},
- {"id":"settings.copy.preview","label":"预览其他客户端的配置","args":{"clientId":"string"}},
- {"id":"settings.copy.apply","label":"将预览的配置复制到草稿","args":{}},
- {"id":"settings.copy.cancel","label":"取消配置预览","args":{}},
- {"id":"settings.catalog","label":"可配置字段与平台支持范围","args":{}},
- {"id":"settings.tab","label":"设备设置分类","args":{"tab":"video / audio / input / network / advanced"}},
- {"id":"settings.sources.toggle","label":"展开其他客户端的配置","args":{"tab":"video / audio / input / network / advanced"}},
- {"id":"settings.network.edit","label":"编辑待保存的设备地址","args":{"key":"address | addresses | relayUrl","value":"string"}},
- {"id":"settings.save","label":"保存","args":{"displayName":"string, optional; empty clears alias"}},
- {"id":"settings.cancel","label":"取消设置 / 返回","args":{}},
- {"id":"device.connect","label":"连接","args":{"uuid":"string","testInitialFailure":"optional network / identity / decoder; Windows RHREMOTE_TEST_MODE only"}},
- {"id":"connection.retry","label":"重试连接原设备","args":{}},
- {"id":"connection.dismiss","label":"返回原设备","args":{}},
- {"id":"device.pair","label":"配对","args":{"uuid":"string","pin":"four digits, optional"}},
- {"id":"pair.cancel","label":"取消配对","args":{}},
- {"id":"appearance.toggle","label":"深色 / 浅色","args":{}},
- {"id":"app.settings.open","label":"设置","args":{}},
- {"id":"app.settings.tab","label":"设置分类","args":{"tab":"appearance / sync / updates / about"}},
- {"id":"sync.state","label":"同步状态","args":{}},
- {"id":"sync.edit","label":"编辑 WebDAV 草稿","args":{"key":"url / username / password / automatic / intervalMinutes","value":"typed value"}},
- {"id":"sync.save","label":"保存 WebDAV 草稿","args":{}},
- {"id":"sync.cancel","label":"取消 WebDAV 更改","args":{}},
- {"id":"sync.configure","label":"保存 WebDAV","args":{"url":"HTTP or HTTPS directory URL","username":"string","password":"optional if unchanged","automatic":"boolean","intervalMinutes":"5 / 15 / 30 / 60, optional; defaults to 5 for new settings"}},
- {"id":"sync.run","label":"立即同步","args":{"automatic":"optional boolean; scheduler requests quietly defer during editing or active sessions"}},
- {"id":"sync.clear","label":"请求移除本机同步设置","args":{}},
- {"id":"sync.clear.resolve","label":"确认或取消移除同步设置","args":{"choice":"remove / cancel"}},
- {"id":"sync.resolve","label":"解决同步冲突","args":{"resolution":"local / remote"}},
- {"id":"updates.state","label":"更新状态","args":{}},
- {"id":"updates.primary","label":"更新主按钮","args":{}},
- {"id":"updates.cancel","label":"取消更新","args":{"operationId":"number"}},
- {"id":"updates.details.toggle","label":"展开或收起更新详情","args":{}},
- {"id":"updates.check","label":"检查更新","args":{}},
- {"id":"updates.download","label":"下载更新","args":{}},
- {"id":"updates.install","label":"重启并安装","args":{}},
- {"id":"stream.exit.request","label":"请求断开连接","platforms":["android"],"args":{}},
- {"id":"stream.exit.resolve","label":"处理断开请求","platforms":["android"],"args":{"choice":"stay / disconnect"}},
- {"id":"stream.controls.toggle","label":"控制","args":{}},
- {"id":"stream.controls.tab","label":"串流控制分类","args":{"tab":"input / displays / audio"}},
- {"id":"stream.menu.open","label":"打开悬浮选择列表","args":{"menu":"shortcuts / displays / feedback"}},
- {"id":"stream.menu.close","label":"关闭悬浮选择列表","args":{}},
- {"id":"stream.mode.toggle","label":"直接点击 / 触控板","args":{}},
- {"id":"stream.keyboard.toggle","label":"键盘","args":{}},
- {"id":"stream.shortcuts.list","label":"远程快捷键列表","args":{}},
- {"id":"stream.shortcuts.open","label":"展开远程快捷键","args":{}},
- {"id":"stream.shortcut","label":"发送远程快捷键","args":{"shortcut":"id from stream.shortcuts.list"}},
- {"id":"stream.window.move","label":"移动远程窗口到相邻屏幕","args":{"direction":"left / right"}},
- {"id":"stream.displays.refresh","label":"刷新远程屏幕列表","args":{}},
- {"id":"stream.displays.open","label":"展开远程屏幕列表","args":{}},
- {"id":"stream.display.select","label":"切换远程屏幕","args":{"displayId":"monitor id from displays / auto / virtual"}},
- {"id":"stream.pan.toggle","label":"移动画面","args":{}},
- {"id":"stream.zoom.reset","label":"还原缩放","args":{}},
- {"id":"stream.stats.toggle","label":"统计","args":{}},
- {"id":"stream.audio.toggle","label":"远程声音开关","args":{}},
- {"id":"stream.audio.volume","label":"串流音量","args":{"volume":"integer 0..100"}},
- {"id":"stream.disconnect","label":"断开","args":{}},
- {"id":"stream.test.interrupt","label":"测试模式注入一次连接中断","args":{}},
- {"id":"input.gesture","label":"输入与手势","args":{"gesture":"tap / secondary / drag / scroll / pinch","x":"number","y":"number"}},
- {"id":"window.minimize","label":"最小化","args":{}},
- {"id":"window.maximize","label":"最大化 / 还原","args":{}},
- {"id":"window.close","label":"关闭","args":{}},
- {"id":"view.snapshot","label":"导出本应用界面预览","args":{}},
- {"id":"view.ui.inspect","platforms":["windows"],"testOnly":true,"label":"隔离测试：读取实际控件状态","args":{"window":"optional main / toolbar / picker","requestId":"optional idempotency key; retained for the most recent 64 requests"}},
- {"id":"view.ui.focus","platforms":["windows"],"testOnly":true,"label":"隔离测试：聚焦实际控件","args":{"control":"id returned by inspect","window":"optional main / toolbar / picker","requestId":"optional idempotency key"}},
- {"id":"view.ui.activate","platforms":["windows"],"testOnly":true,"label":"隔离测试：执行当前可见按钮","args":{"actionId":"exact action ID of one visible ActionButton","argument":"optional exact button argument","window":"optional main / toolbar / picker","expectedPending":"optional toolbar pending-state precondition, checked at execution","requestId":"optional idempotency key; reuse it to query without replaying"}},
- {"id":"view.ui.key","platforms":["windows"],"testOnly":true,"label":"隔离测试：向应用控件发送按键","args":{"key":"Tab / Enter / Escape / Space / Up / Down / Left / Right / Home / End","shift":"optional boolean","repeat":"optional boolean","window":"optional main / toolbar / picker","requestId":"optional idempotency key"}},
- {"id":"view.ui.scroll","platforms":["windows"],"testOnly":true,"label":"隔离测试：滚动应用内容","args":{"control":"scroll id returned by inspect","pixels":"number -10000..10000; negative scrolls down","window":"optional main / toolbar / picker","requestId":"optional idempotency key"}},
- {"id":"view.ui.result","platforms":["windows"],"testOnly":true,"label":"隔离测试：读取界面测试结果","args":{"id":"queued request id"}},
- {"id":"view.toolbar.snapshot","label":"导出串流悬浮控制栏预览","args":{}},
- {"id":"view.picker.snapshot","label":"导出悬浮选择列表预览","args":{}},
- {"id":"device.network.configure","label":"保存设备连接地址","args":{"uuid":"string","address":"primary hostname or IP; optional","addresses":"array of extra hostnames/IPs; maximum total 8"}},
- {"id":"device.network.diagnose","label":"诊断连接网络","args":{"uuid":"string","address":"optional one-time primary address","addresses":"optional one-time extra address array"}},
- {"id":"network.state","label":"当前路径与诊断结果","args":{}}
+  {
+    "id": "navigation.back",
+    "label": "返回上一页",
+    "args": {}
+  },
+  {
+    "id": "navigation.resolve",
+    "label": "处理未保存的更改",
+    "args": {
+      "choice": "save / discard / stay"
+    }
+  },
+  {
+    "id": "settings.input",
+    "label": "编辑设置字段",
+    "args": {
+      "key": "numeric setting key | displayName",
+      "value": "raw string"
+    }
+  },
+  {
+    "id": "settings.step",
+    "label": "调整数字设置",
+    "args": {
+      "key": "numeric setting key",
+      "direction": "up / down"
+    }
+  },
+  {
+    "id": "devices.open",
+    "label": "设备",
+    "args": {}
+  },
+  {
+    "id": "device.select",
+    "label": "选择设备",
+    "args": {
+      "uuid": "string"
+    }
+  },
+  {
+    "id": "devices.filter",
+    "label": "搜索设备",
+    "args": {
+      "query": "string; up to 128 characters; local view only"
+    }
+  },
+  {
+    "id": "devices.filter.clear",
+    "label": "清除搜索",
+    "args": {
+      "expectedQuery": "current search string; stale values are rejected; local view only"
+    }
+  },
+  {
+    "id": "statistics.configure",
+    "label": "测试模式逐帧统计",
+    "args": {
+      "enabled": "boolean; local only; change while disconnected"
+    }
+  },
+  {
+    "id": "statistics.state",
+    "label": "测试统计文件状态",
+    "args": {}
+  },
+  {
+    "id": "statistics.complete",
+    "label": "确认统计分析完成",
+    "platforms": [
+      "android"
+    ],
+    "args": {
+      "runId": "closed statistics run ID",
+      "sha256": "SHA-256 of exported native.jsonl; prune before next recording"
+    }
+  },
+  {
+    "id": "devices.refresh",
+    "label": "刷新设备",
+    "args": {
+      "uuid": "optional string; checks only this saved device; omitted refreshes the list"
+    }
+  },
+  {
+    "id": "device.check",
+    "label": "检查设备连接",
+    "platforms": [
+      "android"
+    ],
+    "args": {
+      "uuid": "saved device UUID",
+      "expectedIntent": "optional frozen saved network policy and pairing fingerprint"
+    }
+  },
+  {
+    "id": "device.move",
+    "label": "调整设备顺序",
+    "args": {
+      "uuid": "string",
+      "direction": "up / down"
+    }
+  },
+  {
+    "id": "device.add.open",
+    "label": "添加电脑",
+    "args": {}
+  },
+  {
+    "id": "device.add.input",
+    "label": "输入待添加的设备地址",
+    "args": {
+      "address": "raw IP or hostname"
+    }
+  },
+  {
+    "id": "device.add.submit",
+    "label": "添加",
+    "args": {
+      "address": "string"
+    }
+  },
+  {
+    "id": "device.add.cancel",
+    "label": "取消添加",
+    "args": {}
+  },
+  {
+    "id": "device.info.open",
+    "label": "编辑设备资料",
+    "args": {
+      "uuid": "string"
+    }
+  },
+  {
+    "id": "device.info.input",
+    "label": "编辑显示名称",
+    "args": {
+      "displayName": "raw string; empty uses hostname"
+    }
+  },
+  {
+    "id": "device.info.reset",
+    "label": "恢复原名",
+    "args": {}
+  },
+  {
+    "id": "device.info.save",
+    "label": "完成资料编辑",
+    "args": {}
+  },
+  {
+    "id": "device.info.cancel",
+    "label": "取消资料编辑",
+    "args": {}
+  },
+  {
+    "id": "device.settings.open",
+    "label": "连接设置",
+    "args": {
+      "uuid": "string"
+    }
+  },
+  {
+    "id": "settings.set",
+    "label": "画质、编码、输入和统计选项",
+    "args": {
+      "key": "string",
+      "value": "any"
+    }
+  },
+  {
+    "id": "settings.route.move",
+    "label": "调整连接路径顺序",
+    "args": {
+      "route": "route id",
+      "direction": "up / down"
+    }
+  },
+  {
+    "id": "settings.route.toggle",
+    "label": "启用或停用连接路径",
+    "args": {
+      "route": "route id"
+    }
+  },
+  {
+    "id": "settings.copy_from",
+    "label": "复制其他客户端的配置到当前草稿",
+    "args": {
+      "clientId": "string"
+    }
+  },
+  {
+    "id": "settings.copy.preview",
+    "label": "预览其他客户端的配置",
+    "args": {
+      "clientId": "string"
+    }
+  },
+  {
+    "id": "settings.copy.apply",
+    "label": "将预览的配置复制到草稿",
+    "args": {}
+  },
+  {
+    "id": "settings.copy.cancel",
+    "label": "取消配置预览",
+    "args": {}
+  },
+  {
+    "id": "settings.catalog",
+    "label": "可配置字段与平台支持范围",
+    "args": {}
+  },
+  {
+    "id": "settings.tab",
+    "label": "设备设置分类",
+    "args": {
+      "tab": "video / audio / input / network / advanced"
+    }
+  },
+  {
+    "id": "settings.sources.toggle",
+    "label": "展开其他客户端的配置",
+    "args": {
+      "tab": "video / audio / input / network / advanced"
+    }
+  },
+  {
+    "id": "settings.network.edit",
+    "label": "编辑待保存的设备地址",
+    "args": {
+      "key": "address | addresses | relayUrl",
+      "value": "string"
+    }
+  },
+  {
+    "id": "settings.save",
+    "label": "保存",
+    "args": {
+      "displayName": "string, optional; empty clears alias"
+    }
+  },
+  {
+    "id": "settings.cancel",
+    "label": "取消设置 / 返回",
+    "args": {}
+  },
+  {
+    "id": "device.connect",
+    "label": "连接",
+    "args": {
+      "uuid": "string",
+      "testInitialFailure": "optional network / identity / decoder; Windows RHREMOTE_TEST_MODE only"
+    }
+  },
+  {
+    "id": "connection.retry",
+    "label": "重试连接原设备",
+    "args": {}
+  },
+  {
+    "id": "connection.dismiss",
+    "label": "返回原设备",
+    "args": {}
+  },
+  {
+    "id": "device.pair",
+    "label": "配对",
+    "args": {
+      "uuid": "string",
+      "pin": "four digits, optional"
+    }
+  },
+  {
+    "id": "pair.cancel",
+    "label": "取消配对",
+    "args": {}
+  },
+  {
+    "id": "appearance.toggle",
+    "label": "深色 / 浅色",
+    "args": {}
+  },
+  {
+    "id": "app.settings.open",
+    "label": "设置",
+    "args": {}
+  },
+  {
+    "id": "app.settings.tab",
+    "label": "设置分类",
+    "args": {
+      "tab": "appearance / sync / updates / about"
+    }
+  },
+  {
+    "id": "sync.state",
+    "label": "同步状态",
+    "args": {}
+  },
+  {
+    "id": "sync.edit",
+    "label": "编辑 WebDAV 草稿",
+    "args": {
+      "key": "url / username / password / automatic / intervalMinutes",
+      "value": "typed value"
+    }
+  },
+  {
+    "id": "sync.save",
+    "label": "保存 WebDAV 草稿",
+    "args": {}
+  },
+  {
+    "id": "sync.cancel",
+    "label": "取消 WebDAV 更改",
+    "args": {}
+  },
+  {
+    "id": "sync.configure",
+    "label": "保存 WebDAV",
+    "args": {
+      "url": "HTTP or HTTPS directory URL",
+      "username": "string",
+      "password": "optional if unchanged",
+      "automatic": "boolean",
+      "intervalMinutes": "5 / 15 / 30 / 60, optional; defaults to 5 for new settings"
+    }
+  },
+  {
+    "id": "sync.run",
+    "label": "立即同步",
+    "args": {
+      "automatic": "optional boolean; scheduler requests quietly defer during editing or active sessions"
+    }
+  },
+  {
+    "id": "sync.clear",
+    "label": "请求移除本机同步设置",
+    "args": {}
+  },
+  {
+    "id": "sync.clear.resolve",
+    "label": "确认或取消移除同步设置",
+    "args": {
+      "choice": "remove / cancel"
+    }
+  },
+  {
+    "id": "sync.resolve",
+    "label": "解决同步冲突",
+    "args": {
+      "resolution": "local / remote",
+      "reviewId": "optional current state.sync.reviewId; UI supplies this snapshot identifier"
+    }
+  },
+  {
+    "id": "stream.keyboard.floating.set",
+    "label": "悬浮键盘",
+    "args": {
+      "enabled": "boolean"
+    }
+  },
+  {
+    "id": "updates.state",
+    "label": "更新状态",
+    "args": {}
+  },
+  {
+    "id": "updates.primary",
+    "label": "更新主按钮",
+    "args": {
+      "expectedIntent": "optional string from updates.intent; rejects stale action, task, or package"
+    }
+  },
+  {
+    "id": "updates.cancel",
+    "label": "取消更新",
+    "args": {
+      "operationId": "number"
+    }
+  },
+  {
+    "id": "updates.details.toggle",
+    "label": "展开或收起更新详情",
+    "args": {}
+  },
+  {
+    "id": "updates.check",
+    "label": "检查更新",
+    "args": {
+      "expectedIntent": "optional string from updates.intent"
+    }
+  },
+  {
+    "id": "updates.download",
+    "label": "下载更新",
+    "args": {
+      "expectedIntent": "optional string from updates.intent"
+    }
+  },
+  {
+    "id": "updates.install",
+    "label": "重启并安装",
+    "args": {
+      "expectedIntent": "optional string from updates.intent"
+    }
+  },
+  {
+    "id": "stream.exit.request",
+    "label": "请求断开连接",
+    "platforms": [
+      "android"
+    ],
+    "args": {}
+  },
+  {
+    "id": "stream.exit.resolve",
+    "label": "处理断开请求",
+    "platforms": [
+      "android"
+    ],
+    "args": {
+      "choice": "stay / disconnect"
+    }
+  },
+  {
+    "id": "stream.controls.toggle",
+    "label": "控制",
+    "args": {}
+  },
+  {
+    "id": "stream.controls.tab",
+    "label": "串流控制分类",
+    "args": {
+      "tab": "input / displays / audio"
+    }
+  },
+  {
+    "id": "stream.menu.open",
+    "label": "打开悬浮选择列表",
+    "args": {
+      "menu": "shortcuts / displays / feedback / warning (Android)"
+    }
+  },
+  {
+    "id": "stream.menu.close",
+    "label": "关闭悬浮选择列表",
+    "args": {}
+  },
+  {
+    "id": "stream.mode.toggle",
+    "label": "直接点击 / 触控板",
+    "args": {}
+  },
+  {
+    "id": "stream.keyboard.toggle",
+    "label": "键盘",
+    "args": {}
+  },
+  {
+    "id": "stream.shortcuts.list",
+    "label": "远程快捷键列表",
+    "args": {}
+  },
+  {
+    "id": "stream.shortcuts.open",
+    "label": "展开远程快捷键",
+    "args": {}
+  },
+  {
+    "id": "stream.shortcut",
+    "label": "发送远程快捷键",
+    "args": {
+      "shortcut": "id from stream.shortcuts.list"
+    }
+  },
+  {
+    "id": "stream.window.move",
+    "label": "移动远程窗口到相邻屏幕",
+    "args": {
+      "direction": "left / right"
+    }
+  },
+  {
+    "id": "stream.displays.refresh",
+    "label": "刷新远程屏幕列表",
+    "args": {}
+  },
+  {
+    "id": "stream.displays.open",
+    "label": "展开远程屏幕列表",
+    "args": {}
+  },
+  {
+    "id": "stream.display.select",
+    "label": "切换远程屏幕",
+    "args": {
+      "displayId": "monitor id from displays / auto / virtual"
+    }
+  },
+  {
+    "id": "stream.pan.toggle",
+    "label": "移动画面",
+    "args": {}
+  },
+  {
+    "id": "stream.zoom.reset",
+    "label": "还原缩放",
+    "args": {}
+  },
+  {
+    "id": "stream.stats.toggle",
+    "label": "统计",
+    "args": {}
+  },
+  {
+    "id": "stream.audio.toggle",
+    "label": "远程声音开关",
+    "args": {}
+  },
+  {
+    "id": "stream.audio.volume",
+    "label": "串流音量",
+    "args": {
+      "volume": "integer 0..100"
+    }
+  },
+  {
+    "id": "stream.disconnect",
+    "label": "断开",
+    "args": {}
+  },
+  {
+    "id": "stream.test.interrupt",
+    "label": "测试模式注入一次连接中断",
+    "args": {}
+  },
+  {
+    "id": "input.gesture",
+    "label": "输入与手势",
+    "args": {
+      "gesture": "tap / secondary / drag / scroll / pinch",
+      "x": "number",
+      "y": "number"
+    }
+  },
+  {
+    "id": "window.minimize",
+    "label": "最小化",
+    "args": {}
+  },
+  {
+    "id": "window.maximize",
+    "label": "最大化 / 还原",
+    "args": {}
+  },
+  {
+    "id": "window.close",
+    "label": "关闭",
+    "args": {}
+  },
+  {
+    "id": "view.snapshot",
+    "label": "导出本应用界面预览",
+    "args": {}
+  },
+  {
+    "id": "view.ui.inspect",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：读取实际控件状态",
+    "args": {
+      "window": "optional main / toolbar / picker",
+      "requestId": "optional idempotency key; retained for the most recent 64 requests"
+    }
+  },
+  {
+    "id": "view.ui.focus",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：聚焦实际控件",
+    "args": {
+      "control": "id returned by inspect",
+      "window": "optional main / toolbar / picker",
+      "requestId": "optional idempotency key"
+    }
+  },
+  {
+    "id": "view.ui.activate",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：执行当前可见按钮",
+    "args": {
+      "actionId": "exact action ID of the current button",
+      "control": "optional exact current button ID returned by inspect; cannot combine with argument",
+      "argument": "optional exact simple button argument when control is omitted",
+      "window": "optional main / toolbar / picker / keyboard",
+      "expectedPending": "optional toolbar pending-state precondition, checked at execution",
+      "requestId": "optional idempotency key; reuse it to query without replaying"
+    }
+  },
+  {
+    "id": "view.ui.key",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：向应用控件发送按键",
+    "args": {
+      "key": "Tab / Enter / Escape / Space / Up / Down / Left / Right / Home / End / PageUp / PageDown",
+      "shift": "optional boolean",
+      "repeat": "optional boolean",
+      "window": "optional main / toolbar / picker",
+      "requestId": "optional idempotency key"
+    }
+  },
+  {
+    "id": "view.ui.scroll",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：滚动应用内容",
+    "args": {
+      "control": "scroll id returned by inspect",
+      "pixels": "number -10000..10000; negative scrolls down",
+      "window": "optional main / toolbar / picker",
+      "requestId": "optional idempotency key"
+    }
+  },
+  {
+    "id": "view.ui.result",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：读取界面测试结果",
+    "args": {
+      "id": "queued request id"
+    }
+  },
+  {
+    "id": "view.ui.native-state-fault",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：短暂跳过本次原生状态读取",
+    "args": {
+      "processId": "owned rendered native PID",
+      "polls": "1–8; synthetic state-read failures only"
+    }
+  },
+  {
+    "id": "view.ui.native-window",
+    "platforms": [
+      "windows"
+    ],
+    "testOnly": true,
+    "label": "隔离测试：本次串流窗口状态",
+    "args": {
+      "processId": "owned rendered native PID; no arbitrary window handles",
+      "command": "inspect / minimize / restore; restore does not activate"
+    }
+  },
+  {
+    "id": "view.toolbar.snapshot",
+    "label": "导出串流悬浮控制栏预览",
+    "args": {}
+  },
+  {
+    "id": "view.picker.snapshot",
+    "label": "导出悬浮选择列表预览",
+    "args": {}
+  },
+  {
+    "id": "view.keyboard.snapshot",
+    "label": "导出悬浮键盘预览",
+    "args": {}
+  },
+  {
+    "id": "device.network.configure",
+    "label": "保存设备连接地址",
+    "args": {
+      "uuid": "string",
+      "address": "primary hostname or IP; optional",
+      "addresses": "array of extra hostnames/IPs; maximum total 8"
+    }
+  },
+  {
+    "id": "device.network.diagnose",
+    "label": "诊断连接网络",
+    "args": {
+      "uuid": "string",
+      "address": "optional one-time primary address",
+      "addresses": "optional one-time extra address array",
+      "draftId": "optional Windows network settings context",
+      "expectedIntent": "optional diagnostic settings snapshot",
+      "expectedOperationId": "optional diagnostic task number"
+    }
+  },
+  {
+    "id": "device.network.cancel",
+    "label": "取消连接诊断或重试清理",
+    "platforms": [
+      "windows",
+      "android"
+    ],
+    "args": {
+      "operationId": "number",
+      "expectedAction": "optional cancel / cleanup from diagnostics.cancelAction"
+    }
+  },
+  {
+    "id": "device.network.details.toggle",
+    "label": "查看或收起诊断详情",
+    "platforms": [
+      "windows",
+      "android"
+    ],
+    "args": {
+      "uuid": "string",
+      "operationId": "number",
+      "expectedExpanded": "optional boolean"
+    }
+  },
+  {
+    "id": "network.state",
+    "label": "当前路径与诊断结果",
+    "args": {}
+  },
+  {
+    "id": "device.windows.open",
+    "label": "选择窗口",
+    "args": {
+      "uuid": "string"
+    },
+    "platforms": [
+      "windows",
+      "android"
+    ]
+  },
+  {
+    "id": "device.windows.close",
+    "label": "取消窗口选择",
+    "args": {},
+    "platforms": [
+      "windows",
+      "android"
+    ]
+  },
+  {
+    "id": "device.window.connect",
+    "label": "连接窗口",
+    "args": {
+      "uuid": "string",
+      "source": "string"
+    },
+    "platforms": [
+      "windows",
+      "android"
+    ]
+  }
 ]

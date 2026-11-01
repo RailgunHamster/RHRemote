@@ -23,18 +23,24 @@ import java.util.*;
 public final class RhHome implements RhActions.Target {
     private final RhBackNavigation systemBack;
     public interface Actions { void connect(ComputerDetails d); void add(String address); void advanced(); void pair(ComputerDetails d,String pin);void cancelPair();void refresh();
+        default void refresh(String uuid){refresh();}
         default Runnable prepareConnect(ComputerDetails d,RhAdmission operation)throws Exception{return ()->connect(d);}
+        default Runnable prepareWindowConnect(ComputerDetails d,RhAdmission operation,org.json.JSONObject window)throws Exception{throw new java.io.IOException("窗口串流暂不可用");}
+        default org.json.JSONObject windows(ComputerDetails d,RhAdmission operation)throws Exception{throw new java.io.IOException("窗口列表暂不可用");}
         default void setDiscoveryPaused(boolean paused){}
         default ComputerDetails inspectAdd(String address,RhDeviceAdd operation)throws Exception{throw new java.io.IOException("设备查找暂不可用");}
         default ComputerDetails commitAdd(ComputerDetails verified)throws Exception{return verified;}
+        default java.util.concurrent.Executor checkExecutor(){return CHECKS;}
     }
     private final Activity activity;private final Actions actions;
     private final LinearLayout root,content,bar,body,sidebar,compactHeader,formHeader,formFooter,formPane;private final TextView status;
+    private final ScrollView sidebarScroll;
     private boolean profileWorkspaceWide;
     private final FrameLayout workspace;
     private final RhDeviceBrowser browser;
     private final Map<String,View> navigation=new HashMap<>();
     private String browserUuid="",deviceQuery="";
+    private String windowsUuid="";private org.json.JSONObject windowList=RhActions.obj();private AlertDialog windowsDialog;
     private String infoUuid="",infoName="",infoOriginal="",infoError="";private EditText infoEditor;private TextView infoFailure,infoNotice;private Button infoReset;
     private int shellBucket=-1;
     private final RelativeLayout empty;
@@ -51,7 +57,8 @@ public final class RhHome implements RhActions.Target {
     private boolean networkBusy=false;
     private final RhDiagnosticWork diagnostics;
     private final RhDiagnosticWork.Listener diagnosticListener=this::diagnosticChanged;
-    private Button diagnosticButton;private TextView diagnosticReport;
+    private RhBoundAction.Button diagnosticButton,diagnosticCancel,diagnosticDetailsToggle;private TextView diagnosticReport,diagnosticDetailsText;private String diagnosticDetailsKey="";
+    private final LinearLayout diagnosticBanner;private final TextView diagnosticBannerText;private final RhBoundAction.Button diagnosticBannerCancel;
     private RhAdmission admission;
     private final RhConnection connection=new RhConnection();
     private String pendingConnectionRestore="";
@@ -62,6 +69,9 @@ public final class RhHome implements RhActions.Target {
     private final Map<String,String[]> selectKeys=new HashMap<>();
     private final Map<String,Button> presets=new HashMap<>();
     private String draftBaseline="",formError="",formErrorField="";
+    private Runnable profileErrorFocus;
+    private android.view.ViewTreeObserver.OnWindowFocusChangeListener profileErrorWindowFocus;
+    private long profileFocusGeneration;
     private boolean bindingProfile;
     private TextView formNotice,formErrorView;private Button formSave;
     private org.json.JSONObject pendingNavigation;private AlertDialog navigationDialog;
@@ -73,21 +83,23 @@ public final class RhHome implements RhActions.Target {
     private long syncRevision=-1;private final boolean renderedDark;
     private boolean syncClearPending;private AlertDialog syncClearDialog;
     private org.json.JSONObject syncDraft;private String syncError="";
-    private TextView syncNotice,syncErrorView;private Button syncSave,syncCancel;
+    private TextView syncNotice,syncErrorView,syncPasswordNotice;private EditText syncPasswordInput;private Button syncSave,syncCancel,syncRun;private boolean syncRunPrimary;
 
     private final RhUpdates updates;private final RhUpdateWork updateWork;
     private final RhUpdateWork.Listener updateListener=this::updateChanged;
     private boolean disposed,foreground;
+    private Runnable cancelEditorSubmit=()->{};
     private TextView updateStatus,updateProvider,updateBytes,updateFailureDetails,updateInstallNotice;
     private boolean updateDetails;private Button updateDetailsToggle;
     private ProgressBar updateProgress;
-    private Button updateCancel,updatePrimary;
+    private RhBoundAction.Button updateCancel,updatePrimary;
     private TextView updateVersion;
     private final android.os.Handler updateUi=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable updateTick=this::refreshUpdateUi;
     private boolean pairing;private String pairPin="";
     private static final java.util.concurrent.ExecutorService NETWORK=java.util.concurrent.Executors.newFixedThreadPool(2);
     private static final java.util.concurrent.ExecutorService CONNECT=java.util.concurrent.Executors.newSingleThreadExecutor(task->new Thread(task,"RHRemote admission"));
+    private static final java.util.concurrent.ExecutorService CHECKS=java.util.concurrent.Executors.newSingleThreadExecutor(task->new Thread(task,"RHRemote device check"));
     public RhHome(Activity a,Actions callbacks) {
         activity=a;actions=callbacks;diagnostics=RhDiagnosticWork.shared(a);syncWork=RhSyncWork.shared(a);sync=syncWork.sync;syncBusy=syncWork.busy();syncError=syncWork.error();updateWork=RhUpdateWork.shared(a);updates=updateWork.updates;systemBack=new RhBackNavigation(a,this::goBack);
         boolean dark=RhShared.dark(a);
@@ -107,20 +119,29 @@ public final class RhHome implements RhActions.Target {
         compactHeader=row();compactHeader.setPadding(dp(16),dp(8),dp(16),dp(8));
         ImageView logo=new ImageView(a);logo.setImageResource(R.drawable.rh_icon);LinearLayout.LayoutParams logoParams=new LinearLayout.LayoutParams(dp(32),dp(32));logoParams.setMarginEnd(dp(12));compactHeader.addView(logo,logoParams);
         compactHeader.addView(text("RHRemote",19,ink,true),new LinearLayout.LayoutParams(0,-1,1));compactHeader.addView(text("Moonlight",12,muted,false));root.addView(compactHeader,new LinearLayout.LayoutParams(-1,dp(64)));
-        body=row();body.setGravity(Gravity.TOP);sidebar=column();sidebar.setPadding(dp(12),dp(16),dp(12),dp(16));sidebar.setBackground(bg(surface,line,0));body.addView(sidebar,new LinearLayout.LayoutParams(dp(72),-1));
+        // These children are containers. Baseline probing can briefly collapse the responsive list.
+        body=row();body.setBaselineAligned(false);body.setGravity(Gravity.TOP);sidebar=column();sidebar.setPadding(dp(12),dp(16),dp(12),dp(16));sidebar.setBackground(bg(surface,line,0));
+        // The rail remains reachable when a short window or keyboard leaves less height.
+        sidebarScroll=new ScrollView(a);sidebarScroll.setFillViewport(true);sidebarScroll.setVerticalScrollBarEnabled(false);sidebarScroll.addView(sidebar,new ScrollView.LayoutParams(-1,-2));body.addView(sidebarScroll,new LinearLayout.LayoutParams(dp(72),-1));
         LinearLayout stage=column();workspace=new FrameLayout(a);formPane=column();formHeader=column();formHeader.setBackgroundColor(surface);formHeader.setVisibility(View.GONE);formPane.addView(formHeader);
-        scroll=new ScrollView(a);scroll.setDefaultFocusHighlightEnabled(false);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(pageId.equals("settings")||pageId.equals("global-settings")||pageId.equals("add")||pageId.equals("profile-copy"))formPadding(r-l);});
+        scroll=new ScrollView(a);scroll.setDefaultFocusHighlightEnabled(false);scroll.setFillViewport(true);scroll.setClipToPadding(false);scroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{
+            // Changing sibling padding during layout can retain its old child
+            // measurements. Apply the new inset after this layout has finished.
+            if(r-l!=or-ol){int width=r-l;scroll.post(()->{if(scroll.getWidth()==width&&(pageId.equals("settings")||pageId.equals("global-settings")||pageId.equals("add")||pageId.equals("profile-copy")))formPadding(width);});}
+            if(r-l!=or-ol||b-t!=ob-ot)revealFocusedEditor();
+        });
         content=column();content.setPadding(dp(24),dp(24),dp(24),dp(24));scroll.addView(content);
         formPane.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));formFooter=column();formFooter.setBackgroundColor(surface);formFooter.setVisibility(View.GONE);formPane.addView(formFooter);workspace.addView(formPane,new FrameLayout.LayoutParams(-1,-1));browser=new RhDeviceBrowser(a,this::invoke);workspace.addView(browser,new FrameLayout.LayoutParams(-1,-1));workspace.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(pageId.equals("settings")&&draft!=null)layoutProfileWorkspace();});stage.addView(workspace,new LinearLayout.LayoutParams(-1,0,1));
+        diagnosticBanner=row();diagnosticBanner.setTag("diagnostic.banner");diagnosticBanner.setPadding(dp(16),dp(8),dp(16),dp(8));diagnosticBanner.setBackground(bg(surface,line,0));diagnosticBannerText=text("",13,muted,false);diagnosticBannerText.setMaxLines(2);diagnosticBannerText.setEllipsize(android.text.TextUtils.TruncateAt.END);diagnosticBanner.addView(diagnosticBannerText,new LinearLayout.LayoutParams(0,-2,1));diagnosticBannerCancel=boundButton("取消诊断",false);diagnosticBannerCancel.setTag("diagnostic.banner.cancel");LinearLayout.LayoutParams bannerAction=new LinearLayout.LayoutParams(-2,-2);bannerAction.setMarginStart(dp(12));diagnosticBanner.addView(diagnosticBannerCancel,bannerAction);diagnosticBanner.setVisibility(View.GONE);stage.addView(diagnosticBanner);
         status=text("",12,muted,false);status.setPadding(dp(16),dp(8),dp(16),dp(8));status.setVisibility(View.GONE);stage.addView(status);
         body.addView(stage,new LinearLayout.LayoutParams(0,-1,1));root.addView(body,new LinearLayout.LayoutParams(-1,0,1));
         bar=row();bar.setGravity(Gravity.CENTER);bar.setPadding(dp(12),dp(8),dp(12),dp(8));bar.setBackground(bg(surface,line,0));
         String[] navIds={"devices.open","device.add.open","app.settings.open"},navLabels={"设备","添加","设置"};
-        for(int i=0;i<navIds.length;i++){final String id=navIds[i];Button b=button(navLabels[i],false,()->invoke(id,RhActions.obj()));b.setTag("nav:"+id);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,dp(48),1);if(i>0)lp.setMarginStart(dp(8));bar.addView(b,lp);}root.addView(bar);
+        for(int i=0;i<navIds.length;i++){final String id=navIds[i];Button b=button(navLabels[i],false,()->invoke(id,RhActions.obj()));b.setTag("nav:"+id);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);if(i>0)lp.setMarginStart(dp(8));bar.addView(b,lp);}root.addView(bar);
         empty=new RelativeLayout(a); // Compatibility with the upstream activity's discovery placeholder.
         root.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->applyShell(r-l-root.getPaddingLeft()-root.getPaddingRight()));
-        a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();updateWork.attach(updateListener);syncWork.attach(syncListener);diagnostics.attach(diagnosticListener);
-        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(disposed||activity.isDestroyed())return;if(!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&syncWork.canAutomaticallySync()&&!syncBusy&&draft==null&&infoUuid.isEmpty()&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&!syncClearPending&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(syncWork.lastAttempt(),sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){invoke("sync.run",RhActions.obj("automatic",true));}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updateWork.busy()&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
+        a.setContentView(root);ViewCompat.requestApplyInsets(root);applyShell(dp(a.getResources().getConfiguration().screenWidthDp));RhActions.initialize(a,this);restoreSharedDevices();showDevices();updateWork.attach(updateListener);syncWork.attach(syncListener);diagnostics.attach(diagnosticListener);refreshDiagnosticBanner();
+        final android.os.Handler handler=new android.os.Handler(android.os.Looper.getMainLooper());handler.postDelayed(new Runnable(){public void run(){if(disposed||activity.isDestroyed())return;if(RhActions.ownsHome(RhHome.this)&&!RhActions.hasStream()){if(sync.state().optBoolean("automatic")&&syncWork.canAutomaticallySync()&&!syncBusy&&draft==null&&infoUuid.isEmpty()&&addOperation==null&&!pageId.equals("add")&&!syncDirty()&&pendingNavigation==null&&!syncClearPending&&sync.state().optJSONArray("conflicts").length()==0&&System.currentTimeMillis()-Math.max(syncWork.lastAttempt(),sync.state().optLong("lastSyncMs"))>=sync.state().optInt("intervalMinutes",5)*60000L){invoke("sync.run",RhActions.obj("automatic",true));}long last=activity.getSharedPreferences("rhremote.global",0).getLong("lastUpdateCheck",0);if(!updateWork.busy()&&System.currentTimeMillis()-last>21600000){activity.getSharedPreferences("rhremote.global",0).edit().putLong("lastUpdateCheck",System.currentTimeMillis()).apply();startUpdate("updates.check",true);}}handler.postDelayed(this,30000);}},15000);
     }
     /** Only navigation identifiers are serialized; form data and credentials stay out of the Bundle. */
     public void saveNavigation(android.os.Bundle state){
@@ -154,19 +175,54 @@ public final class RhHome implements RhActions.Target {
             }
         }catch(Exception unavailable){showDevices();}
     }
-    /** Retained only in-process across recreation; it contains no Activity, View or credential. */
+    /** In-process recreation state only. Never serialize it or retain an Activity or View. */
     public static final class UiState {
-        final String addAddress,addError,copySnapshot,copyNotice,copyNoticeUuid;final boolean updateDetails;final RhConnection.Result connectionResult;
-        UiState(String address,String error,boolean details,String copy,String notice,String noticeUuid,RhConnection.Result result){addAddress=address;addError=error;updateDetails=details;copySnapshot=copy;copyNotice=notice;copyNoticeUuid=noticeUuid;connectionResult=result;}
+        final String addAddress,addError,copySnapshot,copyNotice,copyNoticeUuid,diagnosticDetailsKey;final boolean updateDetails;final RhConnection.Result connectionResult;
+        private FormState form;
+        UiState(String address,String error,boolean details,String diagnosticDetails,String copy,String notice,String noticeUuid,RhConnection.Result result,FormState form){addAddress=address;addError=error;updateDetails=details;diagnosticDetailsKey=diagnosticDetails;copySnapshot=copy;copyNotice=notice;copyNoticeUuid=noticeUuid;connectionResult=result;this.form=form;}
+        private FormState takeForm(){FormState value=form;form=null;return value;}
     }
-    public Object retainUiState(){
+    /** Unsubmitted values, including a typed password, remain in memory for this recreation only. */
+    private static final class FormState {
+        private final String kind,uuid,data,pending;
+        private FormState(String kind,String uuid,org.json.JSONObject data,org.json.JSONObject pending){this.kind=kind;this.uuid=uuid;this.data=data.toString();this.pending=pending==null?"":pending.toString();}
+        static FormState capture(RhHome home){
+            if(home.draft!=null&&home.selected!=null&&(home.profileDirty()||!home.formError.isEmpty()))return new FormState("profile",home.selected.uuid,RhActions.obj("profile",home.draft.json(),"inputs",new org.json.JSONObject(home.numberInputs),"baseline",home.draftBaseline,"name",home.draftDisplayName,"address",home.draftAddress,"addresses",home.draftAddresses,"relay",home.draftRelay,"error",home.formError,"errorField",home.formErrorField,"copyNotice",home.copyNotice,"copyError",home.copyError),home.pendingNavigation);
+            if(!home.infoUuid.isEmpty()&&(home.infoDirty()||!home.infoError.isEmpty()))return new FormState("info",home.infoUuid,RhActions.obj("name",home.infoName,"original",home.infoOriginal,"error",home.infoError),home.pendingNavigation);
+            if(home.syncDraft!=null&&(home.syncDirty()||!home.syncError.isEmpty()))return new FormState("sync","",RhActions.obj("draft",home.syncDraft,"error",home.syncError,"revision",home.syncWork.revision()),home.pendingNavigation);
+            return null;
+        }
+        void restore(RhHome home){
+            try{
+                org.json.JSONObject value=new org.json.JSONObject(data);
+                if(kind.equals("profile")&&home.draft!=null&&home.selected!=null&&uuid.equals(home.selected.uuid)&&(home.pageId.equals("settings")||home.pageId.equals("profile-copy"))){
+                    home.draft=RhProfile.fromJson(uuid,value.getJSONObject("profile"));home.numberInputs.clear();org.json.JSONObject inputs=value.getJSONObject("inputs");for(java.util.Iterator<String> keys=inputs.keys();keys.hasNext();){String key=keys.next();home.numberInputs.put(key,inputs.getString(key));}
+                    home.draftBaseline=value.getString("baseline");home.draftDisplayName=value.getString("name");home.draftAddress=value.getString("address");home.draftAddresses=value.getString("addresses");home.draftRelay=value.getString("relay");home.formError=value.getString("error");home.formErrorField=value.getString("errorField");home.copyNotice=value.getString("copyNotice");home.copyError=value.getString("copyError");
+                    if(home.pageId.equals("profile-copy"))home.showCopyPreview();else home.showProfile(home.selected,home.draft);
+                }else if(kind.equals("info")&&home.pageId.equals("device-info")&&uuid.equals(home.infoUuid)){
+                    home.infoName=value.getString("name");home.infoOriginal=value.getString("original");home.infoError=value.getString("error");home.refreshInfo();
+                }else if(kind.equals("sync")&&home.pageId.equals("global-settings")&&home.settingsTab.equals("sync")){
+                    home.syncDraft=value.getJSONObject("draft");long revision=home.syncWork.revision();home.syncError=value.getLong("revision")==revision?value.getString("error"):home.syncWork.error();home.syncRevision=revision;home.showGlobal();
+                }else return;
+                if(!pending.isEmpty()){
+                    home.pendingNavigation=new org.json.JSONObject(pending);
+                    if(home.pendingNavigation.optString("id").equals("appearance.toggle"))home.pendingAppearance=new AppearanceContext(home);
+                    home.showNavigationPrompt();
+                }
+            }catch(org.json.JSONException invalid){throw new IllegalStateException("界面草稿恢复失败",invalid);}
+        }
+    }
+    public Object retainUiState(){return retainUiState(true);}
+    private Object retainUiState(boolean includeForms){
         boolean cleanProfile=selected!=null&&draft!=null&&!profileDirty()&&(pageId.equals("settings")||pageId.equals("profile-copy"));
-        return new UiState(pageId.equals("add")?addAddress:"",pageId.equals("add")?addError:"",updateDetails,pageId.equals("profile-copy")&&copyPreview!=null?copyPreview.toString():"",cleanProfile?copyNotice:"",cleanProfile?selected.uuid:"",pageId.equals("connection")&&!connectionBusy()?connection.retainResult():null);
+        return new UiState(pageId.equals("add")?addAddress:"",pageId.equals("add")?addError:"",updateDetails,diagnosticDetailsKey,pageId.equals("profile-copy")&&copyPreview!=null?copyPreview.toString():"",cleanProfile?copyNotice:"",cleanProfile?selected.uuid:"",pageId.equals("connection")&&!connectionBusy()?connection.retainResult():null,includeForms?FormState.capture(this):null);
     }
     public void restoreUiState(Object saved){
         String resultUuid=pendingConnectionRestore;pendingConnectionRestore="";
         if(!(saved instanceof UiState))return;UiState value=(UiState)saved;
+        FormState form=value.takeForm();if(form!=null)form.restore(this);
         updateDetails=value.updateDetails&&updates.state().optString("phase").equals("error");
+        diagnosticDetailsKey=value.diagnosticDetailsKey.equals(diagnosticKey(diagnostics.state()))?value.diagnosticDetailsKey:"";refreshDiagnosticControls();
         if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();
         if(pageId.equals("add")){boolean previous=bindingProfile;bindingProfile=true;try{addAddress=value.addAddress;addError=value.addError;refreshAdd();}finally{bindingProfile=previous;}}
         if(pageId.equals("settings")&&selected!=null&&selected.uuid.equals(value.copyNoticeUuid)&&!value.copyNotice.isEmpty()&&!profileDirty()){copyNotice=value.copyNotice;refreshProfileFooter();}
@@ -180,45 +236,78 @@ public final class RhHome implements RhActions.Target {
     }
     private static final class AppearanceContext {
         final android.os.Bundle navigation=new android.os.Bundle();final Object transientState;
-        AppearanceContext(RhHome home){home.saveNavigation(navigation);transientState=home.retainUiState();}
+        AppearanceContext(RhHome home){home.saveNavigation(navigation);transientState=home.retainUiState(false);}
     }
     public RelativeLayout emptyView(){return empty;}
     private int c(String hex){return Color.parseColor(hex);}private int dp(float v){return Math.round(v*activity.getResources().getDisplayMetrics().density);}
+    private void fromView(View source,Runnable action){
+        if(android.os.Looper.myLooper()!=android.os.Looper.getMainLooper()){updateUi.post(()->fromView(source,action));return;}
+        if(!disposed&&!activity.isDestroyed()&&!activity.isFinishing()&&RhActions.ownsHome(this)&&RhViewOrigin.visibleWithin(root,source))action.run();
+    }
+    private void editorSubmit(EditText editor,String action,java.util.function.BooleanSupplier owner){
+        java.util.function.BooleanSupplier current=()->!disposed&&foreground&&!activity.isDestroyed()&&!activity.isFinishing()&&RhActions.ownsHome(this)&&RhViewOrigin.visibleWithin(root,editor)&&pendingNavigation==null&&!syncClearPending&&owner.getAsBoolean();
+        cancelEditorSubmit.run();cancelEditorSubmit=RhEditorSubmit.install(editor,current,()->fromView(editor,()->{if(editor.isEnabled()&&current.getAsBoolean())invoke(action,RhActions.obj());}));
+    }
     private LinearLayout column(){LinearLayout l=new LinearLayout(activity);l.setOrientation(LinearLayout.VERTICAL);return l;}
     private LinearLayout row(){LinearLayout l=new LinearLayout(activity);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
-    private void categoryTabs(String[] ids,String[] labels,String selectedId,String action){HorizontalScrollView strip=new HorizontalScrollView(activity);strip.setDefaultFocusHighlightEnabled(false);strip.setHorizontalScrollBarEnabled(false);strip.setFillViewport(true);LinearLayout items=row();items.setPadding(0,dp(4),0,dp(4));Button selectedTab=null;for(int i=0;i<ids.length;i++){String id=ids[i];Button item=tab(labels[i],selectedId.equals(id),()->invoke(action,RhActions.obj("tab",id)));LinearLayout.LayoutParams bounds=new LinearLayout.LayoutParams(-2,dp(48));if(i>0)bounds.setMarginStart(dp(8));items.addView(item,bounds);if(selectedId.equals(id))selectedTab=item;}strip.addView(items,new HorizontalScrollView.LayoutParams(-2,-2));formHeader.addView(strip,new LinearLayout.LayoutParams(-1,-2));Button active=selectedTab;if(active!=null)strip.post(()->active.requestRectangleOnScreen(new android.graphics.Rect(0,0,active.getWidth(),active.getHeight()),true));}
+    private void categoryTabs(String[] ids,String[] labels,String selectedId,String action){
+        HorizontalScrollView strip=new HorizontalScrollView(activity);strip.setDefaultFocusHighlightEnabled(false);strip.setHorizontalScrollBarEnabled(false);strip.setFillViewport(true);
+        LinearLayout items=row();items.setPadding(0,dp(4),0,dp(4));Button selectedTab=null;
+        for(int i=0;i<ids.length;i++){
+            String id=ids[i],tag="category:"+action+":"+id;Button[] owner={null};
+            Button item=tab(labels[i],selectedId.equals(id),()->{
+                boolean hadFocus=owner[0].hasFocus();invoke(action,RhActions.obj("tab",id));
+                // Rebuilding a category removes its focused button. Keep keyboard navigation
+                // at its replacement, without moving touch focus or stealing a prompt's focus.
+                View replacement=formHeader.findViewWithTag(tag);
+                if(hadFocus&&replacement!=null&&replacement.isSelected()&&RhViewOrigin.visibleWithin(root,replacement)){
+                    View fallback=root.findFocus();Runnable restore=()->{
+                        if(!disposed&&RhActions.ownsHome(this)&&RhViewOrigin.visibleWithin(root,replacement)&&replacement.isSelected()&&root.findFocus()==fallback)replacement.requestFocusFromTouch();
+                    };
+                    if(replacement.isLaidOut())restore.run();
+                    else replacement.addOnLayoutChangeListener(new View.OnLayoutChangeListener(){public void onLayoutChange(View view,int l,int t,int r,int b,int ol,int ot,int or,int ob){if(r<=l||b<=t)return;view.removeOnLayoutChangeListener(this);restore.run();}});
+                }
+            });
+            owner[0]=item;item.setTag(tag);LinearLayout.LayoutParams bounds=new LinearLayout.LayoutParams(-2,-2);if(i>0)bounds.setMarginStart(dp(8));items.addView(item,bounds);if(selectedId.equals(id))selectedTab=item;
+        }
+        strip.addView(items,new HorizontalScrollView.LayoutParams(-2,-2));formHeader.addView(strip,new LinearLayout.LayoutParams(-1,-2));Button active=selectedTab;
+        if(active!=null)strip.post(()->active.requestRectangleOnScreen(new android.graphics.Rect(0,0,active.getWidth(),active.getHeight()),true));
+    }
     private LinearLayout card(){LinearLayout box=column();box.setPadding(dp(20),dp(20),dp(20),dp(20));box.setBackground(bg(surface,line,12));return box;}
     private void wrapBodyInCard(){List<View> views=new ArrayList<>();for(int i=0;i<content.getChildCount();i++)views.add(content.getChildAt(i));content.removeAllViews();LinearLayout box=card();for(View view:views)box.addView(view);content.addView(box,new LinearLayout.LayoutParams(-1,-2));scroll.setBackgroundColor(page);content.setBackgroundColor(page);}
-    private void settingRow(String title,View control){TextView label=text(title,14,ink,false);LinearLayout row=new LinearLayout(activity){int bucket=-1;@Override protected void onMeasure(int width,int height){int next=MeasureSpec.getSize(width)>=dp(560)?1:0;if(next!=bucket){bucket=next;setOrientation(next==1?HORIZONTAL:VERTICAL);label.setMinHeight(dp(next==1?48:32));label.setLayoutParams(new LinearLayout.LayoutParams(next==1?0:-1,-2,next==1?1:0));LinearLayout.LayoutParams field=new LinearLayout.LayoutParams(next==1?dp(240):-1,dp(48));if(next==1)field.setMarginStart(dp(20));else field.topMargin=dp(6);control.setLayoutParams(field);}super.onMeasure(width,height);}};row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(0,dp(8),0,dp(8));row.addView(label);row.addView(control);content.addView(row,new LinearLayout.LayoutParams(-1,-2));}
+    private void settingRow(String title,View control){TextView label=text(title,14,ink,false);LinearLayout row=new LinearLayout(activity){int bucket=-1;@Override protected void onMeasure(int width,int height){int next=MeasureSpec.getSize(width)>=dp(560)?1:0;if(next!=bucket){bucket=next;setOrientation(next==1?HORIZONTAL:VERTICAL);label.setMinHeight(dp(next==1?48:32));label.setLayoutParams(new LinearLayout.LayoutParams(next==1?0:-1,-2,next==1?1:0));control.setMinimumHeight(dp(48));LinearLayout.LayoutParams field=new LinearLayout.LayoutParams(next==1?dp(240):-1,-2);if(next==1)field.setMarginStart(dp(20));else field.topMargin=dp(6);control.setLayoutParams(field);}super.onMeasure(width,height);}};row.setGravity(Gravity.CENTER_VERTICAL);row.setPadding(0,dp(8),0,dp(8));row.addView(label);row.addView(control);content.addView(row,new LinearLayout.LayoutParams(-1,-2));}
     private EditText numberField(String title,String value){EditText edit=new EditText(activity);edit.setContentDescription(title);edit.setTextColor(ink);edit.setHintTextColor(muted);edit.setTextSize(15);edit.setSingleLine(true);edit.setPadding(dp(12),0,dp(12),0);edit.setBackground(bg(surface,line,8));edit.setText(value);settingRow(title,edit);return edit;}
     private LinearLayout brandCard(String version){LinearLayout box=card(),brand=row();ImageView logo=new ImageView(activity);logo.setImageResource(R.drawable.rh_icon);LinearLayout.LayoutParams image=new LinearLayout.LayoutParams(dp(48),dp(48));image.setMarginEnd(dp(16));brand.addView(logo,image);LinearLayout labels=column();labels.addView(text("RHRemote",21,ink,true));TextView edition=text("Moonlight · "+version,13,muted,false);edition.setPadding(0,dp(5),0,0);labels.addView(edition);brand.addView(labels,new LinearLayout.LayoutParams(0,-2,1));box.addView(brand);content.addView(box,new LinearLayout.LayoutParams(-1,-2));return box;}
     private View themeChoice(boolean dark){
         boolean chosen=RhShared.dark(activity)==dark;LinearLayout tile=column();tile.setPadding(dp(12),dp(12),dp(12),dp(12));tile.setSelected(chosen);
         android.graphics.drawable.StateListDrawable states=new android.graphics.drawable.StateListDrawable();states.addState(new int[]{android.R.attr.state_focused},bg(surface,blue,12));states.addState(new int[]{android.R.attr.state_pressed},bg(blueSoft,blue,12));states.addState(new int[]{},bg(surface,chosen?blue:line,12));tile.setBackground(states);
         View preview=new View(activity){@Override protected void onDraw(android.graphics.Canvas canvas){super.onDraw(canvas);android.graphics.Paint paint=new android.graphics.Paint(3);float w=getWidth(),h=getHeight();paint.setColor(c(dark?"#151b29":"#f6f7fa"));canvas.drawRoundRect(0,0,w,h,dp(7),dp(7),paint);paint.setColor(c(dark?"#242d3e":"#ffffff"));canvas.drawRoundRect(dp(6),dp(6),w*.25f,h-dp(6),dp(4),dp(4),paint);paint.setColor(c(dark?"#6f8af1":"#5274e8"));canvas.drawRoundRect(dp(12),dp(16),w*.25f-dp(6),dp(22),dp(3),dp(3),paint);paint.setColor(c(dark?"#303c53":"#e3e8f2"));for(int i=0;i<3;i++)canvas.drawRoundRect(w*.32f,dp(17+i*25),w-dp(12),dp(30+i*25),dp(4),dp(4),paint);}};
-        tile.addView(preview,new LinearLayout.LayoutParams(-1,dp(110)));TextView caption=text(dark?"深色":"浅色",15,ink,true);caption.setPadding(dp(2),dp(10),dp(2),dp(6));tile.addView(caption,new LinearLayout.LayoutParams(-1,dp(42)));if(chosen){TextView current=text("已选择",13,blue,true);current.setGravity(Gravity.CENTER);tile.addView(current,new LinearLayout.LayoutParams(-1,dp(48)));}else{Button choose=button(dark?"切换为深色":"切换为浅色",false,()->invoke("appearance.toggle",RhActions.obj()));tile.addView(choose,new LinearLayout.LayoutParams(-1,dp(48)));}return tile;
+        tile.addView(preview,new LinearLayout.LayoutParams(-1,dp(110)));TextView caption=text(dark?"深色":"浅色",15,ink,true);caption.setPadding(dp(2),dp(10),dp(2),dp(6));caption.setMinHeight(dp(42));tile.addView(caption,new LinearLayout.LayoutParams(-1,-2));if(chosen){TextView current=text("已选择",13,blue,true);current.setGravity(Gravity.CENTER);current.setMinHeight(dp(48));tile.addView(current,new LinearLayout.LayoutParams(-1,-2));}else{Button choose=button(dark?"切换为深色":"切换为浅色",false,()->invoke("appearance.toggle",RhActions.obj()));tile.addView(choose,new LinearLayout.LayoutParams(-1,-2));}return tile;
     }
-    private void showAppearance(){TextView heading=text("主题",18,ink,true);LinearLayout.LayoutParams title=new LinearLayout.LayoutParams(-1,dp(40));title.bottomMargin=dp(12);content.addView(heading,title);LinearLayout choices=row();choices.addView(themeChoice(false),new LinearLayout.LayoutParams(0,-2,1));LinearLayout.LayoutParams other=new LinearLayout.LayoutParams(0,-2,1);other.setMarginStart(dp(12));choices.addView(themeChoice(true),other);content.addView(choices);}
-    private void showAbout(){brandCard(com.limelight.BuildConfig.VERSION_NAME);LinearLayout details=card();LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.topMargin=dp(16);content.addView(details,p);details.addView(text("开源组件",16,ink,true));for(String[] value:new String[][]{{"客户端核心","Moonlight"},{"服务端","Sunshine"},{"许可证","GPL v3"}}){LinearLayout item=row();item.setPadding(0,dp(14),0,0);item.addView(text(value[0],14,muted,false),new LinearLayout.LayoutParams(dp(110),-2));item.addView(text(value[1],14,ink,false));details.addView(item);}LinearLayout diagnostic=card();LinearLayout.LayoutParams q=new LinearLayout.LayoutParams(-1,-2);q.topMargin=dp(16);content.addView(diagnostic,q);diagnostic.addView(text("诊断",16,ink,true));Button stats=button(RhStatistics.enabled()?"测试统计：开启":"测试统计：关闭",RhStatistics.enabled(),()->invoke("statistics.configure",RhActions.obj("enabled",!RhStatistics.enabled())));LinearLayout.LayoutParams b=new LinearLayout.LayoutParams(-2,dp(48));b.topMargin=dp(16);diagnostic.addView(stats,b);TextView hint=text("测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。",13,muted,false);hint.setPadding(0,dp(12),0,0);diagnostic.addView(hint);String latest=RhStatistics.state().optString("latest");if(!latest.isEmpty()){TextView path=text(latest,12,muted,false);path.setPadding(0,dp(12),0,0);diagnostic.addView(path);}}
+    private void showAppearance(){TextView heading=text("主题",18,ink,true);heading.setMinHeight(dp(40));LinearLayout.LayoutParams title=new LinearLayout.LayoutParams(-1,-2);title.bottomMargin=dp(12);content.addView(heading,title);LinearLayout choices=row();choices.addView(themeChoice(false),new LinearLayout.LayoutParams(0,-2,1));LinearLayout.LayoutParams other=new LinearLayout.LayoutParams(0,-2,1);other.setMarginStart(dp(12));choices.addView(themeChoice(true),other);content.addView(choices);}
+    private void showAbout(){brandCard(com.limelight.BuildConfig.VERSION_NAME);LinearLayout details=card();LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.topMargin=dp(16);content.addView(details,p);details.addView(text("开源组件",16,ink,true));for(String[] value:new String[][]{{"客户端核心","Moonlight"},{"服务端","Sunshine"},{"许可证","GPL v3"}}){LinearLayout item=row();item.setPadding(0,dp(14),0,0);TextView label=text(value[0],14,muted,false);int labelWidth=Math.max(dp(110),(int)Math.ceil(label.getPaint().measureText("客户端核心"))+dp(12));item.addView(label,new LinearLayout.LayoutParams(labelWidth,-2));item.addView(text(value[1],14,ink,false));details.addView(item);}LinearLayout diagnostic=card();LinearLayout.LayoutParams q=new LinearLayout.LayoutParams(-1,-2);q.topMargin=dp(16);content.addView(diagnostic,q);diagnostic.addView(text("诊断",16,ink,true));Button stats=button(RhStatistics.enabled()?"测试统计：开启":"测试统计：关闭",RhStatistics.enabled(),()->invoke("statistics.configure",RhActions.obj("enabled",!RhStatistics.enabled())));LinearLayout.LayoutParams b=new LinearLayout.LayoutParams(-2,-2);b.topMargin=dp(16);diagnostic.addView(stats,b);TextView hint=text("测试模式每次连接记录阶段和逐帧时间。分析后自动清理原始记录。",13,muted,false);hint.setPadding(0,dp(12),0,0);diagnostic.addView(hint);String latest=RhStatistics.state().optString("latest");if(!latest.isEmpty()){TextView path=text(latest,12,muted,false);path.setPadding(0,dp(12),0,0);diagnostic.addView(path);}}
     private GradientDrawable bg(int color,int border,int radius){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(radius));if(border!=0)d.setStroke(dp(1),border);return d;}
     private TextView text(String value,int size,int color,boolean medium){TextView t=new TextView(activity);t.setText(value);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);if(medium)t.setTypeface(Typeface.create("sans-serif-medium",Typeface.NORMAL));return t;}
     private Button backButton(String title,Runnable action){Button b=button(title,false,action);android.graphics.drawable.Drawable arrow=activity.getDrawable(R.drawable.rh_chevron_left).mutate();arrow.setTint(ink);arrow.setBounds(0,0,dp(18),dp(18));b.setCompoundDrawablesRelative(arrow,null,null,null);b.setCompoundDrawablePadding(dp(6));return b;}
-    private LinearLayout pageHeading(String title,String backAction){LinearLayout heading=row();heading.addView(backButton("返回设备",()->invoke(backAction,RhActions.obj())));TextView label=text(title,24,ink,true);label.setSingleLine(true);label.setEllipsize(android.text.TextUtils.TruncateAt.END);LinearLayout.LayoutParams bounds=new LinearLayout.LayoutParams(0,dp(48),1);bounds.setMarginStart(dp(12));heading.addView(label,bounds);return heading;}
-    private Button button(String title,boolean primary,Runnable action){Button b=new Button(activity);b.setText(title);b.setTextSize(14);b.setAllCaps(false);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(Typeface.create("sans-serif-medium",0));RhUiStyle.button(b,primary?Color.WHITE:ink,muted,bg(primary?blue:surface,primary?0:line,8),bg(soft,line,8),bg(primary?blue:surface,primary?ink:blue,8));b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(16),dp(8),dp(16),dp(8));b.setOnClickListener(v->action.run());b.setLayoutParams(new LinearLayout.LayoutParams(-2,dp(48)));return b;}
-    private Button tab(String title,boolean selected,Runnable action){Button b=button(title,false,action);b.setSelected(selected);b.setTextColor(selected?blue:muted);b.setBackground(bg(selected?blueSoft:surface,0,8));return b;}
+    private LinearLayout pageHeading(String title,String backAction){LinearLayout heading=row();heading.addView(backButton("返回设备",()->invoke(backAction,RhActions.obj())));TextView label=text(title,24,ink,true);label.setSingleLine(true);label.setEllipsize(android.text.TextUtils.TruncateAt.END);label.setMinHeight(dp(48));LinearLayout.LayoutParams bounds=new LinearLayout.LayoutParams(0,-2,1);bounds.setMarginStart(dp(12));heading.addView(label,bounds);return heading;}
+    private void buttonStyle(Button b,boolean primary){RhUiStyle.button(b,primary?Color.WHITE:ink,muted,bg(primary?blue:surface,primary?0:line,8),bg(soft,line,8),bg(primary?blue:surface,primary?ink:blue,8));}
+    private Button button(String title,boolean primary,Runnable action){Button b=new Button(activity);b.setText(title);b.setTextSize(14);b.setAllCaps(false);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(Typeface.create("sans-serif-medium",0));buttonStyle(b,primary);b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(16),dp(8),dp(16),dp(8));b.setOnClickListener(v->fromView(v,action));b.setLayoutParams(new LinearLayout.LayoutParams(-2,-2));return b;}
+    private RhBoundAction.Button boundButton(String title,boolean primary){RhBoundAction.Button b=new RhBoundAction.Button(activity,(source,id,args)->fromView(source,()->invoke(id,args)));b.setText(title);b.setTextSize(14);b.setAllCaps(false);b.setStateListAnimator(null);b.setElevation(0);b.setTypeface(Typeface.create("sans-serif-medium",0));buttonStyle(b,primary);b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setMinWidth(0);b.setMinimumWidth(0);b.setPadding(dp(16),dp(8),dp(16),dp(8));b.setLayoutParams(new LinearLayout.LayoutParams(-2,-2));return b;}
+    private void tabStyle(Button button,boolean selected){button.setSelected(selected);RhUiStyle.button(button,selected?blue:muted,muted,bg(selected?blueSoft:surface,0,8),bg(soft,line,8),bg(selected?blueSoft:surface,blue,8));}
+    private Button tab(String title,boolean selected,Runnable action){Button b=button(title,false,action);tabStyle(b,selected);return b;}
     private RhActionRow actionRow(){RhActionRow row=new RhActionRow(activity);row.setPadding(0,dp(8),0,dp(8));return row;}
-    private void applyShell(int width){int bucket=width>=dp(1180)?2:width>=dp(840)?1:0;if(bucket==shellBucket)return;shellBucket=bucket;boolean wide=bucket>0;sidebar.setVisibility(wide?View.VISIBLE:View.GONE);compactHeader.setVisibility(wide?View.GONE:View.VISIBLE);bar.setVisibility(wide?View.GONE:View.VISIBLE);sidebar.getLayoutParams().width=dp(bucket==2?184:72);sidebar.removeAllViews();navigation.clear();
+    private void applyShell(int width){int bucket=width>=dp(1180)?2:width>=dp(600)?1:0;if(bucket==shellBucket)return;shellBucket=bucket;boolean wide=bucket>0;sidebar.setVisibility(wide?View.VISIBLE:View.GONE);sidebarScroll.setVisibility(wide?View.VISIBLE:View.GONE);compactHeader.setVisibility(wide?View.GONE:View.VISIBLE);bar.setVisibility(wide?View.GONE:View.VISIBLE);sidebarScroll.getLayoutParams().width=dp(bucket==2?184:72);sidebar.removeAllViews();navigation.clear();
         LinearLayout brand=row();ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_icon);brand.addView(icon,new LinearLayout.LayoutParams(dp(32),dp(32)));if(bucket==2){LinearLayout names=column();names.setPadding(dp(10),0,0,0);names.addView(text("RHRemote",18,ink,true));names.addView(text("Moonlight",11,muted,false));brand.addView(names);}sidebar.addView(brand,new LinearLayout.LayoutParams(-1,dp(68)));
         nav("远程设备",R.drawable.rh_monitor,"devices.open",bucket==2);nav("添加电脑",R.drawable.rh_plus,"device.add.open",bucket==2);sidebar.addView(new View(activity),new LinearLayout.LayoutParams(-1,0,1));nav("设置",R.drawable.rh_settings,"app.settings.open",bucket==2);nav("主题",R.drawable.rh_moon,"appearance.toggle",bucket==2);if(bucket==2){TextView version=text("v"+com.limelight.BuildConfig.VERSION_NAME+"\nMoonlight · GPL v3",11,muted,false);version.setPadding(dp(10),dp(20),0,0);sidebar.addView(version);}content.setPadding(dp(wide?24:16),dp(24),dp(wide?24:16),dp(24));refreshNavigation();}
-    private void nav(String title,int icon,String id,boolean labels){LinearLayout item=row();item.setGravity(labels?Gravity.CENTER_VERTICAL:Gravity.CENTER);item.setPadding(dp(10),0,dp(10),0);ImageView image=new ImageView(activity);image.setImageResource(icon);image.setColorFilter(id.equals("devices.open")?blue:muted);item.addView(image,new LinearLayout.LayoutParams(dp(22),dp(22)));if(labels){TextView label=text(title,14,ink,false);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMarginStart(dp(12));item.addView(label,p);}item.setContentDescription(title);item.setTag("nav:"+id);item.setDefaultFocusHighlightEnabled(false);item.setFocusable(true);item.setOnClickListener(v->invoke(id,RhActions.obj()));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));p.bottomMargin=dp(8);sidebar.addView(item,p);navigation.put(id,item);}
+    private void nav(String title,int icon,String id,boolean labels){LinearLayout item=row();item.setGravity(labels?Gravity.CENTER_VERTICAL:Gravity.CENTER);item.setPadding(dp(10),0,dp(10),0);ImageView image=new ImageView(activity);image.setImageResource(icon);image.setColorFilter(id.equals("devices.open")?blue:muted);item.addView(image,new LinearLayout.LayoutParams(dp(22),dp(22)));if(labels){TextView label=text(title,14,ink,false);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1);p.setMarginStart(dp(12));item.addView(label,p);}item.setContentDescription(title);item.setTag("nav:"+id);item.setDefaultFocusHighlightEnabled(false);item.setFocusable(true);item.setOnClickListener(v->fromView(v,()->invoke(id,RhActions.obj())));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(48));p.bottomMargin=dp(8);sidebar.addView(item,p);navigation.put(id,item);}
     private void refreshNavigation(){
         if(!statusScope.equals(pageId+(pageId.equals("global-settings")?"/"+settingsTab:"")))status.setVisibility(View.GONE);
         String destination=pageId.equals("global-settings")?"app.settings.open":pageId.equals("add")?"device.add.open":"devices.open";
         for(Map.Entry<String,View> item:navigation.entrySet()){
-            boolean chosen=item.getKey().equals(destination);View view=item.getValue();view.setSelected(chosen);navigationAvailability(view);view.setBackground(bg(chosen?blueSoft:surface,0,8));
+            boolean chosen=item.getKey().equals(destination);View view=item.getValue();view.setSelected(chosen);navigationAvailability(view);RhUiStyle.focusBackground(view,bg(chosen?blueSoft:surface,0,8),bg(chosen?blueSoft:surface,0,8),bg(chosen?blueSoft:surface,blue,8));
             ViewGroup row=(ViewGroup)view;for(int i=0;i<row.getChildCount();i++){View child=row.getChildAt(i);if(child instanceof ImageView)((ImageView)child).setColorFilter(chosen?blue:muted);else if(child instanceof TextView)((TextView)child).setTextColor(chosen?blue:ink);}
         }
-        for(int i=0;i<bar.getChildCount();i++){View child=bar.getChildAt(i);if(child instanceof Button){boolean chosen=("nav:"+destination).equals(child.getTag());child.setSelected(chosen);navigationAvailability(child);((Button)child).setTextColor(chosen?blue:muted);child.setBackground(bg(chosen?blueSoft:surface,chosen?0:line,8));}}
+        for(int i=0;i<bar.getChildCount();i++){View child=bar.getChildAt(i);if(child instanceof Button){boolean chosen=("nav:"+destination).equals(child.getTag());child.setSelected(chosen);navigationAvailability(child);RhUiStyle.button((Button)child,chosen?blue:muted,chosen?blue:muted,bg(chosen?blueSoft:surface,chosen?0:line,8),bg(chosen?blueSoft:surface,chosen?0:line,8),bg(chosen?blueSoft:surface,blue,8));}}
     }
     private void navigationAvailability(View view){boolean locked=navigationLocked();view.setEnabled(!locked);view.setFocusable(!locked);view.setAlpha(locked?.45f:1f);view.setTooltipText(locked?navigationHint():null);}
     private void standaloneWorkspace(){browser.setListOnly(false);FrameLayout.LayoutParams listBounds=(FrameLayout.LayoutParams)browser.getLayoutParams();if(listBounds.width!=-1){listBounds.width=-1;browser.setLayoutParams(listBounds);}FrameLayout.LayoutParams formBounds=(FrameLayout.LayoutParams)formPane.getLayoutParams();if(formBounds.leftMargin!=0){formBounds.leftMargin=0;formPane.setLayoutParams(formBounds);}}
@@ -226,15 +315,15 @@ public final class RhHome implements RhActions.Target {
     private boolean wideProfileWorkspace(){return workspace.getWidth()>=dp(700);}
     private void layoutProfileWorkspace(){boolean wide=wideProfileWorkspace();browser.setListOnly(wide);FrameLayout.LayoutParams listBounds=(FrameLayout.LayoutParams)browser.getLayoutParams();int listWidth=wide?dp(273):-1;if(listBounds.width!=listWidth){listBounds.width=listWidth;browser.setLayoutParams(listBounds);}FrameLayout.LayoutParams formBounds=(FrameLayout.LayoutParams)formPane.getLayoutParams();int margin=wide?dp(273):0;if(formBounds.leftMargin!=margin){formBounds.leftMargin=margin;formPane.setLayoutParams(formBounds);}browser.setVisibility(wide?View.VISIBLE:View.GONE);if(wide)browser.update(RhShared.ordered(activity,computers.values()),selected.uuid,deviceQuery);if(profileWorkspaceWide!=wide){buildProfileChrome(selected);}formPane.setVisibility(View.VISIBLE);}
     private void heading(String title,String sub){TextView h=text(title,26,ink,true);h.setPadding(0,0,0,dp(18));content.addView(h);if(!sub.isEmpty()){TextView s=text(sub,13,muted,false);s.setPadding(0,0,0,dp(20));content.addView(s);}}
-    public void update(ComputerDetails d){String signature=d.name+"|"+d.state+"|"+d.pairState+"|"+RhProfile.load(activity,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&!signature.equals(old))renderDevices(false);else if(pageId.equals("settings")&&profileWorkspaceWide&&!signature.equals(old))browser.update(RhShared.ordered(activity,computers.values()),selected.uuid,deviceQuery);}
+    public void update(ComputerDetails d){org.json.JSONObject shared=RhShared.read(activity);if(!RhShared.acceptsDiscovery(activity,shared,d.uuid))return;boolean observation=diagnostics.observed(d,shared);String signature=d.name+"|"+d.state+"|"+RhNetwork.pairingStatus(d)+"|"+RhDiscoveryObservation.signature(d)+"|"+RhProfile.load(activity,shared,d.uuid).summary();String old=signatures.put(d.uuid,signature);computers.put(d.uuid,d);if(!profileVisible&&(observation||!signature.equals(old)))renderDevices(false,shared);else if(pageId.equals("settings")&&profileWorkspaceWide&&(observation||!signature.equals(old)))browser.update(shared,RhShared.ordered(shared,computers.values()),selected.uuid,deviceQuery);}
     public void message(String value){statusScope=pageId+(pageId.equals("global-settings")?"/"+settingsTab:"");if(!copyError.isEmpty()&&copyError.equals(value)||pageId.equals("device-info")&&!infoError.isEmpty()&&infoError.equals(value)||draft!=null&&!formError.isEmpty()&&formError.equals(value)||syncDraft!=null&&!syncError.isEmpty()&&syncError.equals(value)||pageId.equals("add")&&!addError.isEmpty()&&addError.equals(value))value="";status.setText(value==null?"":value);status.setVisibility(value==null||value.isEmpty()?View.GONE:View.VISIBLE);}
-    public boolean goBack(){if(syncClearPending){invoke("sync.clear.resolve",RhActions.obj("choice","cancel"));return true;}if(pendingNavigation!=null){invoke("navigation.resolve",RhActions.obj("choice","stay"));return true;}if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(pageId.equals("add")){invoke("device.add.cancel",RhActions.obj());return true;}if(profileVisible||pageId.equals("global-settings")){invoke("navigation.back",RhActions.obj());return true;}if(browser.isDetailOpen()){invoke("navigation.back",RhActions.obj());return true;}return false;}
-    public void dispose(){disposed=true;foreground=false;diagnostics.detach(diagnosticListener);syncWork.detach(syncListener);if(updateWork.detach(updateListener)&&activity.isFinishing())updateWork.abandonInstall();systemBack.close();if(addOperation!=null){RhDeviceAdd retired=addOperation;addOperation=null;retired.cancel();}if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();if(syncClearDialog!=null)syncClearDialog.dismiss();updateUi.removeCallbacks(updateTick);updateUi.removeCallbacks(connectionTick);}
+    public boolean goBack(){if(windowsDialog!=null){invoke("device.windows.close",RhActions.obj());return true;}if(syncClearPending){invoke("sync.clear.resolve",RhActions.obj("choice","cancel"));return true;}if(pendingNavigation!=null){invoke("navigation.resolve",RhActions.obj("choice","stay"));return true;}if(admission!=null){invoke("stream.disconnect",RhActions.obj());return true;}if(pairing){invoke("pair.cancel",RhActions.obj());return true;}if(pageId.equals("add")){invoke("device.add.cancel",RhActions.obj());return true;}if(profileVisible||pageId.equals("global-settings")){invoke("navigation.back",RhActions.obj());return true;}if(browser.isDetailOpen()){invoke("navigation.back",RhActions.obj());return true;}return false;}
+    public void dispose(){disposed=true;foreground=false;cancelProfileErrorFocus();diagnostics.detach(diagnosticListener);syncWork.detach(syncListener);if(updateWork.detach(updateListener)&&activity.isFinishing())updateWork.abandonInstall();systemBack.close();if(windowsDialog!=null)windowsDialog.dismiss();if(addOperation!=null){RhDeviceAdd retired=addOperation;addOperation=null;retired.cancel();}if(admission!=null)admission.cancel();if(navigationDialog!=null)navigationDialog.dismiss();if(syncClearDialog!=null)syncClearDialog.dismiss();updateUi.removeCallbacks(updateTick);updateUi.removeCallbacks(connectionTick);}
     public void rebind(){activity.setContentView(root);ViewCompat.requestApplyInsets(root);if(admission!=null){if(pairing&&!admission.state().optBoolean("cancelled"))showPair();else showAdmission(admission);}else if(pageId.equals("connection"))showConnection();else if(pageId.equals("global-settings"))showGlobal();else if(pageId.equals("device-info"))showInfo();else if(pageId.equals("profile-copy"))showCopyPreview();else if(draft!=null)showProfile(selected,draft);else if(pageId.equals("add"))showAdd();else renderDevices(false);if(pendingNavigation!=null)showNavigationPrompt();}
-    public void paused(){foreground=false;updateUi.removeCallbacks(updateTick);}
-    public void resumed(){if(disposed)return;boolean entering=!foreground;foreground=true;if(pageId.equals("connection"))refreshConnection();syncChanged();if(entering)updateWork.returned();updateChanged();}
-    private String updateInstallBlockReason(){if(connectionBusy()||pairing||admission!=null)return "请先完成或断开当前远程连接";if(syncBusy)return "请先完成配置同步";if(pageId.equals("add")||addingBusy())return "请先完成或取消添加设备";if(pendingNavigation!=null||syncClearPending)return "请先处理当前确认";return "";}
-    private boolean protectPreparedUpdate(){if(!updateWork.awaitingInstall())return false;boolean dirty=profileDirty()||infoDirty()||syncDirty();String blocked=updateInstallBlockReason();if(!dirty&&blocked.isEmpty())return false;boolean decide=dirty&&blocked.isEmpty()&&foreground&&!activity.isFinishing();updateWork.abandonInstall();if(decide)invoke("updates.install",RhActions.obj());return true;}
+    public void paused(){foreground=false;cancelEditorSubmit.run();cancelProfileErrorFocus();updateUi.removeCallbacks(updateTick);}
+    public void resumed(){if(disposed||activity.isDestroyed()||activity.isFinishing())return;RhActions.attachHome(this);boolean entering=!foreground;foreground=true;if(pageId.equals("connection"))refreshConnection();syncChanged();if(entering)updateWork.returned();updateChanged();}
+    private String updateInstallBlockReason(){if(connectionBusy()||pairing||admission!=null)return "请先完成或断开当前远程连接";if(diagnostics.busy())return "请先完成或取消连接诊断";if(syncBusy)return "请先完成配置同步";if(pageId.equals("add")||addingBusy())return "请先完成或取消添加设备";if(pendingNavigation!=null||syncClearPending)return "请先处理当前确认";return "";}
+    private boolean protectPreparedUpdate(){if(!updateWork.awaitingInstall())return false;boolean dirty=profileDirty()||infoDirty()||syncDirty();String blocked=updateInstallBlockReason();if(!dirty&&blocked.isEmpty())return false;boolean decide=dirty&&blocked.isEmpty()&&foreground&&!activity.isFinishing();String intent=updateWork.state().optString("intent");updateWork.abandonInstall();if(decide)invoke("updates.install",RhActions.obj("expectedIntent",intent));return true;}
     private void updateChanged(){if(disposed||activity.isDestroyed())return;boolean protectedForm=protectPreparedUpdate();if(!protectedForm&&foreground&&!activity.isFinishing())updateWork.continueInstall(activity,NETWORK);updateUi.removeCallbacks(updateTick);refreshUpdateUi();}
     private void refreshUpdateUi(){if(disposed||activity.isDestroyed())return;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))refreshUpdateControls();if(foreground&&updateWork.busy())updateUi.postDelayed(updateTick,300);}
     public void showDevices(){if(admission!=null){showAdmission(admission);return;}pageId="devices";discardDraft();selected=null;browser.showDetail(false);renderDevices(true);message("");}
@@ -245,7 +334,8 @@ public final class RhHome implements RhActions.Target {
     private void navigationFooter(){if(navigationLocked()){TextView hint=text(navigationHint(),12,muted,false);hint.setContentDescription("页面导航状态");hint.setPadding(0,dp(4),0,dp(4));formFooter.addView(hint);}}
     void connectionFailure(String failure){connection.fail(failure);if(pageId.equals("connection"))showConnection();}
     void connectionStopping(String uuid){if(connection.uuid.equals(uuid)){connection.stop();if(pageId.equals("connection"))showConnection();}}
-    void connectionFrame(String uuid){if(connection.uuid.equals(uuid)){connection.frame();if(pageId.equals("connection"))showConnection();}}
+    void connectionEnded(String uuid){if(connection.uuid.equals(uuid)){connection.gracefulEnd();if(pageId.equals("connection"))showConnection();}}
+    void connectionFrame(String uuid){diagnostics.clearCheck(uuid);if(connection.uuid.equals(uuid)){connection.frame();if(pageId.equals("connection"))showConnection();}}
     private void refreshConnection(){
         updateUi.removeCallbacks(connectionTick);if(activity.isDestroyed()||!pageId.equals("connection"))return;
         org.json.JSONObject active=RhActions.activeState();String before=connection.phase;boolean wasBusy=connectionBusy();
@@ -253,8 +343,7 @@ public final class RhHome implements RhActions.Target {
             if(RhActions.hasStream()){
                 if(active.optBoolean("firstFrame"))connection.frame();
                 else if(active.optString("phase").equals("reconnecting"))connection.phase="reconnecting";
-            }else if(!connection.stopping)connection.fail("远程连接已结束");
-            else connection.finished(false,"");
+            }else connection.observeIdle();
         }
         if(!wasBusy||!before.equals(connection.phase)||!RhActions.hasStream()){
             if(connection.stopping&&!connectionBusy()){returnToDevice();message(connection.title());return;}
@@ -265,48 +354,74 @@ public final class RhHome implements RhActions.Target {
     private void showAdmission(RhAdmission operation){connection.stage(operation.state());showConnection();}
     private void showConnection(){
         pageId="connection";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
-        boolean pairFlow=connection.operation.equals("pair");TextView title=text(pairFlow?"配对":"连接",23,ink,true);formHeader.addView(title);heading(connection.name,"");
+        boolean pairFlow=connection.operation.equals("pair"),windowFlow=connection.operation.equals("windows");TextView title=text(pairFlow?"配对":windowFlow?"选择窗口":"连接",23,ink,true);formHeader.addView(title);heading(connection.name,"");
         TextView stage=text(connection.title(),16,connection.phase.equals("failed")?failureColor:blue,true);stage.setContentDescription(pairFlow?"配对阶段":"连接阶段");content.addView(stage);
         if(connectionBusy()&&!connection.phase.equals("connected")){ProgressBar progress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);progress.setIndeterminate(true);LinearLayout.LayoutParams progressParams=new LinearLayout.LayoutParams(-1,dp(4));progressParams.topMargin=dp(20);content.addView(progress,progressParams);}
-        if(!pairFlow){label("1  检查地址与配对");label("2  建立串流");label("3  显示远程画面");}
+        if(!pairFlow&&!windowFlow){label("1  检查地址与配对");label("2  建立串流");label("3  显示远程画面");}
         if(!connection.error.isEmpty()){String detail=connection.error.startsWith("连接失败：")?connection.error.substring(5):connection.error;TextView error=text(detail,14,failureColor,false);error.setContentDescription("连接错误");error.setPadding(0,dp(20),0,dp(8));content.addView(error);}
         navigationFooter();RhActionRow footer=actionRow();
         if(connectionBusy()){
             boolean cleaning=connection.stopping||connection.phase.equals("cancelling")||connection.phase.equals("cleaning")||connection.phase.equals("failed");
-            Button cancel=button(cleaning?"正在清理…":pairFlow?"取消配对":connection.phase.equals("connected")?"断开连接":"取消连接",false,()->invoke(pairFlow?"pair.cancel":"stream.disconnect",RhActions.obj()));cancel.setEnabled(!cleaning);footer.addView(cancel);
+            Button cancel=button(cleaning?"正在清理…":pairFlow?"取消配对":connection.phase.equals("connected")?"断开连接":windowFlow?"取消请求":"取消连接",false,()->invoke(pairFlow?"pair.cancel":"stream.disconnect",RhActions.obj()));cancel.setEnabled(!cleaning);footer.addView(cancel);
         }else{
             footer.addView(button("返回设备",false,()->invoke("connection.dismiss",RhActions.obj())));
-            if(connection.phase.equals("failed"))footer.addView(button(connection.operation.equals("pair")?"重试配对":"重试连接",true,()->invoke("connection.retry",RhActions.obj())));
+            if(connection.phase.equals("failed"))footer.addView(button(connection.operation.equals("pair")?"重试配对":windowFlow?"重新读取":"重试连接",true,()->invoke("connection.retry",RhActions.obj())));
         }
         LinearLayout aligned=row();aligned.setGravity(Gravity.END);aligned.addView(footer,new LinearLayout.LayoutParams(-2,-2));formFooter.addView(aligned);formPadding(scroll.getWidth());refreshNavigation();
     }
     private void beginAdmission(ComputerDetails target,boolean connect,String pin){
-        RhActions.clearConnectionError();browserUuid=target.uuid;selected=target;String alias=RhShared.alias(activity,target.uuid);connection.begin(target.uuid,alias.isEmpty()?target.name:alias);connection.operation=connect?"connect":"pair";
+        beginAdmission(target,connect,pin,false,null);
+    }
+    private void beginAdmission(ComputerDetails target,boolean connect,String pin,boolean chooseWindow,org.json.JSONObject window){
+        RhActions.clearConnectionError();browserUuid=target.uuid;selected=target;String alias=RhShared.alias(activity,target.uuid);connection.begin(target.uuid,alias.isEmpty()?target.name:alias);connection.operation=chooseWindow?"windows":connect?"connect":"pair";connection.window=window;
         RhProfile profile=RhProfile.load(activity,target.uuid);networkBusy=true;
         admission=new RhAdmission(activity,target.uuid,CONNECT,new RhAdmission.Listener(){
-            public void changed(RhAdmission operation){if(activity.isDestroyed())return;actions.setDiscoveryPaused(true);if(!operation.state().optString("phase").equals("pairing"))showAdmission(operation);}
+            public void changed(RhAdmission operation){if(activity.isDestroyed())return;actions.setDiscoveryPaused(true);connection.stage(operation.state());if(connection.phase.equals("pairing"))showPair();else showConnection();}
             public void finished(RhAdmission operation,boolean handedOff,String result){if(admission!=operation)return;admission=null;networkBusy=false;pairing=false;pairPin="";
                 String error=operation.state().optString("error");if(error.isEmpty()&&operation.state().optBoolean("cancelled"))connection.stop();connection.finished(handedOff,error);
                 if(!activity.isDestroyed()){
-                    if(handedOff||!error.isEmpty()){showConnection();updateUi.postDelayed(connectionTick,300);}
+                    if(chooseWindow&&error.isEmpty()&&!operation.state().optBoolean("cancelled")){returnToDevice();showWindows();}
+                    else if(handedOff||!error.isEmpty()){showConnection();updateUi.postDelayed(connectionTick,300);}
                     else{returnToDevice();if(!result.isEmpty())message(result);}
                     actions.setDiscoveryPaused(false);
                 }}
         });
         admission.start(operation->{
-            if(connect)RhStatistics.begin(profile);
+            if(connect&&!chooseWindow)RhStatistics.begin(profile);
             operation.progress("resolving");ComputerDetails routed=RhNetwork.resolve(activity,new ComputerDetails(target),profile,null,operation);
-            operation.progress("identity");ComputerDetails resolved=RhNetwork.refreshConnectionDetails(activity,routed,operation);
-            if(!connect||resolved.pairState!=PairingManager.PairState.PAIRED||resolved.serverCert==null)return ()->{update(resolved);connection.operation="pair";pairPin=pin;pairing=true;showPair();try{operation.pair(()->actions.pair(resolved,pin),actions::cancelPair);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
-            Runnable launch=actions.prepareConnect(resolved,operation);operation.checkpoint();
+            operation.progress("identity");ComputerDetails resolved=connect?RhNetwork.refreshConnectionDetails(activity,routed,operation):RhNetwork.refreshPairingDetails(activity,routed,operation);
+            if((chooseWindow||window!=null)&&(resolved.pairState!=PairingManager.PairState.PAIRED||resolved.serverCert==null))throw new java.io.IOException("配对状态已变化，请先重新配对，再选择窗口");
+            if(!connect||resolved.pairState!=PairingManager.PairState.PAIRED||resolved.serverCert==null)return ()->{update(resolved);connection.operation="pair";pairPin=pin;pairing=true;try{operation.pair(()->actions.pair(resolved,pin),actions::cancelPair);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
+            if(chooseWindow){operation.progress("windows");org.json.JSONObject list=actions.windows(resolved,operation);operation.checkpoint();return ()->{windowList=list;windowsUuid=resolved.uuid;update(resolved);try{operation.completeRead();}catch(java.io.IOException e){throw new IllegalStateException(e);}};}
+            Runnable launch=window==null?actions.prepareConnect(resolved,operation):actions.prepareWindowConnect(resolved,operation,window);operation.checkpoint();
             return ()->{try(RhStatistics.Scope trace=new RhStatistics.Scope("admission_ui_update")){update(resolved);}try{operation.handoff(launch);}catch(java.io.IOException e){throw new IllegalStateException(e);}};
         });
     }
+    private void showWindows(){
+        if(disposed||activity.isFinishing())return;
+        if(windowsDialog!=null)windowsDialog.dismiss();
+        org.json.JSONArray rows=windowList.optJSONArray("windows");if(rows==null)rows=new org.json.JSONArray();final org.json.JSONArray choices=rows;
+        android.widget.BaseAdapter adapter=new android.widget.BaseAdapter(){
+            public int getCount(){return choices.length();}public Object getItem(int p){return choices.optJSONObject(p);}public long getItemId(int p){return p;}public boolean areAllItemsEnabled(){return false;}public boolean isEnabled(int p){org.json.JSONObject row=choices.optJSONObject(p);return row!=null&&row.optBoolean("available");}
+            public View getView(int p,View old,ViewGroup parent){
+                org.json.JSONObject item=choices.optJSONObject(p);LinearLayout row=new LinearLayout(activity);row.setOrientation(LinearLayout.VERTICAL);row.setPadding(dp(20),dp(12),dp(20),dp(12));row.setMinimumHeight(dp(64));row.setAlpha(isEnabled(p)?1f:.45f);
+                int ink=Color.parseColor(RhShared.dark(activity)?"#e1e8f6":"#34415b");TextView title=new TextView(activity);title.setText(item.optString("title"));title.setTextColor(ink);title.setTextSize(14);title.setSingleLine(true);title.setEllipsize(android.text.TextUtils.TruncateAt.END);row.addView(title,new LinearLayout.LayoutParams(-1,-2));
+                TextView detail=new TextView(activity);detail.setText(item.optString("application")+" · "+(item.optBoolean("available")?item.optInt("width")+" × "+item.optInt("height"):item.optString("state").equals("minimized")?"已最小化":"不可用"));detail.setTextSize(12);detail.setTextColor(ink);detail.setSingleLine(true);detail.setEllipsize(android.text.TextUtils.TruncateAt.END);row.addView(detail,new LinearLayout.LayoutParams(-1,-2));return row;
+            }
+        };
+        windowsDialog=new AlertDialog.Builder(activity,RhUiStyle.dialogTheme(activity)).setTitle("选择窗口（预览）").setAdapter(adapter,(dialog,index)->{org.json.JSONObject row=choices.optJSONObject(index);if(row!=null&&row.optBoolean("available"))invoke("device.window.connect",RhActions.obj("uuid",windowsUuid,"source",row.optString("id")));}).setNegativeButton("取消",(dialog,which)->invoke("device.windows.close",RhActions.obj())).setNeutralButton("刷新",null).create();
+        windowsDialog.setOnCancelListener(dialog->invoke("device.windows.close",RhActions.obj()));windowsDialog.setOnDismissListener(dialog->{if(windowsDialog==dialog)windowsDialog=null;});windowsDialog.show();RhUiStyle.dialog(windowsDialog,false);
+        windowsDialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view->invoke("device.windows.open",RhActions.obj("uuid",windowsUuid)));
+        if(choices.length()==0)message("当前没有可采集的窗口");
+    }
     private void renderDevices(boolean resetScroll){
+        renderDevices(resetScroll,RhShared.read(activity));
+    }
+    private void renderDevices(boolean resetScroll,org.json.JSONObject shared){
         profileVisible=false;standaloneWorkspace();formPane.setVisibility(View.GONE);formHeader.setVisibility(View.GONE);formFooter.setVisibility(View.GONE);scroll.setVisibility(View.GONE);browser.setVisibility(View.VISIBLE);refreshNavigation();
-        List<ComputerDetails> list=RhShared.ordered(activity,computers.values());
+        List<ComputerDetails> list=RhShared.ordered(shared,computers.values());
         if(!computers.containsKey(browserUuid))browserUuid=list.isEmpty()?"":list.get(0).uuid;
-        browser.update(list,browserUuid,deviceQuery);
+        browser.update(shared,list,browserUuid,deviceQuery);
     }
     private void label(String value){TextView t=text(value,13,muted,false);t.setPadding(0,dp(15),0,dp(7));content.addView(t);}
     private void choices(String[] values,String selected,java.util.function.Consumer<String> onSelect){RhActionRow group=actionRow();for(String value:values){Button b=tab(value,value.equals(selected),()->onSelect.accept(value));presets.put(value,b);group.addView(b);}content.addView(group);}
@@ -317,11 +432,12 @@ public final class RhHome implements RhActions.Target {
             @Override public View getDropDownView(int position,View reused,android.view.ViewGroup parent){return style(super.getDropDownView(position,reused,parent),true);}
         };adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);return adapter;
     }
-    private CheckBox check(String label,boolean checked,java.util.function.Consumer<Boolean> change){CheckBox b=new CheckBox(activity);b.setText(label);b.setTextColor(ink);b.setTextSize(14);b.setChecked(checked);b.setMinHeight(dp(48));b.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);b.setTextDirection(View.TEXT_DIRECTION_LTR);b.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);b.setButtonTintList(android.content.res.ColorStateList.valueOf(blue));b.setOnCheckedChangeListener((v,state)->change.accept(state));content.addView(b);return b;}
+    private CheckBox check(String label,boolean checked,java.util.function.Consumer<Boolean> change){CheckBox b=new CheckBox(activity);b.setText(label);b.setTextColor(ink);b.setTextSize(14);b.setChecked(checked);b.setMinHeight(dp(48));b.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);b.setTextDirection(View.TEXT_DIRECTION_LTR);b.setGravity(Gravity.LEFT|Gravity.CENTER_VERTICAL);b.setButtonTintList(android.content.res.ColorStateList.valueOf(blue));b.setOnCheckedChangeListener((v,state)->fromView(v,()->change.accept(state)));content.addView(b);return b;}
     public void showProfile(ComputerDetails d){copyPreview=null;copyNotice="";copyError="";numberInputs.clear();formError="";formErrorField="";draftBaseline="";renderedProfileTab="";pageId="settings";browserUuid=d.uuid;selected=d;draft=RhProfile.load(activity,d.uuid);draftDisplayName=RhShared.alias(activity,d.uuid);try{org.json.JSONObject host=RhNetwork.metadata(activity,d);draftAddress=host.getString("address");org.json.JSONArray extra=host.optJSONArray("addresses");List<String> addresses=new ArrayList<>();if(extra!=null)for(int i=0;i<extra.length();i++)addresses.add(extra.getString(i));draftAddresses=android.text.TextUtils.join(", ",addresses);}catch(Exception missing){draftAddress="";draftAddresses="";}draftRelay=draft.relayUrl;profileSourcesExpanded=false;draftBaseline=draftSnapshot();showProfile(d,draft);scroll.post(()->scroll.scrollTo(0,0));}
     private void showProfile(ComputerDetails d,RhProfile p){
+        cancelProfileErrorFocus();
         int restoreScroll=profileTab.equals(renderedProfileTab)?scroll.getScrollY():0;renderedProfileTab=profileTab;
-        copyFailure=null;diagnosticButton=null;diagnosticReport=null;numberEditors.clear();profileControls.clear();selectKeys.clear();presets.clear();displayNameEditor=null;primaryEditor=null;backupEditor=null;relayEditor=null;
+        copyFailure=null;diagnosticButton=null;diagnosticCancel=null;diagnosticReport=null;diagnosticDetailsToggle=null;diagnosticDetailsText=null;numberEditors.clear();profileControls.clear();selectKeys.clear();presets.clear();displayNameEditor=null;primaryEditor=null;backupEditor=null;relayEditor=null;
         profileVisible=true;showContent();content.removeAllViews();org.json.JSONObject shared=RhShared.read(activity);String currentClient=RhShared.clientId(activity);
         buildProfileChrome(d);scroll.setBackgroundColor(page);content.setBackgroundColor(page);formPadding(scroll.getWidth());
         if(profileTab.equals("advanced")){
@@ -332,28 +448,54 @@ public final class RhHome implements RhActions.Target {
         }
         if(profileTab.equals("network"))try {
             label(RhNetwork.savedSummary(activity,d));label("按路径顺序尝试所有已保存地址，内网地址不会限制外网连接。");
-            primaryEditor=field("首选 IP 或主机名",draftAddress,false);watch(primaryEditor,"settings.network.edit","address");
-            backupEditor=field("备用地址（逗号分隔，随 WebDAV 同步）",draftAddresses,false);watch(backupEditor,"settings.network.edit","addresses");
-            diagnosticButton=button("诊断连接",false,()->invoke("device.network.diagnose",RhActions.obj("uuid",d.uuid)));content.addView(diagnosticButton);
+            primaryEditor=addressField("首选 IP 或主机名",draftAddress);watch(primaryEditor,"settings.network.edit","address");
+            backupEditor=addressField("备用地址（逗号分隔，随 WebDAV 同步）",draftAddresses);watch(backupEditor,"settings.network.edit","addresses");
+            diagnosticReport=text("",13,muted,false);diagnosticReport.setMinLines(2);diagnosticReport.setMaxLines(2);diagnosticReport.setEllipsize(android.text.TextUtils.TruncateAt.END);diagnosticReport.setPadding(0,dp(8),0,dp(8));content.addView(diagnosticReport);
+            RhActionRow diagnosticCommands=actionRow();diagnosticButton=boundButton("诊断连接",false);diagnosticButton.setTag("device.network.diagnose");diagnosticCommands.addView(diagnosticButton);diagnosticCancel=boundButton("取消诊断",false);diagnosticCancel.setTag("device.network.cancel");diagnosticCommands.addView(diagnosticCancel);diagnosticDetailsToggle=boundButton("查看详情",false);diagnosticDetailsToggle.setTag("device.network.details.toggle");diagnosticCommands.addView(diagnosticDetailsToggle);content.addView(diagnosticCommands);
+            diagnosticDetailsText=text("",13,muted,false);diagnosticDetailsText.setPadding(0,dp(8),0,dp(15));content.addView(diagnosticDetailsText);
             label("连接顺序");java.util.ArrayList<String> routes=new java.util.ArrayList<>(p.routeOrder);for(String route:RhProfile.ROUTES)if(!routes.contains(route))routes.add(route);
             for(String route:routes){boolean enabled=p.routeOrder.contains(route);int index=java.util.Arrays.asList(RhProfile.ROUTES).indexOf(route),position=p.routeOrder.indexOf(route);String routeLabel=RhProfile.ROUTE_LABELS[index];RhActionRow controls=actionRow();
-                CheckBox toggle=new CheckBox(activity);toggle.setText(routeLabel);toggle.setContentDescription("连接路径："+routeLabel);toggle.setTextColor(ink);toggle.setTextSize(14);toggle.setMinHeight(dp(48));toggle.setButtonTintList(android.content.res.ColorStateList.valueOf(blue));toggle.setChecked(enabled);toggle.setEnabled(!enabled||p.routeOrder.size()>1);toggle.setOnCheckedChangeListener((v,checked)->invoke("settings.route.toggle",RhActions.obj("route",route)));controls.addView(toggle);
+                CheckBox toggle=new CheckBox(activity);toggle.setText(routeLabel);toggle.setContentDescription("连接路径："+routeLabel);toggle.setTextColor(ink);toggle.setTextSize(14);toggle.setMinHeight(dp(48));toggle.setButtonTintList(android.content.res.ColorStateList.valueOf(blue));toggle.setChecked(enabled);toggle.setEnabled(!enabled||p.routeOrder.size()>1);toggle.setOnCheckedChangeListener((v,checked)->fromView(v,()->invoke("settings.route.toggle",RhActions.obj("route",route))));controls.addView(toggle);
                 if(enabled){Button up=button("↑",false,()->invoke("settings.route.move",RhActions.obj("route",route,"direction","up")));up.setContentDescription("上移"+routeLabel);up.setEnabled(position>0);controls.addView(up);Button down=button("↓",false,()->invoke("settings.route.move",RhActions.obj("route",route,"direction","down")));down.setContentDescription("下移"+routeLabel);down.setEnabled(position+1<p.routeOrder.size());controls.addView(down);}content.addView(controls);}
             label("至少启用一条连接路径。");
             content.addView(button("恢复默认顺序",false,()->set("routeOrder",new org.json.JSONArray(java.util.Arrays.asList(RhProfile.ROUTES)))));
-            relayEditor=field("中继服务器",draftRelay,false);watch(relayEditor,"settings.network.edit","relayUrl");
-            label("按已启用的顺序尝试，失败后自动回退。配置随 WebDAV 同步。");diagnosticReport=text("",13,muted,false);diagnosticReport.setPadding(0,dp(15),0,dp(7));content.addView(diagnosticReport);refreshDiagnosticControls();
+            relayEditor=addressField("中继服务器",draftRelay);watch(relayEditor,"settings.network.edit","relayUrl");
+            label("按已启用的顺序尝试，失败后自动回退。配置随 WebDAV 同步。");refreshDiagnosticControls();
         }catch(Exception e){label("连接地址读取失败："+e.getMessage());}
         if(profileTab.equals("video"))choices(new String[]{"720P","1080P","1440P","平板","4K"},p.width==1280&&p.height==720?"720P":p.width==1920&&p.height==1080?"1080P":p.width==2560&&p.height==1440?"1440P":p.width==2520&&p.height==1680?"平板":p.width==3840&&p.height==2160?"4K":"",v->{int w=v.equals("720P")?1280:v.equals("1080P")?1920:v.equals("1440P")?2560:v.equals("平板")?2520:3840;int h=w==1280?720:w==1920?1080:w==2560?1440:w==2520?1680:2160;set("resolution",new org.json.JSONArray().put(w).put(h));});
         try{org.json.JSONArray fields=RhSettings.catalog(activity);org.json.JSONObject values=p.json();for(int i=0;i<fields.length();i++){
             org.json.JSONObject f=fields.getJSONObject(i);if(!profileTab.equals(f.getString("tab"))||!RhSettings.supports(f,"android"))continue;String key=f.getString("key"),type=f.getString("type"),title=f.getString("label");
             if(type.equals("bool")){profileControls.put(key,check(title,values.getBoolean(key),v->{if(!bindingProfile)set(key,v);}));}
             else if(type.equals("number")){EditText edit=numberField(title,numberInputs.containsKey(key)?numberInputs.get(key):String.valueOf(values.getInt(key)));edit.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);numberEditors.put(key,edit);profileControls.put(key,edit);watch(edit,"settings.input",key);}
-            else if(type.equals("select")){org.json.JSONArray options=f.getJSONArray("options");String[] labels=new String[options.length()],keys=new String[options.length()];int index=0;for(int j=0;j<options.length();j++){keys[j]=options.getJSONArray(j).getString(0);labels[j]=options.getJSONArray(j).getString(1);if(keys[j].equals(values.getString(key)))index=j;}Spinner spinner=new Spinner(activity);ArrayAdapter<String> adapter=options(labels);spinner.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));spinner.setAdapter(adapter);spinner.setSelection(index,false);selectKeys.put(key,keys);profileControls.put(key,spinner);spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){if(!bindingProfile&&draft!=null&&!keys[position].equals(draft.json().optString(key)))set(key,keys[position]);}});spinner.setContentDescription(title);spinner.setBackground(bg(surface,line,8));settingRow(title,spinner);}
+            else if(type.equals("select")){org.json.JSONArray options=f.getJSONArray("options");String[] labels=new String[options.length()],keys=new String[options.length()];int index=0;for(int j=0;j<options.length();j++){keys[j]=options.getJSONArray(j).getString(0);labels[j]=options.getJSONArray(j).getString(1);if(keys[j].equals(values.getString(key)))index=j;}Spinner spinner=new Spinner(activity);ArrayAdapter<String> adapter=options(labels);spinner.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));spinner.setAdapter(adapter);spinner.setSelection(index,false);selectKeys.put(key,keys);profileControls.put(key,spinner);spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){fromView(spinner,()->{if(!bindingProfile&&draft!=null&&!keys[position].equals(draft.json().optString(key)))set(key,keys[position]);});}});spinner.setContentDescription(title);spinner.setBackground(bg(surface,line,8));settingRow(title,spinner);}
             if(!f.optString("help").isEmpty())label(f.optString("help"));
         }}catch(org.json.JSONException e){throw new IllegalStateException("invalid settings catalog",e);}
         if(profileTab.equals("audio"))label("串流中的声音开关位于控制栏；这里设置下次连接的声音。");
-        wrapBodyInCard();refreshProfileControls();layoutProfileWorkspace();scroll.post(()->{scroll.scrollTo(0,restoreScroll);if(!formError.isEmpty()){View invalid=profileControls.get(formErrorField);if(formErrorField.equals("address"))invalid=primaryEditor;else if(formErrorField.equals("relayUrl"))invalid=relayEditor;else if(formErrorField.equals("displayName"))invalid=displayNameEditor;if(invalid!=null){invalid.requestFocus();invalid.requestRectangleOnScreen(new android.graphics.Rect(0,0,invalid.getWidth(),invalid.getHeight()),false);}}});
+        wrapBodyInCard();refreshProfileControls();layoutProfileWorkspace();View rendered=content.getChildAt(0);scroll.post(()->{if(!disposed&&pageId.equals("settings")&&content.getChildAt(0)==rendered)scroll.scrollTo(0,restoreScroll);});focusProfileError(false);
+    }
+    private void revealFocusedEditor(){if(editorKeyboardVisible()){View focused=content.findFocus();if(focused instanceof EditText)focused.requestRectangleOnScreen(new android.graphics.Rect(0,0,focused.getWidth(),focused.getHeight()),true);}}
+    private boolean editorKeyboardVisible(){WindowInsetsCompat insets=ViewCompat.getRootWindowInsets(root);return insets!=null&&insets.isVisible(WindowInsetsCompat.Type.ime());}
+    private void cancelProfileErrorFocus(){
+        profileFocusGeneration++;
+        if(profileErrorFocus!=null){scroll.removeCallbacks(profileErrorFocus);profileErrorFocus=null;}
+        if(profileErrorWindowFocus!=null){if(root.getViewTreeObserver().isAlive())root.getViewTreeObserver().removeOnWindowFocusChangeListener(profileErrorWindowFocus);profileErrorWindowFocus=null;}
+    }
+    /** Own the posted focus/show so leaving, editing or pausing cannot reopen an old editor. */
+    private void focusProfileError(boolean reopenKeyboard){
+        cancelProfileErrorFocus();if(formError.isEmpty()||formErrorField.isEmpty())return;
+        View invalid=profileControls.get(formErrorField);if(formErrorField.equals("address"))invalid=primaryEditor;else if(formErrorField.equals("relayUrl"))invalid=relayEditor;else if(formErrorField.equals("displayName"))invalid=displayNameEditor;
+        if(invalid==null)return;final View target=invalid;final long ticket=profileFocusGeneration;
+        final String owner=selected==null?"":selected.uuid,category=profileTab,key=formErrorField;
+        profileErrorFocus=()->{
+            if(ticket!=profileFocusGeneration||profileErrorFocus==null)return;
+            if(disposed||!pageId.equals("settings")||selected==null||!owner.equals(selected.uuid)||!category.equals(profileTab)||!key.equals(formErrorField)||formError.isEmpty()||!target.isAttachedToWindow()){cancelProfileErrorFocus();return;}
+            if(reopenKeyboard&&target instanceof EditText&&!target.hasWindowFocus()){
+                if(profileErrorWindowFocus==null){profileErrorWindowFocus=focused->{if(focused&&ticket==profileFocusGeneration&&profileErrorFocus!=null)scroll.post(profileErrorFocus);};root.getViewTreeObserver().addOnWindowFocusChangeListener(profileErrorWindowFocus);}return;
+            }
+            profileErrorFocus=null;if(profileErrorWindowFocus!=null){root.getViewTreeObserver().removeOnWindowFocusChangeListener(profileErrorWindowFocus);profileErrorWindowFocus=null;}
+            if(!target.hasFocus())target.requestFocus();target.requestRectangleOnScreen(new android.graphics.Rect(0,0,target.getWidth(),target.getHeight()),false);
+            if(reopenKeyboard&&target instanceof EditText&&target.hasFocus())((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).showSoftInput(target,0);
+        };scroll.post(profileErrorFocus);
     }
     private void showCopyPreview(){
         pageId="profile-copy";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
@@ -361,10 +503,27 @@ public final class RhHome implements RhActions.Target {
         scroll.setBackgroundColor(page);content.setBackgroundColor(page);formPadding(scroll.getWidth());
         copyDetail("来源客户端",copyPreview.optString("sourceName"));copyDetail("目标设备",copyPreview.optString("targetName"));label("将替换当前草稿的连接参数。设备地址和主机鼠标设置沿用当前值。");
         org.json.JSONArray fields=copyPreview.optJSONArray("fields");for(int i=0;i<fields.length();i++){org.json.JSONObject field=fields.optJSONObject(i);copyDetail(field.optString("label"),field.optString("value"));}
-        copyFailure=text(copyError,13,failureColor,false);copyFailure.setVisibility(copyError.isEmpty()?View.GONE:View.VISIBLE);formFooter.addView(copyFailure);
+        copyFailure=footerError(copyError,"复制配置错误");
         LinearLayout commands=row();commands.setGravity(Gravity.END);commands.addView(button("取消",false,()->invoke("settings.copy.cancel",RhActions.obj())));Button apply=button("复制到草稿",true,()->invoke("settings.copy.apply",RhActions.obj()));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,dp(48));lp.setMarginStart(dp(8));commands.addView(apply,lp);formFooter.addView(commands);scroll.post(()->scroll.scrollTo(0,0));
     }
     private void copyDetail(String title,String value){label(title);TextView detail=text(value,15,ink,false);detail.setTextIsSelectable(true);content.addView(detail,new LinearLayout.LayoutParams(-1,-2));}
+    private LinearLayout reviewColumns(TextView local,TextView remote){
+        LinearLayout row=new LinearLayout(activity);row.setOrientation(LinearLayout.HORIZONTAL);row.setGravity(Gravity.TOP);
+        LinearLayout.LayoutParams left=new LinearLayout.LayoutParams(0,-2,1),right=new LinearLayout.LayoutParams(0,-2,1);left.rightMargin=dp(8);right.leftMargin=dp(8);row.addView(local,left);row.addView(remote,right);return row;
+    }
+    private LinearLayout syncReviewCard(org.json.JSONObject item){
+        LinearLayout card=column();card.setPadding(dp(14),dp(12),dp(14),dp(12));card.setBackground(bg(soft,line,12));card.addView(text(item.optString("label"),14,ink,true));
+        org.json.JSONArray fields=item.optJSONArray("fields");
+        if(fields!=null&&fields.length()>0){
+            LinearLayout headings=reviewColumns(text("本机",13,ink,true),text("远端",13,ink,true));headings.setPadding(0,dp(10),0,dp(8));card.addView(headings);
+            for(int i=0;i<fields.length();i++){
+                org.json.JSONObject field=fields.optJSONObject(i);TextView label=text(field.optString("label"),12,muted,false);label.setPadding(0,dp(8),0,dp(4));card.addView(label);
+                TextView local=text(field.optString("local"),14,ink,false),remote=text(field.optString("remote"),14,ink,false);String key=item.optString("key")+"|"+field.optString("key");local.setContentDescription("sync-review-local|"+key);remote.setContentDescription("sync-review-remote|"+key);
+                LinearLayout values=reviewColumns(local,remote);values.setPadding(0,0,0,dp(8));card.addView(values);
+            }
+        }else{card.addView(text("本机："+item.optString("local"),13,muted,false));card.addView(text("远端："+item.optString("remote"),13,muted,false));}
+        return card;
+    }
     private org.json.JSONObject performCopy(String id,org.json.JSONObject args)throws Exception{
         try{
             if(draft==null||selected==null)throw new IllegalStateException("请先打开连接设置");
@@ -388,14 +547,14 @@ public final class RhHome implements RhActions.Target {
     private void buildProfileChrome(ComputerDetails device){
         formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
         profileWorkspaceWide=wideProfileWorkspace();LinearLayout heading=row();
-        if(profileWorkspaceWide){TextView name=text(RhShared.displayName(activity,device.uuid,device.name),24,ink,true);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);heading.addView(name,new LinearLayout.LayoutParams(-1,dp(48)));formHeader.addView(heading);LinearLayout sections=row();sections.addView(tab("概览",false,()->invoke("device.select",RhActions.obj("uuid",device.uuid))));LinearLayout.LayoutParams sectionBounds=new LinearLayout.LayoutParams(-2,dp(48));sectionBounds.setMarginStart(dp(8));sections.addView(tab("连接设置",true,()->invoke("device.settings.open",RhActions.obj("uuid",device.uuid))),sectionBounds);formHeader.addView(sections);}
-        else{Button overview=backButton("概览",()->invoke("device.select",RhActions.obj("uuid",device.uuid)));overview.setContentDescription("返回设备概览");heading.addView(overview,new LinearLayout.LayoutParams(-2,dp(48)));LinearLayout.LayoutParams chooserBounds=new LinearLayout.LayoutParams(0,dp(48),1);chooserBounds.setMarginStart(dp(8));heading.addView(profileDeviceChooser(device),chooserBounds);formHeader.addView(heading);TextView caption=text("连接设置",16,ink,true);caption.setPadding(0,dp(12),0,dp(4));formHeader.addView(caption);}
+        if(profileWorkspaceWide){TextView name=text(RhShared.displayName(activity,device.uuid,device.name),24,ink,true);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);name.setMinHeight(dp(48));heading.addView(name,new LinearLayout.LayoutParams(-1,-2));formHeader.addView(heading);LinearLayout sections=row();sections.addView(tab("概览",false,()->invoke("device.select",RhActions.obj("uuid",device.uuid))));LinearLayout.LayoutParams sectionBounds=new LinearLayout.LayoutParams(-2,-2);sectionBounds.setMarginStart(dp(8));sections.addView(tab("连接设置",true,()->invoke("device.settings.open",RhActions.obj("uuid",device.uuid))),sectionBounds);formHeader.addView(sections);}
+        else{Button overview=backButton("概览",()->invoke("device.select",RhActions.obj("uuid",device.uuid)));overview.setContentDescription("返回设备概览");heading.addView(overview,new LinearLayout.LayoutParams(-2,-2));LinearLayout.LayoutParams chooserBounds=new LinearLayout.LayoutParams(0,-2,1);chooserBounds.setMarginStart(dp(8));heading.addView(profileDeviceChooser(device),chooserBounds);formHeader.addView(heading);}
         categoryTabs(new String[]{"video","audio","input","network","advanced"},new String[]{"画面","音频","输入","网络","高级"},profileTab,"settings.tab");
-        formErrorView=text("",13,failureColor,false);formErrorView.setVisibility(View.GONE);formFooter.addView(formErrorView);
-        LinearLayout end=row();formNotice=text("",12,muted,false);formNotice.setSingleLine(true);formNotice.setEllipsize(android.text.TextUtils.TruncateAt.END);end.addView(formNotice,new LinearLayout.LayoutParams(0,-2,1));Button cancel=button("取消",false,()->invoke("settings.cancel",RhActions.obj()));end.addView(cancel);formSave=button("保存",true,()->invoke("settings.save",RhActions.obj()));LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(-2,dp(48));saveParams.setMarginStart(dp(8));end.addView(formSave,saveParams);formFooter.addView(end);refreshProfileFooter();
+        formErrorView=footerError("","连接设置错误");
+        LinearLayout end=row();formNotice=text("",12,muted,false);formNotice.setSingleLine(true);formNotice.setEllipsize(android.text.TextUtils.TruncateAt.END);end.addView(formNotice,new LinearLayout.LayoutParams(0,-2,1));Button cancel=button("取消",false,()->invoke("settings.cancel",RhActions.obj()));end.addView(cancel);formSave=button("保存",true,()->invoke("settings.save",RhActions.obj()));LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(-2,-2);saveParams.setMarginStart(dp(8));end.addView(formSave,saveParams);formFooter.addView(end);refreshProfileFooter();
     }
-    private Spinner profileDeviceChooser(ComputerDetails current){List<ComputerDetails> devices=RhShared.ordered(activity,computers.values());String[] names=new String[devices.size()];int active=0;for(int i=0;i<devices.size();i++){ComputerDetails item=devices.get(i);names[i]=RhShared.displayName(activity,item.uuid,item.name);if(item.uuid.equals(current.uuid))active=i;}Spinner chooser=new Spinner(activity);chooser.setContentDescription("切换远程设备");chooser.setTag("device.settings.open");android.graphics.drawable.Drawable arrow=activity.getDrawable(R.drawable.rh_chevron_down).mutate();arrow.setTint(muted);android.graphics.drawable.LayerDrawable background=new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{bg(surface,line,8),arrow});background.setLayerSize(1,dp(16),dp(16));background.setLayerGravity(1,Gravity.END|Gravity.CENTER_VERTICAL);background.setLayerInset(1,0,0,dp(12),0);chooser.setBackground(background);chooser.setPadding(0,0,dp(24),0);chooser.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));chooser.setAdapter(options(names));chooser.setSelection(active,false);final int initial=active;chooser.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){if(position<0||position>=devices.size())return;ComputerDetails target=devices.get(position);if(target.uuid.equals(current.uuid))return;invoke("device.settings.open",RhActions.obj("uuid",target.uuid));if(selected==null||!selected.uuid.equals(target.uuid))chooser.setSelection(initial,false);}});return chooser;}
-    private void watch(EditText edit,String action,String key){edit.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){}public void afterTextChanged(android.text.Editable value){if(!bindingProfile)invoke(action,action.equals("device.add.input")?RhActions.obj("address",value.toString()):action.equals("device.info.input")?RhActions.obj("displayName",value.toString()):RhActions.obj("key",key,"value",value.toString()));}});}
+    private Spinner profileDeviceChooser(ComputerDetails current){List<ComputerDetails> devices=RhShared.ordered(activity,computers.values());String[] names=new String[devices.size()];int active=0;for(int i=0;i<devices.size();i++){ComputerDetails item=devices.get(i);names[i]=RhShared.displayName(activity,item.uuid,item.name);if(item.uuid.equals(current.uuid))active=i;}Spinner chooser=new Spinner(activity);chooser.setMinimumHeight(dp(48));chooser.setContentDescription("切换远程设备");chooser.setTag("device.settings.open");android.graphics.drawable.Drawable arrow=activity.getDrawable(R.drawable.rh_chevron_down).mutate();arrow.setTint(muted);android.graphics.drawable.LayerDrawable background=new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{bg(surface,line,8),arrow});background.setLayerSize(1,dp(16),dp(16));background.setLayerGravity(1,Gravity.END|Gravity.CENTER_VERTICAL);background.setLayerInset(1,0,0,dp(12),0);chooser.setBackground(background);chooser.setPadding(0,0,dp(24),0);chooser.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));chooser.setAdapter(options(names));chooser.setSelection(active,false);final int initial=active;chooser.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){fromView(chooser,()->{if(position<0||position>=devices.size())return;ComputerDetails target=devices.get(position);if(target.uuid.equals(current.uuid))return;invoke("device.settings.open",RhActions.obj("uuid",target.uuid));if(selected==null||!selected.uuid.equals(target.uuid))chooser.setSelection(initial,false);});}});return chooser;}
+    private void watch(EditText edit,String action,String key){edit.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){}public void afterTextChanged(android.text.Editable value){if(!bindingProfile){String text=value.toString();fromView(edit,()->{if(!bindingProfile)invoke(action,action.equals("device.add.input")?RhActions.obj("address",text):action.equals("device.info.input")?RhActions.obj("displayName",text):RhActions.obj("key",key,"value",text));});}}});}
     private String draftSnapshot(){
         if(draft==null)return "";try{
             org.json.JSONObject raw=new org.json.JSONObject(),values=draft.json();for(Map.Entry<String,String> input:numberInputs.entrySet())if(!input.getValue().trim().equals(String.valueOf(values.opt(input.getKey()))))raw.put(input.getKey(),input.getValue());
@@ -405,56 +564,100 @@ public final class RhHome implements RhActions.Target {
     private boolean profileDirty(){return draft!=null&&!draftSnapshot().equals(draftBaseline);}
     private void discardDraft(){copyPreview=null;copyNotice="";copyError="";copyFailure=null;draft=null;draftDisplayName="";draftAddress="";draftAddresses="";draftRelay="";draftBaseline="";numberInputs.clear();numberEditors.clear();profileControls.clear();selectKeys.clear();presets.clear();formError="";formErrorField="";displayNameEditor=null;primaryEditor=null;backupEditor=null;relayEditor=null;}
     private void refreshProfileFooter(){if(draft==null||formSave==null||!pageId.equals("settings"))return;boolean dirty=profileDirty();formNotice.setText(copyNotice.isEmpty()?(dirty?"有未保存的更改":"设置已保存"):copyNotice);submitState(formSave,dirty);formErrorView.setText(formError);formErrorView.setVisibility(formError.isEmpty()?View.GONE:View.VISIBLE);}
+    private TextView footerError(String value,String description){TextView label=text(value,13,failureColor,false);label.setContentDescription(description);formFooter.addView(new RhSaveErrorDetails(activity,formPane,label,blue));return label;}
     private void setText(EditText edit,String text){if(edit!=null&&!edit.getText().toString().equals(text)){edit.setText(text);edit.setSelection(edit.length());}}
     private boolean networkBusy(){return networkBusy||diagnostics.busy();}
+    private static String diagnosticKey(org.json.JSONObject work){return work.optString("uuid")+"|"+work.optLong("operationId");}
+    private org.json.JSONObject toggleDiagnosticDetails(org.json.JSONObject args)throws Exception{
+        org.json.JSONObject work=diagnostics.state();if(!pageId.equals("settings")||!profileTab.equals("network")||selected==null||!selected.uuid.equals(args.getString("uuid"))||!selected.uuid.equals(work.optString("uuid"))||work.optBoolean("busy")||args.getLong("operationId")!=work.optLong("operationId")||!Arrays.asList("completed","error").contains(work.optString("phase")))throw new IllegalStateException("诊断结果已变化，请重新查看当前设备");
+        String key=diagnosticKey(work);boolean expanded=key.equals(diagnosticDetailsKey);if(args.has("expectedExpanded")&&!(args.opt("expectedExpanded") instanceof Boolean&&((Boolean)args.opt("expectedExpanded"))==expanded))throw new IllegalStateException("详情状态已变化，请重新点击");cancelProfileErrorFocus();diagnosticDetailsKey=expanded?"":key;refreshDiagnosticControls();
+        TextView target=expanded?diagnosticReport:diagnosticDetailsText;String expectedKey=expanded?"":key;
+        target.post(()->{if(diagnosticDetailsKey.equals(expectedKey)&&key.equals(diagnosticKey(diagnostics.state()))&&target==(expanded?diagnosticReport:diagnosticDetailsText)&&target.isShown())target.requestRectangleOnScreen(new android.graphics.Rect(0,0,target.getWidth(),expanded?target.getHeight():Math.min(target.getHeight(),dp(80))),true);});
+        return RhActions.obj("expanded",!expanded,"operationId",work.optLong("operationId"));
+    }
+    private void refreshDiagnosticBanner(){
+        org.json.JSONObject work=diagnostics.state();
+        boolean checking=work.optString("mode").equals("check"),busy=work.optBoolean("busy");
+        boolean own=!checking&&pageId.equals("settings")&&profileTab.equals("network")&&selected!=null&&selected.uuid.equals(work.optString("uuid"));
+        boolean visible=busy&&!own;
+        browser.setConnectionBlocked(busy);
+        diagnosticBanner.setVisibility(visible?View.VISIBLE:View.GONE);
+        String phase=work.optString("phase"),operation=checking?"检查":"诊断";
+        boolean retry=phase.equals("cleanup-error");
+        diagnosticBannerCancel.setText(retry?"重试清理":"取消"+operation);
+        diagnosticBannerCancel.bind("device.network.cancel",RhActions.obj("operationId",work.optLong("operationId"),"expectedAction",work.optString("cancelAction")));
+        diagnosticBannerCancel.setEnabled(work.optBoolean("canCancel"));
+        // Hidden banners need current action ownership, but no device-name lookup.
+        // Resolve the alias when shown so sync and renames remain immediately visible.
+        if(!visible)return;
+        String uuid=work.optString("uuid"),name="远程设备";ComputerDetails target=computers.get(uuid);if(target!=null&&target.name!=null&&!target.name.isEmpty())name=target.name;name=RhShared.displayName(RhShared.read(activity),uuid,name);
+        diagnosticBannerText.setText((retry?operation+"通道清理失败":phase.equals("waiting-probes")&&work.optInt("pendingProbes")>0?"等待 "+work.optInt("pendingProbes")+" 个地址探测结束":phase.equals("cancelling")?"正在取消"+operation:phase.equals("cleaning")||phase.equals("waiting-probes")?"正在清理"+operation+"通道":"正在"+operation)+" · "+name);diagnosticBannerText.setTextColor(retry?failureColor:muted);
+    }
+    private static final class DiagnosticRequest {ComputerDetails device;RhProfile profile;org.json.JSONObject options;String intent;}
+    private DiagnosticRequest diagnosticRequest(String uuid,org.json.JSONObject args)throws Exception{
+        DiagnosticRequest request=new DiagnosticRequest();request.device=computers.get(uuid);if(request.device==null)throw new IllegalArgumentException("unknown device");request.options=new org.json.JSONObject(args.toString());
+        boolean ownDraft=draft!=null&&selected!=null&&selected.uuid.equals(uuid);
+        if(ownDraft){request.options.put("address",draftAddress.trim());request.options.put("addresses",splitAddresses(draftAddresses));}
+        request.profile=ownDraft?RhProfile.fromJson(uuid,draft.json().put("relayUrl",draftRelay.trim())):RhProfile.load(activity,uuid);
+        request.intent=RhDiagnosticWork.intent(uuid,request.profile,RhDiagnosticWork.capture(activity,request.device,request.options));
+        if(args.has("expectedIntent")&&!(args.opt("expectedIntent") instanceof String&&request.intent.equals(args.opt("expectedIntent"))))throw new IllegalStateException("连接设置已变化，请重新点击诊断");
+        if(args.has("expectedOperationId")&&!(args.opt("expectedOperationId") instanceof Number&&((Number)args.opt("expectedOperationId")).longValue()==diagnostics.state().optLong("operationId")))throw new IllegalStateException("诊断任务已变化，请重新点击诊断");
+        return request;
+    }
     private void refreshDiagnosticControls(){
+        refreshDiagnosticBanner();
         if(diagnosticButton==null||diagnosticReport==null||selected==null||!pageId.equals("settings")||!profileTab.equals("network"))return;
-        org.json.JSONObject work=diagnostics.state(),last=RhNetwork.state();boolean own=selected.uuid.equals(work.optString("uuid")),failed=own&&work.optString("phase").equals("error");
-        diagnosticButton.setText(networkBusy()?"诊断中…":"诊断连接");diagnosticButton.setEnabled(!networkBusy());
-        diagnosticReport.setText(own&&work.optBoolean("busy")?"正在诊断连接…":failed?work.optString("error"):own&&work.optString("phase").equals("completed")?RhNetwork.summary(work.optJSONObject("result")):selected.uuid.equals(last.optString("uuid"))?RhNetwork.summary(last):"尚未诊断");
-        diagnosticReport.setTextColor(failed?failureColor:muted);
+        org.json.JSONObject work=diagnostics.state();String phase=work.optString("phase"),intent="";boolean checking=work.optString("mode").equals("check"),own=!checking&&selected.uuid.equals(work.optString("uuid")),busy=work.optBoolean("busy"),failed=own&&(phase.equals("error")||phase.equals("cleanup-error"));
+        try{intent=diagnosticRequest(selected.uuid,RhActions.obj()).intent;}catch(Exception invalid){/* Invalid drafts are validated by the submitted action. */}
+        diagnosticButton.setText(own&&busy?(phase.equals("running")?"诊断中…":"正在清理…"):"诊断连接");diagnosticButton.bind("device.network.diagnose",RhActions.obj("uuid",selected.uuid,"expectedIntent",intent,"expectedOperationId",work.optLong("operationId")));diagnosticButton.setEnabled(!networkBusy());
+        boolean retry=phase.equals("cleanup-error");diagnosticCancel.setText(retry?"重试清理":"取消诊断");diagnosticCancel.bind("device.network.cancel",RhActions.obj("operationId",work.optLong("operationId"),"expectedAction",work.optString("cancelAction")));diagnosticCancel.setVisibility(own&&busy?View.VISIBLE:View.GONE);diagnosticCancel.setEnabled(own&&work.optBoolean("canCancel"));
+        boolean stale=own&&!busy&&!intent.equals(work.optString("requestIntent"));org.json.JSONObject report=work.optJSONObject("result"),host=report==null?null:report.optJSONObject("host");String completion=host!=null&&host.optString("mediaUdp").equals("reachable")?"诊断 UDP 可达，视频尚未验证":"设备信息可达，视频尚未验证";
+        String text=own&&busy?(retry?work.optString("error"):phase.equals("cancelling")?"正在取消诊断，等待通道清理…":phase.equals("cleaning")?"正在清理诊断通道…":"正在诊断连接…"):busy?"另一台设备正在诊断连接，完成或取消后可重试":failed?(stale?"上次诊断失败（连接设置已更改）\n":"")+work.optString("error"):own&&phase.equals("completed")?(stale?"上次诊断结果（连接设置已更改）\n":"诊断完成\n")+completion:own&&phase.equals("cancelled")?"已取消诊断":"尚未诊断";
+        if(checking&&busy)text="设备检查正在进行，完成或取消后可诊断";else if(own&&busy&&phase.equals("waiting-probes"))text=work.optInt("pendingProbes")>0?"等待 "+work.optInt("pendingProbes")+" 个地址探测结束…":"正在清理诊断通道…";diagnosticReport.setText(text);diagnosticReport.setTextColor(failed?failureColor:muted);
+        boolean detailAvailable=own&&!busy&&(phase.equals("completed")||phase.equals("error")),expanded=diagnosticKey(work).equals(diagnosticDetailsKey);diagnosticDetailsToggle.setText(expanded?"收起详情":"查看详情");diagnosticDetailsToggle.bind("device.network.details.toggle",RhActions.obj("uuid",selected.uuid,"operationId",work.optLong("operationId"),"expectedExpanded",expanded));diagnosticDetailsToggle.setVisibility(detailAvailable?View.VISIBLE:View.GONE);diagnosticDetailsToggle.setEnabled(detailAvailable);diagnosticDetailsText.setVisibility(detailAvailable&&expanded?View.VISIBLE:View.GONE);diagnosticDetailsText.setText(detailAvailable?RhNetwork.summary(report)+(failed?"\n"+work.optString("error")+"\n"+work.optString("detail"):""):"");
     }
     private void diagnosticChanged(){
-        if(disposed||activity.isDestroyed()||selected==null||!pageId.equals("settings")||!profileTab.equals("network"))return;
-        org.json.JSONObject work=diagnostics.state();if(!selected.uuid.equals(work.optString("uuid")))return;
-        refreshDiagnosticControls();message(work.optBoolean("busy")?"正在诊断连接…":work.optString("phase").equals("error")?"诊断失败："+work.optString("error"):"诊断完成");
+        if(disposed||activity.isDestroyed())return;refreshUpdateUi();refreshDiagnosticControls();if(pageId.equals("devices"))renderDevices(false);
     }
     private void refreshProfileControls(){
         if(draft==null)return;bindingProfile=true;
         try{
             org.json.JSONObject values=draft.json();for(Map.Entry<String,View> entry:profileControls.entrySet()){
                 String key=entry.getKey();View view=entry.getValue();
-                if(view instanceof EditText){setText((EditText)view,numberInputs.containsKey(key)?numberInputs.get(key):String.valueOf(values.getInt(key)));((EditText)view).setError(key.equals(formErrorField)&&!formError.isEmpty()?formError:null);}
+                if(view instanceof EditText){boolean disabled=key.equals("bitrateMbps")&&draft.bitrateAuto;view.setEnabled(!disabled);view.setAlpha(disabled?.55f:1f);setText((EditText)view,!disabled&&numberInputs.containsKey(key)?numberInputs.get(key):String.valueOf(values.getInt(key)));((EditText)view).setError(!disabled&&key.equals(formErrorField)&&!formError.isEmpty()?formError:null);}
                 else if(view instanceof CheckBox)((CheckBox)view).setChecked(values.getBoolean(key));
                 else if(view instanceof Spinner){String[] keys=selectKeys.get(key);int index=Arrays.asList(keys).indexOf(values.getString(key));if(index>=0&&((Spinner)view).getSelectedItemPosition()!=index)((Spinner)view).setSelection(index);}
             }
             setText(displayNameEditor,draftDisplayName);setText(primaryEditor,draftAddress);setText(backupEditor,draftAddresses);setText(relayEditor,draftRelay);
             int width=-1,height=-1;try{width=Integer.parseInt(numberInputs.containsKey("width")?numberInputs.get("width"):String.valueOf(draft.width));height=Integer.parseInt(numberInputs.containsKey("height")?numberInputs.get("height"):String.valueOf(draft.height));}catch(NumberFormatException ignored){}
             String preset=width==1280&&height==720?"720P":width==1920&&height==1080?"1080P":width==2560&&height==1440?"1440P":width==2520&&height==1680?"平板":width==3840&&height==2160?"4K":"";
-            for(Map.Entry<String,Button> entry:presets.entrySet()){boolean selected=entry.getKey().equals(preset);Button b=entry.getValue();b.setSelected(selected);b.setTextColor(selected?blue:muted);b.setBackground(bg(selected?blueSoft:surface,0,8));}
+            for(Map.Entry<String,Button> entry:presets.entrySet())tabStyle(entry.getValue(),entry.getKey().equals(preset));
         }catch(Exception invalid){throw new IllegalStateException("设置控件刷新失败",invalid);}finally{bindingProfile=false;}
-        refreshProfileFooter();
+        refreshProfileFooter();refreshDiagnosticControls();
     }
     boolean syncRemovalOpen(){return syncClearPending;}
     private void showSyncClearPrompt(){
+        if(disposed||activity.isDestroyed()||!RhActions.ownsHome(this))return;
         String message="仅移除此设备保存的 WebDAV 地址和登录信息，并关闭自动同步。本机远程设备和服务器上的配置文件保留。";
         if(!syncError.isEmpty())message+="\n\n"+syncError;
         if(syncClearDialog!=null&&syncClearDialog.isShowing()){syncClearDialog.setMessage(message);return;}
         syncClearDialog=new AlertDialog.Builder(activity,RhUiStyle.dialogTheme(activity)).setTitle("移除同步设置？").setMessage(message)
-            .setNegativeButton("取消",(dialog,which)->invoke("sync.clear.resolve",RhActions.obj("choice","cancel")))
+            .setNegativeButton("取消",(dialog,which)->syncClearChoice(dialog,"cancel"))
             .setPositiveButton("移除",null).create();
         syncClearDialog.setCanceledOnTouchOutside(false);
-        syncClearDialog.setOnCancelListener(dialog->invoke("sync.clear.resolve",RhActions.obj("choice","cancel")));
-        syncClearDialog.setOnShowListener(dialog->{syncClearDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view->invoke("sync.clear.resolve",RhActions.obj("choice","remove")));syncClearDialog.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus();});
-        syncClearDialog.show();
+        syncClearDialog.setOnCancelListener(dialog->syncClearChoice(dialog,"cancel"));
+        syncClearDialog.setOnShowListener(dialog->{if(disposed||dialog!=syncClearDialog||!RhActions.ownsHome(this))return;AlertDialog owner=(AlertDialog)dialog;owner.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view->syncClearChoice(owner,"remove"));owner.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus();});
+        syncClearDialog.show();RhUiStyle.dialog(syncClearDialog,true);AlertDialog owner=syncClearDialog;RhDialogKeys.install(owner,AlertDialog.BUTTON_NEGATIVE,()->syncClearChoice(owner,"cancel"));
     }
+    private void syncClearChoice(android.content.DialogInterface owner,String choice){if(owner==syncClearDialog)invoke("sync.clear.resolve",RhActions.obj("choice",choice));}
+    private void navigationChoice(android.content.DialogInterface owner,String choice){if(owner==navigationDialog)invoke("navigation.resolve",RhActions.obj("choice",choice));}
     private void showNavigationPrompt(){
-        if(pendingNavigation==null||activity.isDestroyed()||navigationDialog!=null&&navigationDialog.isShowing())return;
+        if(disposed||!RhActions.ownsHome(this)||pendingNavigation==null||activity.isDestroyed()||navigationDialog!=null&&navigationDialog.isShowing())return;
         navigationDialog=new AlertDialog.Builder(activity,RhUiStyle.dialogTheme(activity)).setTitle("保存更改？").setMessage(pendingNavigation.optBoolean("info")?"设备名称有未保存的更改。":pendingNavigation.optBoolean("sync")?"WebDAV 设置有未保存的更改。":"连接设置有未保存的更改。")
-            .setPositiveButton("保存并继续",(dialog,which)->invoke("navigation.resolve",RhActions.obj("choice","save")))
-            .setNegativeButton("放弃更改",(dialog,which)->invoke("navigation.resolve",RhActions.obj("choice","discard")))
-            .setNeutralButton("继续编辑",(dialog,which)->invoke("navigation.resolve",RhActions.obj("choice","stay"))).create();
-        navigationDialog.setCanceledOnTouchOutside(false);navigationDialog.setOnCancelListener(dialog->invoke("navigation.resolve",RhActions.obj("choice","stay")));navigationDialog.show();
+            .setPositiveButton("保存并继续",(dialog,which)->navigationChoice(dialog,"save"))
+            .setNegativeButton("放弃更改",(dialog,which)->navigationChoice(dialog,"discard"))
+            .setNeutralButton("继续编辑",(dialog,which)->navigationChoice(dialog,"stay")).create();
+        navigationDialog.setCanceledOnTouchOutside(false);navigationDialog.setOnCancelListener(dialog->navigationChoice(dialog,"stay"));navigationDialog.show();RhUiStyle.dialog(navigationDialog,false);AlertDialog owner=navigationDialog;RhDialogKeys.install(owner,AlertDialog.BUTTON_NEUTRAL,()->navigationChoice(owner,"stay"));
     }
     private org.json.JSONObject resolveNavigation(org.json.JSONObject args)throws Exception {
         String choice=args.getString("choice");if(!Arrays.asList("save","discard","stay").contains(choice))throw new IllegalArgumentException("unknown navigation choice");if(pendingNavigation==null)throw new IllegalStateException("没有等待处理的更改");
@@ -470,21 +673,21 @@ public final class RhHome implements RhActions.Target {
     private void showInfo(){
         pageId="device-info";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setVisibility(View.VISIBLE);
         formHeader.addView(pageHeading("设备资料","navigation.back"));
-        ComputerDetails device=computers.get(infoUuid);infoEditor=field("设备名称",infoName,false);infoEditor.setHint(device==null?"":device.name);watch(infoEditor,"device.info.input","");infoEditor.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);infoEditor.setOnEditorActionListener((v,id,event)->{if(id==android.view.inputmethod.EditorInfo.IME_ACTION_DONE){invoke("device.info.save",RhActions.obj());return true;}return false;});
+        ComputerDetails device=computers.get(infoUuid);infoEditor=field("设备名称",infoName,false);infoEditor.setHint(device==null?"":device.name);watch(infoEditor,"device.info.input","");infoEditor.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);EditText name=infoEditor;editorSubmit(name,"device.info.save",()->pageId.equals("device-info")&&infoEditor==name&&!syncBusy);
         infoFailure=text(infoError,13,failureColor,false);content.addView(infoFailure);label("留空使用主机名。显示名称随设备配置同步。");infoReset=button("恢复原名",false,()->invoke("device.info.reset",RhActions.obj()));content.addView(infoReset);
         label("主机名");content.addView(text(device==null?"":device.name,15,ink,false));label("设备标识");content.addView(text(infoUuid,13,ink,false));
-        LinearLayout commands=row();infoNotice=text("",12,muted,false);commands.addView(infoNotice,new LinearLayout.LayoutParams(0,dp(48),1));commands.addView(button("取消",false,()->invoke("device.info.cancel",RhActions.obj())));LinearLayout.LayoutParams doneLayout=new LinearLayout.LayoutParams(-2,dp(48));doneLayout.setMarginStart(dp(8));commands.addView(button("完成",true,()->invoke("device.info.save",RhActions.obj())),doneLayout);formFooter.addView(commands);wrapBodyInCard();formPadding(scroll.getWidth());refreshInfo();
+        LinearLayout commands=row();infoNotice=text("",12,muted,false);commands.addView(infoNotice,new LinearLayout.LayoutParams(0,dp(48),1));commands.addView(button("取消",false,()->invoke("device.info.cancel",RhActions.obj())));LinearLayout.LayoutParams doneLayout=new LinearLayout.LayoutParams(-2,-2);doneLayout.setMarginStart(dp(8));commands.addView(button("完成",true,()->invoke("device.info.save",RhActions.obj())),doneLayout);formFooter.addView(commands);wrapBodyInCard();formPadding(scroll.getWidth());refreshInfo();
     }
     private boolean addingBusy(){return addOperation!=null;}
     private void cancelAdding(){RhDeviceAdd retired=addOperation;addOperation=null;addAddress="";addError="";if(retired!=null)retired.cancel();}
     private void showAdd(){
         pageId="add";profileVisible=true;showContent();content.removeAllViews();formHeader.setVisibility(View.VISIBLE);formHeader.removeAllViews();
         formHeader.addView(pageHeading("添加电脑","device.add.cancel"));
-        label("IP 或主机名，支持局域网、Tailscale 和公网地址");addEditor=field("设备地址",addAddress,false);addEditor.setHint("例如 192.168.0.104 或 100.x.x.x");watch(addEditor,"device.add.input","address");addEditor.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_DONE);addEditor.setOnEditorActionListener((view,action,event)->{invoke("device.add.submit",RhActions.obj());return true;});
+        label("IP 或主机名，支持局域网、Tailscale 和公网地址");addEditor=addressField("设备地址",addAddress);addEditor.setHint("例如 192.168.0.104 或 100.x.x.x");watch(addEditor,"device.add.input","address");addEditor.setImeOptions((addEditor.getImeOptions()&~android.view.inputmethod.EditorInfo.IME_MASK_ACTION)|android.view.inputmethod.EditorInfo.IME_ACTION_DONE);EditText address=addEditor;editorSubmit(address,"device.add.submit",()->pageId.equals("add")&&addEditor==address&&addSubmit!=null&&addSubmit.isEnabled());
         addFailure=text(addError,13,failureColor,false);content.addView(addFailure);
         addProgress=row();ProgressBar spinner=new ProgressBar(activity);spinner.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(blue));addProgress.addView(spinner,new LinearLayout.LayoutParams(dp(28),dp(28)));addProgressText=text("",14,muted,false);LinearLayout.LayoutParams progressLabel=new LinearLayout.LayoutParams(-2,dp(48));progressLabel.setMarginStart(dp(12));addProgress.addView(addProgressText,progressLabel);content.addView(addProgress);
         label("找到设备后会保存到远程设备列表，配对在设备详情中完成。");
-        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout footer=row();footer.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(48),1));addCancel=button("取消",false,()->invoke("device.add.cancel",RhActions.obj()));addSubmit=button("添加",true,()->invoke("device.add.submit",RhActions.obj()));footer.addView(addCancel);LinearLayout.LayoutParams submitLayout=new LinearLayout.LayoutParams(-2,dp(48));submitLayout.setMarginStart(dp(8));footer.addView(addSubmit,submitLayout);formFooter.addView(footer);wrapBodyInCard();formPadding(scroll.getWidth());refreshAdd();
+        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout footer=row();footer.addView(new View(activity),new LinearLayout.LayoutParams(0,dp(48),1));addCancel=button("取消",false,()->invoke("device.add.cancel",RhActions.obj()));addSubmit=button("添加",true,()->invoke("device.add.submit",RhActions.obj()));footer.addView(addCancel);LinearLayout.LayoutParams submitLayout=new LinearLayout.LayoutParams(-2,-2);submitLayout.setMarginStart(dp(8));footer.addView(addSubmit,submitLayout);formFooter.addView(footer);wrapBodyInCard();formPadding(scroll.getWidth());refreshAdd();
     }
     private void refreshAdd(){
         if(!pageId.equals("add")||addEditor==null)return;
@@ -514,14 +717,30 @@ public final class RhHome implements RhActions.Target {
         });addOperation.start(operation->actions.inspectAdd(address,operation));
     }
     private static org.json.JSONArray splitAddresses(String text){org.json.JSONArray result=new org.json.JSONArray();for(String address:text.split("[,;，\n]"))if(!address.trim().isEmpty())result.put(address.trim());return result;}
-    private void invoke(String id,org.json.JSONObject args){RhActions.click(id,args);}
+    private void invoke(String id,org.json.JSONObject args){if(android.os.Looper.myLooper()!=android.os.Looper.getMainLooper()){updateUi.post(()->invoke(id,args));return;}if(!disposed&&!activity.isDestroyed()&&!activity.isFinishing()&&RhActions.ownsHome(this))RhActions.click(id,args);}
     private void set(String key,Object value){invoke("settings.set",RhActions.obj("key",key,"value",value));}
     public org.json.JSONObject state()throws Exception{
-        org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(activity,computers.values())){devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(activity,d.uuid),"online",d.state==ComputerDetails.State.ONLINE,"paired",d.pairState==PairingManager.PairState.PAIRED,"canConnect",RhNetwork.connectInsteadOfPair(d),"pairingStatus",RhNetwork.pairingStatus(d),"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,d.uuid).json());}
         org.json.JSONObject shared=RhShared.read(activity);
-        return RhActions.obj("navigation",RhActions.obj("locked",navigationLocked(),"reason",navigationHint()),"profileCopy",copyPreview==null?org.json.JSONObject.NULL:new org.json.JSONObject(copyPreview.toString()),"profileCopyNotice",copyNotice,"profileCopyError",copyError,"connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?addOperation.phase():"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy(),"diagnostics",diagnostics.state(),"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncClearPrompt",syncClearPending?RhActions.obj("title","移除同步设置？"):org.json.JSONObject.NULL,"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",syncWork.state(),"syncBusy",syncBusy,"updates",updateWork.state(),"updatesBusy",updateWork.busy(),"updateInstallHint",updateInstallBlockReason(),"updateDetails",updateDetails,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing);
+        org.json.JSONArray devices=new org.json.JSONArray();org.json.JSONObject profiles=new org.json.JSONObject();for(ComputerDetails d:RhShared.ordered(shared,computers.values())){org.json.JSONObject check=RhDeviceCheck.snapshot(activity,shared,d);devices.put(RhActions.obj("uuid",d.uuid,"name",d.name,"displayName",RhShared.alias(shared,d.uuid),"online",RhDeviceCheck.online(d,check),"reachabilityStatus",RhDeviceCheck.reachability(d,check),"paired",RhDeviceCheck.paired(d,check),"canConnect",RhDeviceCheck.canConnect(d,check),"pairingStatus",RhDeviceCheck.status(d,check),"primaryAction",RhDeviceCheck.primaryAction(d,check),"primaryLabel",RhDeviceCheck.primaryLabel(d,check),"check",check,"isSelf",false));profiles.put(d.uuid,RhProfile.load(activity,shared,d.uuid).json());}
+        return RhActions.obj("windows",RhActions.obj("uuid",windowsUuid,"open",windowsDialog!=null,"result",windowList),"navigation",RhActions.obj("locked",navigationLocked(),"reason",navigationHint()),"profileCopy",copyPreview==null?org.json.JSONObject.NULL:new org.json.JSONObject(copyPreview.toString()),"profileCopyNotice",copyNotice,"profileCopyError",copyError,"connection",connection.state(),"infoDraft",infoUuid.isEmpty()?org.json.JSONObject.NULL:RhActions.obj("uuid",infoUuid,"displayName",infoName,"error",infoError),"infoDirty",infoDirty(),"deviceQuery",deviceQuery,"homeLayout",RhActions.obj("browser",browser.layoutState(),"width",root.getWidth(),"height",root.getHeight(),"insets",RhActions.obj("left",root.getPaddingLeft(),"top",root.getPaddingTop(),"right",root.getPaddingRight(),"bottom",root.getPaddingBottom())),"add",RhActions.obj("address",addAddress,"error",addError,"phase",addingBusy()?addOperation.phase():"editing"),"admission",admission==null?org.json.JSONObject.NULL:admission.state(),"network",RhNetwork.state(),"networkBusy",networkBusy(),"diagnostics",diagnostics.state(),"diagnosticDetailsExpanded",diagnosticDetailsKey.equals(diagnosticKey(diagnostics.state())),"platform","android","page",pageId,"settingsTab",settingsTab,"profileTab",profileTab,"profileSourcesExpanded",profileSourcesExpanded,"settingsCatalog",RhSettings.catalog(activity),"devices",devices,"saved",RhActions.obj("profiles",profiles,"dark",RhShared.dark(activity),"clientId",RhShared.clientId(activity),"clients",shared.getJSONObject("clients"),"clientProfiles",shared.getJSONObject("profiles"),"devices",shared.getJSONArray("devices"),"profileSchemaVersion",2),"draft",draft==null?org.json.JSONObject.NULL:draft.json(),"selected",selected==null?browserUuid:selected.uuid,"settingsDirty",profileDirty(),"settingsInputs",new org.json.JSONObject(numberInputs),"settingsError",formError,"settingsErrorField",formErrorField,"navigationPrompt",pendingNavigation==null?org.json.JSONObject.NULL:RhActions.obj("kind",pendingNavigation.optBoolean("info")?"unsaved-info":pendingNavigation.optBoolean("sync")?"unsaved-sync":"unsaved-device","title","保存更改？"),"syncClearPrompt",syncClearPending?RhActions.obj("title","移除同步设置？"):org.json.JSONObject.NULL,"syncDraft",publicSyncDraft(),"syncDirty",syncDirty(),"syncError",syncError,"draftDisplayName",draftDisplayName,"draftAddress",draftAddress,"draftAddresses",draftAddresses,"draftRelay",draftRelay,"status",status.getText().toString(),"sync",syncWork.state(),"syncBusy",syncBusy,"updates",updateWork.state(),"updatesBusy",updateWork.busy(),"updateInstallHint",updateInstallBlockReason(),"updateDetails",updateDetails,"tracing",RhStatistics.state(),"pairPin",pairPin,"pairing",pairing,"syncPasswordReusable",syncPasswordReusable(syncWork.state(),syncDraft));
     }
     public org.json.JSONObject perform(String id,org.json.JSONObject args)throws Exception{
+        if(id.equals("device.windows.open")){if(RhActions.hasStream())throw new IllegalStateException("请先断开当前连接");return perform("device.connect",RhActions.obj("uuid",args.getString("uuid"),"chooseWindow",true));}
+        if(id.equals("device.windows.close")){if(windowsDialog!=null)windowsDialog.dismiss();windowList=RhActions.obj();windowsUuid="";return RhActions.obj("closed",true);}
+        if(id.equals("device.window.connect"))return perform("device.connect",RhActions.obj("uuid",args.getString("uuid"),"windowSource",args.getString("source")));
+        if(id.equals("sync.run")&&args.has("automatic")&&!(args.get("automatic") instanceof Boolean))throw new IllegalArgumentException("automatic must be a boolean");
+        if(id.equals("sync.resolve")&&args.has("reviewId")){Object expected=args.get("reviewId");if(!(expected instanceof String))throw new IllegalArgumentException("reviewId must be a string");sync.validateReviewId((String)expected);}
+        if(id.equals("device.network.details.toggle"))return toggleDiagnosticDetails(args);
+        if(id.equals("device.network.cancel")){diagnostics.cancel(args.getLong("operationId"),args.has("expectedAction")?args.getString("expectedAction"):null);return diagnostics.state();}
+        if(id.equals("device.network.diagnose")&&(args.has("expectedIntent")||args.has("expectedOperationId")))diagnosticRequest(args.getString("uuid"),args);
+        if(Arrays.asList("updates.primary","updates.check","updates.download","updates.install").contains(id))updateWork.validateIntent(args);
+        if(!Arrays.asList("settings.catalog","updates.state","sync.state","statistics.state","network.state").contains(id))cancelProfileErrorFocus();
+        String previous=inputPage();org.json.JSONObject result=performAppearance(id,args);refreshDiagnosticBanner();
+        if(!previous.equals(inputPage())&&activity.hasWindowFocus()&&root.getWindowToken()!=null)((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(root.getWindowToken(),0);
+        return result;
+    }
+    private String inputPage(){return pageId+"|"+(pageId.equals("global-settings")?settingsTab:pageId.equals("settings")?(selected==null?"":selected.uuid)+"|"+profileTab:pageId.equals("device-info")?infoUuid:"");}
+    private org.json.JSONObject performAppearance(String id,org.json.JSONObject args)throws Exception{
         if(!id.equals("appearance.toggle"))return performInner(id,args);
         AppearanceContext context=resumingAppearance==null?new AppearanceContext(this):resumingAppearance;
         org.json.JSONObject result=performInner(id,args);
@@ -530,7 +749,9 @@ public final class RhHome implements RhActions.Target {
         RhShared.theme(activity,!RhShared.dark(activity));activity.recreate();return result;
     }
     private org.json.JSONObject performInner(String id,org.json.JSONObject args)throws Exception{
+        if(Arrays.asList("updates.primary","updates.check","updates.download","updates.install").contains(id))updateWork.validateIntent(args);
         if(id.equals("sync.run")&&args.optBoolean("automatic")&&syncWork.state().optBoolean("automaticBlocked"))return RhActions.obj("skipped",true,"reason","sync_interrupted");
+        if(id.equals("sync.run")&&args.optBoolean("automatic")&&(syncWork.phase().equals("conflict")||sync.state().optJSONArray("conflicts").length()>0))return RhActions.obj("skipped",true,"reason","sync_conflict");
         if(id.equals("sync.run")&&args.optBoolean("automatic")&&(!sync.state().optBoolean("automatic")||syncBusy||!infoUuid.isEmpty()||draft!=null||pageId.equals("add")||pairing||admission!=null||RhActions.hasStream()||pendingNavigation!=null||syncClearPending||syncDirty()))return RhActions.obj("skipped",true);
         if(id.equals("navigation.back")&&syncClearPending)return perform("sync.clear.resolve",RhActions.obj("choice","cancel"));
         if(syncClearPending&&!Arrays.asList("sync.clear.resolve","sync.clear","settings.catalog","updates.state","updates.cancel","sync.state","statistics.state","network.state").contains(id))throw new IllegalStateException("请先确认是否移除同步设置");
@@ -540,7 +761,7 @@ public final class RhHome implements RhActions.Target {
             if(!pageId.equals("connection"))throw new IllegalStateException("请先打开连接页");
             if(connection.uuid.isEmpty())throw new IllegalStateException("没有可操作的连接");
             if(connectionBusy())throw new IllegalStateException("上一连接尚未结束");
-            if(id.equals("connection.retry"))return perform(connection.operation.equals("pair")?"device.pair":"device.connect",RhActions.obj("uuid",connection.uuid));
+            if(id.equals("connection.retry")){if(connection.operation.equals("windows"))return perform("device.windows.open",RhActions.obj("uuid",connection.uuid));org.json.JSONObject request=RhActions.obj("uuid",connection.uuid);if(connection.window!=null)request.put("windowSource",connection.window.optString("id"));return perform(connection.operation.equals("pair")?"device.pair":"device.connect",request);}
             returnToDevice();message("");return RhActions.obj("accepted",true);
         }
         if(navigationLocked()&&Arrays.asList("devices.open","device.select","device.add.open","device.settings.open","device.info.open","app.settings.open","app.settings.tab","appearance.toggle").contains(id))throw new IllegalStateException(navigationHint());
@@ -591,12 +812,19 @@ public final class RhHome implements RhActions.Target {
             }
             case "device.select":if(!pageId.equals("devices")||admission!=null||RhActions.hasStream())throw new IllegalStateException("请先返回空闲设备列表");String uuid=args.getString("uuid");if(!computers.containsKey(uuid))throw new IllegalArgumentException("unknown device");browserUuid=uuid;browser.showDetail(true);renderDevices(false);break;
             case "devices.filter":String query=args.getString("query");if(query.codePointCount(0,query.length())>128)throw new IllegalArgumentException("搜索内容不能超过 128 字符");deviceQuery=query;if(pageId.equals("devices"))renderDevices(false);else if(pageId.equals("settings")&&profileWorkspaceWide)browser.update(RhShared.ordered(activity,computers.values()),selected.uuid,deviceQuery);break;
+            case "devices.filter.clear":if(!(args.opt("expectedQuery") instanceof String)||!deviceQuery.equals(args.getString("expectedQuery")))throw new IllegalStateException("搜索内容已变化，请重新操作");return performInner("devices.filter",RhActions.obj("query",""));
             case "statistics.state":return RhStatistics.state();
             case "statistics.complete":return RhStatistics.complete(args.getString("runId"),args.getString("sha256"));
             case "statistics.configure":if(!(args.get("enabled") instanceof Boolean))throw new IllegalArgumentException("enabled must be boolean");org.json.JSONObject tracing=RhStatistics.configure(args.getBoolean("enabled"));if(pageId.equals("global-settings"))showGlobal();return tracing;
             case "devices.open":showDevices();break;
             case "settings.cancel":returnToDevice();break;
-            case "devices.refresh":actions.refresh();break;
+            case "devices.refresh":{
+                if(admission!=null||pairing||RhActions.hasStream())throw new IllegalStateException("请先完成或断开当前远程连接");
+                String checkUuid=args.has("uuid")?args.getString("uuid"):"";
+                if(args.has("uuid")){if(checkUuid.isEmpty()||!computers.containsKey(checkUuid))throw new IllegalArgumentException("未找到要检查的设备");actions.refresh(checkUuid);}
+                else actions.refresh();
+                message("已请求检查连接");break;
+            }
             case "device.move":if(!pageId.equals("devices"))throw new IllegalStateException("请先返回设备列表");RhShared.move(activity,computers.values(),args.getString("uuid"),args.getString("direction"));renderDevices(false);message("设备顺序已保存");break;
             case "device.add.open":if(pairing||admission!=null)throw new IllegalStateException("请先完成或取消当前操作");if(!pageId.equals("add")){addAddress="";addError="";}showAdd();break;
             case "device.add.cancel":cancelAdding();showDevices();break;
@@ -614,37 +842,57 @@ public final class RhHome implements RhActions.Target {
                 org.json.JSONObject routeDraft=draft.json();routeDraft.put("routeOrder",new org.json.JSONArray(order));draft=RhProfile.fromJson(selected.uuid,routeDraft);showProfile(selected,draft);break;
             case "settings.input":{
                 if(draft==null)throw new IllegalStateException("请先打开连接设置");String key=args.getString("key"),text=args.getString("value");if(text.length()>4096)throw new IllegalArgumentException("输入内容过长");
+                if(key.equals("bitrateMbps")&&draft.bitrateAuto)throw new IllegalStateException("请先关闭自动码率再修改手动值");
                 if(key.equals("displayName"))draftDisplayName=text;else{boolean number=false;org.json.JSONArray catalog=RhSettings.catalog(activity);for(int i=0;i<catalog.length();i++){org.json.JSONObject field=catalog.getJSONObject(i);if(field.getString("key").equals(key)&&field.getString("type").equals("number"))number=true;}if(!number)throw new IllegalArgumentException("unknown editable field");numberInputs.put(key,text);}
                 formError="";formErrorField="";refreshProfileControls();break;
             }
             case "settings.step":{
-                if(draft==null)throw new IllegalStateException("请先打开连接设置");String key=args.getString("key"),direction=args.getString("direction");org.json.JSONArray catalog=RhSettings.catalog(activity);org.json.JSONObject meta=null;for(int i=0;i<catalog.length();i++){org.json.JSONObject field=catalog.getJSONObject(i);if(field.getString("key").equals(key)&&field.getString("type").equals("number"))meta=field;}if(meta==null||!Arrays.asList("up","down").contains(direction))throw new IllegalArgumentException("unknown numeric field / direction");int n=draft.json().getInt(key);try{n=Integer.parseInt(numberInputs.get(key));}catch(Exception ignored){}n=Math.max(meta.getInt("min"),Math.min(meta.getInt("max"),n+(direction.equals("up")?1:-1)*meta.getInt("step")));numberInputs.put(key,String.valueOf(n));formError="";refreshProfileControls();break;
+                if(draft==null)throw new IllegalStateException("请先打开连接设置");String key=args.getString("key"),direction=args.getString("direction");if(key.equals("bitrateMbps")&&draft.bitrateAuto)throw new IllegalStateException("请先关闭自动码率再修改手动值");org.json.JSONArray catalog=RhSettings.catalog(activity);org.json.JSONObject meta=null;for(int i=0;i<catalog.length();i++){org.json.JSONObject field=catalog.getJSONObject(i);if(field.getString("key").equals(key)&&field.getString("type").equals("number"))meta=field;}if(meta==null||!Arrays.asList("up","down").contains(direction))throw new IllegalArgumentException("unknown numeric field / direction");int n=draft.json().getInt(key);try{n=Integer.parseInt(numberInputs.get(key));}catch(Exception ignored){}n=Math.max(meta.getInt("min"),Math.min(meta.getInt("max"),n+(direction.equals("up")?1:-1)*meta.getInt("step")));numberInputs.put(key,String.valueOf(n));formError="";refreshProfileControls();break;
             }
             case "settings.network.edit":if(draft==null)throw new IllegalStateException("open device settings first");String networkKey=args.getString("key"),networkValue=args.getString("value");if(networkValue.length()>4096)throw new IllegalArgumentException("network field too long");if(networkKey.equals("address"))draftAddress=networkValue;else if(networkKey.equals("addresses"))draftAddresses=networkValue;else if(networkKey.equals("relayUrl"))draftRelay=networkValue;else throw new IllegalArgumentException("unknown network field");formError="";formErrorField="";refreshProfileControls();break;
-            case "settings.set":if(draft==null)throw new IllegalStateException("open device settings first");org.json.JSONObject next=draft.json();String key=args.getString("key");if(key.equals("displayName")){draftDisplayName=RhShared.validateDisplayName(args.getString("value"));refreshProfileControls();break;}if(key.equals("resolution")){org.json.JSONArray size=args.getJSONArray("value");next.put("width",size.getInt(0));next.put("height",size.getInt(1));numberInputs.remove("width");numberInputs.remove("height");}else if(next.has(key)){next.put(key,args.get("value"));numberInputs.remove(key);}else throw new IllegalArgumentException("unknown option");draft=RhProfile.fromJson(selected.uuid,next);if(key.equals("relayUrl"))draftRelay=draft.relayUrl;formError="";formErrorField="";refreshProfileControls();break;
+            case "settings.set":if(draft==null)throw new IllegalStateException("open device settings first");org.json.JSONObject next=draft.json();String key=args.getString("key");if(key.equals("bitrateMbps")&&draft.bitrateAuto)throw new IllegalStateException("请先关闭自动码率再修改手动值");if(key.equals("bitrateAuto")&&Boolean.TRUE.equals(args.get("value"))){try{int manual=Integer.parseInt(numberInputs.get("bitrateMbps").trim());if(manual>=1&&manual<=300){next.put("bitrateMbps",manual);numberInputs.remove("bitrateMbps");}}catch(NumberFormatException|NullPointerException ignored){}}if(key.equals("displayName")){draftDisplayName=RhShared.validateDisplayName(args.getString("value"));refreshProfileControls();break;}if(key.equals("resolution")){org.json.JSONArray size=args.getJSONArray("value");next.put("width",size.getInt(0));next.put("height",size.getInt(1));numberInputs.remove("width");numberInputs.remove("height");}else if(next.has(key)){next.put(key,args.get("value"));numberInputs.remove(key);}else throw new IllegalArgumentException("unknown option");draft=RhProfile.fromJson(selected.uuid,next);if(key.equals("relayUrl"))draftRelay=draft.relayUrl;formError="";formErrorField="";refreshProfileControls();break;
 
             case "settings.save":{
                 if(draft==null)throw new IllegalStateException("请先打开连接设置");
+                boolean keepKeyboard=editorKeyboardVisible();
                 try{
                     RhProfile validated=RhSettingsDraft.validate(activity,selected.uuid,draft,numberInputs,draftRelay);
                     String name=args.optString("displayName",draftDisplayName);
                     try{RhShared.validateDisplayName(name);}catch(Exception invalid){throw new RhSettingsDraft.Invalid("displayName","advanced",invalid.getMessage());}
                     try{RhNetwork.addresses(RhActions.obj("address",draftAddress.trim(),"addresses",splitAddresses(draftAddresses)));}catch(Exception invalid){throw new RhSettingsDraft.Invalid("address","network",invalid.getMessage());}
                     RhShared.saveProfile(activity,selected,validated,name,draftAddress.trim(),splitAddresses(draftAddresses));returnToDevice();message("连接设置已保存");
-                }catch(Exception invalid){formError=invalid.getMessage()==null?"保存失败":invalid.getMessage();if(invalid instanceof RhSettingsDraft.Invalid){RhSettingsDraft.Invalid field=(RhSettingsDraft.Invalid)invalid;profileTab=field.tab;formErrorField=field.key;}showProfile(selected,draft);throw invalid;}break;
+                }catch(Exception invalid){formError=invalid.getMessage()==null?"保存失败":invalid.getMessage();if(invalid instanceof RhSettingsDraft.Invalid){RhSettingsDraft.Invalid field=(RhSettingsDraft.Invalid)invalid;profileTab=field.tab;formErrorField=field.key;}boolean rebuilt=!profileTab.equals(renderedProfileTab)||!pageId.equals("settings");if(rebuilt)showProfile(selected,draft);else refreshProfileControls();focusProfileError(keepKeyboard&&rebuilt);throw invalid;}break;
             }
             case "network.state":return RhNetwork.state();
             case "device.network.configure":ComputerDetails networkTarget=computers.get(args.getString("uuid"));if(networkTarget==null)throw new IllegalArgumentException("unknown device");RhShared.capture(activity,Collections.singletonList(networkTarget));RhShared.saveAddresses(activity,args.getString("uuid"),args.getString("address"),args.getJSONArray("addresses"));message("连接地址已保存");if(draft!=null)showProfile(selected,draft);break;
             case "device.network.diagnose":{
-                if(networkBusy())throw new IllegalStateException("连接检查正在进行");ComputerDetails device=computers.get(args.getString("uuid"));if(device==null)throw new IllegalArgumentException("unknown device");
-                if(draft!=null&&selected!=null&&selected.uuid.equals(device.uuid)){args.put("address",draftAddress.trim());args.put("addresses",splitAddresses(draftAddresses));}
-                RhProfile probeProfile=draft!=null&&selected!=null&&selected.uuid.equals(device.uuid)?RhProfile.fromJson(device.uuid,draft.json().put("relayUrl",draftRelay.trim())):RhProfile.load(activity,device.uuid);
-                diagnostics.start(device,probeProfile,args,NETWORK);break;
+                if(networkBusy())throw new IllegalStateException("连接检查正在进行");DiagnosticRequest request=diagnosticRequest(args.getString("uuid"),args);diagnostics.start(request.device,request.profile,request.options,NETWORK);break;
+            }
+            case "device.check":{
+                if(networkBusy()||admission!=null||pairing||RhActions.hasStream())throw new IllegalStateException("请先完成或取消当前连接检查");
+                ComputerDetails target=computers.get(args.getString("uuid"));if(target==null)throw new IllegalArgumentException("未找到要检查的设备");
+                String intent=RhDeviceCheck.intent(activity,RhShared.read(activity),target);
+                if(args.has("expectedIntent")&&!(args.opt("expectedIntent") instanceof String&&intent.equals(args.opt("expectedIntent"))))throw new IllegalStateException("连接设置已变化，请重新点击检查");
+                diagnostics.startCheck(target,RhProfile.load(activity,target.uuid),actions.checkExecutor());break;
             }
             case "device.connect":case "device.pair":{
                 if(networkBusy())throw new IllegalStateException("正在检查连接地址");ComputerDetails target=computers.get(args.getString("uuid"));if(target==null)throw new IllegalArgumentException("unknown device");
-                boolean connect=id.equals("device.connect");String pin=args.optString("pin",String.format(Locale.ROOT,"%04d",new java.security.SecureRandom().nextInt(10000)));if(!pin.matches("[0-9]{4}"))throw new IllegalArgumentException("PIN must contain four digits");
-                beginAdmission(target,connect,pin);break;
+                org.json.JSONObject check=RhDeviceCheck.snapshot(activity,RhShared.read(activity),target);boolean connect=id.equals("device.connect");
+                if(RhDeviceCheck.blocks(check))throw new IllegalStateException("请先检查并确认设备连接地址");
+                if(check.optBoolean("networkStale")||!connect&&RhDeviceCheck.repairNeedsCheck(target,check))throw new IllegalStateException(RhDeviceCheck.hint(target,check));
+                if(connect&&!RhDeviceCheck.canConnect(target,check)){String hint=RhDeviceCheck.hint(target,check);throw new IllegalStateException(hint.isEmpty()?"连接前请先检查设备并完成配对。":hint);}
+                String pin=args.optString("pin",String.format(Locale.ROOT,"%04d",new java.security.SecureRandom().nextInt(10000)));if(!pin.matches("[0-9]{4}"))throw new IllegalArgumentException("PIN must contain four digits");
+                org.json.JSONObject window=null;
+                if(args.has("windowSource")){
+                    String source=args.getString("windowSource");org.json.JSONArray rows=windowList.optJSONArray("windows");
+                    boolean retryWindow=connection.window!=null&&connection.uuid.equals(target.uuid)&&!connection.busy()&&source.equals(connection.window.optString("id"));
+                    if(!RhWindows.valid(source)||!retryWindow&&(windowsDialog==null||!windowsUuid.equals(target.uuid)||rows==null))throw new IllegalStateException("请重新选择窗口");
+                    if(retryWindow)window=new org.json.JSONObject(connection.window.toString());
+                    else for(int i=0;i<rows.length();i++){org.json.JSONObject row=rows.getJSONObject(i);if(source.equals(row.optString("id"))&&row.optBoolean("available")){window=new org.json.JSONObject(row.toString());break;}}
+                    if(window==null)throw new IllegalStateException("窗口已不可用，请刷新列表");
+                }
+                if(windowsDialog!=null)windowsDialog.dismiss();
+                beginAdmission(RhDeviceCheck.admission(target,check,connect),connect,pin,args.optBoolean("chooseWindow"),window);break;
             }
             case "pair.cancel":if(admission!=null){admission.cancel();break;}if(!pairing)throw new IllegalStateException("no active pairing");actions.cancelPair();message("正在取消配对…");break;
             case "appearance.toggle":break;
@@ -675,7 +923,7 @@ public final class RhHome implements RhActions.Target {
                 if(choice.equals("remove")){syncDraft=null;syncError="";showGlobal();message("同步设置已移除");}else{syncError=syncWork.error();refreshSyncFooter();}
                 return RhActions.obj(choice.equals("remove")?"removed":"cancelled",true);
             }
-            case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"),id.equals("sync.run")&&args.optBoolean("automatic"));break;
+            case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"),id.equals("sync.run")&&args.optBoolean("automatic"),args.has("reviewId")?args.getString("reviewId"):null);break;
             case "updates.state":return updateWork.state();
             case "updates.cancel":updateWork.cancel(args.getLong("operationId"));break;
             case "updates.details.toggle":if(!pageId.equals("global-settings")||!settingsTab.equals("updates"))throw new IllegalStateException("请先打开更新页");updateDetails=!updateDetails;refreshUpdateControls();break;
@@ -696,7 +944,7 @@ public final class RhHome implements RhActions.Target {
         updateFailureDetails=text("",13,muted,false);updateFailureDetails.setContentDescription("更新错误详情");summary.addView(updateFailureDetails);
         updateBytes=text("",13,muted,false);updateBytes.setPadding(0,dp(12),0,dp(8));summary.addView(updateBytes);
         updateProgress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);updateProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(blue));updateProgress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(blue));summary.addView(updateProgress,new LinearLayout.LayoutParams(-1,dp(4)));
-        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout commands=row();commands.setGravity(Gravity.END);updateInstallNotice=text("",12,muted,false);commands.addView(updateInstallNotice,new LinearLayout.LayoutParams(0,-2,1));updatePrimary=button("检查更新",true,()->invoke("updates.primary",RhActions.obj()));updatePrimary.setTag("updates.primary");commands.addView(updatePrimary);updateCancel=button("取消",false,()->{});updateCancel.setTag("updates.cancel");LinearLayout.LayoutParams cancelLayout=new LinearLayout.LayoutParams(-2,-2);cancelLayout.setMarginStart(dp(8));commands.addView(updateCancel,cancelLayout);formFooter.addView(commands);formPadding(scroll.getWidth());
+        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout commands=row();commands.setGravity(Gravity.END);updateInstallNotice=text("",12,muted,false);commands.addView(updateInstallNotice,new LinearLayout.LayoutParams(0,-2,1));updatePrimary=boundButton("检查更新",true);updatePrimary.setTag("updates.primary");commands.addView(updatePrimary);updateCancel=boundButton("取消",false);updateCancel.setTag("updates.cancel");LinearLayout.LayoutParams cancelLayout=new LinearLayout.LayoutParams(-2,-2);cancelLayout.setMarginStart(dp(8));commands.addView(updateCancel,cancelLayout);formFooter.addView(commands);formPadding(scroll.getWidth());
         refreshUpdateControls();label("安装时在系统界面手动确认；需要安装权限时会先打开对应设置。");
     }
 
@@ -709,8 +957,8 @@ public final class RhHome implements RhActions.Target {
         long total=s.optLong("totalBytes"),bytes=s.optLong("downloadedBytes");boolean downloading=phase.equals("downloading")&&total>0;
         updateBytes.setVisibility(total>0&&(bytes>0||phase.equals("downloading"))?View.VISIBLE:View.GONE);updateBytes.setText(String.format(Locale.ROOT,"%.1f / %.1f MB",bytes/1048576.0,total/1048576.0));
         updateProgress.setVisibility(updateWork.busy()?View.VISIBLE:View.GONE);updateProgress.setIndeterminate(!downloading);if(downloading)updateProgress.setProgress((int)(bytes*100/total));
-        String blocked=updates.primaryAction().equals("updates.install")?updateInstallBlockReason():"";updateInstallNotice.setText(blocked);updateInstallNotice.setVisibility(blocked.isEmpty()?View.GONE:View.VISIBLE);boolean enabled=!updateWork.busy()&&blocked.isEmpty();updatePrimary.setText(updates.primaryLabel(updateWork.busy()));updatePrimary.setEnabled(enabled);updatePrimary.setAlpha(enabled?1f:0.65f);
-        boolean cancelling=s.optBoolean("cancelRequested");updateCancel.setVisibility(s.optBoolean("canCancel")||cancelling?View.VISIBLE:View.GONE);updateCancel.setEnabled(!cancelling);long operation=s.optLong("operationId");updateCancel.setOnClickListener(view->invoke("updates.cancel",RhActions.obj("operationId",operation)));
+        String blocked=updates.primaryAction().equals("updates.install")?updateInstallBlockReason():"";updateInstallNotice.setText(blocked);updateInstallNotice.setVisibility(blocked.isEmpty()?View.GONE:View.VISIBLE);boolean enabled=!updateWork.busy()&&blocked.isEmpty();updatePrimary.setText(updates.primaryLabel(updateWork.busy()));updatePrimary.bind("updates.primary",RhActions.obj("expectedIntent",s.optString("intent")));updatePrimary.setEnabled(enabled);updatePrimary.setAlpha(enabled?1f:0.65f);
+        boolean cancelling=s.optBoolean("cancelRequested");updateCancel.setVisibility(s.optBoolean("canCancel")||cancelling?View.VISIBLE:View.GONE);updateCancel.setEnabled(!cancelling);long operation=s.optLong("operationId");updateCancel.bind("updates.cancel",RhActions.obj("operationId",operation));
     }
     private void startUpdate(String id){startUpdate(id,false);}
     private void startUpdate(String id,boolean automatic){
@@ -718,6 +966,7 @@ public final class RhHome implements RhActions.Target {
         updateDetails=false;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))message("");updateWork.start(id,automatic,NETWORK);
     }
     private EditText field(String title,String value,boolean password){label(title);EditText edit=new EditText(activity);edit.setContentDescription(title);edit.setTextColor(ink);edit.setHintTextColor(muted);edit.setTextSize(15);edit.setSingleLine(true);edit.setPadding(dp(12),0,dp(12),0);edit.setBackground(bg(surface,line,8));edit.setText(value);if(password)edit.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);content.addView(edit,new LinearLayout.LayoutParams(-1,dp(52)));return edit;}
+    private EditText addressField(String title,String value){EditText edit=field(title,value,false);RhTextInput.address(edit);return edit;}
     private void globalChrome(){
         formHeader.setVisibility(View.VISIBLE);formHeader.removeAllViews();formHeader.setPadding(dp(20),dp(12),dp(20),dp(8));
         formHeader.addView(pageHeading("设置","navigation.back"));
@@ -726,8 +975,10 @@ public final class RhHome implements RhActions.Target {
     private void ensureSyncDraft(){if(syncDraft==null){org.json.JSONObject s=sync.state();syncDraft=RhActions.obj("url",s.optString("url"),"username",s.optString("username"),"password","","automatic",s.optBoolean("automatic"),"intervalMinutes",s.optInt("intervalMinutes",5));}}
     private org.json.JSONObject publicSyncDraft(){if(syncDraft==null)return null;try{org.json.JSONObject s=new org.json.JSONObject(syncDraft.toString());s.remove("password");return s;}catch(Exception impossible){throw new IllegalStateException(impossible);}}
     private boolean syncDirty(){if(syncDraft==null)return false;org.json.JSONObject s=sync.state();return !syncDraft.optString("url").trim().equals(s.optString("url"))||!syncDraft.optString("username").trim().equals(s.optString("username"))||!syncDraft.optString("password").isEmpty()||syncDraft.optBoolean("automatic")!=s.optBoolean("automatic")||syncDraft.optInt("intervalMinutes",5)!=s.optInt("intervalMinutes",5);}
+    static boolean syncPasswordReusable(org.json.JSONObject saved,org.json.JSONObject draft){org.json.JSONObject form=draft==null?saved:draft;return saved.optBoolean("hasPassword")&&form.optString("url").trim().equals(saved.optString("url"))&&form.optString("username").trim().equals(saved.optString("username"));}
+    private void refreshSyncPasswordHint(){if(syncPasswordInput==null||syncPasswordNotice==null)return;org.json.JSONObject saved=syncWork.state();boolean reusable=syncPasswordReusable(saved,syncDraft);String hint=reusable?"已保存，留空保留":"请填写 WebDAV 密码";if(!hint.contentEquals(syncPasswordInput.getHint()==null?"":syncPasswordInput.getHint()))syncPasswordInput.setHint(hint);syncPasswordNotice.setVisibility(saved.optBoolean("hasPassword")&&!reusable?View.VISIBLE:View.GONE);}
     private void submitState(Button button,boolean enabled){button.setEnabled(enabled);button.setAlpha(1f);}
-    private void refreshSyncFooter(){if(syncSave==null||!pageId.equals("global-settings")||!settingsTab.equals("sync"))return;boolean dirty=syncDirty();submitState(syncSave,dirty&&!syncBusy);syncCancel.setEnabled(dirty&&!syncBusy);syncCancel.setAlpha(dirty&&!syncBusy?1f:0.45f);syncNotice.setText(dirty?"有未保存的更改":sync.state().optBoolean("hasPassword")?"设置已保存":"未配置");syncErrorView.setText(syncError);syncErrorView.setVisibility(syncError.isEmpty()?View.GONE:View.VISIBLE);}
+    private void refreshSyncFooter(){if(syncSave==null||!pageId.equals("global-settings")||!settingsTab.equals("sync"))return;boolean dirty=syncDirty(),primary=!dirty&&sync.state().optJSONArray("conflicts").length()==0;if(syncRun!=null&&syncRunPrimary!=primary){syncRunPrimary=primary;buttonStyle(syncRun,syncRunPrimary);}submitState(syncSave,dirty&&!syncBusy);syncCancel.setEnabled(dirty&&!syncBusy);syncCancel.setAlpha(dirty&&!syncBusy?1f:0.45f);syncNotice.setText(dirty?"有未保存的更改":sync.state().optBoolean("hasPassword")?"设置已保存":"未配置");refreshSyncPasswordHint();syncErrorView.setText(syncError);syncErrorView.setVisibility(syncError.isEmpty()?View.GONE:View.VISIBLE);}
     private String syncProgressText(boolean compact){String phase=syncWork.phase();return phase.equals("applying")?(compact?"正在应用…":"正在应用本机配置…"):phase.equals("recording")?(compact?"正在保存…":"正在保存同步状态…"):"同步中…";}
     static String syncSummary(org.json.JSONObject state,boolean busy,String error){
         if(busy)return "同步进行中";
@@ -740,21 +991,23 @@ public final class RhHome implements RhActions.Target {
     private void showSync(){
         ensureSyncDraft();org.json.JSONObject s=syncWork.state();
         label(syncSummary(s,syncBusy,syncError));
-        RhActionRow commands=actionRow();Button run=button(syncBusy?syncProgressText(true):"立即同步",true,()->invoke("sync.run",RhActions.obj())),clear=button("移除同步设置",false,()->invoke("sync.clear",RhActions.obj()));run.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));clear.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));commands.addView(run);commands.addView(clear);content.addView(commands);
-        org.json.JSONArray conflicts=s.optJSONArray("conflicts");if(conflicts!=null&&conflicts.length()>0){
-            label(conflicts.length()+" 项配置存在冲突。选择保留哪一端的冲突项，其余改动会合并。");RhActionRow choices=actionRow();Button keepLocal=button("冲突项保留本机",false,()->invoke("sync.resolve",RhActions.obj("resolution","local"))),keepRemote=button("冲突项保留远端",false,()->invoke("sync.resolve",RhActions.obj("resolution","remote")));keepLocal.setEnabled(!syncBusy);keepRemote.setEnabled(!syncBusy);choices.addView(keepLocal);choices.addView(keepRemote);content.addView(choices);
-            org.json.JSONArray review=s.optJSONArray("conflictItems");if(review!=null)for(int i=0;i<review.length();i++){org.json.JSONObject item=review.optJSONObject(i);LinearLayout card=column();card.setPadding(dp(14),dp(12),dp(14),dp(12));card.setBackground(bg(soft,line,12));card.addView(text(item.optString("label"),14,ink,true));card.addView(text("本机："+item.optString("local"),13,muted,false));card.addView(text("远端："+item.optString("remote"),13,muted,false));LinearLayout.LayoutParams cardLayout=new LinearLayout.LayoutParams(-1,-2);cardLayout.topMargin=dp(12);cardLayout.bottomMargin=dp(12);content.addView(card,cardLayout);}
+        org.json.JSONArray conflicts=s.optJSONArray("conflicts");boolean waiting=conflicts!=null&&conflicts.length()>0;
+        RhActionRow commands=actionRow();syncRunPrimary=!syncDirty()&&!waiting;syncRun=button(syncBusy?syncProgressText(true):waiting?"重新同步":"立即同步",syncRunPrimary,()->invoke("sync.run",RhActions.obj()));Button clear=button("移除同步设置",false,()->invoke("sync.clear",RhActions.obj()));syncRun.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));clear.setEnabled(!syncBusy&&s.optBoolean("hasPassword"));commands.addView(syncRun);commands.addView(clear);content.addView(commands);
+        if(waiting){
+            String reviewId=s.optString("reviewId");label(conflicts.length()+" 项配置存在冲突。选择保留哪一端的冲突项，其余改动会合并。");RhActionRow choices=actionRow();Button keepLocal=button("冲突项保留本机",false,()->invoke("sync.resolve",reviewId.isEmpty()?RhActions.obj("resolution","local"):RhActions.obj("resolution","local","reviewId",reviewId))),keepRemote=button("冲突项保留远端",false,()->invoke("sync.resolve",reviewId.isEmpty()?RhActions.obj("resolution","remote"):RhActions.obj("resolution","remote","reviewId",reviewId)));keepLocal.setEnabled(!syncBusy);keepRemote.setEnabled(!syncBusy);choices.addView(keepLocal);choices.addView(keepRemote);content.addView(choices);
+            org.json.JSONArray review=s.optJSONArray("conflictItems");if(review!=null)for(int i=0;i<review.length();i++){LinearLayout.LayoutParams cardLayout=new LinearLayout.LayoutParams(-1,-2);cardLayout.topMargin=dp(12);cardLayout.bottomMargin=dp(12);content.addView(syncReviewCard(review.optJSONObject(i)),cardLayout);}
         }
-        EditText url=field("WebDAV 目录地址（HTTP / HTTPS）",syncDraft.optString("url"),false),user=field("用户名",syncDraft.optString("username"),false),password=field(s.optBoolean("hasPassword")?"密码（留空保留）":"密码",syncDraft.optString("password"),true);
+        EditText url=addressField("WebDAV 目录地址（HTTP / HTTPS）",syncDraft.optString("url")),user=field("用户名",syncDraft.optString("username"),false),password=field("密码",syncDraft.optString("password"),true);RhTextInput.username(user);syncPasswordInput=password;
+        syncPasswordNotice=text("地址或用户名已更改，请重新填写密码。",12,muted,false);LinearLayout.LayoutParams passwordNoteLayout=new LinearLayout.LayoutParams(-1,-2);passwordNoteLayout.topMargin=dp(6);passwordNoteLayout.bottomMargin=dp(6);content.addView(syncPasswordNotice,passwordNoteLayout);
         url.setEnabled(!syncBusy);user.setEnabled(!syncBusy);password.setEnabled(!syncBusy);watch(url,"sync.edit","url");watch(user,"sync.edit","username");watch(password,"sync.edit","password");
         check("自动同步",syncDraft.optBoolean("automatic"),v->invoke("sync.edit",RhActions.obj("key","automatic","value",v))).setEnabled(!syncBusy);label("同步间隔");
-        Spinner interval=new Spinner(activity);interval.setEnabled(!syncBusy);interval.setAdapter(options(new String[]{"5 分钟","15 分钟","30 分钟","60 分钟"}));interval.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));interval.setSelection(Math.max(0,Arrays.asList(5,15,30,60).indexOf(syncDraft.optInt("intervalMinutes",5))));content.addView(interval,new LinearLayout.LayoutParams(-1,dp(48)));
-        interval.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){int minutes=new int[]{5,15,30,60}[position];if(syncDraft!=null&&syncDraft.optInt("intervalMinutes",5)!=minutes)invoke("sync.edit",RhActions.obj("key","intervalMinutes","value",minutes));}});
+        Spinner interval=new Spinner(activity);interval.setEnabled(!syncBusy);interval.setAdapter(options(new String[]{"5 分钟","15 分钟","30 分钟","60 分钟"}));interval.setPopupBackgroundDrawable(new android.graphics.drawable.ColorDrawable(surface));interval.setSelection(Math.max(0,Arrays.asList(5,15,30,60).indexOf(syncDraft.optInt("intervalMinutes",5))));interval.setMinimumHeight(dp(48));content.addView(interval,new LinearLayout.LayoutParams(-1,-2));
+        interval.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> parent){}public void onItemSelected(AdapterView<?> parent,View view,int position,long row){fromView(interval,()->{int minutes=new int[]{5,15,30,60}[position];if(syncDraft!=null&&syncDraft.optInt("intervalMinutes",5)!=minutes)invoke("sync.edit",RhActions.obj("key","intervalMinutes","value",minutes));});}});
         label("同步设备列表、连接配置和主题。画面参数按客户端分别保存；配对密钥及 WebDAV 凭据不参与同步。");
-        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setPadding(dp(20),dp(8),dp(20),dp(12));syncErrorView=text(syncError,13,failureColor,false);syncErrorView.setContentDescription("配置同步错误");formFooter.addView(syncErrorView);
-        LinearLayout footer=row();syncNotice=text("",12,muted,false);footer.addView(syncNotice,new LinearLayout.LayoutParams(0,dp(48),1));syncCancel=button("取消",false,()->invoke("sync.cancel",RhActions.obj()));syncSave=button("保存",true,()->invoke("sync.save",RhActions.obj()));footer.addView(syncCancel);LinearLayout.LayoutParams saveLayout=new LinearLayout.LayoutParams(-2,dp(48));saveLayout.setMarginStart(dp(8));footer.addView(syncSave,saveLayout);formFooter.addView(footer);wrapBodyInCard();formPadding(scroll.getWidth());refreshSyncFooter();scroll.scrollTo(0,0);
+        formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();formFooter.setPadding(dp(20),dp(8),dp(20),dp(12));syncErrorView=footerError(syncError,"配置同步错误");
+        LinearLayout footer=row();syncNotice=text("",12,muted,false);footer.addView(syncNotice,new LinearLayout.LayoutParams(0,dp(48),1));syncCancel=button("取消",false,()->invoke("sync.cancel",RhActions.obj()));syncSave=button("保存",true,()->invoke("sync.save",RhActions.obj()));footer.addView(syncCancel);LinearLayout.LayoutParams saveLayout=new LinearLayout.LayoutParams(-2,-2);saveLayout.setMarginStart(dp(8));footer.addView(syncSave,saveLayout);formFooter.addView(footer);wrapBodyInCard();formPadding(scroll.getWidth());refreshSyncFooter();scroll.scrollTo(0,0);
     }
-    private void startSync(String resolution,boolean automatic)throws Exception{syncWork.start(RhShared.capture(activity,new ArrayList<>(computers.values())),resolution,automatic,NETWORK);}
+    private void startSync(String resolution,boolean automatic,String reviewId)throws Exception{syncWork.start(RhShared.capture(activity,new ArrayList<>(computers.values())),resolution,automatic,reviewId,NETWORK);}
     private void syncChanged(){
         if(disposed||activity.isDestroyed())return;
         if(renderedDark!=RhShared.dark(activity)){if(foreground&&!activity.isFinishing())activity.recreate();return;}
@@ -762,16 +1015,21 @@ public final class RhHome implements RhActions.Target {
         syncBusy=syncWork.busy();syncError=syncWork.error();String phase=syncWork.phase();
         if(!syncBusy&&phase.equals("completed"))restoreSharedDevices();
         if(pageId.equals("global-settings")&&settingsTab.equals("sync")){
-            showGlobal();message(syncBusy?syncProgressText(false):phase.equals("completed")?"同步完成":phase.equals("conflict")?"配置冲突，请选择保留哪一端的冲突项":syncError);
+            showGlobal();message("");
         }else if(pageId.equals("devices")){renderDevices(false);if(phase.equals("completed"))message("同步完成");}
         else if(pageId.equals("add"))refreshAdd();
     }
-    private void restoreSharedDevices(){try{org.json.JSONArray list=RhShared.read(activity).getJSONArray("devices");for(int i=0;i<list.length();i++){org.json.JSONObject d=list.getJSONObject(i);String uuid=d.getString("uuid");if(!computers.containsKey(uuid)){ComputerDetails added=new ComputerDetails();added.uuid=uuid;added.name=d.getString("name");added.manualAddress=new ComputerDetails.AddressTuple(d.getString("address"),47989);computers.put(uuid,added);}}}catch(Exception e){message("已同步的设备列表读取失败");}}
+    private void restoreSharedDevices(){try{
+        org.json.JSONObject shared=RhShared.read(activity);org.json.JSONArray list=shared.getJSONArray("devices");Set<String> present=new HashSet<>();for(int i=0;i<list.length();i++)present.add(list.getJSONObject(i).getString("uuid"));
+        for(String uuid:new ArrayList<>(computers.keySet()))if(!present.contains(uuid)&&!RhShared.acceptsDiscovery(activity,shared,uuid)){computers.remove(uuid);signatures.remove(uuid);diagnostics.clearCheck(uuid);}
+        for(int i=0;i<list.length();i++){org.json.JSONObject d=list.getJSONObject(i);String uuid=d.getString("uuid");if(!computers.containsKey(uuid)){ComputerDetails added=new ComputerDetails();added.uuid=uuid;added.name=d.getString("name");added.manualAddress=new ComputerDetails.AddressTuple(d.getString("address"),47989);computers.put(uuid,added);}}
+        if(!computers.containsKey(browserUuid)){List<ComputerDetails> rows=RhShared.ordered(shared,computers.values());browserUuid=rows.isEmpty()?"":rows.get(0).uuid;}
+    }catch(Exception e){message("已同步的设备列表读取失败");}}
     private void showPair(){
         pageId="pair";profileVisible=true;showContent();content.removeAllViews();formHeader.removeAllViews();formFooter.removeAllViews();formHeader.setVisibility(View.VISIBLE);formFooter.setVisibility(View.VISIBLE);
         formHeader.addView(text("配对",23,ink,true));TextView name=text(connection.name,13,muted,false);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);formHeader.addView(name);
         label("请在这台电脑的 RHRemote-Sunshine 管理界面输入配对码：");TextView pin=text(pairPin,40,blue,true);pin.setContentDescription("配对码");content.addView(pin);label("等待主机确认配对");
         navigationFooter();RhActionRow footer=actionRow();footer.addView(button("取消配对",false,()->invoke("pair.cancel",RhActions.obj())));LinearLayout aligned=row();aligned.setGravity(Gravity.END);aligned.addView(footer,new LinearLayout.LayoutParams(-2,-2));formFooter.addView(aligned);formPadding(scroll.getWidth());refreshNavigation();
     }
-    public void pairFinished(boolean success,String result){if(admission!=null){admission.pairFinished(success,result);return;}pairing=false;pairPin="";showDevices();message(result);}
+    public void pairFinished(boolean success,String result){if(success)diagnostics.clearCheck(admission!=null?admission.state().optString("uuid"):connection.uuid);if(admission!=null){admission.pairFinished(success,result);return;}pairing=false;pairPin="";showDevices();message(result);}
 }

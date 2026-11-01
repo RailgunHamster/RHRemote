@@ -38,10 +38,18 @@ int main(int argc,char** argv){
     require(first.wait_for(std::chrono::milliseconds(0))==std::future_status::timeout);
     allowAcknowledgement.set_value();require(first.get()==Result::Cancelled);require(second.get()==Result::Cancelled);require(cancellationCalls==1);
     originalHttpReturned=true;
-    for(const auto& state:QStringList{"cancelled","handed_off","finished","expired"}){
+    for(const auto& state:QStringList{"cancelled","finished","expired"}){
         const auto value=Attempt::reply(state);require(value!=Result::Failed);require(Attempt::confirmed(value));
         Attempt attempt(true,[value](const QString&){return value;});require(attempt.finish()==value);
     }
+    require(Attempt::reply("handed_off")==Result::Claimed);require(!Attempt::confirmed(Result::Claimed));
+    std::vector<QString> claimedKeys;
+    {Attempt claimed(true,[&](const QString& token){claimedKeys.push_back(token);return claimedKeys.size()==1?Result::Claimed:Result::Expired;});require(claimed.finish()==Result::Expired);require(claimed.done());require(claimedKeys.size()==2);require(claimedKeys[0]==claimedKeys[1]);}
+    std::atomic_int activeCleanupCalls{0};
+    {Attempt active(true,[&](const QString&){++activeCleanupCalls;return Result::Failed;});active.handedOff();require(active.done());require(active.finish()==Result::HandedOff);}require(activeCleanupCalls==0);
+    std::promise<void> claimEntered,releaseClaim;auto claimReleased=releaseClaim.get_future().share();
+    {Attempt racing(true,[&](const QString&){claimEntered.set_value();claimReleased.wait();return Result::Claimed;});racing.cancel();claimEntered.get_future().wait();racing.handedOff();releaseClaim.set_value();require(racing.finish()==Result::HandedOff);}
+    {const auto began=std::chrono::steady_clock::now();std::atomic_int polls{0};Attempt unfinished(true,[&](const QString&){++polls;return Result::Claimed;});require(unfinished.finish()==Result::Claimed);require(!Attempt::confirmed(unfinished.finish()));require(polls>=2&&polls<=16);require(std::chrono::steady_clock::now()-began<std::chrono::seconds(19));}
     require(Attempt::reply("")==Result::Failed);require(Attempt::reply("OK")==Result::Failed);require(!Attempt::confirmed(Result::Failed));
     {Attempt failure(true,[](const QString&)->Result{throw std::runtime_error("fixture");});require(failure.finish()==Result::Failed);require(failure.done());}
     std::atomic_bool destructorDrained{false};

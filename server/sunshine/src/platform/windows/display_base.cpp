@@ -1,6 +1,7 @@
 #include "src/rhremote_device_probe.h"
 #include "src/rhremote_gpu_priority.h"
 #include "src/rhremote_trace.h"
+#include "src/rhremote_window_capture.h"
 /**
  * @file src/platform/windows/display_base.cpp
  * @brief Definitions for the Windows display base code.
@@ -507,7 +508,21 @@ namespace platf::dxgi {
     }
 
     auto adapter_name = utf_utils::from_utf8(config::video.adapter_name);
-    auto output_name = utf_utils::from_utf8(display_name);
+    const bool window_source = rhremote::is_window_source(display_name);
+    if (window_source) {
+      if (!platf::window_capture::supported()) {
+        return -1;
+      }
+      window_target = platf::window_capture::acquire(display_name);
+      if (!window_target || window_target->state() != "ready" || !window_target->present()) {
+        BOOST_LOG(error) << "Selected application window is unavailable; refusing desktop fallback";
+        return -1;
+      }
+    }
+    auto output_name = window_target ? window_target->monitor_name() : utf_utils::from_utf8(display_name);
+    if (window_source && output_name.empty()) {
+      return -1;
+    }
 
     adapter_t::pointer adapter_p;
     for (int tries = 0; tries < 2; ++tries) {
@@ -584,6 +599,19 @@ namespace platf::dxgi {
     if (!output) {
       BOOST_LOG(error) << "Failed to locate an output device"sv;
       return -1;
+    }
+
+    if (window_target) {
+      const auto size = window_target->item.Size();
+      if (size.Width <= 0 || size.Height <= 0 || size.Width > 16384 || size.Height > 16384) {
+        return -1;
+      }
+      width = width_before_rotation = size.Width;
+      height = height_before_rotation = size.Height;
+      display_rotation = DXGI_MODE_ROTATION_IDENTITY;
+      const auto rect = window_target->bounds();
+      offset_x = rect.left - GetSystemMetrics(SM_XVIRTUALSCREEN);
+      offset_y = rect.top - GetSystemMetrics(SM_YVIRTUALSCREEN);
     }
 
     // The successful probe already created this exact adapter's device with the
@@ -1025,40 +1053,46 @@ namespace platf {
    * @param hwdevice_type enables possible use of hardware encoder
    */
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
-    if (config::video.capture == "ddx" || config::video.capture.empty()) {
-      if (hwdevice_type == mem_type_e::dxgi) {
-        auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
+    try {
+      const bool window_source = rhremote::is_window_source(display_name);
+      if (!window_source && (config::video.capture == "ddx" || config::video.capture.empty())) {
+        if (hwdevice_type == mem_type_e::dxgi) {
+          auto disp = std::make_shared<dxgi::display_ddup_vram_t>();
 
-        if (!disp->init(config, display_name)) {
-          return disp;
-        }
-      } else if (hwdevice_type == mem_type_e::system) {
-        auto disp = std::make_shared<dxgi::display_ddup_ram_t>();
+          if (!disp->init(config, display_name)) {
+            return disp;
+          }
+        } else if (hwdevice_type == mem_type_e::system) {
+          auto disp = std::make_shared<dxgi::display_ddup_ram_t>();
 
-        if (!disp->init(config, display_name)) {
-          return disp;
-        }
-      }
-    }
-
-    if (config::video.capture == "wgc" || config::video.capture.empty()) {
-      if (hwdevice_type == mem_type_e::dxgi) {
-        auto disp = std::make_shared<dxgi::display_wgc_vram_t>();
-
-        if (!disp->init(config, display_name)) {
-          return disp;
-        }
-      } else if (hwdevice_type == mem_type_e::system) {
-        auto disp = std::make_shared<dxgi::display_wgc_ram_t>();
-
-        if (!disp->init(config, display_name)) {
-          return disp;
+          if (!disp->init(config, display_name)) {
+            return disp;
+          }
         }
       }
-    }
 
-    // ddx and wgc failed
-    return nullptr;
+      if (window_source || config::video.capture == "wgc" || config::video.capture.empty()) {
+        if (hwdevice_type == mem_type_e::dxgi) {
+          auto disp = std::make_shared<dxgi::display_wgc_vram_t>();
+
+          if (!disp->init(config, display_name)) {
+            return disp;
+          }
+        } else if (hwdevice_type == mem_type_e::system) {
+          auto disp = std::make_shared<dxgi::display_wgc_ram_t>();
+
+          if (!disp->init(config, display_name)) {
+            return disp;
+          }
+        }
+      }
+
+      // ddx and wgc failed
+      return nullptr;
+    } catch (const winrt::hresult_error &capture_error) {
+      BOOST_LOG(error) << "Windows capture source became unavailable during initialization [0x"sv << util::hex(capture_error.code()).to_string_view() << ']';
+      return nullptr;
+    }
   }
 
   std::vector<std::string> display_names(mem_type_e) {

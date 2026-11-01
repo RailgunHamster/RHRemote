@@ -41,6 +41,7 @@ pub(crate) struct ControlTrace {
     last_disconnect_result: &'static str,
     disconnect_http_status: Option<u16>,
     elapsed_ms: u64,
+    last_state_request: Option<crate::native_control::RequestTrace>,
 }
 
 #[derive(Clone, Default)]
@@ -274,22 +275,11 @@ fn stop(child: &mut Child, context: &Context) -> Report {
         }
         if !dispatched {
             trace.state_requests += 1;
-            let state = agent
-                .get(&format!("http://127.0.0.1:{}/v1/state", context.port))
-                .set("Authorization", &format!("Bearer {}", context.token))
-                .call();
-            let state: Option<Value> = match state {
-                Ok(response) => match response.into_json() {
-                    Ok(value) => { trace.last_state_result = "decoded"; Some(value) }
-                    Err(_) => { trace.last_state_result = "invalid_json"; None }
-                },
-                Err(ureq::Error::Status(code, _)) => {
-                    trace.last_state_result = "http_error";
-                    trace.state_http_status = Some(code);
-                    None
-                }
-                Err(_) => { trace.last_state_result = "transport_error"; None }
-            };
+            let (state, request) = crate::native_control::read_state(
+                &agent, context.port, &context.token, Duration::from_millis(250));
+            trace.last_state_result = request.result;
+            if request.result == "http_error" { trace.state_http_status = request.http_status; }
+            trace.last_state_request = Some(request);
             if state
                 .as_ref()
                 .is_some_and(|s| s["processId"].as_u64() == Some(u64::from(pid)))

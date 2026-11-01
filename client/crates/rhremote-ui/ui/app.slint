@@ -1,6 +1,10 @@
 import { ProgressIndicator, ScrollView as BaseScrollView, LineEdit as BaseLineEdit, CheckBox as BaseCheckBox, SpinBox as BaseSpinBox, ComboBox as BaseComboBox, Palette as WidgetPalette } from "std-widgets.slint";
 
 export global Commands { callback trigger(string,string); }
+export global ModalContext {
+    in-out property <string> allowed-action;
+    out property <bool> active:ModalContext.allowed-action!="";
+}
 export global UiTest {
     in property <bool> enabled;
     in property <int> generation;
@@ -16,6 +20,22 @@ export global KeyboardFocus {
     public function remember(id:string,focused:bool,content:bool){
         if(focused && content){KeyboardFocus.last-content-control=id;}
     }
+}
+export global ProfileErrorFocus {
+    in-out property <string> target-key;
+    in-out property <string> request-id;
+    in-out property <string> consumed-request;
+    in-out property <bool> allowed;
+    in-out property <length> editor-top;
+    in-out property <length> editor-height;
+    in-out property <int> reveal-request;
+    in-out property <int> viewport-revision;
+}
+global DiagnosticReveal {
+    in-out property <int> request;
+    in-out property <string> context;
+    in-out property <length> top;
+    in-out property <length> height;
 }
 component UiProbe inherits Rectangle {
     width:0px;height:0px;
@@ -55,50 +75,142 @@ component LineEdit inherits BaseLineEdit {
     property <string> test-label:root.accessible-label!="" ? root.accessible-label : root.placeholder-text;
     property <string> test-id:"input|"+root.test-label;
     accessible-id:root.test-id;
+    accessible-enabled:root.enabled && !ModalContext.active;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
     changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
-    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"input",root.test-label,root.enabled,root.has-focus,false,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"input",root.test-label,root.accessible-enabled,root.has-focus,false,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.accessible-enabled){root.focus();}}}
+}
+component ProfileErrorEditor inherits LineEdit {
+    in property <string> field-key;
+    private property <string> error-request:ProfileErrorFocus.request-id;
+    private property <bool> error-allowed:ProfileErrorFocus.allowed;
+    private property <int> viewport-revision:ProfileErrorFocus.viewport-revision;
+    function reveal-focused-error(){
+        if(root.error-allowed && root.has-focus && ProfileErrorFocus.target-key==root.field-key
+            && ProfileErrorFocus.consumed-request==root.error-request){
+            ProfileErrorFocus.editor-top=root.absolute-position.y;
+            ProfileErrorFocus.editor-height=root.height;
+            ProfileErrorFocus.reveal-request+=1;
+        }
+    }
+    function focus-requested-error(){
+        if(root.error-allowed && root.enabled && root.error-request!=""
+            && ProfileErrorFocus.target-key==root.field-key && ProfileErrorFocus.consumed-request!=root.error-request){
+            root.focus();ProfileErrorFocus.consumed-request=root.error-request;
+            root.reveal-focused-error();
+        }
+    }
+    init=>{root.focus-requested-error();}
+    changed error-request=>{root.focus-requested-error();}
+    changed error-allowed=>{root.focus-requested-error();}
+    changed viewport-revision=>{root.reveal-focused-error();}
 }
 component ComboBox inherits BaseComboBox {
     property <string> test-id:"choice|"+root.accessible-label;
     accessible-id:root.test-id;
+    accessible-enabled:root.enabled && !ModalContext.active;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
     changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
-    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"combobox",root.accessible-label,root.enabled,root.has-focus,false,root.accessible-expanded,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"combobox",root.accessible-label,root.accessible-enabled,root.has-focus,false,root.accessible-expanded,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.accessible-enabled){root.focus();}}}
 }
 component CheckBox inherits BaseCheckBox {
     property <string> test-id:"check|"+root.accessible-label;
     accessible-id:root.test-id;
+    accessible-enabled:root.enabled && !ModalContext.active;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
     changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
-    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"checkbox",root.accessible-label,root.enabled,root.has-focus,root.checked,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"checkbox",root.accessible-label,root.accessible-enabled,root.has-focus,root.checked,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.accessible-enabled){root.focus();}}}
 }
 component SpinBox inherits BaseSpinBox {
     property <string> test-id:"spin|"+root.accessible-label;
     accessible-id:root.test-id;
+    accessible-enabled:root.enabled && !ModalContext.active;
     property <int> test-request:UiTest.generation;
     property <int> restore-request:KeyboardFocus.restore-generation;
     changed has-focus=>{KeyboardFocus.remember(root.test-id,root.has-focus,true);}
     changed restore-request=>{if(KeyboardFocus.restore-target==root.test-id && root.enabled){root.focus();}}
-    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"spinbox",root.accessible-label,root.enabled,root.has-focus,false,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.enabled){root.focus();}}}
+    changed test-request=>{if(UiTest.enabled){if(UiTest.operation=="inspect"){UiTest.report(root.test-id,"spinbox",root.accessible-label,root.accessible-enabled,root.has-focus,false,false,root.width/1px,root.height/1px,0,0);}else if(UiTest.operation=="focus" && UiTest.target==root.test-id && root.accessible-enabled){root.focus();}}}
 }
 component ScrollView inherits BaseScrollView {
+    enabled:!ModalContext.active;
     in property <string> test-id;
     UiProbe{control-id:root.test-id;kind:"scroll";control-width:root.width;control-height:root.height;scroll-y:root.content-y;scroll-maximum:max(0px,root.content-height - root.visible-height);scroll-requested(delta)=>{root.content-y=max(-max(0px,root.content-height - root.visible-height),min(0px,root.content-y + delta*1px));}}
 }
-export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, search-addresses:string, status:string, paired:bool, online:bool, is-self:bool }
+// Full save errors remain readable without growing the fixed action bar off-screen.
+component SaveErrorDetails inherits Rectangle {
+    in property <string> message;
+    in property <string> test-id;
+    preferred-height:min(80px,error-content.preferred-height);min-height:0px;max-height:80px;vertical-stretch:0;
+    accessible-role:groupbox;accessible-label:"保存错误详情";
+    border-radius:4px;border-width:1px;border-color:error-keys.has-focus && root.available ? Palette.blue : transparent;
+    private property <bool> available:!ModalContext.active && error-scroll.content-height>error-scroll.visible-height+1px;
+    function scroll-by(delta:length){error-scroll.content-y=max(-max(0px,error-scroll.content-height - error-scroll.visible-height),min(0px,error-scroll.content-y+delta));}
+    changed message=>{error-scroll.content-y=0px;}
+    forward-focus:error-keys;
+    error-keys:=FocusScope {width:root.width;height:root.height;focus-on-click:root.available;focus-on-tab-navigation:root.available;
+        key-pressed(event)=>{
+            if(root.available){
+                if(event.text==Key.DownArrow){root.scroll-by(-32px);return accept;}
+                if(event.text==Key.UpArrow){root.scroll-by(32px);return accept;}
+                if(event.text==Key.PageDown){root.scroll-by(-max(32px,error-scroll.visible-height - 16px));return accept;}
+                if(event.text==Key.PageUp){root.scroll-by(max(32px,error-scroll.visible-height - 16px));return accept;}
+                if(event.text==Key.Home){error-scroll.content-y=0px;return accept;}
+                if(event.text==Key.End){error-scroll.content-y=-max(0px,error-scroll.content-height - error-scroll.visible-height);return accept;}
+            }
+            return reject;
+        }
+        error-scroll:=BaseScrollView {width:parent.width;height:parent.height;enabled:!ModalContext.active;content-width:self.visible-width;horizontal-scrollbar-policy:always-off;
+            error-content:=VerticalLayout {padding:0px;Text{text:root.message;accessible-label:root.message;color:Palette.failure;font-size:13px;wrap:word-wrap;}}
+        }
+    }
+    UiProbe{control-id:root.test-id;kind:"scroll";label:"保存错误详情";control-enabled:root.available;focused:error-keys.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;scroll-y:error-scroll.content-y;scroll-maximum:max(0px,error-scroll.content-height - error-scroll.visible-height);focus-requested=>{error-keys.focus();}scroll-requested(delta)=>{root.scroll-by(delta*1px);}}
+}
+// Session details fill the available body; fixed close/recovery actions stay outside.
+component SessionErrorDetails inherits Rectangle {
+    in property <string> message;
+    in property <string> test-id;
+    in property <string> label;
+    in property <length> message-font-size:13px;
+    min-height:0px;vertical-stretch:1;
+    accessible-role:groupbox;accessible-label:root.label;
+    border-radius:4px;border-width:1px;border-color:message-keys.has-focus && root.available ? Palette.blue : transparent;
+    private property <bool> available:message-scroll.content-height>message-scroll.visible-height+1px;
+    function scroll-by(delta:length){message-scroll.content-y=max(-max(0px,message-scroll.content-height - message-scroll.visible-height),min(0px,message-scroll.content-y+delta));}
+    changed message=>{message-scroll.content-y=0px;}
+    forward-focus:message-keys;
+    message-keys:=FocusScope{width:root.width;height:root.height;focus-on-click:root.available;focus-on-tab-navigation:root.available;
+        key-pressed(event)=>{
+            if(root.available){
+                if(event.text==Key.DownArrow){root.scroll-by(-32px);return accept;}
+                if(event.text==Key.UpArrow){root.scroll-by(32px);return accept;}
+                if(event.text==Key.PageDown){root.scroll-by(-max(32px,message-scroll.visible-height - 16px));return accept;}
+                if(event.text==Key.PageUp){root.scroll-by(max(32px,message-scroll.visible-height - 16px));return accept;}
+                if(event.text==Key.Home){message-scroll.content-y=0px;return accept;}
+                if(event.text==Key.End){message-scroll.content-y=-max(0px,message-scroll.content-height - message-scroll.visible-height);return accept;}
+            }
+            return reject;
+        }
+        message-scroll:=BaseScrollView{x:4px;y:4px;width:max(0px,parent.width - 8px);height:max(0px,parent.height - 8px);content-width:self.visible-width;horizontal-scrollbar-policy:always-off;
+            VerticalLayout{padding:0px;Text{text:root.message;accessible-label:root.message;color:Palette.failure;font-size:root.message-font-size;wrap:word-wrap;}}
+        }
+    }
+    UiProbe{control-id:root.test-id;kind:"scroll";label:root.label;control-enabled:root.available;focused:message-keys.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;scroll-y:message-scroll.content-y;scroll-maximum:max(0px,message-scroll.content-height - message-scroll.visible-height);focus-requested=>{message-keys.focus();}scroll-requested(delta)=>{root.scroll-by(delta*1px);}}
+}
+export struct DeviceRow { uuid:string, name:string, host-name:string, address:string, search-addresses:string, status:string, paired:bool, online:bool, is-self:bool, pending:bool, check-retry:bool, check-failed:bool, check-hint:string, repair-required:bool }
 export struct ProfileSource { client-id:string, label:string }
 export struct CopyField { label:string, value:string }
-export struct SyncConflictRow { label:string, local:string, remote:string }
+export struct SyncConflictField { key:string, label:string, local:string, remote:string }
+export struct SyncConflictRow { key:string, label:string, local:string, remote:string, fields:[SyncConflictField] }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
-export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,number:int,input-text:string,invalid:bool,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
-export struct RouteRow { key:string,label:string,enabled:bool,can-move-up:bool,can-move-down:bool,can-disable:bool }
+export struct KeyboardKey { id:string,label:string,description:string,x:float,y:float,width:float,height:float }
+export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,disabled:bool,number:int,input-text:string,invalid:bool,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
+export struct RouteRow { key:string,label:string,enabled:bool,can-move-up:bool,can-move-down:bool,can-disable:bool,toggle-blocked:bool }
 export global Palette {
     in property <bool> dark;
     out property <color> page: dark ? #151b29 : #f6f7fa;
@@ -110,12 +222,23 @@ export global Palette {
     out property <color> soft: dark ? #253452 : #edf2ff;
     out property <color> purple: dark ? #ba9aef : #8b5be2;
     out property <color> failure: dark ? #f28b9c : #b04452;
+    out property <color> success: dark ? #8bc7b1 : #369c81;
 }
 component ActionButton inherits Rectangle {
-    function invoke-action(){if(!root.disabled){Commands.trigger(root.action-id,root.argument);}}
+    property <bool> available:!root.disabled && (!ModalContext.active || root.action-id==ModalContext.allowed-action);
+    private property <bool> press-valid:false;
+    private property <string> pressed-action;
+    private property <string> pressed-argument;
+    private property <string> pressed-text;
+    changed action-id=>{root.press-valid=false;}
+    changed argument=>{root.press-valid=false;}
+    changed text=>{root.press-valid=false;}
+    changed available=>{if(!root.available){root.press-valid=false;}}
+    function invoke-action(){if(root.available){Commands.trigger(root.action-id,root.argument);}}
     in property <string> text;
     in property <string> action-id;
     in property <string> argument;
+    in property <bool> elide-text:false;
     in property <bool> primary:false;
     in property <bool> chosen:false;
     in property <bool> disabled:false;
@@ -136,17 +259,24 @@ component ActionButton inherits Rectangle {
     border-color: key-focus.has-focus || root.chosen ? Palette.blue : Palette.line;
     border-width: (root.primary || root.subtle) && !key-focus.has-focus && !root.chosen ? 0px : 1px;
     if root.has-icon:Image{source:root.icon; x:12px;y:(parent.height - self.height)/2;width:16px;height:16px;colorize:root.disabled ? Palette.muted : root.primary ? white : root.chosen ? Palette.blue : Palette.ink;}
-    label := Text {x:root.has-icon ? 28px : 0px;width:parent.width - self.x;text:root.text;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
+    label := Text {x:root.has-icon ? 28px : 0px;width:parent.width - self.x;text:root.text;overflow:root.elide-text ? elide : clip;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:13px;}
     // Slint 1.18.1 ignores FocusOut on disabled FocusScope items. Keep delivery
     // enabled and gate focus entry/actions so a former focus marker can clear.
-    key-focus := FocusScope {focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){root.invoke-action();return accept;}return reject;}}
-    touch := TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{key-focus.focus();root.invoke-action();}}
+    key-focus := FocusScope {focus-on-click:root.available;focus-on-tab-navigation:root.available;key-pressed(event)=>{if(root.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){root.invoke-action();}return accept;}return reject;}}
+    touch := TouchArea {
+        enabled:root.available;mouse-cursor:pointer;
+        pointer-event(event)=>{
+            if(event.kind==PointerEventKind.down && event.button==PointerEventButton.left){root.pressed-action=root.action-id;root.pressed-argument=root.argument;root.pressed-text=root.text;root.press-valid=true;}
+            else if(event.kind==PointerEventKind.cancel){root.press-valid=false;}
+        }
+        clicked=>{key-focus.focus();if(root.press-valid && root.pressed-action==root.action-id && root.pressed-argument==root.argument && root.pressed-text==root.text){root.invoke-action();}root.press-valid=false;}
+    }
     accessible-role: button;
-    accessible-enabled:!root.disabled;
+    accessible-enabled:root.available;
     accessible-label: root.text;
     accessible-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;
     accessible-action-default=>{root.invoke-action();}
-    UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:!root.disabled;focused:root.focused;remember-focus:root.remember-focus && root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve" && root.action-id!="navigation.back" && root.action-id!="device.select" && root.action-id!="device.settings.open";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}activate-requested=>{root.invoke-action();}}
+    UiProbe{control-id:"action|"+root.action-id+"|"+root.argument+"|"+root.accessible-label;kind:"button";label:root.accessible-label;control-enabled:root.available;focused:root.focused;remember-focus:root.remember-focus && root.action-id!="navigation.resolve" && root.action-id!="sync.clear.resolve" && root.action-id!="navigation.back" && root.action-id!="device.select" && root.action-id!="device.settings.open";control-width:root.width;control-height:root.height;focus-requested=>{key-focus.focus();}activate-requested=>{root.invoke-action();}}
 }
 component TabButton inherits ActionButton { border-width:root.focused ? 1px : 0px; }
 component BackButton inherits ActionButton { remember-focus:false;has-icon:true;icon:@image-url("icons/chevron-left.svg"); }
@@ -172,6 +302,8 @@ component ThemePreview inherits Rectangle {
     }
 }
 component NavigationItem inherits Rectangle {
+    property <bool> available:!root.disabled && !ModalContext.active;
+    function invoke-navigation(){if(root.available){nav-focus.focus();Commands.trigger(root.action-id,"");}}
     in property <string> text;
     in property <image> icon;
     in property <string> action-id;
@@ -181,7 +313,7 @@ component NavigationItem inherits Rectangle {
     opacity:root.disabled ? 0.45 : 1;
     height:42px;border-radius:7px;
     forward-focus:nav-focus;
-    border-color:Palette.blue;border-width:!root.disabled && nav-focus.has-focus ? 1px : 0px;
+    border-color:Palette.blue;border-width:root.available && nav-focus.has-focus ? 1px : 0px;
     background:root.chosen ? Palette.soft : touch.has-hover ? Palette.page : transparent;
     HorizontalLayout {
         padding-left:12px;padding-right:12px;spacing:12px;
@@ -191,18 +323,20 @@ component NavigationItem inherits Rectangle {
         if !root.compact: Text {text:root.text;color:root.chosen ? Palette.blue : Palette.ink;font-weight:root.chosen ? 600 : 400;vertical-alignment:center;font-size:13px;}
         if !root.compact: Rectangle {horizontal-stretch:1;}
     }
-    nav-focus:=FocusScope{focus-on-click:!root.disabled;focus-on-tab-navigation:!root.disabled;key-pressed(event)=>{if(!root.disabled && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.action-id,"");return accept;}return reject;}}
-    touch:=TouchArea {enabled:!root.disabled;mouse-cursor:pointer;clicked=>{nav-focus.focus();Commands.trigger(root.action-id,"");}}
-    accessible-role:button;accessible-label:root.text;accessible-enabled:!root.disabled;
+    nav-focus:=FocusScope{focus-on-click:root.available;focus-on-tab-navigation:root.available;key-pressed(event)=>{if(root.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){root.invoke-navigation();}return accept;}return reject;}}
+    touch:=TouchArea {enabled:root.available;mouse-cursor:pointer;clicked=>{root.invoke-navigation();}}
+    accessible-role:button;accessible-label:root.text;accessible-enabled:root.available;
     accessible-id:"nav|"+root.action-id;
-    accessible-action-default=>{if(!root.disabled){Commands.trigger(root.action-id,"");}}
-    UiProbe{control-id:"nav|"+root.action-id;kind:"navigation";label:root.text;control-enabled:!root.disabled;focused:nav-focus.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;focus-requested=>{nav-focus.focus();}}
+    accessible-action-default=>{root.invoke-navigation();}
+    UiProbe{control-id:"nav|"+root.action-id;kind:"navigation";label:root.text;control-enabled:root.available;focused:nav-focus.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;focus-requested=>{nav-focus.focus();}activate-requested=>{root.invoke-navigation();}}
 }
 component DeviceListPane inherits Rectangle {
     in property <bool> compact;
+    in property <bool> refreshing;
+    in property <string> refresh-error;
     in property <[DeviceRow]> devices;
     in property <string> selected-uuid;
-    in property <string> device-query;
+    in-out property <string> device-query;
     in property <int> device-total;
     in property <int> device-online;
     in property <string> selection-action:"device.select";
@@ -212,12 +346,14 @@ width:root.compact ? 224px : 276px;background:Palette.surface;
                         HorizontalLayout {spacing:8px;height:36px;
                             Text {text:"远程设备";font-size:19px;font-weight:600;color:Palette.ink;vertical-alignment:center;}
                             Rectangle {horizontal-stretch:1;}
-                            ActionButton {text:"刷新";action-id:"devices.refresh";height:32px;}
+                            ActionButton {text:root.refreshing ? "刷新中…" : "刷新";action-id:"devices.refresh";disabled:root.refreshing;height:32px;}
                         }
-                        LineEdit {text:root.device-query;accessible-label:"搜索名称或地址";placeholder-text:"搜索名称或地址";height:36px;edited(value)=>{Commands.trigger("devices.filter",value);}}
+                        LineEdit {text <=> root.device-query;accessible-label:"搜索名称或地址";placeholder-text:"搜索名称或地址";height:36px;edited(value)=>{Commands.trigger("devices.filter",value);}}
+                        if root.refresh-error!="":Text{text:root.refresh-error;accessible-label:root.refresh-error;color:Palette.failure;font-size:12px;wrap:word-wrap;max-height:48px;overflow:elide;}
                         ScrollView {test-id:"scroll|devices";horizontal-stretch:1;vertical-stretch:1;content-width:self.width;
                             VerticalLayout {spacing:6px;alignment:start;
                                 for device in root.devices: Rectangle {
+                                    property <bool> available:!ModalContext.active;
                                     height:86px;border-radius:8px;
                                     forward-focus:device-focus;
                                     border-width:device-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
@@ -231,19 +367,23 @@ width:root.compact ? 224px : 276px;background:Palette.surface;
                                             Text {text:device.name;color:Palette.ink;font-size:14px;font-weight:device.uuid==root.selected-uuid ? 600 : 400;overflow:elide;}
                                             Text {text:device.address;color:Palette.muted;font-size:11px;overflow:elide;}
                                             HorizontalLayout {spacing:5px;
-                                                Rectangle {width:6px;height:6px;border-radius:3px;background:device.is-self ? Palette.blue : device.online ? #369c81 : #98a1b2;vertical-stretch:0;}
-                                                Text {text:device.status;color:Palette.muted;font-size:10px;overflow:elide;}
+                                                Rectangle {width:6px;height:6px;border-radius:3px;background:device.is-self ? Palette.blue : device.online ? Palette.success : #98a1b2;vertical-stretch:0;}
+                                                device-row-status:=Text {text:device.status;color:device.is-self ? Palette.blue : device.check-failed ? Palette.failure : !device.pending && device.paired && device.online ? Palette.success : Palette.muted;font-size:10px;overflow:elide;}
                                             }
                                         }
                                     }
-                                    device-focus:=FocusScope{key-pressed(event)=>{if(event.text==Key.Return || event.text==" "){Commands.trigger(root.selection-action,device.uuid);return accept;}return reject;}}
-                                    UiProbe{control-id:"device|"+device.uuid;kind:"device";label:"选择设备 "+device.name;remember-focus:false;focused:device-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{device-focus.focus();}}
-                                    device-touch:=TouchArea {mouse-cursor:pointer;clicked=>{device-focus.focus();Commands.trigger(root.selection-action,device.uuid);}}
+                                    device-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){Commands.trigger(root.selection-action,device.uuid);}return accept;}return reject;}}
+                                    UiProbe{control-id:"device|"+device.uuid;kind:"device";label:"选择设备 "+device.name;control-enabled:parent.available;remember-focus:false;focused:device-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{device-focus.focus();}}
+                                    device-touch:=TouchArea {enabled:parent.available;mouse-cursor:pointer;clicked=>{device-focus.focus();Commands.trigger(root.selection-action,device.uuid);}}
                                     accessible-role:button;accessible-label:"选择设备 "+device.name;
+                                    accessible-enabled:self.available;
                                     accessible-id:"device|"+device.uuid;
-                                    accessible-action-default=>{Commands.trigger(root.selection-action,device.uuid);}
+                                    accessible-action-default=>{if(self.available){Commands.trigger(root.selection-action,device.uuid);}}
                                 }
-                                if root.devices.length==0: Text {text:root.device-query!="" ? "没有匹配的设备" : "尚未添加设备";color:Palette.muted;font-size:12px;height:80px;horizontal-alignment:center;vertical-alignment:center;}
+                                if root.devices.length==0: VerticalLayout {padding-top:24px;spacing:16px;
+                                    Text {text:root.device-total>0 ? "没有匹配的设备" : "尚未添加设备";color:Palette.muted;font-size:12px;horizontal-alignment:center;wrap:word-wrap;}
+                                    if root.device-total>0 && root.device-query!="":HorizontalLayout {Rectangle{horizontal-stretch:1;}ActionButton {text:"清除搜索";action-id:"devices.filter.clear";argument:root.device-query;}Rectangle{horizontal-stretch:1;}}
+                                }
                             }
                         }
                         Rectangle {height:1px;background:Palette.line;}
@@ -254,9 +394,10 @@ width:root.compact ? 224px : 276px;background:Palette.surface;
 component DetailField inherits VerticalLayout {
     in property <string> label;
     in property <string> value;
+    in property <color> value-color:Palette.ink;
     spacing:8px;
     Text {text:root.label;color:Palette.muted;font-size:12px;}
-    Text {text:root.value;color:Palette.ink;font-size:14px;overflow:elide;}
+    Text {text:root.value;color:root.value-color;font-size:14px;overflow:elide;}
 }
 component DeviceContextHeader inherits Rectangle {
     in property <DeviceRow> device;
@@ -271,10 +412,10 @@ component DeviceContextHeader inherits Rectangle {
             VerticalLayout {padding:16px;padding-left:root.content-inset;padding-right:root.content-inset;spacing:8px;
                 device-title-row:=HorizontalLayout {height:32px;spacing:10px;
                     Text{text:root.name;font-size:24px;font-weight:600;color:Palette.ink;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;vertical-alignment:center;}
-                    VerticalLayout {width:68px;spacing:0px;
+                    VerticalLayout {width:100px;spacing:0px;
                         Rectangle{vertical-stretch:1;}
-                        device-state:=Rectangle {width:68px;height:26px;border-radius:13px;background:Palette.surface;
-                            Text{text:root.device.is-self ? "本机" : root.device.online ? "在线" : "离线";color:root.device.is-self ? Palette.blue : root.device.online ? #369c81 : Palette.muted;font-size:11px;horizontal-alignment:center;vertical-alignment:center;}
+                        device-state:=Rectangle {width:100px;height:26px;border-radius:13px;background:Palette.surface;
+                            device-status-label:=Text{text:root.device.status;color:root.device.is-self ? Palette.blue : root.device.check-failed ? Palette.failure : root.device.pending ? Palette.muted : root.device.paired && root.device.online ? Palette.success : Palette.muted;font-size:11px;horizontal-alignment:center;vertical-alignment:center;}
                         }
                         Rectangle{vertical-stretch:1;}
                     }
@@ -292,7 +433,24 @@ component DeviceContextHeader inherits Rectangle {
         }
     }
 }
+export component FloatingKeyboardWindow inherits Window {
+    title:"RHRemote-Moonlight · 悬浮键盘";
+    no-frame:true;background:transparent;
+    preferred-width:1px;preferred-height:1px;min-width:1px;min-height:1px;
+    max-width:32768px;max-height:32768px;
+    in property <[KeyboardKey]> keys;
+    in property <bool> busy;
+    for key in root.keys:ActionButton{
+        x:key.x*1px;y:key.y*1px;width:key.width*1px;height:key.height*1px;min-width:1px;
+        text:key.label;accessible-label:key.description;action-id:"stream.shortcut";argument:key.id;
+        disabled:root.busy;border-radius:10px;remember-focus:false;
+        background:Palette.surface;
+    }
+}
+
 export component StreamToolbar inherits Window {
+    in property <bool> floating-keyboard;
+    in property <string> floating-keyboard-error;
     private property <bool> themed-dark:Palette.dark;
     init=>{WidgetPalette.color-scheme=Palette.dark ? ColorScheme.dark : ColorScheme.light;}
     changed themed-dark=>{WidgetPalette.color-scheme=Palette.dark ? ColorScheme.dark : ColorScheme.light;}
@@ -306,7 +464,7 @@ export component StreamToolbar inherits Window {
     changed connection-failed=>{toolbar-focus.focus();}
     in property <string> pending-cancel-label:"取消连接";
     in property <bool> audio-enabled;
-    in property <int> audio-volume:100;
+    in-out property <int> audio-volume:100;
     in property <bool> stats-enabled;
     in property <bool> busy;
     in property <bool> failed;
@@ -347,6 +505,11 @@ export component StreamToolbar inherits Window {
         primary:true;has-icon:!root.connection-failed;icon:root.expanded ? @image-url("icons/chevron-up.svg") : @image-url("icons/chevron-down.svg");
         text:root.connection-failed ? "关闭" : root.expanded ? "收起" : "控制";action-id:root.connection-failed ? "navigation.back" : "stream.controls.toggle";
     }
+    if !root.expanded && !root.connection-failed && root.floating-keyboard-error!="":Rectangle{
+        x:(parent.width - 72px)/2+60px;y:3px;width:8px;height:8px;border-radius:4px;
+        background:Palette.failure;border-width:1px;border-color:#fff;
+        accessible-role:text;accessible-label:"悬浮键盘未显示";
+    }
     if root.connection-failed:Rectangle{
         y:28px;height:parent.height - 28px;
         background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
@@ -355,11 +518,7 @@ export component StreamToolbar inherits Window {
                 Text{text:"连接失败";color:Palette.ink;font-size:15px;font-weight:600;}
                 Text{text:root.device-name;color:Palette.muted;horizontal-alignment:right;overflow:elide;min-width:0px;horizontal-stretch:1;}
             }
-            ScrollView{test-id:"scroll|connection-error";vertical-stretch:1;content-width:self.width;
-                VerticalLayout{alignment:start;
-                    Text{text:root.connection-error;color:Palette.failure;wrap:word-wrap;vertical-alignment:top;accessible-label:root.connection-error;}
-                }
-            }
+            SessionErrorDetails{test-id:"scroll|connection-error";label:"连接错误详情";message:root.connection-error;message-font-size:12px;}
             HorizontalLayout{spacing:8px;alignment:end;
                 ActionButton{text:"返回设备";action-id:"connection.dismiss";}
                 ActionButton{text:"重试";primary:true;action-id:"connection.retry";}
@@ -388,6 +547,7 @@ export component StreamToolbar inherits Window {
             padding:12px;spacing:8px;
             HorizontalLayout {spacing:8px;
                 Text{text:root.device-name;color:Palette.ink;font-size:13px;vertical-alignment:center;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
+                ActionButton{text:root.floating-keyboard-error!="" ? "关闭悬浮键盘" : root.floating-keyboard ? "悬浮键盘：开" : "悬浮键盘：关";action-id:"stream.keyboard.floating.set";argument:root.floating-keyboard ? "false" : "true";chosen:root.floating-keyboard && root.floating-keyboard-error=="";disabled:root.busy || root.pending;}
                 ActionButton{text:root.pending ? root.pending-cancel-label : "断开";action-id:"stream.disconnect";disabled:root.canceling;}
             }
             HorizontalLayout {spacing:6px;
@@ -396,8 +556,13 @@ export component StreamToolbar inherits Window {
                 TabButton{text:"声音";action-id:"stream.controls.tab";argument:"audio";chosen:root.controls-tab=="audio";horizontal-stretch:1;}
             }
             ScrollView {test-id:"scroll|toolbar";vertical-stretch:1;
-                VerticalLayout {spacing:8px;alignment:start;
+                VerticalLayout {spacing:8px;alignment:start;padding-right:12px;
                     if root.controls-tab=="input":VerticalLayout{spacing:8px;
+                        if root.floating-keyboard-error!="":Text{text:root.floating-keyboard-error;color:Palette.failure;wrap:word-wrap;accessible-label:root.floating-keyboard-error;}
+                        if root.floating-keyboard-error!="":HorizontalLayout{spacing:8px;
+                            Rectangle{horizontal-stretch:1;}
+                            ActionButton{text:"重试";action-id:"stream.keyboard.floating.set";argument:"true";disabled:root.busy || root.pending;}
+                        }
                         if !root.narrow:HorizontalLayout{spacing:8px;
                             ActionButton{text:"Ctrl+Alt+Delete";subtle:true;has-icon:true;icon:@image-url("icons/lock.svg");action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
                             ActionButton{text:"快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
@@ -435,7 +600,7 @@ export component StreamToolbar inherits Window {
                         ActionButton{text:root.audio-enabled ? "声音：开" : "声音：关";action-id:"stream.audio.toggle";chosen:root.audio-enabled;disabled:root.busy;}
                         HorizontalLayout{spacing:8px;
                             Text{text:"音量";color:Palette.ink;vertical-alignment:center;}
-                            SpinBox{minimum:0;maximum:100;value:root.audio-volume;enabled:!root.busy;max-width:120px;accessible-label:"串流音量";edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
+                            SpinBox{minimum:0;maximum:100;value <=> root.audio-volume;enabled:!root.busy;max-width:120px;accessible-label:"串流音量";edited(v)=>{Commands.trigger("stream.audio.volume",v);}}
                             Text{text:"%";color:Palette.muted;vertical-alignment:center;}
                         }
                     }
@@ -479,7 +644,8 @@ export component StreamPicker inherits Window {
                 if root.kind!="feedback" && root.error!="":ActionButton{text:"详情";action-id:"stream.menu.open";argument:"feedback";}
                 ActionButton{text:"关闭";action-id:"stream.menu.close";}
             }
-            ScrollView{test-id:"scroll|picker";vertical-stretch:1;horizontal-stretch:1;
+            if root.kind=="feedback":SessionErrorDetails{test-id:"scroll|picker";label:"会话操作错误详情";message:root.error;}
+            if root.kind!="feedback":ScrollView{test-id:"scroll|picker";vertical-stretch:1;horizontal-stretch:1;
                 VerticalLayout{spacing:4px;alignment:start;
                     if root.error!="":Text{text:root.error;color:Palette.failure;wrap:word-wrap;}
                     if root.kind!="feedback" && root.labels.length==0:Text{text:"暂无屏幕信息，请在屏幕分类刷新。";color:Palette.muted;wrap:word-wrap;}
@@ -487,12 +653,27 @@ export component StreamPicker inherits Window {
                         for item-label[index] in root.labels:Rectangle{
                             property <bool> available:!root.busy && (root.enabled-items.length<=index || root.enabled-items[index]);
                             property <bool> chosen:root.chosen-items.length>index && root.chosen-items[index];
+                            property <string> menu:root.kind;
+                            property <string> value:root.values[index];
+                            property <bool> press-valid:false;
+                            property <string> pressed-menu;
+                            property <string> pressed-value;
+                            changed menu=>{self.press-valid=false;}
+                            changed value=>{self.press-valid=false;}
+                            changed available=>{if(!self.available){self.press-valid=false;}}
                             height:40px;border-radius:8px;background:self.chosen || touch.has-hover ? Palette.soft : transparent;
                             forward-focus:row-focus;
                             border-width:row-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
                             Text{x:10px;width:parent.width - 20px;text:item-label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
-                            row-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);return accept;}return reject;}}
-                            touch:=TouchArea{enabled:parent.available;mouse-cursor:pointer;clicked=>{row-focus.focus();Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
+                            row-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}return accept;}return reject;}}
+                            touch:=TouchArea{
+                                enabled:parent.available;mouse-cursor:pointer;
+                                pointer-event(event)=>{
+                                    if(event.kind==PointerEventKind.down && event.button==PointerEventButton.left){parent.pressed-menu=parent.menu;parent.pressed-value=parent.value;parent.press-valid=true;}
+                                    else if(event.kind==PointerEventKind.cancel){parent.press-valid=false;}
+                                }
+                                clicked=>{if(parent.press-valid && parent.available && parent.pressed-menu==parent.menu && parent.pressed-value==parent.value){row-focus.focus();Commands.trigger(parent.menu=="shortcuts" ? "stream.shortcut" : "stream.display.select",parent.value);}parent.press-valid=false;}
+                            }
                             accessible-role:button;accessible-enabled:self.available;accessible-label:item-label;
                             accessible-id:"picker|"+root.kind+"|"+root.values[index];
                             accessible-action-default=>{if(self.available){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
@@ -514,12 +695,14 @@ export component MainWindow inherits Window {
     in property <bool> isolated-preview;
     background:Palette.page;default-font-family:"Microsoft YaHei UI";default-font-size:14px;
     in property <[DeviceRow]> devices;
+    in property <bool> devices-refreshing;
+    in property <string> devices-refresh-error;
     in property <DeviceRow> selected-device;
-    in property <string> device-query;
-    in property <string> add-address;
+    in-out property <string> device-query;
+    in-out property <string> add-address;
     in property <string> add-phase:"editing";
     in property <string> add-error;
-    in property <string> info-name;
+    in-out property <string> info-name;
     in property <string> info-error;
     in property <bool> info-dirty;
     private property <bool> add-busy:root.add-phase=="probing";
@@ -531,11 +714,29 @@ export component MainWindow inherits Window {
     in property <string> selected-name;
     in property <string> client-name;
     in property <string> selected-uuid;
-    in property <string> network-address;
-    in property <string> network-addresses;
+    in-out property <string> network-address;
+    in-out property <string> network-addresses;
     in property <string> network-report;
+    in property <string> diagnostic-summary;
+    in property <bool> diagnostic-busy;
+    in property <bool> diagnostic-start-disabled;
+    in property <bool> diagnostic-own;
+    in property <bool> diagnostic-failed;
+    in property <string> diagnostic-start-label;
+    in property <string> diagnostic-start-args;
+    in property <bool> diagnostic-can-cancel;
+    in property <string> diagnostic-cancel-label;
+    in property <string> diagnostic-cancel-args;
+    in property <bool> diagnostic-details-visible;
+    in property <bool> diagnostic-details-expanded;
+    in property <string> diagnostic-details-args;
+    in property <bool> diagnostic-banner;
+    in property <bool> diagnostic-banner-failed;
+    in property <string> diagnostic-banner-text;
+    in property <string> diagnostic-reveal-key;
+
     in property <[RouteRow]> network-routes;
-    in property <string> relay-url;
+    in-out property <string> relay-url;
     in property <string> draft-display-name;
     in property <[ProfileSource]> profile-sources;
     in property <string> profile-tab:"video";
@@ -554,6 +755,7 @@ export component MainWindow inherits Window {
     in property <int> profile-height:1680;
     in property <int> fps:30;
     in property <int> bitrate:25;
+    in property <bool> bitrate-auto;
     in property <string> codec:"HEVC";
     in property <bool> profile-audio-enabled;
     in property <string> profile-display;
@@ -577,24 +779,35 @@ export component MainWindow inherits Window {
     in property <[string]> shortcut-labels;
     in property <[string]> shortcut-ids;
     in property <[RemoteDisplay]> remote-displays;
+    in property <[RemoteDisplay]> window-picker-rows;
+    in property <string> window-picker-uuid;
+    in property <string> window-picker-error;
+    in property <bool> window-picker-open;
+    in property <bool> window-picker-busy;
+    in-out property <int> window-picker-choice:0;
     in property <string> display-error;
     in property <bool> compact:false;
     in property <string> settings-tab:"updates";
     in property <bool> test-mode:false;
     in property <string> trace-path:"";
-    in property <string> sync-url;
-    in property <string> sync-username;
-    in property <bool> sync-automatic;
-    in property <int> sync-interval-index;
+    in-out property <string> sync-url;
+    in-out property <string> sync-username;
+    in-out property <bool> sync-automatic;
+    in-out property <int> sync-interval-index;
     in property <bool> sync-has-password;
+    in property <bool> sync-password-reusable;
     in property <bool> sync-busy;
     in property <string> sync-progress-text:"同步中…";
     in property <bool> sync-dirty;
     in property <int> sync-generation;
     in property <string> sync-error;
     in property <string> navigation-message;
+    in property <string> navigation-request-id;
+    in property <string> profile-draft-id;
+    in property <string> sync-clear-request-id;
     in-out property <int> navigation-choice;
     in property <[SyncConflictRow]> sync-conflict-items;
+    in property <string> sync-review-id;
     in property <string> sync-last;
     in property <bool> updates-managed;
     in property <bool> updates-busy;
@@ -604,6 +817,7 @@ export component MainWindow inherits Window {
     in property <string> update-status;
     in property <bool> update-details;
     in property <string> update-primary-text:"检查更新";
+    in property <string> update-intent;
     in property <bool> update-primary-installs;
     in property <string> update-install-hint;
     in property <string> update-phase;
@@ -629,7 +843,11 @@ export component MainWindow inherits Window {
         changed active-page=>{if(root.page!="add" && root.page!="device-info"){self.focus();}}
         property <string> dialog-page;
         property <bool> dialog-open:root.navigation-prompt || root.sync-clear-prompt;
+        property <string> dialog-action:root.navigation-prompt ? "navigation.resolve" : root.sync-clear-prompt ? "sync.clear.resolve" : "";
+        changed dialog-action=>{ModalContext.allowed-action=self.dialog-action;}
         changed dialog-open=>{
+            // Restore content focus only after its accessibility/action gate has reopened.
+            ModalContext.allowed-action=self.dialog-action;
             if(self.dialog-open){self.dialog-page=root.page;}
             else if(self.dialog-page==root.page){
                 let target=KeyboardFocus.last-content-control;
@@ -673,7 +891,8 @@ export component MainWindow inherits Window {
         HorizontalLayout {spacing:0px;
             if root.device-context: DeviceListPane {
                 compact:root.compact;devices:root.devices;selected-uuid:root.selected-uuid;
-                device-query:root.device-query;device-total:root.device-total;device-online:root.device-online;
+                refreshing:root.devices-refreshing;refresh-error:root.devices-refresh-error;
+                device-query <=> root.device-query;device-total:root.device-total;device-online:root.device-online;
                 selection-action:root.page=="settings" || root.page=="profile-copy" ? "device.settings.open" : root.page=="device-info" ? "device.info.open" : "device.select";
             }
         content-pane := VerticalLayout {
@@ -682,17 +901,24 @@ export component MainWindow inherits Window {
                     if root.selected-uuid!="": VerticalLayout {spacing:0px;
                         DeviceContextHeader{device:root.selected-device;name:root.selected-name;address:root.network-address;uuid:root.selected-uuid;content-inset:root.form-inset;}
                         ScrollView {test-id:"scroll|details";content-width:self.width;vertical-stretch:1;
+                            in property <string> device-uuid:root.selected-uuid;
+                            changed device-uuid=>{self.content-y=0px;}
                             VerticalLayout {padding:root.compact ? 20px : 28px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:20px;alignment:start;
-                                Rectangle {height:root.compact ? 132px : 148px;border-radius:10px;border-width:1px;border-color:Palette.line;
-                                    HorizontalLayout {padding:20px;spacing:24px;
+                                Rectangle {accessible-role:groupbox;accessible-label:"桌面连接区域";min-height:root.selected-device.check-hint!="" ? 164px : root.compact ? 132px : 148px;preferred-height:device-hero.preferred-height;vertical-stretch:0;border-radius:10px;border-width:1px;border-color:Palette.line;
+                                    device-hero:=HorizontalLayout {padding:20px;spacing:24px;
                                         if !root.compact: Rectangle {width:144px;border-radius:8px;background:Palette.page;
                                             Image {source:@image-url("icons/monitor.svg");width:54px;height:54px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2 - 6px;}
                                             Text {text:"远程桌面";color:Palette.muted;font-size:11px;height:20px;y:parent.height - 30px;horizontal-alignment:center;}
                                         }
                                         VerticalLayout {spacing:10px;alignment:center;
                                             Text {text:"桌面连接";font-size:16px;font-weight:600;color:Palette.ink;}
-                                            Text {text:root.selected-device.is-self ? "本机不支持连接自身" : root.selected-device.paired ? "已配对" : "连接前需要配对";font-size:12px;color:Palette.muted;}
-                                            HorizontalLayout {ActionButton {text:root.selected-device.is-self ? "本机" : root.selected-device.paired ? "连接" : "配对";action-id:root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-uuid;primary:true;disabled:root.selected-device.is-self || root.control-requests-pending;min-width:112px;}Rectangle{horizontal-stretch:1;}}
+                                            Text {text:root.selected-device.is-self ? "本机不支持连接自身" : root.selected-device.check-hint!="" ? root.selected-device.check-hint : root.selected-device.pending ? "配对状态尚未确认" : root.selected-device.paired ? "已配对" : "连接前需要配对";font-size:12px;color:root.selected-device.check-failed ? Palette.failure : Palette.muted;wrap:word-wrap;}
+                                            HorizontalLayout {spacing:8px;
+                                                ActionButton {text:root.selected-device.is-self ? "本机" : root.selected-device.check-retry ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.repair-required ? "重新配对" : root.selected-device.pending && !root.selected-device.paired ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.paired ? "连接" : "配对";action-id:(root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) ? "devices.refresh" : root.selected-device.repair-required ? "device.pair" : root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-uuid;primary:true;disabled:root.diagnostic-busy || root.selected-device.is-self || root.control-requests-pending || ((root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) && root.devices-refreshing);min-width:112px;}
+                                                if root.selected-device.pending && root.selected-device.online && !root.selected-device.is-self && !root.selected-device.check-retry && !root.selected-device.repair-required: ActionButton{text:"配对";action-id:"device.pair";argument:root.selected-uuid;disabled:root.diagnostic-busy || root.control-requests-pending;}
+                                                ActionButton{text:"选择窗口";action-id:"device.windows.open";argument:root.selected-uuid;disabled:root.window-picker-busy || root.diagnostic-busy || root.selected-device.is-self || !root.selected-device.paired || root.selected-device.check-retry || root.selected-device.repair-required || root.control-requests-pending;}
+                                                Rectangle{horizontal-stretch:1;}
+                                            }
                                         }
                                     }
                                 }
@@ -701,13 +927,13 @@ export component MainWindow inherits Window {
                                     Rectangle {width:1px;background:Palette.line;}
                                     DetailField {label:"帧率";value:root.fps+" FPS";}
                                     Rectangle {width:1px;background:Palette.line;}
-                                    DetailField {label:"码率";value:root.bitrate+" Mbps";}
+                                    DetailField {label:"码率";value:root.bitrate-auto ? "自动（连接时）" : root.bitrate+" Mbps";}
                                 }
                                 Rectangle {height:1px;background:Palette.line;}
                                 HorizontalLayout {Text {text:"设备信息";font-size:14px;font-weight:600;color:Palette.ink;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}ActionButton{text:"编辑资料";action-id:"device.info.open";argument:root.selected-uuid;}}
                                 HorizontalLayout {spacing:20px;
                                     DetailField {label:"首选地址";value:root.network-address;}
-                                    DetailField {label:"配对状态";value:root.selected-device.paired ? "已配对" : "未配对";}
+                                    pairing-status-field:=DetailField {label:"配对状态";value:root.selected-device.is-self ? "本机" : root.selected-device.check-failed ? root.selected-device.status : root.selected-device.pending ? root.selected-device.paired ? "已保存配对" : root.selected-device.status : root.selected-device.paired ? "已配对" : root.selected-device.status;value-color:root.selected-device.is-self ? Palette.blue : root.selected-device.check-failed ? Palette.failure : !root.selected-device.pending && root.selected-device.paired && root.selected-device.online ? Palette.success : Palette.muted;}
                                 }
                                 Text {text:root.network-summary;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                                 Text {text:root.network-current;color:Palette.muted;font-size:12px;wrap:word-wrap;}
@@ -787,6 +1013,33 @@ export component MainWindow inherits Window {
                 }
             }
             if root.page!="devices" || root.streaming || root.connecting: form-scroll:=ScrollView {test-id:"scroll|form";
+                // Validation text can shrink the viewport after the focus event. Reveal
+                // the outer editor using the actual layout, without re-focusing it or
+                // reacting to ordinary user scrolling.
+                private property <int> error-reveal:ProfileErrorFocus.reveal-request;
+                private property <int> diagnostic-reveal:DiagnosticReveal.request;
+                changed diagnostic-reveal=>{
+                    if(root.page=="settings" && root.profile-tab=="network" && root.diagnostic-own && DiagnosticReveal.context==root.diagnostic-reveal-key){
+                        let top=self.absolute-position.y;
+                        // Reveal a nearby result only when its action row is still visible.
+                        // A user who scrolled elsewhere keeps that position.
+                        let result-bottom=DiagnosticReveal.top+DiagnosticReveal.height;
+                        if(result-bottom+10px>=top && result-bottom+48px<=top+self.visible-height && DiagnosticReveal.top<top){
+                            self.content-y=min(0px,self.content-y+top - DiagnosticReveal.top+4px);
+                        }
+                    }
+                }
+                changed height=>{ProfileErrorFocus.viewport-revision+=1;}
+                changed width=>{ProfileErrorFocus.viewport-revision+=1;}
+                changed error-reveal=>{
+                    if(root.page=="settings" && ProfileErrorFocus.allowed){
+                        let top=self.absolute-position.y;
+                        let editor-top=ProfileErrorFocus.editor-top;
+                        let bottom=editor-top+ProfileErrorFocus.editor-height;
+                        let delta=editor-top<top ? top - editor-top : bottom>top+self.visible-height ? top+self.visible-height - bottom : 0px;
+                        self.content-y=max(-max(0px,self.content-height - self.visible-height),min(0px,self.content-y+delta));
+                    }
+                }
                 // A different page/category has different content. Ordinary draft and
                 // background-state updates keep this key, so they retain the position.
                 in property <string> content-context:root.page+"|"+(root.page=="settings" ? root.selected-uuid+"|"+root.profile-tab : root.page=="global-settings" ? root.settings-tab : "");
@@ -816,18 +1069,40 @@ export component MainWindow inherits Window {
                         }
                         }
                         if root.profile-tab=="network": VerticalLayout{spacing:10px;
-                            Text{text:"设备地址";color:Palette.ink;}
-                            Text{text:root.network-summary;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             Text{text:"连接会按路径顺序尝试所有已保存地址，内网地址不会限制外网连接。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
-                            network-primary:=LineEdit{text:root.network-address;accessible-label:"首选 IP 或主机名";placeholder-text:"首选 IP 或主机名";edited(value)=>{Commands.trigger("settings.network.edit","address="+value);}}
-                            network-extra:=LineEdit{text:root.network-addresses;accessible-label:"备用地址";placeholder-text:"备用地址，以逗号分隔，例如 100.x.x.x";edited(value)=>{Commands.trigger("settings.network.edit","addresses="+value);}}
-                            HorizontalLayout{
-                                ActionButton{text:"诊断连接";action-id:"device.network.diagnose";argument:root.selected-uuid;}
+                            Text{text:"首选地址（IP 或主机名）";color:Palette.ink;wrap:word-wrap;}
+                            network-primary:=ProfileErrorEditor{field-key:"address";text <=> root.network-address;accessible-label:"首选 IP 或主机名";placeholder-text:"首选 IP 或主机名";edited(value)=>{Commands.trigger("settings.network.edit","address="+value);}}
+                            Text{text:"备用地址（逗号分隔，随 WebDAV 同步）";color:Palette.ink;wrap:word-wrap;}
+                            network-extra:=ProfileErrorEditor{field-key:"addresses";text <=> root.network-addresses;accessible-label:"备用地址";placeholder-text:"备用地址，以逗号分隔，例如 100.x.x.x";edited(value)=>{Commands.trigger("settings.network.edit","addresses="+value);}}
+                            diagnostic-summary:=Text{text:root.diagnostic-summary;color:root.diagnostic-failed ? Palette.failure : Palette.muted;font-size:12px;wrap:word-wrap;overflow:elide;preferred-height:36px;accessible-label:root.diagnostic-summary;
+                                private property <string> outcome:root.diagnostic-reveal-key;
+                                private property <string> previous-start-args;
+                                private property <string> previous-details-args;
+                                changed outcome=>{
+                                    let start="action|device.network.diagnose|"+root.diagnostic-start-args+"|";
+                                    let details="action|device.network.details.toggle|"+root.diagnostic-details-args+"|";
+                                    let cancel="action|device.network.cancel|"+root.diagnostic-cancel-args+"|";
+                                    let focus=KeyboardFocus.last-content-control;
+                                    // A collapse click keeps its former bound arguments while
+                                    // the outcome updates. Reveal only within that same task/draft.
+                                    let collapsed-here=self.previous-start-args==root.diagnostic-start-args && focus=="action|device.network.details.toggle|"+self.previous-details-args+"|收起详情";
+                                    self.previous-start-args=root.diagnostic-start-args;
+                                    self.previous-details-args=root.diagnostic-details-args;
+                                    if(!root.diagnostic-busy && !root.diagnostic-details-expanded && (collapsed-here || focus==start+"诊断连接" || focus==start+"诊断中…" || focus==start+"正在清理…" || focus==details+"收起详情" || focus==details+"查看详情" || focus==cancel+"取消诊断")){
+                                        DiagnosticReveal.context=root.diagnostic-reveal-key;DiagnosticReveal.top=self.absolute-position.y;DiagnosticReveal.height=self.height;DiagnosticReveal.request+=1;
+                                    }
+                                }
+                            }
+                            HorizontalLayout{spacing:8px;
+                                ActionButton{text:root.diagnostic-start-label;action-id:"device.network.diagnose";argument:root.diagnostic-start-args;disabled:root.diagnostic-start-disabled;}
+                                if root.diagnostic-own && root.diagnostic-busy:ActionButton{text:root.diagnostic-cancel-label;action-id:"device.network.cancel";argument:root.diagnostic-cancel-args;disabled:!root.diagnostic-can-cancel;}
+                                if root.diagnostic-details-visible:ActionButton{text:root.diagnostic-details-expanded ? "收起详情" : "查看详情";action-id:"device.network.details.toggle";argument:root.diagnostic-details-args;}
                                 Rectangle{horizontal-stretch:1;}
                             }
+                            if root.diagnostic-details-visible && root.diagnostic-details-expanded:Text{text:root.network-report;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             Text{text:"连接顺序";color:Palette.ink;}
                             for route in root.network-routes: HorizontalLayout{spacing:6px;
-                                CheckBox{text:route.label;checked:route.enabled;enabled:!route.enabled || route.can-disable;accessible-label:"连接路径："+route.label;toggled=>{Commands.trigger("settings.route.toggle",route.key);}}
+                                CheckBox{text:route.label;checked <=> route.enabled;enabled:!route.toggle-blocked;accessible-label:"连接路径："+route.label;toggled=>{Commands.trigger("settings.route.toggle",route.key);}}
                                 Rectangle{horizontal-stretch:1;}
                                 if route.enabled: ActionButton{text:"↑";action-id:"settings.route.move";argument:route.key+"|up";disabled:!route.can-move-up;accessible-label:"上移"+route.label;}
                                 if route.enabled: ActionButton{text:"↓";action-id:"settings.route.move";argument:route.key+"|down";disabled:!route.can-move-down;accessible-label:"下移"+route.label;}
@@ -835,9 +1110,8 @@ export component MainWindow inherits Window {
                             Text{text:"至少启用一条连接路径。";color:Palette.muted;font-size:12px;}
                             ActionButton{text:"恢复默认顺序";action-id:"settings.set";argument:"routeOrder=default";}
                             Text{text:"中继服务器";color:Palette.ink;}
-                            relay-edit:=LineEdit{text:root.relay-url;accessible-label:"中继服务器";placeholder-text:"https://relay.example.com";edited(value)=>{Commands.trigger("settings.network.edit","relayUrl="+value);}}
+                            relay-edit:=ProfileErrorEditor{field-key:"relayUrl";text <=> root.relay-url;accessible-label:"中继服务器";placeholder-text:"https://relay.example.com";edited(value)=>{Commands.trigger("settings.network.edit","relayUrl="+value);}}
                             Text{text:"按顺序尝试已启用的路径；同类路径按实测质量选择。更改随本设备连接配置同步。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
-                            Text{text:root.network-report;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                         }
                         if root.profile-tab=="video":VerticalLayout {spacing:6px;
                             if !root.narrow-profile:HorizontalLayout{spacing:6px;
@@ -860,13 +1134,13 @@ export component MainWindow inherits Window {
                                 if !root.narrow-profile:Rectangle{horizontal-stretch:1;}
                                 if field.kind=="bool": ActionButton{text:field.flag ? "开启" : "关闭";chosen:field.flag;action-id:"settings.set";argument:field.key+"=toggle";accessible-label:field.label+"："+self.text;}
                                 if field.kind=="number": HorizontalLayout {spacing:6px;horizontal-stretch:0;
-                                    ActionButton{text:"−";action-id:"settings.step";argument:field.key+"|down";accessible-label:"减少"+field.label;}
+                                    ActionButton{text:"−";action-id:"settings.step";argument:field.key+"|down";disabled:field.disabled;accessible-label:"减少"+field.label;}
                                     Rectangle {width:92px;height:38px;border-width:field.invalid ? 2px : 0px;border-radius:6px;border-color:Palette.failure;
-                                        LineEdit{width:parent.width;height:parent.height;text:field.input-text;accessible-label:field.label;edited(value)=>{Commands.trigger("settings.input",field.key+"="+value);}}
+                                        ProfileErrorEditor{field-key:field.key;width:parent.width;height:parent.height;enabled:!field.disabled;text <=> field.input-text;accessible-label:field.label;edited(value)=>{Commands.trigger("settings.input",field.key+"="+value);}}
                                     }
-                                    ActionButton{text:"＋";action-id:"settings.step";argument:field.key+"|up";accessible-label:"增加"+field.label;}
+                                    ActionButton{text:"＋";action-id:"settings.step";argument:field.key+"|up";disabled:field.disabled;accessible-label:"增加"+field.label;}
                                 }
-                                if field.kind=="select": field-choice:=ComboBox{model:field.option-labels;current-index:field.selected-index;width:200px;horizontal-stretch:0;accessible-label:field.label;selected(value)=>{Commands.trigger("settings.set",field.key+"="+field.option-values[self.current-index]);}}
+                                if field.kind=="select": field-choice:=ComboBox{model:field.option-labels;current-index <=> field.selected-index;width:200px;horizontal-stretch:0;accessible-label:field.label;selected(value)=>{Commands.trigger("settings.set",field.key+"="+field.option-values[self.current-index]);}}
                                 if root.narrow-profile:Rectangle{horizontal-stretch:1;}
                             }
                             if field.help!="": Text{text:field.help;color:Palette.muted;font-size:12px;wrap:word-wrap;}
@@ -882,30 +1156,41 @@ export component MainWindow inherits Window {
                             Text{text:"WebDAV";color:Palette.ink;font-size:18px;font-weight:600;}
                             Text{text:root.sync-last;color:Palette.muted;font-size:12px;}
                             HorizontalLayout{spacing:10px;
-                                ActionButton{text:root.sync-busy ? root.sync-progress-text : "立即同步";primary:true;action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
+                                ActionButton{text:root.sync-busy ? root.sync-progress-text : root.sync-conflict-items.length>0 ? "重新同步" : "立即同步";primary:!root.sync-dirty && root.sync-conflict-items.length==0;action-id:"sync.run";disabled:root.sync-busy || !root.sync-has-password;}
                                 ActionButton{text:"移除同步设置";action-id:"sync.clear";disabled:root.sync-busy || !root.sync-has-password;}
                                 Rectangle{horizontal-stretch:1;}
                             }
                             if root.sync-conflict-items.length>0: VerticalLayout{spacing:12px;
                                 Text{text:root.sync-conflict-items.length+" 项配置存在冲突。选择保留哪一端的冲突项，其余改动会合并。";color:Palette.muted;wrap:word-wrap;font-size:13px;}
-                                HorizontalLayout{spacing:10px;ActionButton{text:"冲突项保留本机";action-id:"sync.resolve";argument:"local";disabled:root.sync-busy;}ActionButton{text:"冲突项保留远端";action-id:"sync.resolve";argument:"remote";disabled:root.sync-busy;}Rectangle{horizontal-stretch:1;}}
+                                HorizontalLayout{spacing:10px;ActionButton{text:"冲突项保留本机";action-id:"sync.resolve";argument:root.sync-review-id=="" ? "local" : "local|"+root.sync-review-id;disabled:root.sync-busy;}ActionButton{text:"冲突项保留远端";action-id:"sync.resolve";argument:root.sync-review-id=="" ? "remote" : "remote|"+root.sync-review-id;disabled:root.sync-busy;}Rectangle{horizontal-stretch:1;}}
                                 for item in root.sync-conflict-items: Rectangle{border-radius:12px;border-width:1px;border-color:Palette.line;background:Palette.soft;vertical-stretch:0;
                                     VerticalLayout{padding:14px;spacing:6px;
                                         Text{text:item.label;color:Palette.ink;wrap:word-wrap;font-size:14px;font-weight:600;}
-                                        Text{text:"本机："+item.local;color:Palette.muted;wrap:word-wrap;font-size:13px;}
-                                        Text{text:"远端："+item.remote;color:Palette.muted;wrap:word-wrap;font-size:13px;}
+                                        if item.fields.length>0:VerticalLayout{spacing:12px;
+                                            HorizontalLayout{spacing:16px;Text{text:"本机";color:Palette.ink;font-weight:600;font-size:13px;min-width:0px;preferred-width:0px;horizontal-stretch:1;}Text{text:"远端";color:Palette.ink;font-weight:600;font-size:13px;min-width:0px;preferred-width:0px;horizontal-stretch:1;}}
+                                            for field in item.fields:VerticalLayout{spacing:6px;
+                                                Text{text:field.label;color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                                                HorizontalLayout{spacing:16px;
+                                                    Text{text:field.local;accessible-id:"sync-review-local|"+item.key+"|"+field.key;accessible-label:self.text;color:Palette.ink;wrap:word-wrap;font-size:14px;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
+                                                    Text{text:field.remote;accessible-id:"sync-review-remote|"+item.key+"|"+field.key;accessible-label:self.text;color:Palette.ink;wrap:word-wrap;font-size:14px;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
+                                                }
+                                            }
+                                        }
+                                        if item.fields.length==0:Text{text:"本机："+item.local;color:Palette.muted;wrap:word-wrap;font-size:13px;}
+                                        if item.fields.length==0:Text{text:"远端："+item.remote;color:Palette.muted;wrap:word-wrap;font-size:13px;}
                                     }
                                 }
                             }
                             Text{text:"目录地址（HTTP / HTTPS）";color:Palette.muted;}
-                            dav-url:=LineEdit{enabled:!root.sync-busy;text:root.sync-url;accessible-label:"WebDAV 目录地址（HTTP / HTTPS）";placeholder-text:"https://example.com/dav/RHRemote/";edited(value)=>{Commands.trigger("sync.edit","url="+value);}}
+                            dav-url:=LineEdit{enabled:!root.sync-busy;text <=> root.sync-url;accessible-label:"WebDAV 目录地址（HTTP / HTTPS）";placeholder-text:"https://example.com/dav/RHRemote/";edited(value)=>{Commands.trigger("sync.edit","url="+value);}}
                             Text{text:"用户名";color:Palette.muted;}
-                            dav-user:=LineEdit{enabled:!root.sync-busy;text:root.sync-username;accessible-label:"WebDAV 用户名";edited(value)=>{Commands.trigger("sync.edit","username="+value);}}
+                            dav-user:=LineEdit{enabled:!root.sync-busy;text <=> root.sync-username;accessible-label:"WebDAV 用户名";edited(value)=>{Commands.trigger("sync.edit","username="+value);}}
                             Text{text:"密码";color:Palette.muted;}
-                            dav-password:=LineEdit{enabled:!root.sync-busy;in property <int> generation:root.sync-generation;changed generation=>{self.text="";}input-type:password;accessible-label:"WebDAV 密码";placeholder-text:root.sync-has-password ? "已保存，留空保留" : "WebDAV 密码";edited(value)=>{Commands.trigger("sync.edit","password="+value);}}
+                            dav-password:=LineEdit{enabled:!root.sync-busy;in property <int> generation:root.sync-generation;changed generation=>{self.text="";}input-type:password;accessible-label:"WebDAV 密码";placeholder-text:root.sync-password-reusable ? "已保存，留空保留" : "请填写 WebDAV 密码";edited(value)=>{Commands.trigger("sync.edit","password="+value);}}
+                            if root.sync-has-password && !root.sync-password-reusable:Text{text:"地址或用户名已更改，请重新填写密码。";accessible-label:self.text;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             HorizontalLayout{
-                                dav-auto:=CheckBox{enabled:!root.sync-busy;text:"自动同步";checked:root.sync-automatic;toggled=>{Commands.trigger("sync.edit","automatic="+(self.checked ? "true" : "false"));}}
-                                dav-interval:=ComboBox{enabled:!root.sync-busy;model:["5 分钟","15 分钟","30 分钟","60 分钟"];current-index:root.sync-interval-index;preferred-width:150px;horizontal-stretch:0;accessible-label:"自动同步间隔";selected(value)=>{Commands.trigger("sync.edit","intervalMinutes="+(self.current-index==0?"5":self.current-index==1?"15":self.current-index==2?"30":"60"));}}
+                                dav-auto:=CheckBox{enabled:!root.sync-busy;text:"自动同步";checked <=> root.sync-automatic;toggled=>{Commands.trigger("sync.edit","automatic="+(self.checked ? "true" : "false"));}}
+                                dav-interval:=ComboBox{enabled:!root.sync-busy;model:["5 分钟","15 分钟","30 分钟","60 分钟"];current-index <=> root.sync-interval-index;preferred-width:150px;horizontal-stretch:0;accessible-label:"自动同步间隔";selected(value)=>{Commands.trigger("sync.edit","intervalMinutes="+(self.current-index==0?"5":self.current-index==1?"15":self.current-index==2?"30":"60"));}}
                                 Rectangle{horizontal-stretch:1;}
                             }
                             Text{text:"同步设备列表、各客户端的连接配置和主题。各端只使用自己的配置；其他端的配置可手动复制。配对密钥及本机凭据不参与同步。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
@@ -939,7 +1224,7 @@ export component MainWindow inherits Window {
                     }
                     if root.page=="device-info":SettingsCard {
                         Text{text:"设备名称";color:Palette.ink;font-size:14px;}
-                        info-editor:=LineEdit{init=>{self.focus();}text:root.info-name;placeholder-text:root.selected-device.host-name;accessible-label:"设备名称";enabled:!root.sync-busy;edited(value)=>{Commands.trigger("device.info.input",value);}accepted=>{Commands.trigger("device.info.save","");}}
+                        info-editor:=LineEdit{init=>{self.focus();}text <=> root.info-name;placeholder-text:root.selected-device.host-name;accessible-label:"设备名称";enabled:!root.sync-busy;edited(value)=>{Commands.trigger("device.info.input",value);}accepted=>{Commands.trigger("device.info.save","");}}
                         if root.info-error!="":Text{text:root.info-error;color:Palette.failure;font-size:13px;wrap:word-wrap;}
                         Text{text:"留空使用主机名。显示名称随设备配置同步。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                         HorizontalLayout{ActionButton{text:"恢复原名";action-id:"device.info.reset";disabled:root.info-name=="";}Rectangle{horizontal-stretch:1;}}
@@ -951,7 +1236,7 @@ export component MainWindow inherits Window {
                     if root.page=="add": SettingsCard {
                         Text{text:"IP 或主机名，支持局域网、Tailscale 和公网地址";color:Palette.muted;wrap:word-wrap;}
                         Text{text:"设备地址";color:Palette.ink;font-size:14px;}
-                        address:=LineEdit {init=>{self.focus();}text:root.add-address;enabled:!root.add-busy;accessible-label:"设备地址";placeholder-text:"例如 192.168.0.104 或 100.x.x.x";edited(value)=>{Commands.trigger("device.add.input",value);}accepted=>{Commands.trigger("device.add.submit",self.text);}}
+                        address:=LineEdit {init=>{self.focus();}text <=> root.add-address;enabled:!root.add-busy;accessible-label:"设备地址";placeholder-text:"例如 192.168.0.104 或 100.x.x.x";edited(value)=>{Commands.trigger("device.add.input",value);}accepted=>{Commands.trigger("device.add.submit",self.text);}}
                         if root.sync-busy:Text{text:"配置正在同步，完成后可添加设备。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                         if root.add-error!="":Text{text:root.add-error;color:Palette.failure;wrap:word-wrap;font-size:13px;}
                         if root.add-busy:VerticalLayout{spacing:12px;
@@ -981,9 +1266,10 @@ export component MainWindow inherits Window {
                         if root.connection-phase=="connected":Text{text:"会话控制位于远程画面上方。";color:Palette.muted;font-size:13px;wrap:word-wrap;}
                     }
                     if root.page=="pair": VerticalLayout {spacing:22px;
-                        Text{text:"请在这台电脑的 RHRemote-Sunshine 管理界面输入配对码：";color:Palette.muted;wrap:word-wrap;}
-                        Text{text:root.pair-pin;color:Palette.blue;font-size:44px;}
-                        Text{text:"等待主机确认配对";color:Palette.muted;wrap:word-wrap;}
+                        Text{text:root.connection-title;color:Palette.ink;font-size:22px;wrap:word-wrap;}
+                        if root.connection-busy && root.pair-pin=="":pair-progress:=ProgressIndicator{indeterminate:true;}
+                        Text{text:root.pair-pin=="" ? (root.connection-phase=="preparing" ? "正在选择可用线路，完成后显示配对码。" : "正在启动主机配对，完成后显示配对码。") : "请在这台电脑的 RHRemote-Sunshine 管理界面输入配对码：";color:Palette.muted;wrap:word-wrap;}
+                        if root.pair-pin!="":Text{text:root.pair-pin;color:Palette.blue;font-size:44px;}
                     }
                     if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.page!="device-info" && root.page!="connection" && root.page!="pair" && root.page!="profile-copy" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     Rectangle {min-height:12px;vertical-stretch:1;}
@@ -995,7 +1281,7 @@ export component MainWindow inherits Window {
                 Rectangle{x:0px;y:0px;width:parent.width;height:1px;background:Palette.line;}
                 update-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
                     Text{text:!root.updates-managed ? "此启动方式不支持更新，请使用安装版或便携版。" : root.update-primary-installs ? root.update-install-hint : "";color:Palette.muted;font-size:12px;wrap:word-wrap;min-width:0px;preferred-width:0px;horizontal-stretch:1;vertical-alignment:center;}
-                    ActionButton{text:root.update-primary-text;action-id:"updates.primary";primary:true;disabled:root.updates-busy || !root.updates-managed || (root.update-primary-installs && (root.streaming || root.connecting || root.update-install-hint!=""));}
+                    ActionButton{text:root.update-primary-text;action-id:"updates.primary";argument:root.update-intent;primary:true;disabled:root.updates-busy || !root.updates-managed || (root.update-primary-installs && (root.streaming || root.connecting || root.update-install-hint!=""));}
                     if root.update-can-cancel || root.update-cancelling:ActionButton{text:"取消";action-id:"updates.cancel";argument:root.update-operation;disabled:root.update-cancelling;}
                 }
             }
@@ -1018,7 +1304,7 @@ export component MainWindow inherits Window {
             if root.page=="settings": Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:profile-footer.preferred-height;
                 Rectangle{y:0px;x:0px;width:parent.width;height:1px;background:Palette.line;}
                 profile-footer:=VerticalLayout {padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:8px;
-                    if root.settings-error!="": Text{text:root.settings-error;color:Palette.failure;font-size:13px;wrap:word-wrap;}
+                    if root.settings-error!="": SaveErrorDetails{message:root.settings-error;test-id:"scroll|profile-error";}
                     HorizontalLayout {spacing:10px;
                         Text{text:root.copy-notice!="" ? root.copy-notice : root.settings-dirty ? "有未保存的更改" : "设置已保存";color:Palette.muted;font-size:12px;vertical-alignment:center;overflow:elide;}
                         Rectangle{horizontal-stretch:1;}
@@ -1046,7 +1332,7 @@ export component MainWindow inherits Window {
             if root.page=="global-settings" && root.settings-tab=="sync": Rectangle {background:Palette.surface;vertical-stretch:0;preferred-height:sync-footer.preferred-height;
                 Rectangle{y:0px;x:0px;width:parent.width;height:1px;background:Palette.line;}
                 sync-footer:=VerticalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:8px;
-                    if root.sync-error!="":Text{text:root.sync-error;color:Palette.failure;wrap:word-wrap;font-size:13px;}
+                    if root.sync-error!="":SaveErrorDetails{message:root.sync-error;test-id:"scroll|sync-error";}
                     HorizontalLayout{spacing:10px;
                         Text{text:root.sync-dirty ? "有未保存的更改" : root.sync-has-password ? "设置已保存" : "未配置";color:Palette.muted;vertical-alignment:center;font-size:12px;}
                         Rectangle{horizontal-stretch:1;}
@@ -1056,7 +1342,33 @@ export component MainWindow inherits Window {
                 }
             }
 
+            if root.diagnostic-banner:Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:diagnostic-banner.preferred-height;
+                Rectangle{x:0px;y:0px;height:1px;width:parent.width;background:Palette.line;}
+                diagnostic-banner:=HorizontalLayout{padding:16px;spacing:12px;
+                    Text{text:root.diagnostic-banner-text;color:root.diagnostic-banner-failed ? Palette.failure : Palette.muted;vertical-alignment:center;font-size:12px;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;accessible-label:root.diagnostic-banner-text;}
+                    ActionButton{text:root.diagnostic-cancel-label;action-id:"device.network.cancel";argument:root.diagnostic-cancel-args;disabled:!root.diagnostic-can-cancel;}
+                }
+            }
         }
+        }
+    }
+    if root.window-picker-open: Rectangle {background:#0006;
+        TouchArea{}
+        Rectangle {width:min(parent.width - 32px,640px);height:min(parent.height - 48px,560px);x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;background:Palette.surface;border-radius:12px;
+            init=>{root.window-picker-choice=0;window-close.focus();}
+            VerticalLayout {padding:20px;spacing:12px;
+                HorizontalLayout {Text{text:"选择窗口";color:Palette.ink;font-size:22px;font-weight:600;}Rectangle{horizontal-stretch:1;}window-close:=ActionButton{text:root.window-picker-busy ? "取消请求" : "关闭";action-id:"device.windows.close";chosen:root.window-picker-choice==0;focused-in=>{root.window-picker-choice=0;}}}
+                Text{text:"预览功能：连接后先点击窗口激活输入。独立弹窗需要另选；关闭或最小化后停止。";color:Palette.muted;font-size:12px;wrap:word-wrap;}
+                if root.window-picker-busy:Text{text:"正在读取窗口列表…";color:Palette.muted;}
+                if root.window-picker-error!="":Text{text:root.window-picker-error;color:Palette.failure;wrap:word-wrap;}
+                ScrollView {vertical-stretch:1;
+                    VerticalLayout {spacing:8px;
+                        for row[index] in root.window-picker-rows:ActionButton{text:row.label;elide-text:true;action-id:"device.window.connect";argument:root.window-picker-uuid+"|"+row.id;disabled:root.window-picker-busy || !row.available;min-width:0px;preferred-width:0px;horizontal-stretch:1;height:56px;chosen:root.window-picker-choice==index+1;focused-in=>{root.window-picker-choice=index+1;}}
+                        if !root.window-picker-busy && root.window-picker-rows.length==0:Text{text:"没有可采集的窗口";color:Palette.muted;wrap:word-wrap;}
+                    }
+                }
+                HorizontalLayout {Rectangle{horizontal-stretch:1;}ActionButton{text:"刷新";action-id:"device.windows.open";argument:root.window-picker-uuid;disabled:root.window-picker-busy;chosen:root.window-picker-choice==root.window-picker-rows.length+1;focused-in=>{root.window-picker-choice=root.window-picker-rows.length+1;}}}
+            }
         }
     }
     if root.sync-clear-prompt: Rectangle {background:#0006;

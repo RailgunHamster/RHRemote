@@ -11,7 +11,7 @@ use rhremote_transport::Client as TransportClient;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::{
-    net::{TcpStream, ToSocketAddrs},
+    net::TcpStream,
     process::{Command, Stdio},
     sync::{Mutex, mpsc},
     time::{Duration, Instant},
@@ -30,7 +30,8 @@ fn tailscale() -> Option<std::path::PathBuf> {
     .join("Tailscale/tailscale.exe");
     path.is_file().then_some(path)
 }
-fn cli(args: &[&str]) -> Option<String> {
+fn cli_cancelable(args: &[&str],cancel:&std::sync::atomic::AtomicBool) -> Option<String> {
+    if cancel.load(std::sync::atomic::Ordering::SeqCst) {return None;}
     let mut command = Command::new(tailscale()?);
     command
         .args(args)
@@ -57,7 +58,7 @@ fn cli(args: &[&str]) -> Option<String> {
             }
             return String::from_utf8(data).ok();
         }
-        if Instant::now() >= end {
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) || Instant::now() >= end {
             let _ = child.kill();
             let _ = child.wait();
             return None;
@@ -107,6 +108,14 @@ fn probe_at(address: &str, uuid: &str, port: u16) -> Result<(), &'static str> {
         return Err("uuid_mismatch");
     }
     Ok(())
+}
+fn checkpoint(cancel:&std::sync::atomic::AtomicBool)->Result<(),String>{if cancel.load(std::sync::atomic::Ordering::SeqCst){Err("已取消诊断".into())}else{Ok(())}}
+fn diagnostic_probe_at(address:&str,uuid:&str,port:u16,cancel:std::sync::Arc<std::sync::atomic::AtomicBool>)->Result<(), &'static str>{
+    let text=crate::device_lookup::server_info_at(address,port,cancel,Duration::from_millis(1100),65536).map_err(|_|"serverinfo_unreachable")?;
+    if text.len()>65536{return Err("invalid_response");}
+    let document=roxmltree::Document::parse(&text).map_err(|_|"invalid_response")?;
+    let actual=document.descendants().find(|n|n.has_tag_name("uniqueid")).and_then(|n|n.text()).ok_or("uuid_missing")?;
+    if !actual.eq_ignore_ascii_case(uuid){return Err("uuid_mismatch");}Ok(())
 }
 pub fn report_text(value: &Value) -> String {
     if value.is_null() {
@@ -194,7 +203,7 @@ impl Network {
             .unwrap_or_default();
         (offset, id)
     }
-    fn inventory(&self) -> Value {
+    fn inventory_cancelable(&self,cancel:&std::sync::atomic::AtomicBool) -> Value {
         let mut cache = self.peers.lock().unwrap();
         if let Some((at, value)) = cache
             .as_ref()
@@ -203,14 +212,14 @@ impl Network {
             let _ = at;
             return value.clone();
         }
-        let value = cli(&["status", "--json"])
+        let value = cli_cancelable(&["status", "--json"],cancel)
             .and_then(|s| serde_json::from_str::<Value>(&s).ok())
             .unwrap_or(Value::Null);
-        *cache = Some((Instant::now(), value.clone()));
+        if !cancel.load(std::sync::atomic::Ordering::SeqCst) {*cache = Some((Instant::now(), value.clone()));}
         value
     }
-    pub fn discovered(&self, device: &Device) -> Vec<String> {
-        let inventory = self.inventory();
+    pub fn discovered_cancelable(&self,device:&Device,cancel:&std::sync::atomic::AtomicBool)->Vec<String>{
+        let inventory = self.inventory_cancelable(cancel);
         inventory["Peer"]
             .as_object()
             .into_iter()
@@ -230,6 +239,7 @@ impl Network {
             })
             .collect()
     }
+    #[cfg(test)]
     pub fn resolve(
         &self,
         device: &Device,
@@ -249,6 +259,9 @@ impl Network {
         failed: &[crate::recovery::FailedRoute],
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<(String, EffectivePolicy), String> {
+        self.resolve_inner(device,profile,failed,cancel,None)
+    }
+    fn resolve_inner(&self,device:&Device,profile:&Profile,failed:&[crate::recovery::FailedRoute],cancel:&std::sync::atomic::AtomicBool,mut diagnostic:Option<(std::sync::Arc<std::sync::atomic::AtomicBool>,&mut Vec<std::thread::JoinHandle<()>>)>) -> Result<(String,EffectivePolicy),String>{
         let started = Instant::now();
         let mut candidates = network::addresses(&device.address, &device.addresses)?;
         candidates.retain(|a| network::accepts(&profile.network_mode, a));
@@ -263,7 +276,7 @@ impl Network {
             if route.starts_with("tailscale") && !tailnet_loaded {
                 tailnet_loaded = true;
                 if !candidates.iter().any(|a| network::kind(a) == "tailscale") {
-                    for address in self.discovered(device) {
+                    for address in self.discovered_cancelable(device,cancel) {
                         if candidates.len() < network::MAX_ADDRESSES
                             && !candidates.contains(&address)
                             && network::accepts(&profile.network_mode, &address)
@@ -316,9 +329,9 @@ impl Network {
                         if route == "punch_direct" && info.path != "direct" {
                             return Err("打洞未形成直连，保留后续中继回退".into());
                         }
-                        probe_at(&info.address, &device.uuid, 47989 + info.port_offset)
-                            .map_err(str::to_owned)?;
-                        let mut policy = network::policy(profile, address);
+                        if let Some((cancel,_))=&diagnostic {diagnostic_probe_at(&info.address,&device.uuid,47989+info.port_offset,cancel.clone()).map_err(str::to_owned)?;}
+                        else {probe_at(&info.address, &device.uuid, 47989 + info.port_offset).map_err(str::to_owned)?;}
+                        let mut policy = network::policy_for_route(profile,address,Some(route));
                         policy.network = "transport".into();
                         policy.packet_size = 1024;
                         policy.port_offset = info.port_offset;
@@ -349,7 +362,7 @@ impl Network {
                     && matches!(route.as_str(), "tailscale_direct" | "tailscale_relay")
                 {
                     let path = tailnet_paths.entry(address.clone()).or_insert_with(|| {
-                        let output = cli(&[
+                        let output = cli_cancelable(&[
                             "ping",
                             "--c",
                             "1",
@@ -357,7 +370,7 @@ impl Network {
                             "1s",
                             "--until-direct=false",
                             address,
-                        ])
+                        ],cancel)
                         .unwrap_or_default();
                         if output.contains(" via DERP(") || output.contains(" via peer-relay") {
                             "relay"
@@ -383,11 +396,13 @@ impl Network {
             let (tx, rx) = mpsc::channel();
             for address in group {
                 let (tx, uuid) = (tx.clone(), device.uuid.clone());
-                std::thread::spawn(move || {
+                let diagnostic_cancel=diagnostic.as_ref().map(|(cancel,_)|cancel.clone());
+                let worker=std::thread::spawn(move || {
                     let at = Instant::now();
-                    let result = probe(&address, &uuid);
+                    let result = match diagnostic_cancel {Some(cancel)=>diagnostic_probe_at(&address,&uuid,47989,cancel),None=>probe(&address,&uuid)};
                     let _ = tx.send((address, at.elapsed().as_millis() as u64, result));
                 });
+                if let Some((_,pending))=diagnostic.as_mut(){pending.push(worker);}
             }
             drop(tx);
             let deadline = Instant::now() + Duration::from_millis(1250);
@@ -410,7 +425,7 @@ impl Network {
                 }
             }
             if let Some((address, ms)) = best {
-                let policy = network::policy(profile, &address);
+                let policy = network::policy_for_route(profile,&address,Some(route));
                 let path = tailnet_paths
                     .get(&address)
                     .map(String::as_str)
@@ -426,57 +441,51 @@ impl Network {
             "本轮媒体连接失败，已无可用的备用线路；请查看网络诊断"
         }.into())
     }
-    pub fn diagnose(&self, device: &Device, profile: &Profile) -> Value {
-        let _ = self.resolve(device, profile);
-        let mut result = self.last.lock().unwrap().clone();
-        if let Some(address) = result["selectedAddress"].as_str().map(str::to_owned) {
-            let mut ports = Vec::new();
-            for port in [47984u16, 47989, 47995, 48010] {
-                let start = Instant::now();
-                let offset = result["policy"]["portOffset"].as_u64().unwrap_or(0) as u16;
-                let ok = (address.trim_matches(['[', ']']), port + offset)
-                    .to_socket_addrs()
-                    .ok()
-                    .into_iter()
-                    .flatten()
-                    .take(2)
-                    .any(|a| TcpStream::connect_timeout(&a, Duration::from_millis(500)).is_ok());
-                ports.push(
-                    json!({"port":port,"ok":ok,"elapsedMs":start.elapsed().as_millis() as u64}),
-                );
+    pub(crate) fn diagnose_cancelable(&self,device:&Device,profile:&Profile,cancel:std::sync::Arc<std::sync::atomic::AtomicBool>,pending:&mut Vec<std::thread::JoinHandle<()>>)->Result<Value,String>{
+        *self.last.lock().unwrap()=json!({"uuid":device.uuid,"attempts":[],"mediaUdp":"not_tested"});
+        let _=self.resolve_inner(device,profile,&[],&cancel,Some((cancel.clone(),pending)));
+        checkpoint(&cancel)?;
+        let mut result=self.last.lock().unwrap().clone();
+        if let Some(address)=result["selectedAddress"].as_str().map(str::to_owned){
+            let mut ports=Vec::new();let offset=result["policy"]["portOffset"].as_u64().unwrap_or(0) as u16;
+            for port in [47984u16,47989,47995,48010]{
+                checkpoint(&cancel)?;let start=Instant::now();
+                let name=address.trim_matches(['[',']']).to_owned();
+                let addresses=crate::device_lookup::resolve_cancelable(&name,port+offset,&cancel,Duration::from_millis(500)).unwrap_or_default();
+                let ok=addresses.into_iter().take(2).any(|a|!cancel.load(std::sync::atomic::Ordering::SeqCst)&&TcpStream::connect_timeout(&a,Duration::from_millis(500)).is_ok());
+                ports.push(json!({"port":port,"ok":ok,"elapsedMs":start.elapsed().as_millis() as u64}));
             }
-            result["tcpPorts"] = json!(ports);
-            if network::kind(&address) == "tailscale" {
-                // Relay in `status` is the home region, not actual path evidence.
-                if let Some(output) = cli(&[
-                    "ping",
-                    "--c=1",
-                    "--timeout=2s",
-                    "--until-direct=false",
-                    &address,
-                ]) {
-                    let path =
-                        if output.contains(" via DERP(") || output.contains(" via peer-relay") {
-                            "relay"
-                        } else if output.contains(" via ") && output.contains("pong from ") {
-                            "direct"
-                        } else {
-                            "unknown"
-                        };
-                    result["path"] = json!(path);
-                    result["pathEvidence"] =
-                        json!("tailscale ping; time of diagnosis only, may change");
+            result["tcpPorts"]=json!(ports);checkpoint(&cancel)?;
+            if network::kind(&address)=="tailscale"{
+                if let Some(output)=cli_cancelable(&["ping","--c=1","--timeout=2s","--until-direct=false",&address],&cancel){
+                    result["path"]=json!(if output.contains(" via DERP(")||output.contains(" via peer-relay"){"relay"}else if output.contains(" via ")&&output.contains("pong from "){"direct"}else{"unknown"});
+                    result["pathEvidence"]=json!("tailscale ping; time of diagnosis only, may change");
                 }
             }
         }
-        *self.last.lock().unwrap() = result.clone();
-        result
+        checkpoint(&cancel)?;Ok(result)
     }
+    pub(crate) fn release_diagnostic(&self)->Result<(),String>{
+        let mut slot=self.tunnel.lock().unwrap();
+        if let Some(client)=slot.as_mut(){
+            #[cfg(windows)] client.stop_confirmed()?;
+            #[cfg(not(windows))] client.stop();
+        }
+        *slot=None;Ok(())
+    }
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_body_cancellation_keeps_its_worker_owned_until_the_bounded_read_ends(){
+        use std::io::{Read,Write};use std::net::TcpListener;use std::sync::{Arc,atomic::{AtomicBool,Ordering}};
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();let(entered,started)=mpsc::channel();
+        let server=std::thread::spawn(move||{let(mut socket,_)=listener.accept().unwrap();socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();let mut bytes=Vec::new();while !bytes.ends_with(b"\r\n\r\n"){let mut byte=[0];socket.read_exact(&mut byte).unwrap();bytes.push(byte[0]);assert!(bytes.len()<4096);}socket.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 64\r\n\r\n").unwrap();socket.flush().unwrap();entered.send(()).unwrap();let mut byte=[0];assert_eq!(socket.read(&mut byte).unwrap(),0);});
+        let cancel=Arc::new(AtomicBool::new(false));let worker={let cancel=cancel.clone();std::thread::spawn(move||diagnostic_probe_at("127.0.0.1","fixture",port,cancel))};started.recv_timeout(Duration::from_secs(2)).unwrap();cancel.store(true,Ordering::SeqCst);let before=Instant::now();assert!(worker.join().unwrap().is_err());assert!(before.elapsed()<Duration::from_millis(1800),"The diagnostic body outlived its 1100ms read budget");server.join().unwrap();
+    }
     #[test]
     fn exhausted_media_routes_are_not_reported_as_an_identity_failure() {
         let device=Device{uuid:"host".into(),name:"fixture".into(),display_name:String::new(),

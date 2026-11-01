@@ -129,6 +129,9 @@ pub struct EffectivePolicy {
     pub client_endpoint_id: String,
 }
 pub fn policy(profile: &Profile, address: &str) -> EffectivePolicy {
+    policy_for_route(profile,address,None)
+}
+pub fn policy_for_route(profile: &Profile, address: &str,route:Option<&str>) -> EffectivePolicy {
     let network = if profile.network_mode == "auto" {
         kind(address)
     } else {
@@ -146,11 +149,7 @@ pub fn policy(profile: &Profile, address: &str) -> EffectivePolicy {
         } else {
             profile.packet_size
         },
-        bitrate_mbps: if remote && profile.remote_bitrate_mbps > 0 {
-            profile.bitrate_mbps.min(profile.remote_bitrate_mbps)
-        } else {
-            profile.bitrate_mbps
-        },
+        bitrate_mbps:if profile.bitrate_auto{crate::bitrate::initial_mbps(profile,address,route)}else if remote&&profile.remote_bitrate_mbps>0{profile.bitrate_mbps.min(profile.remote_bitrate_mbps)}else{profile.bitrate_mbps},
     }
 }
 

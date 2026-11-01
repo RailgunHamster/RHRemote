@@ -9,7 +9,7 @@ import java.util.*;
 
 /** Effective preferences for one client installation × Sunshine host. */
 public final class RhProfile {
-    public boolean packetSizeAuto=true;
+    public boolean packetSizeAuto=true,bitrateAuto=false;
     public String networkMode="auto";
     public static final String[] ROUTES={"lan","public_direct","punch_direct","tailscale_direct","relay","tailscale_relay"};
     public static final String[] ROUTE_LABELS={"局域网","公网直连","内置打洞直连","Tailscale 直连","自建中继","Tailscale 中继 / 未确认路径"};
@@ -38,12 +38,16 @@ public final class RhProfile {
     public boolean swapButtons,trackpad,statistics,hdr,audioEnabled,reverseScroll,onScreenController,fullRange;
     public boolean gamepadEnabled=false,playHostAudio=true,muteOnFocusLoss=false,absoluteMouse=true,framePacing=true,vsync=true;
     public String codec="HEVC",audioConfig="stereo",captureSysKeys="fullscreen",decoder="hardware",windowMode="windowed";
-    public static final String[] KEYS={"width","height","fps","bitrateMbps","codec","swapButtons","trackpad","statistics","hdr","audioEnabled","volume","playHostAudio","audioConfig","muteOnFocusLoss","absoluteMouse","reverseScroll","captureSysKeys","framePacing","vsync","decoder","windowMode","packetSize","packetSizeAuto","networkMode","remoteBitrateMbps","routeOrder","relayUrl","onScreenController","gamepadEnabled","fullRange","displayMode"};
+    public static final String[] KEYS={"width","height","fps","bitrateMbps","bitrateAuto","codec","swapButtons","trackpad","statistics","hdr","audioEnabled","volume","playHostAudio","audioConfig","muteOnFocusLoss","absoluteMouse","reverseScroll","captureSysKeys","framePacing","vsync","decoder","windowMode","packetSize","packetSizeAuto","networkMode","remoteBitrateMbps","routeOrder","relayUrl","onScreenController","gamepadEnabled","fullRange","displayMode"};
     private final String id;
     public String displayMode="auto";
     private RhProfile(String id){this.id=id==null?"default":id;}
     public static RhProfile load(Context context,String id){
-        JSONObject shared=RhShared.read(context),group=shared.optJSONObject("profiles").optJSONObject(RhShared.clientId(context));RhProfile p=new RhProfile(id);
+        return load(context,RhShared.read(context),id);
+    }
+    /** Read one host's local preferences from the already validated UI snapshot. */
+    static RhProfile load(Context context,JSONObject shared,String id){
+        JSONObject group=shared.optJSONObject("profiles").optJSONObject(RhShared.clientId(context));RhProfile p=new RhProfile(id);
         try{if(group!=null&&group.has(id))p=fromClientJson(id,group.getJSONObject(id));}catch(JSONException e){throw new IllegalStateException("invalid local profile",e);}
         p.swapButtons=RhShared.swap(shared,id);return p;
     }
@@ -52,11 +56,12 @@ public final class RhProfile {
         p.width=s.getInt(k+"width",2520);p.height=s.getInt(k+"height",1680);p.fps=s.getInt(k+"fps",30);p.bitrateMbps=s.getInt(k+"bitrateMbps",25);
         p.swapButtons=s.getBoolean(k+"swapButtons",false);p.trackpad=s.getBoolean(k+"trackpad",false);p.statistics=s.getBoolean(k+"statistics",false);p.codec=s.getString(k+"codec","HEVC");return p;
     }
-    public JSONObject json(){return RhActions.obj("width",width,"height",height,"fps",fps,"bitrateMbps",bitrateMbps,"codec",codec,"swapButtons",swapButtons,"trackpad",trackpad,"statistics",statistics,"hdr",hdr,"audioEnabled",audioEnabled,"volume",volume,"playHostAudio",playHostAudio,"audioConfig",audioConfig,"muteOnFocusLoss",muteOnFocusLoss,"absoluteMouse",absoluteMouse,"reverseScroll",reverseScroll,"captureSysKeys",captureSysKeys,"framePacing",framePacing,"vsync",vsync,"decoder",decoder,"windowMode",windowMode,"packetSize",packetSize,"packetSizeAuto",packetSizeAuto,"networkMode",networkMode,"remoteBitrateMbps",remoteBitrateMbps,"routeOrder",new JSONArray(routeOrder),"relayUrl",relayUrl,"onScreenController",onScreenController,"gamepadEnabled",gamepadEnabled,"fullRange",fullRange,"displayMode",displayMode);}
-    public JSONObject clientJson(){JSONObject p=json();p.remove("swapButtons");return p;}
+    public JSONObject json(){return RhActions.obj("width",width,"height",height,"fps",fps,"bitrateMbps",bitrateMbps,"bitrateAuto",bitrateAuto,"codec",codec,"swapButtons",swapButtons,"trackpad",trackpad,"statistics",statistics,"hdr",hdr,"audioEnabled",audioEnabled,"volume",volume,"playHostAudio",playHostAudio,"audioConfig",audioConfig,"muteOnFocusLoss",muteOnFocusLoss,"absoluteMouse",absoluteMouse,"reverseScroll",reverseScroll,"captureSysKeys",captureSysKeys,"framePacing",framePacing,"vsync",vsync,"decoder",decoder,"windowMode",windowMode,"packetSize",packetSize,"packetSizeAuto",packetSizeAuto,"networkMode",networkMode,"remoteBitrateMbps",remoteBitrateMbps,"routeOrder",new JSONArray(routeOrder),"relayUrl",relayUrl,"onScreenController",onScreenController,"gamepadEnabled",gamepadEnabled,"fullRange",fullRange,"displayMode",displayMode);}
+    public JSONObject clientJson(){JSONObject p=json();p.remove("swapButtons");if(!bitrateAuto)p.remove("bitrateAuto");return p;}
     public static RhProfile fromClientJson(String id,JSONObject value)throws JSONException{JSONObject p=new JSONObject(value.toString());p.put("swapButtons",false);return fromJson(id,p);}
     public static RhProfile fromJson(String id,JSONObject v)throws JSONException{
         RhProfile p=new RhProfile(id);p.width=v.getInt("width");p.height=v.getInt("height");p.fps=v.getInt("fps");p.bitrateMbps=v.getInt("bitrateMbps");p.codec=v.getString("codec");p.swapButtons=v.getBoolean("swapButtons");p.trackpad=v.getBoolean("trackpad");p.statistics=v.getBoolean("statistics");
+        if(v.has("bitrateAuto")&&!(v.get("bitrateAuto") instanceof Boolean))throw new IllegalArgumentException("invalid automatic bitrate mode");p.bitrateAuto=v.optBoolean("bitrateAuto",false);
         p.displayMode=v.optString("displayMode","auto");if(!Arrays.asList("auto","virtual").contains(p.displayMode))throw new IllegalArgumentException("invalid display mode");
         JSONArray order=v.optJSONArray("routeOrder");if(v.has("routeOrder")&&order==null)throw new IllegalArgumentException("invalid route order");
         if(order!=null){p.routeOrder.clear();for(int i=0;i<order.length();i++){String route=order.getString(i);if(!Arrays.asList(ROUTES).contains(route)||p.routeOrder.contains(route))throw new IllegalArgumentException("unknown or duplicate route");p.routeOrder.add(route);}if(p.routeOrder.isEmpty())throw new IllegalArgumentException("at least one route is required");}
@@ -69,7 +74,10 @@ public final class RhProfile {
     }
     public int remoteConfiguration(String address){if(address.equals("127.77.0.2"))return com.limelight.nvstream.StreamConfiguration.STREAM_CFG_REMOTE;String network=networkMode.equals("auto")?RhNetwork.kind(address):networkMode;return network.equals("tailscale")||network.equals("internet")?com.limelight.nvstream.StreamConfiguration.STREAM_CFG_REMOTE:networkMode.equals("lan")?com.limelight.nvstream.StreamConfiguration.STREAM_CFG_LOCAL:com.limelight.nvstream.StreamConfiguration.STREAM_CFG_AUTO;}
     public int effectivePacketSize(String address){if(address.equals("127.77.0.2"))return 1024;return packetSizeAuto&&(remoteConfiguration(address)==com.limelight.nvstream.StreamConfiguration.STREAM_CFG_REMOTE)?1024:packetSizeAuto?1392:packetSize;}
-    public void applyNetwork(String address,PreferenceConfiguration p){apply(p);if(remoteConfiguration(address)==com.limelight.nvstream.StreamConfiguration.STREAM_CFG_REMOTE&&remoteBitrateMbps>0)p.bitrate=Math.min(bitrateMbps,remoteBitrateMbps)*1000;}
+    public int initialBitrateMbps(String address,String route){
+        boolean remote=route==null?!RhNetwork.kind(address).equals("lan")||address.equals("127.77.0.2"):!route.equals("lan");long pixels=(long)width*height*fps;int nominal=(int)Math.max(1,Math.min(25,(pixels*25+1920L*1080*30-1)/(1920L*1080*30)));int cap=route!=null&&(route.equals("relay")||route.equals("tailscale_relay"))||route==null&&address.equals("127.77.0.2")?3:remote?6:25;int selected=bitrateAuto?Math.min(nominal,cap):bitrateMbps;return remote&&remoteBitrateMbps>0?Math.min(selected,remoteBitrateMbps):selected;
+    }
+    public void applyNetwork(String address,PreferenceConfiguration p){apply(p);if(bitrateAuto){JSONObject network=RhNetwork.state();String route=id.equals(network.optString("uuid"))?network.optString("route",null):null;p.bitrate=initialBitrateMbps(address,route)*1000;}else if(remoteConfiguration(address)==com.limelight.nvstream.StreamConfiguration.STREAM_CFG_REMOTE&&remoteBitrateMbps>0)p.bitrate=Math.min(bitrateMbps,remoteBitrateMbps)*1000;}
     public void apply(PreferenceConfiguration p){
         p.width=width;p.height=height;p.fps=fps;p.bitrate=bitrateMbps*1000;p.touchscreenTrackpad=trackpad;p.enablePerfOverlay=statistics;
         p.framePacing=framePacing?PreferenceConfiguration.FRAME_PACING_BALANCED:PreferenceConfiguration.FRAME_PACING_MIN_LATENCY;
@@ -77,5 +85,5 @@ public final class RhProfile {
         p.audioConfiguration="5.1-surround".equals(audioConfig)?MoonBridge.AUDIO_CONFIGURATION_51_SURROUND:"7.1-surround".equals(audioConfig)?MoonBridge.AUDIO_CONFIGURATION_71_SURROUND:MoonBridge.AUDIO_CONFIGURATION_STEREO;
         p.playHostAudio=playHostAudio;p.enableHdr=hdr;p.onscreenController=onScreenController;p.fullRange=fullRange;p.absoluteMouseMode=absoluteMouse;
     }
-    public String summary(){return width+" × "+height+" · "+fps+" 帧 · "+bitrateMbps+" Mbps";}
+    public String summary(){return width+" × "+height+" · "+fps+" 帧 · "+(bitrateAuto?"自动（连接时）":bitrateMbps+" Mbps");}
 }

@@ -14,23 +14,29 @@ pub struct Preview {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct Field {
+    pub key: String,
     pub label: String,
     pub value: String,
 }
-fn fields(profile: &Profile, platform: &str) -> Vec<Field> {
+/// Human-readable values shared by copy preview and synchronization review.
+/// A synchronization review includes foreign-platform settings as well.
+pub fn fields(profile: &Profile, platform: Option<&str>) -> Vec<Field> {
     let values = serde_json::to_value(profile).unwrap();
     let mut fields = Vec::new();
     for meta in crate::settings_catalog().as_array().unwrap() {
         let key = meta["key"].as_str().unwrap();
         if key == "swapButtons"
-            || meta["platforms"]
+            || platform.is_some_and(|platform|meta["platforms"]
                 .as_array()
-                .is_some_and(|items| !items.iter().any(|item| item == platform))
+                .is_some_and(|items| !items.iter().any(|item| item == platform)))
         {
             continue;
         }
         let value = &values[key];
-        let text = if let Some(flag) = value.as_bool() {
+        let text = if key=="bitrateMbps" {
+            format!("{} Mbps{}",profile.bitrate_mbps,if profile.bitrate_auto{"（手动值，未启用）"}else{""})
+        } else if meta["type"]=="bool" {
+            let flag=value.as_bool().unwrap_or(false);
             if flag { "开启" } else { "关闭" }.into()
         } else if let Some(option) = meta["options"]
             .as_array()
@@ -51,11 +57,13 @@ fn fields(profile: &Profile, platform: &str) -> Vec<Field> {
             _ => "高级",
         };
         fields.push(Field {
-            label: format!("{} · {}", tab, meta["label"].as_str().unwrap()),
+            key: key.into(),
+            label: format!("{} · {}", tab, if key=="bitrateMbps"{"手动码率"}else{meta["label"].as_str().unwrap()}),
             value: text,
         });
     }
     fields.push(Field {
+        key: "routeOrder".into(),
         label: "网络 · 连接顺序".into(),
         value: profile
             .route_order
@@ -71,6 +79,7 @@ fn fields(profile: &Profile, platform: &str) -> Vec<Field> {
             .join(" → "),
     });
     fields.push(Field {
+        key: "relayUrl".into(),
         label: "网络 · 中继服务器".into(),
         value: profile.relay_url.clone(),
     });
@@ -118,7 +127,7 @@ fn source(s: &State, client: &str) -> Result<Preview, String> {
             }
         })
         .unwrap_or_else(|| s.selected.clone());
-    let fields = fields(&profile, &s.platform);
+    let fields = fields(&profile, Some(&s.platform));
     Ok(Preview {
         client_id: client.into(),
         source_name: format!("{name} · {suffix}"),
@@ -135,12 +144,14 @@ pub(crate) fn apply(s: &mut State, preview: Preview) -> Result<(), String> {
     }
     let mut profile = preview.profile;
     profile.validate()?;
+    let draft_id=crate::random_token()?;
     profile.swap_buttons = current.swap_buttons;
     s.settings_inputs.clear();
     s.settings_error.clear();
     s.settings_error_field.clear();
     s.draft_relay = profile.relay_url.clone();
     s.draft = Some(profile);
+    s.profile_draft_id=draft_id;
     s.profile_copy_notice = if crate::interaction::dirty(s) {
         format!("已从 {} 复制，保存后生效", preview.source_name)
     } else {
@@ -182,6 +193,7 @@ impl Controller {
     }
     pub(crate) fn dispatch_profile_copy(&self, id: &str, args: Value) -> Result<Value, String> {
         let mut s = self.state.lock().unwrap();
+        crate::interaction::ensure_profile_origin(&s,id,&args)?;
         if s.sync_busy {
             return Err("同步进行中，请稍后复制".into());
         }
@@ -220,6 +232,15 @@ impl Controller {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn copy_preview_marks_a_preserved_manual_bitrate_and_has_stable_field_identifiers(){
+        let profile=crate::Profile{bitrate_auto:true,bitrate_mbps:41,..crate::Profile::default()};
+        for platform in [None,Some("windows"),Some("android")]{
+            let fields=super::fields(&profile,platform);
+            assert_eq!(fields.iter().find(|field|field.key=="bitrateMbps").unwrap().value,"41 Mbps（手动值，未启用）");
+            let keys:std::collections::BTreeSet<_>=fields.iter().map(|field|&field.key).collect();assert_eq!(keys.len(),fields.len());
+        }
+    }
     use super::*;
     use crate::{
         Device, Platform,

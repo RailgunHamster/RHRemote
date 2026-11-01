@@ -43,14 +43,14 @@ public sealed class RhSessionInputProbe70 : Form {
  readonly Timer timer=new Timer();readonly JavaScriptSerializer json=new JavaScriptSerializer();
  readonly Dictionary<string,int> counts=new Dictionary<string,int>();readonly Dictionary<string,bool> registrations=new Dictionary<string,bool>();
  readonly List<object> desktops=new List<object>();readonly IntPtr priorForeground;
- readonly List<object> keyMessages=new List<object>();
+ readonly List<object> keyMessages=new List<object>(),wheelMessages=new List<object>();
  readonly string[] hotkeys={"ctrl-alt-left","ctrl-alt-right","ctrl-alt-up","ctrl-alt-down"};
  readonly int[] keys={37,39,38,40};
  readonly Font heading=new Font("Segoe UI",22),body=new Font("Consolas",15);
  readonly ConcurrentQueue<string> pendingEvents=new ConcurrentQueue<string>();
  System.Threading.Thread writer;Exception writerFailure;
  volatile string latestSnapshot,lastCommand="";volatile bool finishWriter;
- bool ended;int mouseDown,mouseUp;string closingReason="",desktopSignature="";
+ bool ended;int mouseDown,mouseUp,middleDown,middleUp;string closingReason="",desktopSignature="";
  public static uint IdleMs(){var value=new LastInput{Size=(uint)Marshal.SizeOf(typeof(LastInput))};if(!GetLastInputInfo(ref value))throw new Exception("Could not check input inactivity");return unchecked((uint)Environment.TickCount-value.Tick);}
  protected override bool ShowWithoutActivation {get{return true;}}
  RhSessionInputProbe70(string directory,string id,int seconds){
@@ -74,14 +74,14 @@ public sealed class RhSessionInputProbe70 : Form {
  void Event(string name){int value;counts.TryGetValue(name,out value);counts[name]=value+1;pendingEvents.Enqueue(json.Serialize(new{utc=DateTime.UtcNow.ToString("o"),name=name,count=value+1})+"\n");Invalidate();}
  void KeyMessage(string route,int key,int modifiers){
   // Only the fixed test keys in this owned window; never record character input.
-  if(keyMessages.Count>=512||!(key==16||key==17||key==18||key==91||key==37||key==38||key==39||key==40||key==65||key==67||key==70||key==83||key==27||key==115))return;
+  if(keyMessages.Count>=512||!(key==16||key==17||key==18||key==91||key==37||key==38||key==39||key==40||key==65||key==67||key==70||key==83||key==27||key==115||key==9||key==13||key==8||key==46))return;
   int threadMask=0;int[] keys={16,17,18,91,92};for(int i=0;i<keys.Length;i++)if((GetKeyState(keys[i])&0x8000)!=0)threadMask|=1<<i;
   keyMessages.Add(new{utc=DateTime.UtcNow.ToString("o"),route=route,key=key,modifiers=modifiers,threadModifiers=threadMask,asyncModifiers=Held()});
  }
- protected override void WndProc(ref Message message){if(message.Msg==0x0100||message.Msg==0x0101||message.Msg==0x0104||message.Msg==0x0105)KeyMessage("win32-"+message.Msg.ToString("x"),message.WParam.ToInt32(),0);if(message.Msg==0x0312){int id=message.WParam.ToInt32();if(id>=1&&id<=4){Event(hotkeys[id-1]);WriteStatus();return;}}base.WndProc(ref message);}
- protected override bool ProcessCmdKey(ref Message message,Keys data){KeyMessage("command-before",(int)(data&Keys.KeyCode),(int)(data&Keys.Modifiers));if(data==(Keys.Alt|Keys.F4)){closingReason="alt-f4";Event("alt-f4");}bool handled=base.ProcessCmdKey(ref message,data);KeyMessage(handled?"command-consumed":"command-passed",(int)(data&Keys.KeyCode),(int)(data&Keys.Modifiers));return handled;}
- protected override void OnMouseDown(MouseEventArgs e){mouseDown++;Focus();base.OnMouseDown(e);WriteStatus();}
- protected override void OnMouseUp(MouseEventArgs e){mouseUp++;base.OnMouseUp(e);WriteStatus();}
+ protected override void WndProc(ref Message message){if(message.Msg==0x0100||message.Msg==0x0101||message.Msg==0x0104||message.Msg==0x0105)KeyMessage("win32-"+message.Msg.ToString("x"),message.WParam.ToInt32(),0);if(message.Msg==0x020a||message.Msg==0x020e){int delta=(short)((message.WParam.ToInt64()>>16)&0xffff);bool horizontal=message.Msg==0x020e;string name=horizontal?(delta>0?"wheel-right":"wheel-left"):(delta>0?"wheel-up":"wheel-down");if(delta!=0){Event(name);if(wheelMessages.Count<64)wheelMessages.Add(new{utc=DateTime.UtcNow.ToString("o"),horizontal=horizontal,delta=delta});WriteStatus();}}if(message.Msg==0x0312){int id=message.WParam.ToInt32();if(id>=1&&id<=4){Event(hotkeys[id-1]);WriteStatus();return;}}base.WndProc(ref message);}
+ protected override bool ProcessCmdKey(ref Message message,Keys data){KeyMessage("command-before",(int)(data&Keys.KeyCode),(int)(data&Keys.Modifiers));Keys code=data&Keys.KeyCode,mods=data&Keys.Modifiers;string navigation="";if(mods==Keys.None){if(code==Keys.Tab)navigation="tab";if(code==Keys.Up)navigation="arrow-up";if(code==Keys.Left)navigation="arrow-left";if(code==Keys.Down)navigation="arrow-down";if(code==Keys.Right)navigation="arrow-right";if(code==Keys.Enter)navigation="enter";if(code==Keys.Back)navigation="backspace";if(code==Keys.Delete)navigation="delete";}if(code==Keys.Tab&&mods==Keys.Shift)navigation="shift-tab";if(navigation.Length!=0){Event(navigation);KeyMessage("owned-navigation",(int)code,(int)mods);WriteStatus();return true;}if(data==(Keys.Alt|Keys.F4)){closingReason="alt-f4";Event("alt-f4");}bool handled=base.ProcessCmdKey(ref message,data);KeyMessage(handled?"command-consumed":"command-passed",(int)(data&Keys.KeyCode),(int)(data&Keys.Modifiers));return handled;}
+ protected override void OnMouseDown(MouseEventArgs e){mouseDown++;if(e.Button==MouseButtons.Middle)middleDown++;Focus();base.OnMouseDown(e);WriteStatus();}
+ protected override void OnMouseUp(MouseEventArgs e){mouseUp++;if(e.Button==MouseButtons.Middle)middleUp++;base.OnMouseUp(e);WriteStatus();}
  protected override void OnKeyDown(KeyEventArgs e){
   KeyMessage("managed-down",(int)e.KeyCode,(int)e.Modifiers);
   string name=null;
@@ -106,13 +106,14 @@ public sealed class RhSessionInputProbe70 : Form {
   }catch(IOException){}catch(ArgumentException){}
  }
  void WriteStatus(){
-  if(!IsHandleCreated)return;var screen=Screen.FromHandle(Handle);var hit=WindowFromPoint(new Point32{X=Left+120,Y=Top+140});
+  if(!IsHandleCreated)return;var screen=Screen.FromHandle(Handle);var hit=WindowFromPoint(new Point32{X=Left+120,Y=Top+140});var navigationHit=WindowFromPoint(new Point32{X=Left+400,Y=Top+250});
   var state=new{ok=true,run=run,utc=DateTime.UtcNow.ToString("o"),pid=Process.GetCurrentProcess().Id,sessionId=Process.GetCurrentProcess().SessionId,hwnd=Handle.ToInt64().ToString(),ended=ended,closingReason=closingReason,elapsedMs=clock.ElapsedMilliseconds,
-   foregroundOwn=GetForegroundWindow()==Handle,clickTargetOwn=hit==Handle||GetAncestor(hit,2)==Handle,bounds=new{x=Left,y=Top,width=Width,height=Height},monitor=screen.DeviceName,
+   foregroundOwn=GetForegroundWindow()==Handle,clickTargetOwn=hit==Handle||GetAncestor(hit,2)==Handle,navigationClickTargetOwn=navigationHit==Handle||GetAncestor(navigationHit,2)==Handle,bounds=new{x=Left,y=Top,width=Width,height=Height},monitor=screen.DeviceName,
    screens=Array.ConvertAll(Screen.AllScreens,s=>new{device=s.DeviceName,primary=s.Primary,x=s.Bounds.X,y=s.Bounds.Y,width=s.Bounds.Width,height=s.Bounds.Height}),
-   desktop=Desktop(),desktopTransitions=desktops,heldModifiers=Held(),registeredHotkeys=registrations,events=counts,keyMessages=keyMessages,mouseDown=mouseDown,mouseUp=mouseUp,swapButtons=GetSystemMetrics(23),lastCommand=lastCommand,evidenceIoOffUiThread=true};
+   desktop=Desktop(),desktopTransitions=desktops,heldModifiers=Held(),heldMiddle=(GetAsyncKeyState(4)&0x8000)!=0,registeredHotkeys=registrations,events=counts,keyMessages=keyMessages,wheelMessages=wheelMessages,mouseDown=mouseDown,mouseUp=mouseUp,middleDown=middleDown,middleUp=middleUp,swipeTargetsOwn=OwnPoint(Left+300,Top+250)&&OwnPoint(Left+500,Top+250)&&OwnPoint(Left+400,Top+150)&&OwnPoint(Left+400,Top+350),swapButtons=GetSystemMetrics(23),lastCommand=lastCommand,evidenceIoOffUiThread=true};
   latestSnapshot=json.Serialize(state);
  }
+ bool OwnPoint(int x,int y){var hit=WindowFromPoint(new Point32{X=x,Y=y});return hit==Handle||GetAncestor(hit,2)==Handle;}
  // Observing the window must not delay its input callback or stop command.
  // Coalesce immutable snapshots; preserve every named event in a separate queue.
  void WriteLoop(){

@@ -228,8 +228,10 @@ Edit-Source 'app/gui/CliStartStreamSegue.qml' {param($s)
 '@)
 }
 Edit-Source 'app/cli/listapps.cpp' {param($s)
-    $s="#include `"gui/rhhost.h`"`n#include <QFile>`n#include <QSaveFile>`n"+$s
+    $s="#include `"gui/rhhost.h`"`n#include `"gui/rhprobe.h`"`n#include <QFile>`n#include <QSaveFile>`n"+$s
     return (Replace-Once $s '                if (event.computer->pairState == NvComputer::PS_PAIRED) {' @'
+                RhProbe::noCertificateSelected(event.computer->uuid,!event.computer->serverCert.isNull());
+                if(qEnvironmentVariable("RHREMOTE_PROBE_OPERATION")=="1"&&event.computer->serverCert.isNull()){QCoreApplication::exit(-1);return;}
                 if (event.computer->pairState == NvComputer::PS_PAIRED) {
                     if(qEnvironmentVariableIsSet("RHREMOTE_PROBE_OPERATION")){
                         const auto metadata=qEnvironmentVariable("RHREMOTE_NETWORK_METADATA");
@@ -504,7 +506,7 @@ bool Session::testAudio(int audioConfiguration)
 Edit-Source 'app/app.pro' {param($s)return $s+@'
 
 # RHRemote native shell; the existing streaming implementation remains intact.
-HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h gui/rhprobecache.h gui/rhd3d11probe.h gui/rhcapturetools.h gui/rhwindowbridge.h gui/rhpairing.h
+HEADERS += gui/rhprofiles.h gui/rhcontrol.h gui/rhcontrolaccept.h gui/rhhost.h gui/rhkeys.h gui/rhpreparation.h gui/rhprobecache.h gui/rhd3d11probe.h gui/rhcapturetools.h gui/rhwindowbridge.h gui/rhpairing.h gui/rhprobe.h
 win32 {
     TARGET = RHRemote
     QMAKE_TARGET_COMPANY = RHRemote
@@ -528,6 +530,8 @@ if($LASTEXITCODE -ne 0){throw 'Windows tunnel adaptation failed.'}
 if($LASTEXITCODE -ne 0){throw 'Windows pairing adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-initial-display.py') windows $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Windows initial display adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-window-source.py') windows $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Windows window source adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-frame-trace.py') windows $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Windows host frame trace adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-parent-lifetime.py') $SourceDir
@@ -536,4 +540,6 @@ if($LASTEXITCODE -ne 0){throw 'Windows parent lifetime adaptation failed.'}
 if($LASTEXITCODE-ne0){throw 'Launch cancellation patch failed.'}
 & python (Join-Path $PSScriptRoot 'patch-frame-clock.py') $SourceDir
 if($LASTEXITCODE-ne0){throw 'Direct frame clock patch failed.'}
+& python (Join-Path $PSScriptRoot 'patch-probe-status.py') $SourceDir
+if($LASTEXITCODE-ne0){throw 'Native probe status patch failed.'}
 'Windows RHRemote source prepared; prior engine experiments and upstream UI originals retained.'

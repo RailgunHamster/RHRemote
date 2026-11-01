@@ -11,7 +11,7 @@ pub fn focus_stream(state: &Value) {
 }
 
 #[cfg(windows)]
-unsafe fn owned_window(state: &Value) -> Option<windows::Win32::Foundation::HWND> {
+pub(crate) unsafe fn owned_window(state: &Value) -> Option<windows::Win32::Foundation::HWND> {
     use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::*};
     let value = state["statistics"]["streamWindow"]
         .as_str()?
@@ -221,7 +221,9 @@ impl Follower {
             };
             // Create without activating: the toolbar must not steal the streamed keyboard focus.
             if !toolbar.window().is_visible() {
-                let _ = toolbar.show();
+                                toolbar.window().set_position(slint::PhysicalPosition::new(left,top+4));
+                if !toolbar.window().has_winit_window() {toolbar.window().set_size(slint::PhysicalSize::new(1,1));}
+                if toolbar.show().is_err(){return json!({"visible":false,"reason":"control-open-failed","error":"无法打开串流控制栏"});}
             }
             let (mut x, mut y, mut width, mut height) = placement(
                 left,

@@ -47,12 +47,14 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     private final JSONObject route;
     private RhRecovery predecessor;
     private RhAdmission initialAdmission;
-    private volatile boolean retrying,fatal,handoff,cleanupPending,workerRunning,cancelCleanupDone,completed,gameAdmitted,oldStopped;
+    private volatile boolean retrying,fatal,handoff,cleanupPending,workerRunning,cancelCleanupDone,completed,gameAdmitted,oldStopped,connectionReady;
     private Stopper successorStopper;
     private RhRecovery successor;
     private boolean successorStopping,terminalPending;
     private Intent claimedIntent;
     private String error="";
+    private volatile String initialFailure="";
+    private volatile RhLaunchConflict launchConflict=RhLaunchConflict.UNKNOWN;
     private AlertDialog feedbackDialog;
     private TextView feedbackDetail;
     private final Runnable watchdog,handoffTimeout=()->failed("串流窗口未能接管连接");
@@ -90,14 +92,22 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         if(initialAdmission!=null)main.post(()->{
             RhAdmission enteringGame=initialAdmission;if(enteringGame!=null)enteringGame.gameReady(this);
         });
-        JSONObject saved=parse(activity.getIntent().getStringExtra(EXTRA));
+        JSONObject saved=parse(activity.getIntent().getStringExtra(EXTRA));initialFailure=saved.optString("initialFailure");
         long origin=RhStatistics.originUs();if(origin<=0)origin=System.currentTimeMillis()*1000;
         policy=new RhRecoveryPolicy(saved,origin);route=RhNetwork.state();
         watchdog=()->{if(!policy.rendered()&&!cancelled&&!retrying&&!retry(true,"首帧等待超时")){background();failed("首帧等待超时，已停止本轮连接");}};
-        // WAN HTTP launch plus RTSP can legitimately exceed the LAN deadline.
-        // This is a ceiling only; a received frame disarms it immediately.
-        main.postDelayed(watchdog,route.optString("route").equals("lan")?15_000:30_000);
+        // Native establishment retains its own HTTP/RTSP/video deadlines. A Game
+        // can exist before negotiation finishes, so it cannot start a decoded
+        // frame deadline. Only connectionStarted arms that observation below.
         RhStatistics.event("native_attempt",-1,policy.state());
+    }
+    /** Native connectionStarted follows PLAY/control setup; duplicate or retired replies do not re-arm it. */
+    public synchronized void connected(){
+        if(connectionReady||cancelled||completed||retrying||handoff||policy.rendered())return;
+        connectionReady=true;
+        long timeout=route.optString("route").equals("lan")?15_000:30_000;
+        RhStatistics.event("first_frame_wait_begin",-1,RhActions.obj("timeoutMs",timeout,"attemptId",id));
+        main.postDelayed(watchdog,timeout);
     }
     private static JSONObject parse(String json){try{return json==null?new JSONObject():new JSONObject(json);}catch(Exception e){return new JSONObject();}}
     private void onMain(Runnable action){if(Looper.myLooper()==Looper.getMainLooper())action.run();else main.post(action);}
@@ -106,14 +116,31 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         try{return value==null?fallback:RhProfile.fromJson(activity.getIntent().getStringExtra(Game.EXTRA_PC_UUID),parse(value));}
         catch(Exception e){throw new IllegalArgumentException("重连配置无效",e);}
     }
-    public void frame(){if(!cancelled&&!retrying){boolean first=!policy.rendered();policy.frame(SystemClock.elapsedRealtime());if(first){main.removeCallbacks(watchdog);RhActions.connectionFrame(activity);}}}
+    public void frame(){if(!cancelled&&!retrying){boolean first=!policy.rendered();policy.frame(SystemClock.elapsedRealtime());if(first){initialFailure="";launchConflict=RhLaunchConflict.UNKNOWN;main.removeCallbacks(watchdog);RhActions.connectionFrame(activity);}}}
+    /** The original NvConnection listener owns this reply; ignore retired startup threads. */
+    public synchronized void noteProtocolFailure(int code,String reason){
+        if(cancelled||completed||retrying||handoff||policy.rendered())return;
+        launchConflict=RhLaunchConflict.from(code,reason);
+        RhStatistics.event("connection_http_failed",-1,RhActions.obj("code",code,"hostReason",launchConflict.id));
+    }
+    private String failureMessage(String stage,int code){return code==409&&launchConflict!=RhLaunchConflict.UNKNOWN?launchConflict.message:stageFailureMessage(stage,code);}
     public boolean stageFailed(int portFlags,int code){return stageFailed("",portFlags,code);}
-    public boolean stageFailed(String stage,int portFlags,int code){return retry(RhRecoveryPolicy.networkStage(stage,portFlags,code),"连接阶段失败 ("+code+")");}
+    public boolean stageFailed(String stage,int portFlags,int code){return retry(RhRecoveryPolicy.networkStage(stage,portFlags,code),failureMessage(stage,code));}
+    private static String stageFailureMessage(String stage,int code){
+        if(code==409)return "本次连接与主机当前会话状态冲突（409），请稍后重试。";
+        String label=code==401||code==403?"主机身份或配对校验失败":stage.equals("RTSP handshake")?"串流协商失败":stage.equals("name resolution")?"主机地址解析失败":stage.equals("video stream establishment")?"视频通道建立失败":stage.equals("audio stream establishment")?"音频通道建立失败":"连接阶段失败";
+        return label+"（"+(stage.isEmpty()?"":stage+"，")+"错误码 "+code+"）";
+    }
     /** Fatal startup errors return to the device list after scoped cleanup, without a modal connection owner. */
-    public void handleStageFailure(String stage,int portFlags,int code){
+    public synchronized void handleStageFailure(String stage,int portFlags,int code){
+        // A conflict delivered by the retired startup thread must not cancel the
+        // recovery it already triggered. A successor has its own controller; its
+        // first conflict still fails, and authorization errors still stop retry.
+        if(retrying&&code==409){RhStatistics.event("connection_stage_callback_ignored",-1,RhActions.obj("name",stage,"portFlags",portFlags,"code",code,"reason","retired_attempt_conflict"));return;}
+        RhStatistics.event("connection_stage_failed",-1,RhActions.obj("name",stage,"portFlags",portFlags,"code",code,"hostReason",code==409?launchConflict.id:""));
         if(stageFailed(stage,portFlags,code))return;
-        RhStatistics.event("connection_stage_failed",-1,RhActions.obj("name",stage,"code",code));
-        onMain(()->{RhActions.connectionError("连接失败："+stage+" ("+code+")");background();activity.finish();});
+        String message=failureMessage(stage,code);
+        onMain(()->{RhActions.connectionError("连接失败："+message);background();activity.finish();});
     }
     public boolean terminated(int code){
         if(code==MoonBridge.ML_ERROR_GRACEFUL_TERMINATION){if(!retrying)terminal(code,false);return true;}
@@ -129,6 +156,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
             if(!RhActions.belongsElsewhere(activity)){
                 RhStatistics.event("connection_terminated",-1,RhActions.obj("code",code,"retry",false));
                 if(failure)RhActions.connectionError("连接已断开 ("+code+")");
+                else RhActions.connectionEnded(activity);
                 background();
             }
             activity.finish();
@@ -147,6 +175,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
         String remote=route.optString("remoteAddress",route.optString("selectedAddress"));
         long delay=policy.failure(SystemClock.elapsedRealtime(),System.currentTimeMillis()*1000,route.optString("route"),remote,true);
         if(delay<0){cancelRequests();main.removeCallbacks(watchdog);return false;}
+        if(initialFailure.isEmpty())initialFailure=message;
         retrying=true;cleanupPending=true;RhActions.beginRecovery(this);main.removeCallbacks(watchdog);
         RhStatistics.event("route_media_failed",-1,RhActions.obj("reason",message,"network",route,"recovery",policy.state()));
         main.post(()->{
@@ -193,7 +222,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
                     Intent next=new Intent(activity.getIntent());
                     next.putExtra(Game.EXTRA_HOST,resolved.activeAddress.address);
                     next.putExtra(Game.EXTRA_PORT,resolved.activeAddress.port);
-                    next.putExtra(EXTRA,policy.next().toString());next.putExtra(PROFILE,profile.json().toString());next.putExtra(HANDOFF,id);
+                    next.putExtra(EXTRA,policy.next().put("initialFailure",initialFailure).toString());next.putExtra(PROFILE,profile.json().toString());next.putExtra(HANDOFF,id);
                     main.post(()->launch(next));
                 }
             }catch(Exception|LinkageError e){main.post(()->{if(!cancelled)failed(e.getMessage()==null?"自动重连失败":e.getMessage());});}
@@ -210,9 +239,9 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     }
     private void failed(String message){
         if(completed)return;
-        error=message;cancel();RhStatistics.finish();
-        RhActions.connectionError("连接失败："+message);
-        android.widget.Toast.makeText(activity.getApplicationContext(),message,android.widget.Toast.LENGTH_LONG).show();
+        error=initialFailure.isEmpty()||initialFailure.equals(message)?message:"自动恢复未完成："+message+"\n最初失败："+initialFailure;cancel();RhStatistics.finish();
+        RhActions.connectionError("连接失败："+error);
+        android.widget.Toast.makeText(activity.getApplicationContext(),error,android.widget.Toast.LENGTH_LONG).show();
         closeFeedback();activity.finish();
     }
     private synchronized void release(){
@@ -293,6 +322,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
                 return true;
             });
             try{dialog.show();}catch(android.view.WindowManager.BadTokenException unavailable){closeFeedback();RhStatistics.event("recovery_feedback_unavailable",-1,RhActions.obj("attemptId",id));return;}
+            RhUiStyle.dialog(dialog,false);
             dialog.getButton(DialogInterface.BUTTON_NEGATIVE).setContentDescription("取消恢复连接");
             dialog.getButton(DialogInterface.BUTTON_NEGATIVE).setOnClickListener(view->cancelFromFeedback(dialog));
         }
@@ -304,7 +334,7 @@ public final class RhRecovery extends RhCancellation implements RhActions.Target
     }
     private void closeFeedback(){AlertDialog retired=feedbackDialog;feedbackDialog=null;feedbackDetail=null;if(retired!=null)retired.dismiss();}
     public JSONObject state(){return RhActions.obj("connected",false,"phase",!error.isEmpty()?"error":cancelled?"cancelling":handoff?"starting":"reconnecting","attemptId",id,
-        "workerRunning",workerRunning,"cleanupPending",cleanupPending||workerRunning,"error",error,"recovery",policy.state(),
+        "workerRunning",workerRunning,"cleanupPending",cleanupPending||workerRunning,"error",error,"initialFailure",initialFailure,"recovery",policy.state(),
         "feedback",RhActions.obj("visible",feedbackDialog!=null&&feedbackDialog.isShowing(),"title","正在恢复连接","detail",feedbackText(),"cancelAction","stream.disconnect"));}
     public JSONObject perform(String action,JSONObject args){if(!action.equals("stream.disconnect"))throw new IllegalStateException("正在重连，可取消当前连接");RhActions.connectionStopping(uuid);cancel();closeFeedback();activity.finish();return RhActions.obj("cancelled",true);}
 }

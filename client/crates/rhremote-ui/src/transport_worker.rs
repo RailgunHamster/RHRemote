@@ -163,6 +163,20 @@ impl Client {
             }
         }
     }
+    /// Diagnostic cleanup keeps the child handle on failure. A later retry must
+    /// confirm termination before another operation can borrow these ports.
+    pub(crate) fn stop_confirmed(&mut self)->Result<(),String>{
+        self.input.take();self.active=false;
+        if let Some(child)=self.child.as_mut(){
+            let until=Instant::now()+Duration::from_secs(25);
+            loop{match child.try_wait().map_err(|e|e.to_string())?{
+                Some(_)=>{child.wait().map_err(|e|e.to_string())?;break;},
+                None if Instant::now()<until=>std::thread::sleep(Duration::from_millis(10)),
+                None=>{child.kill().map_err(|e|e.to_string())?;child.wait().map_err(|e|e.to_string())?;break;}
+            }}
+        }
+        self.child=None;self.failure=None;Ok(())
+    }
 }
 impl Drop for Client {
     fn drop(&mut self) {

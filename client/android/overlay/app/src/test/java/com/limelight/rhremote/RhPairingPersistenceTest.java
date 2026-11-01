@@ -49,6 +49,7 @@ public class RhPairingPersistenceTest {
             ComputerDetails d=new ComputerDetails();d.uuid="synced-host";d.name="PC";d.httpsPort=47984;
             d.state=ComputerDetails.State.ONLINE;d.pairState=PairingManager.PairState.PAIRED;return d;
         }
+        @Implementation protected ComputerDetails getRhDiscoveryDetails(boolean online){return getComputerDetails(online);}
     }
     @Implements(value=RhNetwork.class,isInAndroidSdk=false)
     public static class NetworkLearning {
@@ -116,6 +117,10 @@ public class RhPairingPersistenceTest {
             binder.saveRhAddedComputer(input);assertNotNull(database.getComputerByUUID(input.uuid));assertNotNull(binder.getComputer(input.uuid));assertNull(database.getComputerByUUID(input.uuid).serverCert);assertEquals(1,((AtomicInteger)ReflectionHelpers.getField(service,"dbRefCount")).get());
         }finally{database.close();}
         ComputerDatabaseManager reopened=new ComputerDatabaseManager(context);try{assertEquals(input.name,reopened.getComputerByUUID(input.uuid).name);}finally{reopened.close();}
+    }
+    @Test public void aNewPairingDropsOldDiscoveryFailureWithoutPersistingRuntimeEvidence()throws Exception{
+        Context context=RuntimeEnvironment.getApplication();ComputerDetails input=device();input.serverCert=certificate("discovery-old-pin");RhShared.capture(context,Collections.singleton(input));input.rhDiscoveryObservation=RhDiscoveryObservation.result(input,input.serverCert,"http","auth_rejected","auth_rejected",true,System.nanoTime()).bind(RhDiscoveryObservation.begin(context,input));
+        ComputerDatabaseManager database=new ComputerDatabaseManager(context);try{ComputerDetails saved=RhPairingStore.save(context,database,input,certificate("discovery-new-pin"));assertNull(saved.rhDiscoveryObservation);assertEquals(PairingManager.PairState.PAIRED,saved.pairState);assertNull(database.getComputerByUUID(input.uuid).rhDiscoveryObservation);assertNotNull(input.rhDiscoveryObservation);}finally{database.close();}
     }
     @Test public void readdingAtANewAddressCannotClearAnExistingPairingPin()throws Exception{
         Context context=RuntimeEnvironment.getApplication();ComputerDatabaseManager database=new ComputerDatabaseManager(context);ComputerDetails old=device();old.serverCert=certificate("existing-add-pin");

@@ -1,0 +1,11 @@
+{
+  "targetLimitGiB": 40,
+  "keepVersions": 2,
+  "largeRawBytes": 16777216,
+  "protectedDist": {
+    "android/RHRemote-v0.2.11-preview.129.apk": "Installed normal Android client on the dedicated emulator (129/347); retain its signed rollback baseline until a verified normal-client upgrade.",
+    "velopack-candidates/0.2.11-preview.110": "Current physical Windows Debug UI baseline for form and Release comparison; ui-form-focus124-review-20261030.",
+    "server-network-20261022": "Local and claw installed service baseline: install-local-network-20261022-plan.json and claw-network-install-20261022.json (commit 4d9fcf7c).",
+    "server-pairing-3b358b68-20261027-verified": "Current verified winserver service package."
+  }
+}

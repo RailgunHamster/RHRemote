@@ -45,6 +45,10 @@ struct Resolver {
     cancel: Arc<AtomicBool>,
     deadline: Instant,
 }
+pub(crate) fn resolve_cancelable(address:&str,port:u16,cancel:&AtomicBool,timeout:Duration)->io::Result<Vec<SocketAddr>>{
+    if let Ok(ip)=address.parse::<std::net::IpAddr>(){return Ok(vec![SocketAddr::new(ip,port)]);}
+    let address=address.to_owned();resolve_with(cancel,Instant::now()+timeout,move||(address.as_str(),port).to_socket_addrs().map(Iterator::collect))
+}
 impl ureq::Resolver for Resolver {
     fn resolve(&self, netloc: &str) -> io::Result<Vec<SocketAddr>> {
         if self.cancel.load(Ordering::SeqCst) {
@@ -64,6 +68,9 @@ pub(crate) fn server_info(
     cancel: Arc<AtomicBool>,
     timeout: Duration,
 ) -> Result<String, String> {
+    server_info_at(address,47989,cancel,timeout,262144)
+}
+pub(crate) fn server_info_at(address:&str,port:u16,cancel:Arc<AtomicBool>,timeout:Duration,limit:u64)->Result<String,String>{
     if cancel.load(Ordering::SeqCst) {
         return Err("已取消添加".into());
     }
@@ -83,7 +90,7 @@ pub(crate) fn server_info(
         .build();
     let response = agent
         .get(&format!(
-            "http://{host}:47989/serverinfo?uniqueid=0123456789ABCDEF"
+            "http://{host}:{port}/serverinfo?uniqueid=0123456789ABCDEF"
         ))
         .call()
         .map_err(|error| match error {
@@ -95,7 +102,7 @@ pub(crate) fn server_info(
     let mut body = String::new();
     response
         .into_reader()
-        .take(262145)
+        .take(limit+1)
         .read_to_string(&mut body)
         .map_err(|_| "读取设备信息失败".to_string())?;
     if cancel.load(Ordering::SeqCst) {

@@ -472,6 +472,7 @@ impl Saved {
         self.profiles.insert(uuid.into(), p);
     }
     pub(crate) fn apply_shared(&mut self, shared: &SharedConfig) {
+        self.device_membership_authoritative = true;
         self.devices = shared.devices.clone();
         self.clients = shared.clients.clone();
         self.client_profiles = shared.profiles.clone();

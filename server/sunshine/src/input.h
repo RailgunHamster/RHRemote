@@ -80,9 +80,10 @@ namespace input {
    *
    * @param mail Mailbox used to exchange messages with worker threads.
    * @param session_id Stable paired-client identity shared by launch and resume connections.
+   * @param window_source Authorized opaque window identity, or empty for desktop capture.
    * @return Shared input state bound to the stream mailbox.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::string window_source = {});
 
 #ifdef SUNSHINE_TESTS
   namespace testing {
@@ -187,6 +188,7 @@ namespace input {
 
     int env_logical_width;  ///< Width of the full capture environment after display scaling.
     int env_logical_height;  ///< Height of the full capture environment after display scaling.
+    std::string window_source;  ///< Opaque window identity; empty for desktop sessions.
 
     /**
      * @brief Check whether the touch-port bounds are initialized.

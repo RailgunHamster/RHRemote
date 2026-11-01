@@ -1,4 +1,4 @@
-use rhremote_core::{Device, Platform};
+use rhremote_core::{Device, DeviceObservation, Platform, DeviceCheck, CheckOutcome, CheckSource, CheckPhase};
 use serde_json::{Value, json};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -28,10 +28,36 @@ fn apply_device_refresh(current:&mut [Device],before:&[Device],probed:Vec<Device
     for device in probed{if let Some(slot)=current.iter_mut().find(|d|d.uuid==device.uuid){if before.iter().find(|d|d.uuid==device.uuid)==Some(&*slot){*slot=device;}}}
 }
 
-struct PendingPair {
-    attempt: u64,
-    device: Device,
-    cancellation: crate::pairing::Cancellation,
+#[path = "pair_preparation.rs"]
+mod pair_preparation;
+use pair_preparation::PendingPair;
+#[cfg(all(test, windows))]
+#[path = "platform_frame_tests.rs"]
+mod frame_milestone_tests;
+struct FirstFrameState {
+    pid: u32,
+    stream_window: Option<String>,
+    audio_enabled: Option<bool>,
+    volume: Option<u64>,
+}
+impl FirstFrameState {
+    fn observe(pid: u32, value: &Value, previous: Option<&Self>) -> Self {
+        let previous = previous.filter(|state| state.pid == pid);
+        Self {
+            pid,
+            stream_window: value["streamWindow"].as_str().filter(|value| value.parse::<usize>().is_ok()).map(str::to_owned)
+                .or_else(|| previous.and_then(|state| state.stream_window.clone())),
+            audio_enabled: value["audioEnabled"].as_bool().or_else(|| previous.and_then(|state| state.audio_enabled)),
+            volume: value["volume"].as_u64().filter(|value| *value <= 100).or_else(|| previous.and_then(|state| state.volume)),
+        }
+    }
+    fn restore(&self, value: &mut Value) {
+        value["firstFrame"] = json!(true);
+        value["firstFrameFromMilestone"] = json!(true);
+        if value["streamWindow"].is_null() { if let Some(window) = &self.stream_window { value["streamWindow"] = json!(window); } }
+        if value["audioEnabled"].is_null() { if let Some(enabled) = self.audio_enabled { value["audioEnabled"] = json!(enabled); } }
+        if value["volume"].is_null() { if let Some(volume) = self.volume { value["volume"] = json!(volume); } }
+    }
 }
 struct Recovery {
     args: Value,
@@ -43,6 +69,7 @@ struct Recovery {
     native_started: Option<Instant>,
     timeout_requested: bool,
     first_frame_wait: crate::recovery::FirstFrameWait,
+    first_frame: Option<FirstFrameState>,
     attempt: u32,
 }
 impl Recovery {
@@ -57,6 +84,7 @@ impl Recovery {
             native_started: None,
             timeout_requested: false,
             first_frame_wait: Default::default(),
+            first_frame: None,
             attempt: 0,
         }
     }
@@ -83,6 +111,9 @@ struct LaunchOutcome {
     child: OwnedChild,
     network: Value,
 }
+#[path="platform_diagnostics.rs"]
+mod diagnostic;
+
 #[derive(Clone)]
 struct LaunchContext {
     engine: PathBuf,
@@ -170,10 +201,10 @@ mod recovery_transport_tests {
             let state=json!({"phase":"connected","streaming":true,"firstFrame":false,"processId":if owned_status{id}else{id+1}});
             request.respond(tiny_http::Response::from_string(state.to_string())).unwrap();
             if !owned_status {
-                let request=server.recv_timeout(Duration::from_secs(3)).unwrap().unwrap();
-                assert_eq!(request.url(),"/v1/disconnect");
-                request.respond(tiny_http::Response::from_string("{}")).unwrap();
-            }
+                if let Some(request)=server.recv_timeout(Duration::from_millis(200)).unwrap(){
+                    let path=request.url().to_owned();request.respond(tiny_http::Response::from_string("{}")).unwrap();Some(path)
+                } else { None }
+            } else { None }
         });
         let mut platform=NativePlatform::new(PathBuf::from("unused-clock-fixture.exe"),"fixture-token".into(),root.clone()).unwrap();
         platform.port=port;
@@ -182,7 +213,8 @@ mod recovery_transport_tests {
         recovery.native_started=Some(Instant::now()-Duration::from_secs(16));
         *platform.recovery.lock().unwrap()=Some(recovery);
         let state=platform.state().unwrap();
-        worker.join().unwrap();
+        let command=worker.join().unwrap();
+        assert!(command.is_none(),"An unrelated API cannot receive a timeout disconnect");
         assert_eq!(platform.recovery.lock().unwrap().as_ref().unwrap().timeout_requested,!owned_status);
         if owned_status {assert_eq!(state["phase"],"connected");}
         stop_fixture(&platform);
@@ -213,7 +245,7 @@ mod recovery_transport_tests {
     // These older recovery fixtures use sleeping shells, not a native API.
     // Explicitly finish only those fixtures; real graceful teardown is tested
     // with an authenticated control server in native_cleanup's process tests.
-    fn stop_fixture(p: &NativePlatform) {
+    pub(super) fn stop_fixture(p: &NativePlatform) {
         if let Some(child) = p.child.lock().unwrap().as_mut() { let _=child.kill();let _=child.wait(); }
         for (child,_,_) in p.retiring.lock().unwrap().iter_mut() {let _=child.kill();let _=child.wait();}
         p.stop_owned().unwrap();
@@ -377,7 +409,9 @@ mod recovery_transport_tests {
         let port = server.server_addr().to_ip().unwrap().port();
         let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
-            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            // Setup hands off metadata after Windows creates the child. A setup
+            // failure drops the sender; recovery deadlines are asserted below.
+            let pid=pid_rx.recv().expect("fixture setup ended before PID handoff");
             server.recv().unwrap().respond(tiny_http::Response::from_string(
                 owned_json(r#"{"streaming":false,"firstFrame":false,"routeFatal":true,"phase":"error","error":"decoder failed"}"#,pid),
             )).unwrap();
@@ -424,7 +458,7 @@ mod recovery_transport_tests {
         let port = server.server_addr().to_ip().unwrap().port();
         let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
-            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let pid=pid_rx.recv().expect("fixture setup ended before PID handoff");
             server.recv().unwrap().respond(tiny_http::Response::from_string(
                 owned_json(r#"{"streaming":false,"firstFrame":false,"routeRetryEligible":true,"phase":"error","error":"network failed"}"#,pid),
             )).unwrap();
@@ -472,7 +506,7 @@ mod recovery_transport_tests {
         let port = server.server_addr().to_ip().unwrap().port();
         let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
-            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let pid=pid_rx.recv().expect("fixture setup ended before PID handoff");
             let request = server.recv().unwrap();
             request
                 .respond(tiny_http::Response::from_string(
@@ -542,7 +576,7 @@ mod recovery_transport_tests {
         let port = server.server_addr().to_ip().unwrap().port();
         let (pid_tx,pid_rx)=std::sync::mpsc::channel::<u32>();
         let worker = std::thread::spawn(move || {
-            let pid=pid_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            let pid=pid_rx.recv().expect("fixture setup ended before PID handoff");
             for request in server.incoming_requests().take(2) {
                 request.respond(tiny_http::Response::from_string(owned_json(r#"{"ok":true,"streaming":true,"firstFrame":true,"phase":"connected","retryEligible":true}"#,pid))).unwrap();
             }
@@ -645,6 +679,8 @@ pub struct NativePlatform {
     port: u16,
     pub sync: Mutex<crate::config_sync::ConfigSync>,
     device_operation: Mutex<()>,
+    probe_admission: Arc<crate::device_probe::Admission>,
+    local_uuid: Mutex<Option<String>>,
     network: Arc<crate::network::Network>,
     updates: Mutex<crate::updates::Updates>,
     update_snapshot: Arc<Mutex<Value>>,
@@ -743,6 +779,8 @@ impl NativePlatform {
                 .port(),
             sync: Mutex::new(crate::config_sync::ConfigSync::new(data)?),
             device_operation: Mutex::new(()),
+            probe_admission: Arc::new(crate::device_probe::Admission::default()),
+            local_uuid: Mutex::new(None),
             network: Arc::new(crate::network::Network::default()),
             updates: Mutex::new(updates),
             update_snapshot,
@@ -771,10 +809,23 @@ impl NativePlatform {
     fn command(&self) -> Command {
         self.launcher().command()
     }
-    fn probe(&self, device: &Device) -> Device {
+    fn local_identity(&self)->Option<String>{
+        if let Some(uuid)=self.local_uuid.lock().unwrap().clone(){return Some(uuid);}
+        let cancel=Arc::new(AtomicBool::new(false));
+        let text=crate::device_lookup::server_info("127.0.0.1",cancel,Duration::from_millis(700)).ok()?;
+        let device=parse_added_device("127.0.0.1",&text).ok()?;
+        *self.local_uuid.lock().unwrap()=Some(device.uuid.clone());Some(device.uuid)
+    }
+    fn probe(&self, device: &Device, profile: &rhremote_core::Profile) -> Option<DeviceObservation> {
+        self.probe_with_progress(device,profile,&mut |_|{})
+    }
+    fn probe_with_progress(&self,device:&Device,profile:&rhremote_core::Profile,publish:&mut dyn FnMut(DeviceObservation))->Option<DeviceObservation>{
+        let Some(lease)=self.probe_admission.probe() else {return None};
+        let cancel=&*lease.cancel;
         if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending() || !self.retired_launches.lock().unwrap().is_empty() {
-            return device.clone();
+            return None;
         }
+        if self.pairing.lock().unwrap().is_some() {return None;}
         // Probing another host must not replace a live or pending stream's tunnel.
         if self
             .recovery
@@ -783,7 +834,7 @@ impl NativePlatform {
             .as_ref()
             .is_some_and(|r| r.pending.is_some())
         {
-            return device.clone();
+            return None;
         }
         if self
             .child
@@ -792,11 +843,26 @@ impl NativePlatform {
             .as_mut()
             .is_some_and(|c| c.try_wait().ok().flatten().is_none())
         {
-            return device.clone();
+            return None;
         }
         let mut d = device.clone();
+        // A bounded, file-gated delay is only recognized by the isolated UI test
+        // bridge. It holds a real probe lease, so foreground cancellation still
+        // follows the production cleanup/admission path.
+        if self.ui_test.enabled{
+            let gate=self.native_data.parent().unwrap().join("device-probe-gate");
+            if gate.is_file(){
+                self.statistics.lock().unwrap().mark("device_probe_test_gate_entered");let deadline=Instant::now()+Duration::from_secs(30);
+                while gate.is_file()&&!cancel.load(Ordering::SeqCst)&&Instant::now()<deadline{std::thread::sleep(Duration::from_millis(15));}
+                self.statistics.lock().unwrap().mark("device_probe_test_gate_exited");
+            }
+        }
+        if cancel.load(Ordering::SeqCst){return None;}
         d.online = false;
-        d.paired = false;
+        let mut check=Some(DeviceCheck{phase:CheckPhase::RouteSelection,outcome:CheckOutcome::Unreachable,source:CheckSource::None,has_certificate:false,elapsed_us:0});
+        // Failed reachability or a generic CLI exit does not revoke a cached
+        // pairing. The CLI uses the same exit for unpaired and timed-out hosts.
+        let mut pairing_verified=false;
         if let Ok(response) =
             ureq::get("http://127.0.0.1:47989/serverinfo?uniqueid=0123456789ABCDEF")
                 .timeout(Duration::from_millis(700))
@@ -809,6 +875,7 @@ impl NativePlatform {
                         .find(|n| n.has_tag_name("uniqueid"))
                         .and_then(|n| n.text())
                     {
+                        *self.local_uuid.lock().unwrap()=Some(uuid.into());
                         d.is_self = uuid.eq_ignore_ascii_case(&d.uuid);
                     }
                 }
@@ -816,22 +883,29 @@ impl NativePlatform {
         }
         if d.is_self {
             d.online = true;
-            return d;
+            return Some(DeviceObservation{device:d,pairing_verified:true,check:None});
         }
+        if cancel.load(Ordering::SeqCst) {return None;}
+        let mut phase_started=Instant::now();
         let mut native_address = d.address.clone();
-        if let Ok((address, _)) = self.network.resolve(&d, &rhremote_core::Profile::default()) {
+        if let Ok((address, _)) = self.network.resolve_excluding(&d, profile, &[], cancel) {
             native_address = address.clone();
             if address != "127.77.0.2" {
                 d.address = address;
             }
             d.online = true;
-            for a in self.network.discovered(&d) {
+            for a in self.network.discovered_cancelable(&d,cancel) {
                 if d.addresses.len() < 7 && !d.addresses.contains(&a) && a != d.address {
                     d.addresses.push(a);
                 }
             }
         }
+        if cancel.load(Ordering::SeqCst) {self.network.release_transport();return None;}
         if d.online {
+            phase_started=Instant::now();
+            check=Some(DeviceCheck{phase:CheckPhase::NativeProcess,outcome:CheckOutcome::Unavailable,source:CheckSource::None,has_certificate:false,elapsed_us:0});
+            let binding=match crate::probe_report::Binding::new(&self.native_data,&d.uuid){Ok(binding)=>binding,Err(_)=>return Some(DeviceObservation{device:d,pairing_verified:false,check})};
+            let mut reported=false;let mut report_invalid=false;
             let metadata = self.native_data.join(format!(
                 "network-{}.json",
                 d.uuid
@@ -847,6 +921,8 @@ impl NativePlatform {
                 .env("RHREMOTE_CONNECT_ADDRESS", &native_address)
                 .env("RHREMOTE_NETWORK_METADATA", &metadata)
                 .env("RHREMOTE_PROBE_OPERATION", "1")
+                .env("RHREMOTE_PROBE_ID",&binding.id)
+                .env("RHREMOTE_PROBE_REPORT",&binding.path)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn();
@@ -856,14 +932,25 @@ impl NativePlatform {
             if let Ok(mut child) = child {
                 let end = Instant::now() + Duration::from_secs(5);
                 loop {
+                    if cancel.load(Ordering::SeqCst) {
+                        let _=child.kill();let _=child.wait();self.network.release_transport();return None;
+                    }
+                    if !reported {
+                        match crate::probe_report::observe(&binding,&mut d,&mut pairing_verified,&mut check){
+                            Ok(true)=>{publish(DeviceObservation{device:d.clone(),pairing_verified,check:check.clone()});reported=true;},
+                            Err(error) if !report_invalid=>{self.probe_diagnostic("report",&error);report_invalid=true;},
+                            _=>{},
+                        }
+                    }
                     match child.try_wait() {
                         Ok(Some(status)) => {
+                            if let Err(error)=crate::probe_report::observe(&binding,&mut d,&mut pairing_verified,&mut check){if !report_invalid{self.probe_diagnostic("report",&error);}}
                             if status.success() {
                                 match child.wait_with_output() {
                                     Ok(output) => {
-                                        // A successful authenticated app-list request establishes pairing.
-                                        // App names and an initially empty list do not define trust.
-                                        d.paired = output.status.success();
+                                        // Older engines publish no report. The current fast path
+                                        // reports serverinfo before optional metadata, not an app-list.
+                                        if !reported&&!binding.path.exists(){d.paired=output.status.success();pairing_verified=d.paired;check=None;}
                                         if let Ok(bytes) = fs::read(&metadata) {
                                             if let Ok(info) =
                                                 serde_json::from_slice::<Value>(&bytes)
@@ -888,6 +975,7 @@ impl NativePlatform {
                         }
                         _ => {
                             self.probe_diagnostic("timeout", "native list exceeded 5 seconds");
+                            crate::probe_report::timed_out(&mut check,phase_started.elapsed().as_micros() as u64);
                             let _ = child.kill();
                             let _ = child.wait();
                             break;
@@ -896,7 +984,29 @@ impl NativePlatform {
                 }
             }
         }
-        d
+        if cancel.load(Ordering::SeqCst) {self.network.release_transport();return None;}
+        if let Some(check)=&mut check{if check.phase!=CheckPhase::ServerInfo {check.elapsed_us=phase_started.elapsed().as_micros() as u64;}}
+        Some(DeviceObservation{device:d,pairing_verified,check})
+    }
+    fn refresh_device_rows(&self,args:&Value,publish:&mut dyn FnMut(DeviceObservation))->Result<Value,String>{
+        let (before,epoch)={let devices=self.devices.lock().unwrap();(devices.clone(),self.device_epoch.load(Ordering::Acquire))};
+        let target=args.get("uuid").and_then(Value::as_str);
+        if target.is_some_and(|uuid|!before.iter().any(|device|device.uuid==uuid)){return Err("设备记录尚未就绪，请刷新设备列表".into());}
+        let mut observed=Vec::new();let mut verified=Vec::new();let mut checks=BTreeMap::new();
+        for device in before.iter().filter(|device|target.is_none_or(|uuid|device.uuid==uuid)){
+            let profile=args["profiles"].get(&device.uuid).cloned().map(serde_json::from_value::<rhremote_core::Profile>).transpose().map_err(|e|e.to_string())?.unwrap_or_default();
+            let Some(observation)=self.probe_with_progress(device,&profile,&mut |early|{
+                let accepted={let latest=self.devices.lock().unwrap();epoch==self.device_epoch.load(Ordering::Acquire)&&latest.iter().find(|current|current.uuid==device.uuid)==Some(device)};
+                if accepted{publish(early);}
+            })else{continue;};
+            let accepted={let mut latest=self.devices.lock().unwrap();
+                if epoch!=self.device_epoch.load(Ordering::Acquire)||latest.iter().find(|current|current.uuid==device.uuid)!=Some(device){false}else{
+                    apply_device_refresh(&mut latest,&before,vec![observation.device.clone()],epoch,epoch);true
+                }
+            };
+            if accepted{if let Some(check)=&observation.check{checks.insert(observation.device.uuid.clone(),check.clone());}observed.push(observation.device.uuid.clone());if observation.pairing_verified{verified.push(observation.device.uuid.clone());}publish(observation);}
+        }
+        Ok(json!({"devices":*self.devices.lock().unwrap(),"observedUuids":observed,"verifiedUuids":verified,"checks":checks}))
     }
     fn probe_diagnostic(&self, stage: &str, error: &str) {
         use std::io::Write;
@@ -915,89 +1025,14 @@ impl NativePlatform {
         }
     }
     pub fn pairing_result(&self) -> Option<(u64, Device, String, bool)> {
-        let mut pending = self.pairing.lock().unwrap();
-        if pending.is_none() {
-            return None;
-        }
-        let mut child = self.child.lock().unwrap();
-        let status = child.as_mut()?.try_wait().ok()??;
-        let operation = pending.take()?;
-        let (attempt, device) = (operation.attempt, operation.device);
-        child.take();
-        let outcome: Value = fs::read(&self.session_status)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or(Value::Null);
-        // Retire this attempt's status while its admission locks are still held.
-        // A slow probe must not overwrite a later pair attempt after cancellation.
-        let _ = fs::write(&self.session_status,b"{\"streaming\":false,\"phase\":\"idle\",\"error\":\"\"}");
-        drop(child);
-        drop(pending);
-        let paired=outcome["phase"]=="paired"&&status.success();
-        self.finish_pairing(operation.cancellation, !paired);
-        let mut device = self.probe(&device);
-        if paired {
-            device.paired = true;
-        }
-        let error = if paired {
-            String::new()
-        } else if let Some(message) = outcome["error"].as_str().filter(|s| !s.is_empty()) {
-            message.chars().take(512).collect()
-        } else if status.success() {
-            "主机尚未确认配对，请在目标电脑的 Sunshine 提交当前配对码后重试".into()
-        } else {
-            format!(
-                "配对进程退出（{}），请检查目标主机是否在线",
-                status.code().unwrap_or(-1)
-            )
-        };
-        Some((attempt, device, error, self.cleanup.pending()))
-    }
-    fn network_host_diagnostic(&self, address: &str, uuid: &str) -> Result<Value, String> {
-        if self
-            .child
-            .lock()
-            .unwrap()
-            .as_mut()
-            .is_some_and(|c| c.try_wait().ok().flatten().is_none())
-        {
-            return Err("请先断开串流再运行主机网络诊断".into());
-        }
-        let request = self.native_data.join("network-request.json");
-        let response = self.native_data.join("network-response.json");
-        fs::write(&request, br#"{"path":"/v1/network/diagnose"}"#).map_err(|e| e.to_string())?;
-        fs::write(&response, b"{}").map_err(|e| e.to_string())?;
-        let mut child = self
-            .command()
-            .args(["list", address])
-            .env("RHREMOTE_TARGET_UUID", uuid)
-            .env("RHREMOTE_CONNECT_ADDRESS", address)
-            .env("RHREMOTE_HOST_REQUEST", request)
-            .env("RHREMOTE_HOST_RESPONSE", &response)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs(12);
-        loop {
-            if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-                break;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("主机网络诊断超时；检查配对、47995 与主机服务版本".into());
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        let reply: Value = serde_json::from_slice(&fs::read(response).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        if reply["ok"] == true {
-            Ok(reply["result"].clone())
-        } else {
-            Err(reply["error"]
-                .as_str()
-                .unwrap_or("主机网络诊断不可用；检查服务版本与配对证书")
-                .into())
-        }
+        let mut pending=self.pairing.lock().unwrap();
+        let result=pending.as_mut()?.poll(&self.session_status)?;
+        let operation=pending.take()?;
+        let mut device=operation.device.clone();
+        if result.is_ok() {device.paired=true;}
+        // No second authenticated probe: the completed PIN exchange is the evidence.
+        let _=fs::write(&self.session_status,b"{\"streaming\":false,\"phase\":\"idle\",\"error\":\"\"}");
+        Some((operation.attempt,device,result.err().unwrap_or_default(),self.cleanup.pending()))
     }
     fn reap_launches(&self) -> bool {
         let mut retired = self.retired_launches.lock().unwrap();
@@ -1046,15 +1081,14 @@ impl NativePlatform {
         for report in self.cleanup.reap() {
             let _ = self.statistics.lock().unwrap().event("native_cleanup_end", json!({"kind":report.kind,"pid":report.pid,"forced":report.forced,"confirmed":report.confirmed,"error":report.error,"control":report.control}));
         }
-        let http_state: Option<Value> = self
-            .state_agent
-            .get(&format!("http://127.0.0.1:{}/v1/state", self.port))
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .timeout(Duration::from_millis(500))
-            .call()
-            .ok()
-            .and_then(|r| r.into_json().ok());
+        let injected = self.ui_test.enabled && self.ui_test.take_native_state_fault(self.child.lock().unwrap().as_ref().map(|child| child.id()));
+        let (http_state, control_trace) = if injected {
+            (None, crate::native_control::synthetic_unavailable())
+        } else {
+            crate::native_control::read_state(&self.state_agent, self.port, &self.token, Duration::from_millis(500))
+        };
         let http_unavailable = http_state.is_none();
+        let state_source = if http_state.is_some() { "http" } else { "file_or_empty" };
         let mut value = http_state
             .or_else(|| {
                 fs::read(&self.session_status)
@@ -1083,6 +1117,7 @@ impl NativePlatform {
                         r.native_started = Some(Instant::now());
                         r.timeout_requested = false;
                         r.first_frame_wait = Default::default();
+                        r.first_frame = None;
                         value = json!({"streaming":false,"firstFrame":false,"phase":if r.policy.armed(){"reconnecting"}else{"connecting"},"error":""});
                     }
                     Err(error) => {
@@ -1099,6 +1134,16 @@ impl NativePlatform {
         let mut alive = slot
             .as_mut()
             .is_some_and(|c| c.try_wait().ok().flatten().is_none());
+        let current_pid = slot.as_ref().map(|child| child.id());
+        let owned_state = alive && value["processId"].as_u64() == current_pid.map(u64::from);
+        let owned_http = owned_state && !http_unavailable;
+        let control_observation = json!({"request":control_trace,"port":self.port,"stateSource":state_source,
+            "expectedPid":slot.as_ref().map(|child|child.id()),"childAlive":alive,
+            "reportedPid":value["processId"].as_u64(),"firstFrame":value["firstFrame"].as_bool(),
+            "streaming":value["streaming"].as_bool()});
+        if alive {
+            let _ = self.statistics.lock().unwrap().event("native_state_read", control_observation.clone());
+        }
         // HTTP is read before the admission lock, and the fallback file can still
         // describe the previous process. Neither may end or arm a fresh child.
         if alive && value["processId"].as_u64()!=slot.as_ref().map(|child|u64::from(child.id())) {
@@ -1133,6 +1178,23 @@ impl NativePlatform {
                 true
             });
         if let Some(r) = recovery.as_mut() {
+            let connected = owned_state && value["phase"] == "connected" && value["streaming"] == true
+                && value["routeFatal"] != true && value["transportReleased"] != true
+                && value["error"].as_str().is_none_or(str::is_empty) && !r.timeout_requested;
+            // The private status file may predate the first render. Preserve
+            // only an already observed milestone for this same live child;
+            // current errors, resets and process replacements remain decisive.
+            if owned_state && (!connected || (owned_http && value["firstFrame"] != true)) {
+                r.first_frame = None;
+            }
+            if connected && value["firstFrame"] == true {
+                r.first_frame = Some(FirstFrameState::observe(current_pid.unwrap(), &value, r.first_frame.as_ref()));
+            } else if connected && http_unavailable {
+                if let Some(first) = r.first_frame.as_ref().filter(|first| Some(first.pid) == current_pid) {
+                    first.restore(&mut value);
+                    let _ = self.statistics.lock().unwrap().event("native_first_frame_restored", json!({"processId":first.pid}));
+                }
+            }
             let rendered = alive && value["streaming"] == true && value["firstFrame"] == true;
             if value["routeFatal"] == true {
                 terminal = true;
@@ -1157,6 +1219,7 @@ impl NativePlatform {
                 && r.pending.is_none()
                 && alive
                 && !rendered
+                && !r.first_frame.as_ref().is_some_and(|first| Some(first.pid) == current_pid)
                 && !released
                 && r.native_started.is_some()
                 && matches!(
@@ -1176,12 +1239,14 @@ impl NativePlatform {
                         json!({"attempt":r.attempt,"network":r.current,"nativeElapsedMs":elapsed,"protocolReadyObserved":protocol_ready}),
                     );
                     // Bounded native request; cancellation never waits on WAN I/O.
-                    let _ = self
-                        .state_agent
-                        .post(&format!("http://127.0.0.1:{}/v1/disconnect", self.port))
-                        .set("Authorization", &format!("Bearer {}", self.token))
-                        .timeout(Duration::from_millis(500))
-                        .send_json(json!({}));
+                    if owned_http {
+                        let _ = self
+                            .state_agent
+                            .post(&format!("http://127.0.0.1:{}/v1/disconnect", self.port))
+                            .set("Authorization", &format!("Bearer {}", self.token))
+                            .timeout(Duration::from_millis(500))
+                            .send_json(json!({}));
+                    }
                 }
                 if decision == crate::recovery::FirstFrameDecision::ForceExit {
                     if let Some(mut child) = slot.take() {
@@ -1328,6 +1393,10 @@ impl NativePlatform {
         drop(stop_submission);
         drop(slot);
         drop(recovery);
+        if let Some(pair)=self.pairing.lock().unwrap().as_ref() {
+            value["pairAttemptId"]=json!(pair.attempt);
+            value["pairingPhase"]=json!(pair.phase());
+        }
         value["nativeCleanupPending"] = json!(cleanup_pending);
         if self.stop_requested.load(Ordering::SeqCst) && cleanup_pending {
             value["phase"] = json!("cancelling");
@@ -1340,6 +1409,7 @@ impl NativePlatform {
             value["routeFatal"] = json!(true);
         }
         value["tracing"] = self.statistics.lock().unwrap().state();
+        value["nativeControl"] = control_observation;
         value["network"] = self.network.last.lock().unwrap().clone();
         if value["streaming"] == true && value["firstFrame"] == true {
             value["network"]["mediaUdp"] = json!("streaming");
@@ -1351,15 +1421,15 @@ impl NativePlatform {
         if self.stop_requested.swap(true, Ordering::SeqCst) && (self.cleanup.pending() || self.cleanup.failure().is_none()) {
             return Ok(json!({"cancelled":true,"cleanupPending":true}));
         }
+        self.probe_admission.cancel_probe();
+        if let Some(pair)=self.pairing.lock().unwrap().as_ref(){pair.cancel();}
+        let admission=self.probe_admission.clone();
         let (recovery,retired,pairing,child,retiring,cleanup,context,network)=(self.recovery.clone(),self.retired_launches.clone(),self.pairing.clone(),self.child.clone(),self.retiring.clone(),self.cleanup.clone(),self.cleanup_context(),self.network.clone());
         if !self.cleanup.coordinate(self.network.clone(),move||{
             if let Some(mut r)=recovery.lock().unwrap().take(){r.cancel.store(true,Ordering::SeqCst);if let Some(job)=r.pending.take(){retired.lock().unwrap().push(job);}}
-            let pairing=pairing.lock().unwrap().take();
-            if let Some(mut process)=child.lock().unwrap().take(){
-                if pairing.is_some(){let _=process.kill();let _=process.wait();}
-                else{cleanup.enqueue(process,context.clone(),network.clone());}
-            }
-            if let Some(pairing)=pairing {if let Some(job)=pairing.cancellation.finish(true){cleanup.track_pairing(job,network.clone());}}
+            let _foreground=admission.foreground();
+            if let Some(pair)=pairing.lock().unwrap().take(){pair.retire(&cleanup,network.clone());}
+            if let Some(process)=child.lock().unwrap().take(){cleanup.enqueue(process,context.clone(),network.clone());}
             for (process,_,_) in retiring.lock().unwrap().drain(..){cleanup.enqueue(process,context.clone(),network.clone());}
         }) {
             self.stop_requested.store(false,Ordering::SeqCst);
@@ -1367,11 +1437,8 @@ impl NativePlatform {
         }
         Ok(json!({"cancelled":true,"cleanupPending":true}))
     }
-    fn finish_pairing(&self, cancellation: crate::pairing::Cancellation, cancelled: bool) {
-        if let Some(job)=cancellation.finish(cancelled){self.cleanup.track_pairing(job,self.network.clone());}
-    }
     fn cleanup_context(&self) -> crate::native_cleanup::Context {
-        crate::native_cleanup::Context {port:self.port,token:self.token.clone(),status:self.session_status.clone(),limit:Duration::from_secs(15)}
+        crate::native_cleanup::Context {port:self.port,token:self.token.clone(),status:self.session_status.clone(),limit:Duration::from_secs(20)}
     }
     fn control(&self, path: &str, args: &Value) -> Result<Value, String> {
         let response = ureq::post(&format!("http://127.0.0.1:{}/v1/{path}", self.port))
@@ -1396,8 +1463,123 @@ impl NativePlatform {
             Err(_) => Err("native control transport unavailable".into()),
         }
     }
+    fn audio_control(&self, args: &Value) -> Result<Value, String> {
+        // Bind a reply to the admitted child, including its launch instant:
+        // a late acknowledgement must not update a replacement's snapshot.
+        let owner = {
+            let recovery = self.recovery.lock().unwrap();
+            let mut child = self.child.lock().unwrap();
+            match (recovery.as_ref(), child.as_mut()) {
+                (Some(recovery), Some(child)) => {
+                    if child.try_wait().ok().flatten().is_none() {
+                        recovery.native_started.map(|started| (child.id(), started))
+                    } else { None }
+                }
+                _ => None,
+            }
+        };
+        let value = self.control("audio", args)?;
+        if value["ok"] == true {
+            let mut recovery = self.recovery.lock().unwrap();
+            let mut child = self.child.lock().unwrap();
+            if let (Some((pid, started)), Some(recovery), Some(child)) = (owner, recovery.as_mut(), child.as_mut()) {
+                if recovery.native_started == Some(started) && child.id() == pid && child.try_wait().ok().flatten().is_none() {
+                    if let Some(first) = recovery.first_frame.as_mut().filter(|first| first.pid == pid) {
+                        if let Some(enabled) = value["enabled"].as_bool() {
+                            first.audio_enabled = Some(enabled);
+                            recovery.args["profile"]["audioEnabled"] = json!(enabled);
+                        }
+                        if let Some(volume) = value["volume"].as_u64().filter(|volume| *volume <= 100) {
+                            first.volume = Some(volume);
+                            recovery.args["profile"]["volume"] = json!(volume);
+                        }
+                        let _ = self.statistics.lock().unwrap().event("native_audio_ack_state", json!({"processId":pid}));
+                    }
+                }
+            }
+        }
+        Ok(value)
+    }
+    #[cfg(windows)]
+    fn test_native_window(&self, args: &Value) -> Result<Value, String> {
+        use windows::Win32::{
+            Foundation::{HWND, POINT, RECT},
+            Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONULL},
+            UI::WindowsAndMessaging::*,
+        };
+        if !self.ui_test.enabled { return Err("界面测试接口仅在隔离测试预览中启用".into()); }
+        let pid = args["processId"].as_u64().and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).ok_or("processId required")?;
+        let command = args["command"].as_str().filter(|command| ["inspect", "minimize", "restore", "restore-placement", "resize"].contains(command)).ok_or("command must be inspect / minimize / restore / restore-placement / resize")?;
+        let resize=if command=="resize" {
+            let width=args["width"].as_i64().and_then(|v|i32::try_from(v).ok()).filter(|v|(256..=3840).contains(v)).ok_or("width must be 256–3840 physical pixels")?;
+            let height=args["height"].as_i64().and_then(|v|i32::try_from(v).ok()).filter(|v|(160..=2160).contains(v)).ok_or("height must be 160–2160 physical pixels")?;
+            Some((width,height))
+        }else{None};
+        // Hold the admission and child locks across the nonblocking window command.
+        // Callers supply a PID, never an arbitrary HWND or another process's window.
+        let recovery = self.recovery.lock().unwrap();
+        let mut child = self.child.lock().unwrap();
+        if !child.as_mut().is_some_and(|child| child.id() == pid && child.try_wait().ok().flatten().is_none()) {
+            return Err("窗口测试仅支持本次存活子进程".into());
+        }
+        let window = recovery.as_ref().and_then(|recovery| recovery.first_frame.as_ref()).filter(|first| first.pid == pid)
+            .and_then(|first| first.stream_window.as_ref()).and_then(|window| window.parse::<usize>().ok()).filter(|window| *window > 0)
+            .ok_or("窗口测试需要本次已确认首帧及窗口" )?;
+        let hwnd = HWND(window as *mut _);
+        unsafe {
+            let mut actual_pid = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut actual_pid));
+            if actual_pid != pid { return Err("窗口句柄不属于本次子进程".into()); }
+            let resize_queued=if let Some((width,height))=resize {
+                let mut rect=RECT::default();GetWindowRect(hwnd,&mut rect).map_err(|_|"无法读取本次窗口区域")?;
+                let mut monitor=MONITORINFO{cbSize:std::mem::size_of::<MONITORINFO>()as u32,..Default::default()};
+                if !GetMonitorInfoW(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONULL),&mut monitor).as_bool()
+                    ||rect.left<monitor.rcMonitor.left||rect.top<monitor.rcMonitor.top
+                    ||rect.left+width>monitor.rcMonitor.right||rect.top+height>monitor.rcMonitor.bottom {
+                    return Err("测试尺寸必须留在本次窗口所在显示器内".into());
+                }
+                SetWindowPos(hwnd,None,0,0,width,height,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_ASYNCWINDOWPOS).is_ok()
+            }else{false};
+            let queued = match command {
+                // The isolated preview must not activate the next top-level
+                // window while minimizing a background stream.
+                "minimize" => ShowWindowAsync(hwnd, SW_SHOWMINNOACTIVE).as_bool(),
+                "restore" => ShowWindowAsync(hwnd, SW_SHOWNOACTIVATE).as_bool(),
+                "restore-placement" => {
+                    let mut placement=WINDOWPLACEMENT{length:std::mem::size_of::<WINDOWPLACEMENT>()as u32,..Default::default()};
+                    GetWindowPlacement(hwnd,&mut placement).map_err(|_|"无法读取本次窗口位置")?;
+                    placement.showCmd=SW_SHOWNOACTIVATE.0 as u32;
+                    placement.flags|=WPF_ASYNCWINDOWPLACEMENT;
+                    SetWindowPlacement(hwnd,&placement).is_ok()
+                }
+                "resize" => resize_queued,
+                _ => false,
+            };
+            if command != "inspect" && !queued { return Err("本次窗口命令未被系统接受".into()); }
+            let (mut rect, mut client, mut origin) = (RECT::default(), RECT::default(), POINT::default());
+            GetWindowRect(hwnd, &mut rect).map_err(|_| "无法读取本次窗口区域")?;
+            let client_available = GetClientRect(hwnd, &mut client).is_ok() && ClientToScreen(hwnd, &mut origin).as_bool();
+            let mut monitor = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let monitor_available = GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL), &mut monitor).as_bool();
+            let thread_state=crate::native_window::read_thread_state(hwnd,pid)?;
+            Ok(json!({"processId":pid,"streamWindow":window.to_string(),"command":command,"queued":queued,
+                "minimized":IsIconic(hwnd).as_bool(),"visible":IsWindowVisible(hwnd).as_bool(),"foreground":GetForegroundWindow()==hwnd,"threadState":thread_state,
+                "windowRect":{"x":rect.left,"y":rect.top,"width":rect.right-rect.left,"height":rect.bottom-rect.top},
+                "clientGeometryAvailable":client_available,"clientRect":{"x":origin.x,"y":origin.y,"width":client.right-client.left,"height":client.bottom-client.top},
+                "monitorAvailable":monitor_available,"monitorBounds":{"x":monitor.rcMonitor.left,"y":monitor.rcMonitor.top,"width":monitor.rcMonitor.right-monitor.rcMonitor.left,"height":monitor.rcMonitor.bottom-monitor.rcMonitor.top}}))
+        }
+    }
 }
 impl Platform for NativePlatform {
+    fn prepare_diagnostic(&self,device:&Device,profile:&rhremote_core::Profile)->Option<Result<Box<dyn rhremote_core::DiagnosticTask>,String>>{
+        Some(diagnostic::Task::new(self,device,profile).map(|task|Box::new(task) as Box<dyn rhremote_core::DiagnosticTask>))
+    }
+    fn prepare_windows(&self,device:&Device,profile:&rhremote_core::Profile)->Option<Result<Box<dyn rhremote_core::DiagnosticTask>,String>>{
+        Some(diagnostic::Task::windows(self,device,profile).map(|task|Box::new(task) as Box<dyn rhremote_core::DiagnosticTask>))
+    }
+    fn observe_devices(&self,args:&Value,publish:&mut dyn FnMut(DeviceObservation))->Result<Value,String>{
+        let _guard=self.device_operation.lock().unwrap();self.refresh_device_rows(args,publish)
+    }
     fn begin_update(&self,operation:u64,action:&str,cancellable:bool)->Result<(),String>{self.update_cancel.begin(operation,action,cancellable)}
     fn cancel_update(&self,operation:u64)->Result<(),String>{self.update_cancel.cancel(operation)}
     fn sync_applied(&self,shared:&rhremote_core::sync_model::SharedConfig,preferences:&std::path::Path)->Result<Option<Value>,String>{self.sync.lock().unwrap().applied(shared,preferences).map(Some)}
@@ -1416,14 +1598,30 @@ impl Platform for NativePlatform {
         self.statistics.lock().unwrap().connection_requested(timing);
     }
     fn execute(&self, action: &str, args: &Value) -> Result<Value, String> {
+        // Cancel and retire any idle list probe before acquiring session/device
+        // locks. The lease remains held until a pending session owns the tunnel.
+        let _foreground=(matches!(action,"device.connect") || action=="devices.restore"&&args["probe"]!=true).then(||self.probe_admission.foreground());
         let _device_guard = if action.starts_with("devices.")
-            || action == "device.network.diagnose"
         {
             Some(self.device_operation.lock().unwrap())
         } else {
             None
         };
         match action {
+            #[cfg(windows)]
+            "view.ui.native-window" => self.test_native_window(args),
+            "view.ui.native-state-fault" => {
+                if !self.ui_test.enabled { return Err("界面测试接口仅在隔离测试预览中启用".into()); }
+                let pid = args["processId"].as_u64().and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).ok_or("processId required")?;
+                let polls = args["polls"].as_u64().and_then(|polls| u8::try_from(polls).ok()).filter(|polls| (1..=8).contains(polls)).ok_or("polls must be 1–8")?;
+                let recovery = self.recovery.lock().unwrap();
+                let mut child = self.child.lock().unwrap();
+                if !child.as_mut().is_some_and(|child| child.id() == pid && child.try_wait().ok().flatten().is_none())
+                    || !recovery.as_ref().is_some_and(|recovery| recovery.first_frame.as_ref().is_some_and(|first| first.pid == pid)) {
+                    return Err("测试故障仅支持已显示首帧的本次进程".into());
+                }
+                self.ui_test.fail_native_state(pid, polls)
+            }
             id if id.starts_with("view.ui.")=>self.ui_test.execute(id,args),
             "engine.close" => {
                 self.closing.store(true,Ordering::SeqCst);
@@ -1432,20 +1630,7 @@ impl Platform for NativePlatform {
                 result
             },
             "network.state" => Ok(self.network.last.lock().unwrap().clone()),
-            "device.network.diagnose" => {
-                if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending(){return Err("上一连接正在结束，请稍后重试".into());}
-                if self.recovery.lock().unwrap().as_ref().is_some_and(|r|r.pending.is_some()) || self.child.lock().unwrap().as_mut().is_some_and(|c|c.try_wait().ok().flatten().is_none()){
-                    return Err("请先断开当前连接，再运行网络诊断".into());
-                }
-                let d:Device=serde_json::from_value(args["device"].clone()).map_err(|e|e.to_string())?;
-                let p:rhremote_core::Profile=serde_json::from_value(args["profile"].clone()).map_err(|e|e.to_string())?;
-                let mut result=self.network.diagnose(&d,&p);
-                if let Some(address)=result["selectedAddress"].as_str().map(str::to_owned){
-                    match self.network_host_diagnostic(&address,&d.uuid){Ok(host)=>result["host"]=host,Err(error)=>result["hostError"]=json!(error)}
-                }
-                *self.network.last.lock().unwrap()=result.clone();
-                Ok(result)
-            }
+            "device.network.diagnose" => Err("诊断需通过控制器任务接口启动".into()),
             "statistics.state" => Ok(self.statistics.lock().unwrap().state()),
             "statistics.configure" => {
                 if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending(){return Err("disconnect before changing test mode".into());}
@@ -1476,36 +1661,41 @@ impl Platform for NativePlatform {
                         _ => return Err("choose local or remote resolution".into()),
                     }
                 };
-                self.sync.lock().unwrap().run(local, resolution)
+                let review=match args.get("reviewId"){None=>None,Some(value)=>Some(value.as_str().ok_or("reviewId must be a string")?)};
+                self.sync.lock().unwrap().run_reviewed(local, resolution, review)
             }
             "devices.restore" => {
                 let rows: Vec<Device> =
                     serde_json::from_value(args["devices"].clone()).map_err(|e| e.to_string())?;
-                let mut old = self.devices.lock().unwrap().clone();
-                for mut d in rows {
-                    d.online = false;
-                    d.paired = false;
-                    d.is_self = false;
+                let mut old = if args["replace"]==true {Vec::new()}else{self.devices.lock().unwrap().clone()};
+                for d in rows {
                     old.retain(|o| !o.uuid.eq_ignore_ascii_case(&d.uuid));
                     old.push(d);
                 }
-                let next: Vec<_> = old.iter().map(|d| self.probe(d)).collect();
+                // Save/sync supplies the controller's existing observations; it
+                // must not perform another full network scan on the action queue.
+                // Bootstrap still explicitly requests its old authenticated scan.
+                let next: Vec<_> = if args["probe"]==true {old.iter().map(|d| self.probe(d,&rhremote_core::Profile::default()).map(|observation|observation.device).unwrap_or_else(||d.clone())).collect()} else {
+                    // Shared configuration deliberately has no isSelf fact. Reapply
+                    // this machine's observed identity before returning it to Core.
+                    if args["localOnly"]!=true{if let Some(uuid)=self.local_identity(){for row in &mut old{row.is_self=uuid.eq_ignore_ascii_case(&row.uuid);}}}
+                    old
+                };
                 *self.devices.lock().unwrap() = next.clone();
+                self.device_epoch.fetch_add(1,Ordering::Release);
                 Ok(json!({"devices":next}))
             }
             "devices.refresh" => {
-                let (old,epoch)={let devices=self.devices.lock().unwrap();(devices.clone(),self.device_epoch.load(Ordering::Acquire))};
-                let probed: Vec<_> = old.iter().map(|d| self.probe(d)).collect();
-                let mut latest=self.devices.lock().unwrap();
-                apply_device_refresh(&mut latest,&old,probed,epoch,self.device_epoch.load(Ordering::Acquire));
-                Ok(json!({"devices":*latest}))
+                self.refresh_device_rows(args,&mut |_|{})
             }
             "device.connect" => {
+                if self.pairing.lock().unwrap().is_some() {return Err("配对尚未结束".into());}
                 if let Some(failure)=args["testInitialFailure"].as_str(){
                     if std::env::var("RHREMOTE_TEST_MODE").as_deref()!=Ok("1")||!matches!(failure,"network"|"identity"|"decoder"){return Err("首帧故障注入仅允许在 Windows 测试模式使用".into());}
                 }
                 let mut recovery = self.recovery.lock().unwrap();
                 let mut slot = self.child.lock().unwrap();
+                if self.pairing.lock().unwrap().is_some() {return Err("配对尚未结束".into());}
                 if let Some(child) = slot.as_mut() {
                     if child.try_wait().map_err(|e| e.to_string())?.is_none() {
                         return Err("native session already running".into());
@@ -1520,59 +1710,29 @@ impl Platform for NativePlatform {
                 Ok(json!({"accepted":true}))
             }
             "device.pair" => {
-                if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending(){return Err("上一连接正在结束，请稍后重试".into());}
-                let pending_regression = crate::pairing::pending_regression(
-                    args,
-                    std::env::var("RHREMOTE_TEST_MODE").as_deref() == Ok("1"),
-                )?;
-                let mut pending = self.pairing.lock().unwrap();
-                let mut slot = self.child.lock().unwrap();
-                if slot
-                    .as_mut()
-                    .is_some_and(|c| c.try_wait().ok().flatten().is_none())
-                {
-                    return Err("native operation is already running".into());
-                }
-                let attempt = args["attemptId"].as_u64().ok_or("attempt ID required")?;
-                let device: Device =
-                    serde_json::from_value(args["device"].clone()).map_err(|e| e.to_string())?;
+                // Match state/connect lock order. Shutdown holds stop_submission
+                // while signalling a pair; never wait for recovery with pair held.
+                let recovery=self.recovery.lock().unwrap();
+                let mut slot=self.child.lock().unwrap();
+                let mut pending=self.pairing.lock().unwrap();
+                if self.closing.load(Ordering::SeqCst) || self.stop_requested.load(Ordering::SeqCst) || self.cleanup.pending() {return Err("上一连接正在结束，请稍后重试".into());}
+                if pending.is_some() || recovery.is_some() || slot.as_mut().is_some_and(|c|c.try_wait().ok().flatten().is_none()) {return Err("native operation is already running".into());}
+                let regression=crate::pairing::pending_regression(args,std::env::var("RHREMOTE_TEST_MODE").as_deref()==Ok("1"))?;
+                let attempt=args["attemptId"].as_u64().ok_or("attempt ID required")?;
+                let device:Device=serde_json::from_value(args["device"].clone()).map_err(|e|e.to_string())?;
                 let profile:rhremote_core::Profile=serde_json::from_value(args["profile"].clone()).map_err(|e|e.to_string())?;
-                let (pair_address,_)=self.network.resolve(&device,&profile)?;
-                let cancellation=crate::pairing::Cancellation::new(&self.native_data,&pair_address,self.network.native_environment().0)?;
-                fs::write(
-                    &self.session_status,
-                    b"{\"streaming\":false,\"phase\":\"pairing\",\"error\":\"\"}",
-                )
-                .map_err(|e| e.to_string())?;
-                *slot = Some(
-                    self.command()
-                        .env("RHREMOTE_PAIR_OPERATION", "1")
-                        .env("RHREMOTE_TARGET_UUID", &device.uuid)
-                        .env("RHREMOTE_CONNECT_ADDRESS", &pair_address)
-                        .env("RHREMOTE_TEST_PAIR_PENDING", if pending_regression { "1" } else { "0" })
-                        .env("RHREMOTE_PAIR_ID", cancellation.id())
-                        .env("RHREMOTE_PAIR_CANCEL_FILE", cancellation.path())
-                        .env("RHREMOTE_SESSION_STATUS", &self.session_status)
-                        .args([
-                            "pair",
-                            &pair_address,
-                            "--pin",
-                            args["pin"].as_str().ok_or("PIN required")?,
-                        ])
-                        .spawn()
-                        .map_err(|e| e.to_string())?,
-                );
-                *pending = Some(PendingPair {attempt, device, cancellation});
-                Ok(json!({"accepted":true}))
+                let pin=args["pin"].as_str().filter(|pin|pin.len()==4&&pin.bytes().all(|b|b.is_ascii_digit())).ok_or("PIN must contain four digits")?.to_owned();
+                self.cleanup.clear_failure();
+                *pending=Some(PendingPair::start(self.launcher(),self.probe_admission.clone(),attempt,device,profile,pin,regression)?);
+                Ok(json!({"accepted":true,"phase":"preparing"}))
             }
             "pair.cancel" => {
-                let operation=self.pairing.lock().unwrap().take();
-                let pair_id=operation.as_ref().map(|p|p.cancellation.id().to_owned());
-                if let Some(mut child) = self.child.lock().unwrap().take() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-                if let Some(operation)=operation {self.finish_pairing(operation.cancellation, true);}
+                let mut pending=self.pairing.lock().unwrap();
+                let Some(operation)=pending.take() else {return Ok(json!({"cancelled":true,"cleanupPending":self.cleanup.pending()}));};
+                let pair_id=operation.cancellation_id();
+                operation.cancel();
+                if !operation.retire(&self.cleanup,self.network.clone()) {return Err("无法启动配对清理任务".into());}
+                // A stale cancellation never touches an unrelated stream child.
                 let _=fs::write(&self.session_status,b"{\"streaming\":false,\"phase\":\"cancelled\",\"error\":\"\"}");
                 Ok(json!({"cancelled":true,"pairId":pair_id,"cleanupPending":self.cleanup.pending()}))
             }
@@ -1588,14 +1748,14 @@ impl Platform for NativePlatform {
             "stream.stats.toggle" => self.control("stats-toggle", &json!({})),
             "stream.audio.toggle" => {
                 let state = self.state()?;
-                self.control("audio", &json!({"enabled":state["audioEnabled"]!=true}))
+                self.audio_control(&json!({"enabled":state["audioEnabled"]!=true}))
             }
             "stream.audio.volume" => {
                 let volume = args["volume"]
                     .as_u64()
                     .filter(|v| *v <= 100)
                     .ok_or("volume must be 0..100")?;
-                self.control("audio", &json!({"volume":volume}))
+                self.audio_control(&json!({"volume":volume}))
             }
             _ => Err(format!(
                 "action {action} is not supported by the Windows native adapter"
@@ -1617,6 +1777,7 @@ impl LaunchContext {
             .env_remove("RHREMOTE_CONTROL_TOKEN")
             .env_remove("RHREMOTE_TARGET_UUID");
         command.env_remove("RHREMOTE_PAIR_ID").env_remove("RHREMOTE_PAIR_CANCEL_FILE");
+        command.env_remove("RHREMOTE_PROBE_OPERATION").env_remove("RHREMOTE_PROBE_ID").env_remove("RHREMOTE_PROBE_REPORT").env_remove("RHREMOTE_NETWORK_METADATA");
         command.current_dir(&self.native_data);
         command
             .stdin(Stdio::null())
@@ -1798,8 +1959,9 @@ impl LaunchContext {
             )
             .env(
                 "RHREMOTE_DISPLAY_MODE",
-                p["displayMode"].as_str().unwrap_or("auto"),
+                if args["window"].is_object(){"window"}else{p["displayMode"].as_str().unwrap_or("auto")},
             )
+            .env("RHREMOTE_WINDOW_SELECTION",if args["window"].is_object(){args["window"].to_string()}else{String::new()})
             .env(
                 "RHREMOTE_AUDIO_ENABLED",
                 if p["audioEnabled"] == true { "1" } else { "0" },
@@ -1819,7 +1981,7 @@ impl LaunchContext {
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(LaunchOutcome {
-            child: OwnedChild {child:Some(child),cleanup:self.cleanup.clone(),context:crate::native_cleanup::Context {port:self.port,token:self.token.clone(),status:self.session_status.clone(),limit:Duration::from_secs(15)},network:self.network.clone()},
+            child: OwnedChild {child:Some(child),cleanup:self.cleanup.clone(),context:crate::native_cleanup::Context {port:self.port,token:self.token.clone(),status:self.session_status.clone(),limit:Duration::from_secs(20)},network:self.network.clone()},
             network,
         })
     }
@@ -1828,6 +1990,89 @@ impl LaunchContext {
 #[cfg(test)]
 mod add_device_tests{
     use super::*;
+    #[test]
+    fn synced_local_identity_is_disabled_even_when_shared_rows_have_no_local_flags(){
+        let root=std::env::temp_dir().join(format!("rhremote-restore-self-{}",rhremote_core::random_token().unwrap()));
+        let platform=Arc::new(NativePlatform::new(PathBuf::from("unused-local-identity.exe"),"fixture-token".into(),root.clone()).unwrap());
+        *platform.local_uuid.lock().unwrap()=Some("host-1".into());
+        let local=device();let mut remote=device();remote.uuid="different-host".into();remote.is_self=true;
+        let result=platform.execute("devices.restore",&json!({"devices":[local,remote]})).unwrap();
+        assert_eq!(result["devices"][0]["isSelf"],true,"a synchronized local record became connectable");
+        assert_eq!(result["devices"][1]["isSelf"],false,"another host inherited a local-only flag");
+        let controller=rhremote_core::Controller::new("test",root.join("test-preferences.json"),platform.clone()).unwrap();
+        controller.replace_devices(serde_json::from_value(result["devices"].clone()).unwrap());
+        let connect=controller.dispatch("device.connect",json!({"uuid":"host-1"}));assert_eq!(connect["ok"],false);assert!(connect["error"].as_str().unwrap().contains("local device"));
+        assert_eq!(controller.dispatch("device.settings.open",json!({"uuid":"host-1"}))["ok"],true);assert_eq!(controller.state()["devices"][0]["isSelf"],true);
+        drop(controller);drop(platform);fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn restoring_saved_configuration_preserves_observed_identity_without_another_network_scan(){
+        let root=std::env::temp_dir().join(format!("rhremote-restore-local-{}",rhremote_core::random_token().unwrap()));
+        let platform=NativePlatform::new(PathBuf::from("unused-local-restore.exe"),"fixture-token".into(),root.clone()).unwrap();
+        *platform.local_uuid.lock().unwrap()=Some("host-1".into());
+        let mut observed=device();observed.paired=true;observed.is_self=true;observed.online=true;
+        let result=platform.execute("devices.restore",&json!({"devices":[observed]})).unwrap();
+        assert_eq!(result["devices"],json!([observed]));assert_eq!(*platform.devices.lock().unwrap(),vec![observed]);assert_eq!(platform.device_epoch.load(Ordering::Acquire),1);
+        drop(platform);fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn shared_import_replaces_cards_without_erasing_native_identity_or_restoring_removed_rows(){
+        let root=std::env::temp_dir().join(format!("rhremote-import-cache-{}",rhremote_core::random_token().unwrap()));
+        let platform=NativePlatform::new(PathBuf::from("unused-import.exe"),"fixture-token".into(),root.clone()).unwrap();
+        *platform.local_uuid.lock().unwrap()=Some("host-1".into());
+        let local=device();let mut removed=device();removed.uuid="removed".into();
+        platform.execute("devices.restore",&json!({"devices":[local.clone(),removed],"localOnly":true})).unwrap();
+        let identity=platform.native_data.join("RHRemote/RHRemote.ini");fs::create_dir_all(identity.parent().unwrap()).unwrap();fs::write(&identity,b"[General]\nfixture=test-owned identity sentinel\n").unwrap();
+        let result=platform.execute("devices.restore",&json!({"devices":[local],"replace":true})).unwrap();
+        assert_eq!(result["devices"].as_array().unwrap().len(),1);assert_eq!(result["devices"][0]["isSelf"],true);
+        assert_eq!(platform.devices.lock().unwrap().len(),1);assert_eq!(fs::read(&identity).unwrap(),b"[General]\nfixture=test-owned identity sentinel\n");
+        drop(platform);fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn native_pair_admission_and_cancel_do_not_wait_for_an_old_probe() {
+        let root=std::env::temp_dir().join(format!("rhremote-probe-preempt-{}",rhremote_core::random_token().unwrap()));
+        let platform=Arc::new(NativePlatform::new(PathBuf::from("must-not-spawn-pair.exe"),"fixture-token".into(),root.clone()).unwrap());
+        let probe=platform.probe_admission.probe().unwrap();
+        let before=Instant::now();
+        let result=platform.execute("device.pair",&json!({"attemptId":1,"device":device(),"profile":rhremote_core::Profile::default(),"pin":"1234"})).unwrap();
+        assert_eq!(result["accepted"],true);assert!(before.elapsed()<Duration::from_millis(500));
+        let deadline=Instant::now()+Duration::from_secs(2);while !probe.cancel.load(Ordering::SeqCst)&&Instant::now()<deadline{std::thread::yield_now();}
+        assert!(probe.cancel.load(Ordering::SeqCst));assert!(platform.pairing.lock().unwrap().is_some());assert!(platform.child.lock().unwrap().is_none());
+        let before=Instant::now();let cancelled=platform.execute("pair.cancel",&json!({})).unwrap();
+        assert_eq!(cancelled["cancelled"],true);assert!(before.elapsed()<Duration::from_millis(500));
+        let deadline=Instant::now()+Duration::from_secs(2);while platform.cleanup.pending()&&Instant::now()<deadline{platform.cleanup.reap();std::thread::sleep(Duration::from_millis(5));}
+        assert!(!platform.cleanup.pending(),"cancel waited for the old probe instead of retiring only its own worker");
+        assert!(platform.cleanup.failure().is_none());assert!(platform.pairing.lock().unwrap().is_none());
+        assert!(platform.child.lock().unwrap().is_none());assert_eq!(serde_json::from_slice::<Value>(&fs::read(&platform.session_status).unwrap()).unwrap()["phase"],"cancelled");
+        drop(probe);drop(platform);fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn closing_during_pair_preparation_signals_cancel_before_waiting_for_probe_cleanup(){
+        let root=std::env::temp_dir().join(format!("rhremote-close-preparation-{}",rhremote_core::random_token().unwrap()));
+        let platform=NativePlatform::new(PathBuf::from("must-not-spawn-pair.exe"),"fixture-token".into(),root.clone()).unwrap();
+        let probe=platform.probe_admission.probe().unwrap();
+        platform.execute("device.pair",&json!({"attemptId":1,"device":device(),"profile":rhremote_core::Profile::default(),"pin":"1234"})).unwrap();
+        let before=Instant::now();assert_eq!(platform.execute("engine.close",&json!({})).unwrap()["cleanupPending"],true);
+        assert!(before.elapsed()<Duration::from_millis(500),"close waited synchronously for a preparation transport lease");
+        assert!(probe.cancel.load(Ordering::SeqCst));drop(probe);
+        let deadline=Instant::now()+Duration::from_secs(3);while platform.cleanup.pending()&&Instant::now()<deadline{platform.cleanup.reap();std::thread::sleep(Duration::from_millis(5));}
+        assert!(!platform.cleanup.pending());assert!(platform.cleanup.failure().is_none());
+        assert!(platform.pairing.lock().unwrap().is_none());assert!(platform.child.lock().unwrap().is_none());
+        drop(platform);fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn stale_pair_cancel_does_not_take_or_terminate_a_stream_child() {
+        let root=std::env::temp_dir().join(format!("rhremote-pair-stale-cancel-{}",rhremote_core::random_token().unwrap()));
+        let platform=NativePlatform::new(PathBuf::from("unused.exe"),"fixture-token".into(),root.clone()).unwrap();
+        let child=Command::new("pwsh.exe").args(["-NoProfile","-NonInteractive","-Command","Start-Sleep -Seconds 30"]).creation_flags(0x08000000).spawn().unwrap();
+        let pid=child.id();*platform.child.lock().unwrap()=Some(child);
+        let response=platform.execute("pair.cancel",&json!({})).unwrap();assert_eq!(response["cancelled"],true);
+        let mut slot=platform.child.lock().unwrap();
+        assert_eq!(slot.as_ref().map(|child|child.id()),Some(pid));
+        let child=slot.as_mut().unwrap();assert!(child.try_wait().unwrap().is_none(),"stale pair cancellation killed the stream");
+        child.kill().unwrap();child.wait().unwrap();slot.take();drop(slot);drop(platform);fs::remove_dir_all(root).unwrap();
+    }
     fn device()->Device{parse_added_device("192.168.0.104","<root status_code=\"200\"><uniqueid>host-1</uniqueid><hostname>PC</hostname></root>").unwrap()}
     #[test]fn discovery_does_not_claim_pairing_from_public_metadata(){let d=parse_added_device("100.73.139.109","<root status_code=\"200\"><uniqueid>host-1</uniqueid><hostname>PC</hostname><PairStatus>1</PairStatus></root>").unwrap();assert!(d.online);assert!(!d.paired);assert!(!d.is_self);assert_eq!(d.address,"100.73.139.109");}
     #[test]fn malformed_or_rejected_server_info_cannot_be_saved(){for text in ["not XML","<root status_code=\"403\"/>","<root status_code=\"200\"><hostname>PC</hostname></root>"]{assert!(parse_added_device("192.168.0.104",text).is_err());}}

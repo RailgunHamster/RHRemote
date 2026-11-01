@@ -37,7 +37,9 @@ def patch(root):
             const auto reply = cleanup.openConnectionToString(cleanup.m_BaseUrlHttps,
                 "rhremote/launch/cancel", "rhremoteLaunchToken="+credential, 3000, NvHTTP::NVLL_NONE);
             NvHTTP::verifyResponseStatus(reply);
-            return RhLaunchAttempt::reply(NvHTTP::getXmlString(reply,"RHLaunchState"));
+            const auto result=RhLaunchAttempt::reply(NvHTTP::getXmlString(reply,"RHLaunchState"));
+            RhStatistics::event("launch_cleanup_reply",-1,{{"state",RhLaunchAttempt::name(result)}});
+            return result;
         });
     if(!RhRuntime::installLaunch(rhLaunch)){rhLaunch->cancel();throw GfeHttpResponseException(410,"Launch admission closed");}
     if(RhRuntime::get().ownerExited.load()||RhRuntime::get().localDisconnect.load()){

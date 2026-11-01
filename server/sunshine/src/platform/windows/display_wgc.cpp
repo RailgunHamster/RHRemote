@@ -126,10 +126,16 @@ namespace platf::dxgi {
     uwp_device = d3d_comhandle.as<winrt::IDirect3DDevice>();
     display->output->GetDesc(&output_desc);
 
-    auto monitor_factory = winrt::get_activation_factory<winrt::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-    if (monitor_factory == nullptr || FAILED(status = monitor_factory->CreateForMonitor(output_desc.Monitor, winrt::guid_of<winrt::IGraphicsCaptureItem>(), winrt::put_abi(item)))) {
-      BOOST_LOG(error) << "Screen capture is not supported on this device for this release of Windows: failed to acquire display: [0x"sv << util::hex(status).to_string_view() << ']';
-      return -1;
+    window_target = display->window_target;
+    if (window_target) {
+      item = window_target->item;
+      window_size = item.Size();
+    } else {
+      auto monitor_factory = winrt::get_activation_factory<winrt::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+      if (monitor_factory == nullptr || FAILED(status = monitor_factory->CreateForMonitor(output_desc.Monitor, winrt::guid_of<winrt::IGraphicsCaptureItem>(), winrt::put_abi(item)))) {
+        BOOST_LOG(error) << "Screen capture is not supported on this device for this release of Windows: failed to acquire display: [0x"sv << util::hex(status).to_string_view() << ']';
+        return -1;
+      }
     }
 
     if (config.dynamicRange) {
@@ -141,6 +147,11 @@ namespace platf::dxgi {
     try {
       frame_pool = winrt::Direct3D11CaptureFramePool::CreateFreeThreaded(uwp_device, static_cast<winrt::Windows::Graphics::DirectX::DirectXPixelFormat>(display->capture_format), 2, item.Size());
       capture_session = frame_pool.CreateCaptureSession(item);
+      if (window_target && platf::window_capture::secondary_windows_supported()) {
+        // The protocol advertises main-window-only geometry. Do not silently
+        // include an owned popup whose coordinates are outside that geometry.
+        capture_session.IncludeSecondaryWindows(false);
+      }
       frame_pool.FrameArrived({this, &wgc_capture_t::on_frame_arrived});
     } catch (winrt::hresult_error &e) {
       BOOST_LOG(error) << "Screen capture is not supported on this device for this release of Windows: failed to create capture session: [0x"sv << util::hex(e.code()).to_string_view() << ']';
@@ -203,8 +214,25 @@ namespace platf::dxgi {
    * If not available, the capture thread blocks until one is, or the wait times out.
    */
   capture_e wgc_capture_t::next_frame(std::chrono::milliseconds timeout, ID3D11Texture2D **out, uint64_t &out_time) {
+    *out = nullptr;
+    try {
+      return next_frame_impl(timeout, out, out_time);
+    } catch (const winrt::hresult_error &error) {
+      if (*out) {
+        (*out)->Release();
+        *out = nullptr;
+      }
+      BOOST_LOG(warning) << "Windows capture frame became unavailable [0x"sv << util::hex(error.code()).to_string_view() << ']';
+      return capture_e::error;
+    }
+  }
+
+  capture_e wgc_capture_t::next_frame_impl(std::chrono::milliseconds timeout, ID3D11Texture2D **out, uint64_t &out_time) {
     // this CONSUMER runs in the capture thread
     release_frame();
+    if (window_target && window_target->state() != "ready") {
+      return capture_e::error;
+    }
 
     AcquireSRWLockExclusive(&frame_lock);
     if (produced_frame == nullptr && SleepConditionVariableSRW(&frame_present_cv, &frame_lock, timeout.count(), 0) == 0) {
@@ -222,6 +250,20 @@ namespace platf::dxgi {
     ReleaseSRWLockExclusive(&frame_lock);
     if (consumed_frame == nullptr) {  // spurious wakeup
       return capture_e::timeout;
+    }
+
+    if (window_target) {
+      const auto size = consumed_frame.ContentSize();
+      if (size.Width <= 0 || size.Height <= 0) {
+        return capture_e::timeout;
+      }
+      window_target->width = size.Width;
+      window_target->height = size.Height;
+      // Recreate the complete capture/encoder geometry before publishing another
+      // frame. Never encode undefined texture edges after a window resize.
+      if (size.Width != window_size.Width || size.Height != window_size.Height) {
+        return capture_e::reinit;
+      }
     }
 
     auto capture_access = consumed_frame.Surface().as<winrt::IDirect3DDxgiInterfaceAccess>();

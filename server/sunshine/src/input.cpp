@@ -31,6 +31,10 @@ extern "C" {
 #include "config.h"
 #include "globals.h"
 #include "input.h"
+#include "rhremote_window_capture.h"
+#ifdef _WIN32
+  #include "platform/windows/window_capture.h"
+#endif
 #include "logging.h"
 #include "platform/common.h"
 #include "platform/virtualhid_input.h"
@@ -302,6 +306,8 @@ namespace input {
     thread_pool_util::ThreadPool::task_id_t mouse_left_button_timeout;  ///< Mouse left button timeout.
 
     input::touch_port_t touch_port;  ///< Touch coordinate bounds for the current stream.
+    std::string window_source;  ///< Launch identity retained before the first touch-port event.
+    rhremote::window_pointer_mapper window_pointer;  ///< Stable desktop plane while dragging the captured window.
 
     int32_t accumulated_vscroll_delta;  ///< Accumulated vscroll delta.
     int32_t accumulated_hscroll_delta;  ///< Accumulated hscroll delta.
@@ -424,13 +430,13 @@ namespace input {
    * @return 0 if no shortcut applied, > 0 if shortcut applied.
    */
   inline int apply_shortcut(short keyCode) {
-    constexpr auto VK_F1 = 0x70;
-    constexpr auto VK_F13 = 0x7C;
+    constexpr auto first_function_key = 0x70;
+    constexpr auto last_function_key = 0x7C;
 
     BOOST_LOG(debug) << "Apply Shortcut: 0x"sv << util::hex((std::uint8_t) keyCode).to_string_view();
 
-    if (keyCode >= VK_F1 && keyCode <= VK_F13) {
-      mail::man->event<int>(mail::switch_display)->raise(keyCode - VK_F1);
+    if (keyCode >= first_function_key && keyCode <= last_function_key) {
+      mail::man->event<int>(mail::switch_display)->raise(keyCode - first_function_key);
       return 1;
     }
 
@@ -719,6 +725,24 @@ namespace input {
     }
 
     input->mouse_left_button_timeout = DISABLE_LEFT_BUTTON_DELAY;
+#ifdef _WIN32
+    if (!input->window_source.empty()) {
+      const auto target = platf::window_capture::active(input->window_source);
+      if (!target || target->state() != "ready") {
+        return;
+      }
+      const auto rect = target->bounds();
+      POINT point {};
+      if (!GetCursorPos(&point) || rect.right <= rect.left || rect.bottom <= rect.top) {
+        return;
+      }
+      const auto x = std::clamp<LONG>(point.x + util::endian::big(packet->deltaX), rect.left, rect.right - 1);
+      const auto y = std::clamp<LONG>(point.y + util::endian::big(packet->deltaY), rect.top, rect.bottom - 1);
+      const platf::touch_port_t port {0, 0, GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+      platf::abs_mouse(platf_input, port, x - GetSystemMetrics(SM_XVIRTUALSCREEN), y - GetSystemMetrics(SM_YVIRTUALSCREEN));
+      return;
+    }
+#endif
     platf::move_mouse(platf_input, util::endian::big(packet->deltaX), util::endian::big(packet->deltaY));
   }
 
@@ -759,6 +783,22 @@ namespace input {
     */
     x = (x - offsetX) * touch_port.scalar_inv;
     y = (y - offsetY) * touch_port.scalar_inv;
+
+#ifdef _WIN32
+    if (!input->window_source.empty()) {
+      const auto target = platf::window_capture::active(input->window_source);
+      if (!target || target->state() != "ready") {
+        return std::nullopt;
+      }
+      const auto bounds = target->bounds();
+      const auto content_width = (touch_port.width - 2 * touch_port.client_offsetX) * touch_port.scalar_inv;
+      const auto content_height = (touch_port.height - 2 * touch_port.client_offsetY) * touch_port.scalar_inv;
+      if (content_width <= 0 || content_height <= 0 || bounds.right <= bounds.left || bounds.bottom <= bounds.top) {
+        return std::nullopt;
+      }
+      return input->window_pointer.map(x / content_width, y / content_height, {bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top}, GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN));
+    }
+#endif
 
     /*
     This final operation is a bit weird and has been brought about with lots of trial and error. A better
@@ -838,6 +878,9 @@ namespace input {
 
     auto width = (float) util::endian::big(packet->width);
     auto height = (float) util::endian::big(packet->height);
+    if (width <= 0 || height <= 0) {
+      return;
+    }
 
     auto tpcoords = client_to_touchport(input, {x, y}, {width, height});
     if (!tpcoords) {
@@ -862,6 +905,16 @@ namespace input {
       touch_port_dim_x,
       touch_port_dim_y
     };
+#ifdef _WIN32
+    if (!input->window_source.empty()) {
+      abs_port.width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+      abs_port.height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+      if (abs_port.width <= 0 || abs_port.height <= 0) {
+        return;
+      }
+      input->mouse_left_button_timeout = DISABLE_LEFT_BUTTON_DELAY;
+    }
+#endif
 
     platf::abs_mouse(platf_input, abs_port, tpcoords->first, tpcoords->second);
   }
@@ -879,6 +932,20 @@ namespace input {
 
     auto release = util::endian::little(packet->header.magic) == MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5;
     auto button = util::endian::big(packet->button);
+#ifdef _WIN32
+    if (!input->window_source.empty()) {
+      rhremote::window_bounds bounds {};
+      if (!release) {
+        const auto target = platf::window_capture::active(input->window_source);
+        if (!target || target->state() != "ready") {
+          return;
+        }
+        const auto rect = target->bounds();
+        bounds = {rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top};
+      }
+      input->window_pointer.update_button(button, !release, bounds);
+    }
+#endif
     if (button > 0 && button < mouse_press.size()) {
       if (mouse_press[button] != release) {
         // button state is already what we want
@@ -1188,7 +1255,7 @@ namespace input {
           task_pool.cancel(key_press_repeat_id);
         }
 
-        if (config::input.key_repeat_delay.count() > 0) {
+        if (input->window_source.empty() && config::input.key_repeat_delay.count() > 0) {
           key_press_repeat_id = task_pool.pushDelayed(repeat_key, config::input.key_repeat_delay, keyCode, packet->flags, synthetic_modifiers).task_id;
         }
       } else {
@@ -2063,6 +2130,39 @@ namespace input {
     // Print the final input packet
     input::print((void *) payload);
 
+#ifdef _WIN32
+    if (input->touch_port_event->peek()) {
+      input->touch_port = *input->touch_port_event->pop();
+    }
+    if (!input->window_source.empty()) {
+      const auto kind = util::endian::little(payload->magic);
+      const bool release = kind == KEY_UP_EVENT_MAGIC || kind == MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5;
+      const auto target = platf::window_capture::active(input->window_source);
+      // Releases always pass, even after closure, so a drag or modifier cannot
+      // remain stuck. Native touch/pen and gamepads are not window-scoped.
+      if (!release) {
+        if (!target || target->state() != "ready") {
+          return;
+        }
+        if (kind == SS_TOUCH_MAGIC || kind == SS_PEN_MAGIC || kind == MULTI_CONTROLLER_MAGIC_GEN5 || kind == SS_CONTROLLER_ARRIVAL_MAGIC || kind == SS_CONTROLLER_TOUCH_MAGIC || kind == SS_CONTROLLER_MOTION_MAGIC || kind == SS_CONTROLLER_BATTERY_MAGIC) {
+          return;
+        }
+        if (kind == MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5 || kind == SCROLL_MAGIC_GEN5 || kind == SS_HSCROLL_MAGIC) {
+          const bool focused = target->focus();
+          POINT point {};
+          if (!GetCursorPos(&point) || GetAncestor(WindowFromPoint(point), GA_ROOT) != target->window) {
+            return;
+          }
+          if (kind != MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5 && !focused) {
+            return;
+          }
+        } else if (kind != MOUSE_MOVE_ABS_MAGIC && kind != MOUSE_MOVE_REL_MAGIC_GEN5 && !target->focus()) {
+          return;
+        }
+      }
+    }
+#endif
+
     // Send the batched input to the OS
     switch (util::endian::little(payload->magic)) {
       case MOUSE_MOVE_REL_MAGIC_GEN5:
@@ -2196,6 +2296,7 @@ namespace input {
    * @param input Retained stream input state to reset.
    */
   void reset_input_state(const std::shared_ptr<input_t> &input) {
+    input->window_pointer.reset();
     reset_mouse_buttons();
     reset_keyboard_keys();
     reset_gamepads(input);
@@ -2301,8 +2402,12 @@ namespace input {
 
   /**
    * @brief Allocate and initialize platform input state for a stream.
+   * @param mail Stream mailbox.
+   * @param session_id Retained paired-client input identity.
+   * @param window_source Exact authorized window source, empty for desktop sessions.
+   * @return Owned input state with its source registered before input delivery.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id) {
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::string window_source) {
     std::shared_ptr<input_t> input;
     bool resumed = false;
     {
@@ -2327,12 +2432,20 @@ namespace input {
       });
     }
 
-    // Workaround to ensure new frames will be captured when a client connects
-    task_pool.pushDelayed([]() {
-      platf::move_mouse(platf_input, 1, 1);
-      platf::move_mouse(platf_input, -1, -1);
-    },
-                          100ms);
+    dispatch_input_task([input, source = window_source] {
+      input->window_source = source;
+      input->window_pointer.reset();
+    });
+
+    // Window capture does not need desktop mouse nudges, including before its
+    // first frame. Keep the legacy workaround scoped to desktop sessions.
+    if (window_source.empty()) {
+      task_pool.pushDelayed([]() {
+        platf::move_mouse(platf_input, 1, 1);
+        platf::move_mouse(platf_input, -1, -1);
+      },
+                            100ms);
+    }
 
     return input;
   }

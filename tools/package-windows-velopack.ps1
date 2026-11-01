@@ -1,4 +1,6 @@
-param([string]$Version='0.2.7',[switch]$ReleaseBuild,[string]$OutputDirectory='')
+param([string]$Version='0.2.7',[switch]$ReleaseBuild=$true,[string]$OutputDirectory='')
+# Distributable UI packages use the optimized build. Debug packaging is an explicit
+# diagnostic choice via -ReleaseBuild:$false, never the default installed client.
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
 $uiCargo=Get-Content -LiteralPath (Join-Path $repo 'client/crates/rhremote-ui/Cargo.toml') -Raw
@@ -26,4 +28,5 @@ try{
  & $vpk pack --packId RHRemote --packVersion $Version --packDir $stage --mainExe RHRemote.exe --packAuthors RailgunHamster --packTitle RHRemote-Moonlight --icon (Join-Path $repo 'client/shared/icons/rhremote.ico') --channel win --runtime win-x64 --outputDir $out
  if($LASTEXITCODE -ne 0){throw 'Velopack packaging failed'}
  Get-ChildItem -LiteralPath $out -File|ForEach-Object {[pscustomobject]@{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash}}
+ try{& (Join-Path $PSScriptRoot 'clean-build-artifacts.ps1') -Apply -Protect @($out,$stage) | Out-Null}catch{Write-Warning ('Artifact retention deferred: '+$_.Exception.Message)}
 }finally{Pop-Location}

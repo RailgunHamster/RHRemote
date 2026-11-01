@@ -4,6 +4,7 @@
  */
 #include "rhremote_frame_trace.h"
 #include "rhremote_trace.h"
+#include "rhremote_window_capture.h"
 
 // standard includes
 #include <cstring>
@@ -2312,7 +2313,7 @@ namespace stream {
      * @brief Start the audio, video, and control workers for a streaming session.
      */
     int start(session_t &session, const std::string &addr_string) {
-      session.input = input::alloc(session.mail, session.input_session_id);
+      session.input = input::alloc(session.mail, session.input_session_id, rhremote::is_window_source(session.config.monitor.initial_display) ? session.config.monitor.initial_display : std::string {});
 
       session.broadcast_ref = broadcast.ref();
       if (!session.broadcast_ref) {

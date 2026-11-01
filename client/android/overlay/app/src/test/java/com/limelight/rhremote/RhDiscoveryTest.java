@@ -47,6 +47,7 @@ public class RhDiscoveryTest {
             ComputerDetails result=getComputerDetails(false);result.pairState=PairingManager.PairState.PAIRED;
             result.httpsPort=47984;return result;
         }
+        @Implementation protected ComputerDetails getRhDiscoveryDetails(boolean likelyOnline)throws IOException{return getComputerDetails(likelyOnline);}
         @Implementation protected ComputerDetails getComputerDetails(boolean likelyOnline)throws IOException {
             String uuid=replies.get(address.address);if(uuid==null)throw new IOException("unreachable");
             ComputerDetails result=new ComputerDetails();result.uuid=uuid;result.name="PC";

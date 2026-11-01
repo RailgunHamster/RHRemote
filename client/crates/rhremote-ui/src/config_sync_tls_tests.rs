@@ -337,10 +337,10 @@ fn https_get_redirect_with_valid_json_and_etag_still_stops_before_upload() {
 }
 
 #[test]
-fn https_authentication_and_timeout_failures_keep_saved_state() {
+fn https_authentication_lock_and_timeout_failures_keep_saved_state() {
     let mut delayed = Reply::empty(503);
     delayed.delay = Duration::from_secs(7);
-    let server = TlsFixture::new(vec![Reply::empty(401), delayed]);
+    let server = TlsFixture::new(vec![Reply::empty(401), Reply::empty(423), delayed]);
     let mut sync = fixture();
     sync.local.last_sync_ms = 42;
     let before = serde_json::to_value(&sync.local).unwrap();
@@ -356,6 +356,17 @@ fn https_authentication_and_timeout_failures_keep_saved_state() {
     assert!(error.contains("登录失败"), "{error}");
     let error = sync
         .exchange_with_agent(
+            &server.agent(),
+            &server.url("localhost"),
+            "Basic fixture-only",
+            config(),
+            Resolution::Review,
+        )
+        .unwrap_err();
+    assert_eq!(error, "WebDAV 文件被占用，请稍后重试（HTTP 423）");
+    assert_eq!(serde_json::to_value(&sync.local).unwrap(), before);
+    let error = sync
+        .exchange_with_agent(
             &server.agent_with_timeout(Duration::from_secs(5)),
             &server.url("localhost"),
             "Basic fixture-only",
@@ -365,6 +376,6 @@ fn https_authentication_and_timeout_failures_keep_saved_state() {
         .unwrap_err();
     assert!(error.contains("超时"), "{error}");
     assert_eq!(serde_json::to_value(&sync.local).unwrap(), before);
-    assert_eq!(server.requests.lock().unwrap().len(), 2);
+    assert_eq!(server.requests.lock().unwrap().len(), 3);
     cleanup(sync);
 }

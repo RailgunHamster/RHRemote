@@ -23,7 +23,7 @@ import static org.junit.Assert.*;
 public class RhSyncCommitTest {
     @Implements(value=RhSync.class,isInAndroidSdk=false)
     public static class MemoryHttp {
-        static JSONObject server;static int revision,puts;static long appliedThread;static java.util.concurrent.CountDownLatch reached,release;
+        static JSONObject server;static int revision,puts,requests;static long appliedThread;static java.util.concurrent.CountDownLatch reached,release;
         static boolean losePutResponse;static int rejectedPut;
         @RealObject RhSync real;
         @Implementation protected void applied(JSONObject shared)throws Exception{
@@ -32,6 +32,7 @@ public class RhSyncCommitTest {
         }
         @Implementation protected String password(JSONObject account){return "test-only-not-transmitted";}
         @Implementation protected static HttpURLConnection open(URL url,String method,String authorization){
+            requests++;
             final boolean upload=method.equals("PUT");
             return new HttpURLConnection(url){
                 final ByteArrayOutputStream request=new ByteArrayOutputStream();
@@ -64,7 +65,7 @@ public class RhSyncCommitTest {
     static String alias(JSONObject value)throws Exception{return value.getJSONArray("devices").getJSONObject(0).getString("displayName");}
     JSONObject persistedAccount()throws Exception{return new JSONObject(new String(new AtomicFile(account).readFully(),StandardCharsets.UTF_8));}
     @Before public void setup()throws Exception{
-        AtomicFailure.silentlyDiscardAccount=false;MemoryHttp.appliedThread=0;MemoryHttp.reached=null;MemoryHttp.release=null;MemoryHttp.losePutResponse=false;MemoryHttp.rejectedPut=0;
+        AtomicFailure.silentlyDiscardAccount=false;MemoryHttp.appliedThread=0;MemoryHttp.reached=null;MemoryHttp.release=null;MemoryHttp.losePutResponse=false;MemoryHttp.rejectedPut=0;MemoryHttp.requests=0;
         activity=Robolectric.buildActivity(Activity.class).setup().get();original=RhShared.read(activity);original.put("devices",new JSONArray().put(RhActions.obj("uuid","host","name","workstation","displayName","本机旧名","address","192.0.2.10","swapButtons",false,"addresses",new JSONArray())));RhShared.apply(activity,original);original=RhShared.read(activity);
         account=new File(activity.getFilesDir(),"webdav-local.json");RhShared.write(account,RhActions.obj("url","https://sync.example.test/folder/","username","test","ciphertext","unused-test-value","base",original,"lastSyncMs",1));
         MemoryHttp.server=copy(original);MemoryHttp.server.getJSONArray("devices").getJSONObject(0).put("displayName","远端新名");MemoryHttp.revision=1;MemoryHttp.puts=0;
@@ -72,6 +73,22 @@ public class RhSyncCommitTest {
     @Test public void aConfirmedPutDoesNotAdvanceTheLocalBaseBeforeItsConfigurationIsApplied()throws Exception{
         RhSync sync=new RhSync(activity);JSONObject transferred=sync.run(original,"review");assertEquals("远端新名",alias(transferred.getJSONObject("shared")));assertEquals(1,MemoryHttp.puts);
         assertEquals("本机旧名",alias(persistedAccount().getJSONObject("base")));assertEquals(1,persistedAccount().getLong("lastSyncMs"));assertEquals("本机旧名",alias(RhShared.read(activity)));
+    }
+    @Test public void reviewIdentityIsStableForTheSameSnapshotAndOldChoicesStopBeforeHttp()throws Exception{
+        JSONObject ours=copy(original);ours.getJSONArray("devices").getJSONObject(0).put("displayName","本机新名");RhSync sync=new RhSync(activity);sync.run(ours,"review");String first=sync.state().getString("reviewId");assertFalse(first.isEmpty());sync.run(ours,"review");assertEquals(first,sync.state().getString("reviewId"));
+        int count=sync.state().getJSONArray("conflicts").length();sync.state().getJSONArray("conflicts").put("outside-mutation");assertEquals(count,sync.state().getJSONArray("conflicts").length());
+        MemoryHttp.server.getJSONArray("devices").getJSONObject(0).put("displayName","远端第二版");MemoryHttp.revision++;sync.run(ours,"review");String second=sync.state().getString("reviewId");assertNotEquals(first,second);int requests=MemoryHttp.requests;
+        try{sync.runReviewed(ours,"remote",first);fail("Old review applied");}catch(IllegalStateException expected){assertTrue(expected.getMessage().contains("内容已更新"));}
+        assertEquals(requests,MemoryHttp.requests);assertEquals(0,MemoryHttp.puts);assertEquals(second,sync.state().getString("reviewId"));JSONObject result=sync.runReviewed(ours,"remote",second);assertEquals("远端第二版",alias(result.getJSONObject("shared")));assertEquals(1,MemoryHttp.puts);assertEquals("",sync.state().getString("reviewId"));
+    }
+    @Test public void homeGuardsAutomaticAndStaleRequestsBeforeUnsavedAccountDecisions()throws Exception{
+        JSONObject settings=persistedAccount();settings.put("automatic",true);RhShared.write(account,settings);JSONObject ours=copy(original);ours.getJSONArray("devices").getJSONObject(0).put("displayName","本机新名");RhShared.apply(activity,ours);RhSyncWork work=RhSyncWork.shared(activity);work.sync.run(ours,"review");String review=work.state().getString("reviewId");
+        activity.setTheme(com.limelight.R.style.RhTheme);RhHome home=new RhHome(activity,new RhHome.Actions(){public void connect(com.limelight.nvstream.http.ComputerDetails d){throw new AssertionError();}public void add(String address){}public void advanced(){}public void pair(com.limelight.nvstream.http.ComputerDetails d,String pin){throw new AssertionError();}public void cancelPair(){}public void refresh(){}});
+        try{home.perform("app.settings.tab",RhActions.obj("tab","sync"));home.perform("sync.edit",RhActions.obj("key","username","value","unsaved"));int requests=MemoryHttp.requests;JSONObject skipped=home.perform("sync.run",RhActions.obj("automatic",true));assertTrue(skipped.getBoolean("skipped"));assertEquals("sync_conflict",skipped.getString("reason"));
+            for(Object invalid:new Object[]{"true",1,JSONObject.NULL})try{home.perform("sync.run",RhActions.obj("automatic",invalid));fail("Invalid automatic flag accepted");}catch(IllegalArgumentException expected){}
+            try{home.perform("sync.resolve",RhActions.obj("resolution","remote","reviewId","older"));fail("Old choice accepted");}catch(IllegalStateException expected){}
+            assertTrue(home.state().isNull("navigationPrompt"));assertEquals(review,home.state().getJSONObject("sync").getString("reviewId"));assertEquals("unsaved",home.state().getJSONObject("syncDraft").getString("username"));assertEquals(requests,MemoryHttp.requests);assertEquals(0,MemoryHttp.puts);
+        }finally{home.dispose();}
     }
     @Test public void aLostWriteResponseMustPauseAutomaticSyncAndSurviveAColdStart()throws Exception{
         MemoryHttp.losePutResponse=true;RhSyncWork work=RhSyncWork.shared(activity);List<Runnable> queued=new ArrayList<>();work.start(original,"review",queued::add);queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();

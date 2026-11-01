@@ -32,11 +32,12 @@ public class RhLaunchAttemptTest {
         rejected.cancel();assertFalse(rejected.await(0));assertEquals(RhLaunchAttempt.Result.FAILED,rejected.result());
         RhLaunchAttempt failed=new RhLaunchAttempt(true,key->{throw new java.io.IOException("fixture");},Runnable::run,()->1000);
         failed.cancel();assertFalse(failed.await(0));for(String value:Arrays.asList("","success",null))assertEquals(RhLaunchAttempt.Result.FAILED,RhLaunchAttempt.reply(value));
-        for(String value:Arrays.asList("cancelled","handed_off","finished","expired"))assertTrue(RhLaunchAttempt.acknowledged(RhLaunchAttempt.reply(value)));
+        for(String value:Arrays.asList("cancelled","finished","expired"))assertTrue(RhLaunchAttempt.acknowledged(RhLaunchAttempt.reply(value)));
+        assertEquals(RhLaunchAttempt.Result.CLAIMED,RhLaunchAttempt.reply("handed_off"));assertFalse(RhLaunchAttempt.acknowledged(RhLaunchAttempt.reply("handed_off")));
     }
     @Test public void cancellationRunsOffCallerAndConcurrentWaitersShareOneCleanup()throws Exception {
         CountDownLatch entered=new CountDownLatch(1),ack=new CountDownLatch(1);AtomicInteger calls=new AtomicInteger();Thread caller=Thread.currentThread();
-        RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->{assertNotSame(caller,Thread.currentThread());calls.incrementAndGet();entered.countDown();assertTrue(ack.await(3,TimeUnit.SECONDS));return "handed_off";});
+        RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->{assertNotSame(caller,Thread.currentThread());calls.incrementAndGet();entered.countDown();assertTrue(ack.await(3,TimeUnit.SECONDS));return "cancelled";});
         attempt.cancel();assertTrue(entered.await(3,TimeUnit.SECONDS));assertFalse(attempt.await(0));ack.countDown();assertTrue(attempt.await(3000));assertTrue(attempt.await(0));assertEquals(1,calls.get());
     }
     @Test public void diagnosticUrlAndQtStyleMessagesRedactTheCredential(){
@@ -59,6 +60,17 @@ public class RhLaunchAttemptTest {
         List<String> keys=Collections.synchronizedList(new ArrayList<>());
         RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->{keys.add(key);if(keys.size()==1)throw new java.net.SocketTimeoutException("TLS timeout");return "cancelled";});
         assertTrue(attempt.await(3000));assertEquals(2,keys.size());assertEquals(keys.get(0),keys.get(1));assertEquals(RhLaunchAttempt.Result.CANCELLED,attempt.result());
+    }
+    @Test public void serverClaimKeepsTheLeaseUntilTheOwnedRequestExpires()throws Exception{
+        ArrayDeque<Runnable> jobs=new ArrayDeque<>();AtomicLong clock=new AtomicLong(1000);List<String> keys=new ArrayList<>();
+        RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->{keys.add(key);return keys.size()==1?"handed_off":"expired";},jobs::add,clock::get);
+        attempt.cancel();jobs.remove().run();assertEquals(RhLaunchAttempt.Result.CLAIMED,attempt.result());assertFalse(attempt.await(0));assertTrue(jobs.isEmpty());
+        clock.set(2000);attempt.cancel();assertEquals(1,jobs.size());jobs.remove().run();assertTrue(attempt.await(0));assertEquals(RhLaunchAttempt.Result.EXPIRED,attempt.result());assertEquals(keys.get(0),keys.get(1));
+    }
+    @Test public void aBoundedDrainPollsTheSameClaimUntilTheServerHasFinished()throws Exception{
+        List<String> keys=Collections.synchronizedList(new ArrayList<>());
+        RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->{keys.add(key);return keys.size()==1?"handed_off":"finished";});
+        assertTrue(attempt.await(3000));assertEquals(2,keys.size());assertEquals(keys.get(0),keys.get(1));assertEquals(RhLaunchAttempt.Result.FINISHED,attempt.result());
     }
     @Test public void unacknowledgedDrainStillTimesOutAndRetainsOwnership()throws Exception{
         RhLaunchAttempt attempt=new RhLaunchAttempt(true,key->"invalid");long began=System.nanoTime();

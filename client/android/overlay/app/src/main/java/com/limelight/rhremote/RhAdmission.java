@@ -47,7 +47,7 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
                 running=false;
                 if(cancelled||activity.isFinishing()||activity.isDestroyed()){cancel();return;}
                 if(failed!=null){fail(message(failed));return;}
-                try{continuation.run();if(!handoff&&!external&&!cancelled)fail("连接流程未完成");}
+                try{continuation.run();if(!handoff&&!external&&!cancelled&&!cleaning&&!completed)fail("连接流程未完成");}
                 catch(Exception|LinkageError e){fail(message(e));}
             });
         });}catch(RuntimeException rejected){running=false;fail("连接任务无法启动");}
@@ -63,6 +63,11 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
         RhStatistics.event("connection_admission_handoff",-1,RhActions.obj("attemptId",id));
         main.postDelayed(handoffTimeout,15_000);
         try(RhStatistics.Scope trace=new RhStatistics.Scope("admission_activity_launch")){launch.run();}
+    }
+    /** Finish an admitted read-only operation after releasing its private transport. */
+    public void completeRead()throws IOException{
+        checkpoint();if(running||external||handoff||gameAdmitted||cleaning||completed)throw new IllegalStateException("当前连接不能作为只读操作结束");
+        phase="cleaning";listener.changed(this);cleanup();
     }
     public void pair(Runnable begin,Runnable abort)throws IOException {
         checkpoint();external=true;cancelExternal=abort;phase="pairing";listener.changed(this);
@@ -132,6 +137,7 @@ public final class RhAdmission extends RhCancellation implements RhActions.Targe
         if(operation!=null&&operation.canLaunch()&&operation.uuid.equals(intent.getStringExtra(Game.EXTRA_PC_UUID)))intent.putExtra(EXTRA,operation.id);
     }
     public static boolean allowGame(Intent intent){
+        if(RhActions.inspecting())return false;
         RhAdmission operation=RhActions.admission();long requested=intent.getLongExtra(EXTRA,0);
         boolean allowed=requested==0?operation==null:operation!=null&&operation.id==requested&&operation.canLaunch()&&operation.uuid.equals(intent.getStringExtra(Game.EXTRA_PC_UUID));
         if(allowed&&operation!=null){operation.gameAdmitted=true;operation.gameCleanupPending=true;operation.claimedIntent=intent;}

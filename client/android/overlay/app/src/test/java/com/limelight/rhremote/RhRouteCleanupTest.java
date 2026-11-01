@@ -17,9 +17,9 @@ public class RhRouteCleanupTest {
     static class Token extends RhCancellation {void cancel(){cancelRequests();}}
     @Implements(value=RhTunnel.class,isInAndroidSdk=false)
     public static class Transport {
-        static int starts,stops,handshakes;static boolean active,failStart,failStop,cancelStart,lastOnly;
+        static int starts,stops,handshakes;static boolean active,failStart,failStop,cancelStart,lastOnly,missingComponent;
         @Implementation protected static synchronized JSONObject start(Context c,String peer,String relay,boolean only,RhCancellation operation)throws Exception{
-            starts++;boolean reused=active&&lastOnly==only;if(!reused)handshakes++;lastOnly=only;active=true;if(cancelStart){((Token)operation).cancel();operation.checkpoint();}if(failStart)throw new IOException("partial startup failed");
+            starts++;boolean reused=active&&lastOnly==only;if(!reused)handshakes++;lastOnly=only;active=true;if(missingComponent)throw new UnsatisfiedLinkError("fixture missing native library");if(cancelStart){((Token)operation).cancel();operation.checkpoint();}if(failStart)throw new IOException("partial startup failed");
             return RhActions.obj("address","127.77.0.2","portOffset",1000,"path","relay","reused",reused);
         }
         @Implementation protected static synchronized void stop(){stops++;if(failStop)throw new IllegalStateException("cleanup failed");active=false;}
@@ -34,10 +34,13 @@ public class RhRouteCleanupTest {
             else{lan++;assertFalse("Previous rejected tunnel survived into a direct route",Transport.active);}
             return address;
         }
+        @Implementation protected static String check(String address,String uuid,int port,RhCancellation operation,int timeoutMs,java.util.function.Consumer<String> evidence)throws Exception{
+            String result=check(address,uuid,port,operation,timeoutMs);if(evidence!=null)evidence.accept("<root status_code=\"200\"><uniqueid>"+uuid+"</uniqueid><appversion>7.1.0</appversion></root>");return result;
+        }
     }
     Context context;ComputerDetails device;RhProfile profile;
     @Before public void setup()throws Exception{
-        Transport.starts=Transport.stops=Transport.handshakes=Probes.lan=Probes.proxy=0;Transport.active=Transport.failStart=Transport.failStop=Transport.cancelStart=Transport.lastOnly=Probes.rejectProxy=Probes.timeoutProxy=false;
+        Transport.starts=Transport.stops=Transport.handshakes=Probes.lan=Probes.proxy=0;Transport.active=Transport.failStart=Transport.failStop=Transport.cancelStart=Transport.lastOnly=Transport.missingComponent=Probes.rejectProxy=Probes.timeoutProxy=false;
         context=RuntimeEnvironment.getApplication();RhStatistics.initialize(context);RhStatistics.configure(false);
         device=new ComputerDetails();device.uuid="host";device.name="PC";device.manualAddress=new ComputerDetails.AddressTuple("192.168.0.104",47989);
         RhShared.capture(context,java.util.Collections.singletonList(device));
@@ -96,5 +99,31 @@ public class RhRouteCleanupTest {
         assertFalse(RhNetwork.unavailable(new javax.net.ssl.SSLHandshakeException("certificate")));
         assertFalse(RhNetwork.unavailable(new IOException(new java.security.cert.CertificateException())));
         assertFalse(RhNetwork.unavailable(new IOException("invalid address")));
+    }
+    @Test public void aMissingComponentIsNotReportedAsAnIdentityOrNetworkFailure()throws Exception{
+        Transport.missingComponent=true;
+        try{resolve("relay");fail("Missing component accepted");}catch(RhNetwork.Unavailable wrong){fail("Missing component retried as a temporary outage");}catch(IOException expected){assertTrue(expected.getMessage(),expected.getMessage().contains("内置连接组件不可用"));assertFalse(expected.getMessage().contains("设备标识"));}
+        JSONObject row=RhNetwork.state().getJSONArray("attempts").getJSONObject(0);assertEquals("component",row.getString("failureKind"));assertFalse(row.getBoolean("retryable"));assertEquals(1,Transport.stops);assertFalse(Transport.active);
+    }
+    @Test public void alreadyFailedPathsAndIncompatibleSettingsAreDifferentFromUnreachableHosts()throws Exception{
+        profile.routeOrder.clear();profile.routeOrder.add("lan");JSONArray failed=new JSONArray().put(RhActions.obj("route","lan","address","192.168.0.104"));
+        try{RhNetwork.resolve(context,device,profile,RhActions.obj("failedRoutes",failed));fail("Excluded route accepted");}catch(IOException expected){assertTrue(expected.getMessage(),expected.getMessage().contains("已尝试且串流失败"));assertFalse(expected instanceof RhNetwork.Unavailable);}
+        assertEquals(0,Probes.lan);assertEquals(0,RhNetwork.state().getJSONArray("attempts").length());
+        profile.routeOrder.clear();profile.routeOrder.add("tailscale_direct");
+        try{RhNetwork.resolve(context,device,profile,RhActions.obj("failedRoutes",failed));fail("Unmatched route accepted");}catch(IOException expected){assertTrue(expected.getMessage(),expected.getMessage().contains("当前设置中没有可用的连接路径"));assertFalse(expected.getMessage().contains("已尝试"));assertFalse(expected instanceof RhNetwork.Unavailable);}
+    }
+    @Test public void mixedFailuresRetainTheirDifferentCausesAndRetryability(){
+        JSONArray rows=new JSONArray().put(RhActions.obj("failureKind","component","retryable",false)).put(RhActions.obj("failureKind","identity","retryable",false)).put(RhActions.obj("failureKind","network","retryable",true));
+        IOException failure=RhNetwork.resolutionFailure(rows,0);assertFalse(failure instanceof RhNetwork.Unavailable);assertTrue(failure.getMessage(),failure.getMessage().contains("组件不可用"));assertTrue(failure.getMessage(),failure.getMessage().contains("设备标识不符"));assertTrue(failure.getMessage(),failure.getMessage().contains("其他路径也未能连接"));
+        assertTrue(RhNetwork.resolutionFailure(new JSONArray().put(RhActions.obj("retryable",true)),0) instanceof RhNetwork.Unavailable);
+        assertFalse(RhNetwork.resolutionFailure(new JSONArray().put(RhActions.obj("failureKind","certificate","retryable",false)),0) instanceof RhNetwork.Unavailable);
+    }
+    @Test public void readOnlyCheckingReusesRelayAndCarriesOnlyTheAcceptedResponse()throws Exception{
+        profile.routeOrder.clear();java.util.Collections.addAll(profile.routeOrder,"punch_direct","relay");ComputerDetails resolved=RhNetwork.resolve(context,device,profile,RhActions.obj("readOnlyDeviceCheck",true));
+        assertTrue(resolved instanceof RhDeviceCheck.Resolved);assertEquals("127.77.0.2",resolved.activeAddress.address);assertTrue(((RhDeviceCheck.Resolved)resolved).serverInfo.contains("<uniqueid>host</uniqueid>"));assertEquals(1,Transport.handshakes);assertEquals(0,Transport.stops);assertTrue(Transport.active);
+    }
+    @Test public void readOnlyCheckingStopsTheRejectedRelayBeforeItsLanFallback()throws Exception{
+        Probes.rejectProxy=true;profile.routeOrder.clear();java.util.Collections.addAll(profile.routeOrder,"relay","lan");ComputerDetails resolved=RhNetwork.resolve(context,device,profile,RhActions.obj("readOnlyDeviceCheck",true));
+        assertTrue(resolved instanceof RhDeviceCheck.Resolved);assertEquals("192.168.0.104",resolved.activeAddress.address);assertEquals(1,Probes.proxy);assertEquals(1,Probes.lan);assertEquals(1,Transport.stops);assertFalse(Transport.active);assertNotNull(((RhDeviceCheck.Resolved)resolved).serverInfo);
     }
 }

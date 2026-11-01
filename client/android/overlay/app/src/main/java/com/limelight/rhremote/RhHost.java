@@ -13,10 +13,14 @@ import org.json.*;
 /** Mutual TLS with the existing Sunshine pairing identity. Never creates or exports credentials. */
 public final class RhHost {
     public static JSONObject request(Context context,String host,byte[] pinnedDer,String path,JSONObject body)throws Exception {
+        return request(context,host,pinnedDer,path,body,null);
+    }
+    public static JSONObject request(Context context,String host,byte[] pinnedDer,String path,JSONObject body,RhCancellation operation)throws Exception {
+        if(operation!=null)operation.checkpoint();
         if(host==null||pinnedDer==null)throw new IOException("缺少主机配对信息");
         if(!path.equals("/v1/transport/authorize")){
-            try{String endpoint=RhTunnel.identity(context);request(context,host,pinnedDer,"/v1/transport/authorize",RhActions.obj("endpointId",endpoint));}
-            catch(Exception|LinkageError e){if("127.77.0.2".equals(host))throw new IOException("独立连接授权失败",e);}
+            try{String endpoint=RhTunnel.identity(context);request(context,host,pinnedDer,"/v1/transport/authorize",RhActions.obj("endpointId",endpoint),operation);}
+            catch(Exception|LinkageError e){if(operation!=null)operation.checkpoint();if("127.77.0.2".equals(host))throw new IOException("独立连接授权失败",e);}
         }
         X509Certificate pinned=(X509Certificate)CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(pinnedDer));
         LimelightCryptoProvider crypto=PlatformBinding.getCryptoProvider(context);
@@ -37,14 +41,19 @@ public final class RhHost {
         HttpsURLConnection connection=(HttpsURLConnection)new URI("https",null,host,RhTunnel.port(host,47995),path,null,null).toURL().openConnection(Proxy.NO_PROXY);
         connection.setSSLSocketFactory(ssl.getSocketFactory());connection.setHostnameVerifier((name,session)->{try{return session.getPeerCertificates().length==1&&pinned.equals(session.getPeerCertificates()[0]);}catch(Exception e){return false;}});
         connection.setConnectTimeout(2500);connection.setReadTimeout(15000);connection.setInstanceFollowRedirects(false);
-        try {
+        try(RhCancellation.Watch request=operation==null?null:operation.watch(connection::disconnect)) {
+            if(operation!=null)operation.checkpoint();
             if(body!=null){byte[] bytes=body.toString().getBytes(StandardCharsets.UTF_8);connection.setRequestMethod("POST");connection.setDoOutput(true);connection.setFixedLengthStreamingMode(bytes.length);connection.setRequestProperty("Content-Type","application/json");try(OutputStream out=connection.getOutputStream()){out.write(bytes);}}
             int code=connection.getResponseCode();InputStream source=code>=400?connection.getErrorStream():connection.getInputStream();if(source==null)throw new IOException("主机辅助服务响应为空");
-            try(InputStream in=source){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1){if(out.size()+n>131072)throw new IOException("主机响应过大");out.write(b,0,n);}JSONObject result=new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));if(!result.optBoolean("ok"))throw new IOException(result.optString("error","主机操作失败"));return result;}
+            try(InputStream in=source){return readResponse(in,operation);}
         } catch(ConnectException e){
             throw new IOException("无法连接主机辅助服务（"+host+":47995），请在目标电脑安装或启动 RHRemote-Sunshine",e);
         } catch(SocketTimeoutException e){
             throw new IOException("主机辅助服务响应超时，请检查 RHRemote-Sunshine 和局域网连接",e);
         } finally {connection.disconnect();}
+    }
+    private static JSONObject readResponse(InputStream in,RhCancellation operation)throws Exception{
+        ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[4096];int n;while((n=in.read(b))!=-1){if(operation!=null)operation.checkpoint();if(out.size()+n>131072)throw new IOException("主机响应过大");out.write(b,0,n);}if(operation!=null)operation.checkpoint();
+        JSONObject result=new JSONObject(new String(out.toByteArray(),StandardCharsets.UTF_8));if(!result.optBoolean("ok"))throw new IOException(result.optString("error","主机操作失败"));return result;
     }
 }

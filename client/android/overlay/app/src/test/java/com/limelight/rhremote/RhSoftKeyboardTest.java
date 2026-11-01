@@ -55,6 +55,21 @@ public class RhSoftKeyboardTest {
         keyboard.request(true,(visible,error)->completed.add(visible));advance(100);assertTrue(keyboard.pending());assertTrue(completed.isEmpty());
         backend.settled=true;advance(50);assertFalse(keyboard.pending());assertEquals(Collections.singletonList(true),completed);
     }
+    @Test public void aVisibleKeyboardAtTheDeadlineIsNotReportedMissingOrHiddenByItsOwner(){
+        Backend backend=new Backend();backend.visible=true;backend.settled=false;
+        RhSoftKeyboard keyboard=keyboard(backend);List<String> completed=new ArrayList<>();
+        keyboard.request(true,(visible,error)->completed.add(visible+":"+error));advance(2100);
+        assertEquals("The platform has already shown the requested keyboard",Collections.singletonList("true:"),completed);
+        assertEquals("Do not undo a successful show while its animation callback is late",Collections.singletonList(true),backend.requests);
+        assertFalse(keyboard.pending());assertEquals("",keyboard.error());
+    }
+    @Test public void aHiddenKeyboardAtTheDeadlineIsNotReportedStillOpen(){
+        Backend backend=new Backend();backend.visible=false;backend.settled=false;
+        RhSoftKeyboard keyboard=keyboard(backend);List<String> completed=new ArrayList<>();
+        keyboard.request(false,(visible,error)->completed.add(visible+":"+error));advance(2100);
+        assertEquals(Collections.singletonList("false:"),completed);
+        assertEquals(Collections.singletonList(false),backend.requests);assertFalse(keyboard.pending());
+    }
     @Test public void disposalCancelsCallbacksAndClosesOnlyAnOwnedRequest(){
         Backend backend=new Backend();RhSoftKeyboard keyboard=keyboard(backend);List<Boolean> completed=new ArrayList<>();
         keyboard.request(true,(visible,error)->completed.add(visible));keyboard.dispose();advance(3000);

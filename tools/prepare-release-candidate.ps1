@@ -2,6 +2,7 @@ param(
  [Parameter(Mandatory)][string]$WindowsDirectory,
  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='0.2.7',
  [ValidateRange(209,2100000000)][int]$AndroidVersionCode=209,
+ [string]$ServerArchive='',
  [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSignerSha256='2f6464fe50d23ef17e4fdab8c1dcc7b6ec4171b890158738653c51854031dadc'
 )
 $ErrorActionPreference='Stop'
@@ -36,6 +37,11 @@ New-Item -ItemType Directory -Path $out|Out-Null
 foreach($name in @('RHRemote-win-Setup.exe','RHRemote-win-Portable.zip','releases.win.json','RELEASES',$packageName)){Copy-Item -LiteralPath (Join-Path $WindowsDirectory $name) -Destination $out}
 $apkName="RHRemote-Android-$Version-arm64-v8a.apk"
 Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $out $apkName)
+if($ServerArchive){
+ $serverFile=Get-Item -LiteralPath $ServerArchive
+ if($serverFile.PSIsContainer-or$serverFile.Name-ne("RHRemote-Sunshine-$Version-win-x64.zip")){throw 'Unexpected server archive identity'}
+ Copy-Item -LiteralPath $serverFile.FullName -Destination (Join-Path $out $serverFile.Name)
+}
 $apkHash=(Get-FileHash -LiteralPath $apk.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 $android=[ordered]@{schemaVersion=1;android=[ordered]@{version=$Version;versionCode=$AndroidVersionCode;packageName='com.rhremote.client';tag="v$Version";fileName=$apkName;size=$apk.Length;sha256=$apkHash;notes='See RELEASE-NOTES.md for changes.'}}
 [IO.File]::WriteAllText((Join-Path $out 'releases.android.json'),($android|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))

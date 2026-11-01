@@ -1,0 +1,20 @@
+[
+  {"name":"lan","address":"192.168.0.104","route":"lan","expected":25},
+  {"name":"public","address":"203.0.113.8","route":"public_direct","expected":6},
+  {"name":"punch proxy","address":"127.77.0.2","route":"punch_direct","expected":6},
+  {"name":"relay proxy","address":"127.77.0.2","route":"relay","expected":3},
+  {"name":"tailnet direct","address":"100.73.139.109","route":"tailscale_direct","expected":6},
+  {"name":"tailnet unknown path","address":"100.73.139.109","route":"tailscale_relay","expected":3},
+  {"name":"unknown proxy","address":"127.77.0.2","expected":3},
+  {"name":"hostname resolved as LAN","address":"winserver","route":"lan","expected":25},
+  {"name":"hostname unknown","address":"winserver","expected":6},
+  {"name":"private v6","address":"fd7a:115c:a1e0::1","route":"tailscale_direct","expected":6},
+  {"name":"720p LAN","address":"192.168.0.104","width":1280,"height":720,"expected":12},
+  {"name":"small window LAN","address":"192.168.0.104","width":640,"height":480,"expected":4},
+  {"name":"small window relay","address":"127.77.0.2","route":"relay","width":640,"height":480,"expected":3},
+  {"name":"limit applies remote","address":"203.0.113.8","remoteCap":2,"expected":2},
+  {"name":"limit ignored LAN","address":"192.168.0.104","route":"lan","remoteCap":2,"expected":25},
+  {"name":"manual unchanged LAN","address":"192.168.0.104","auto":false,"manual":41,"expected":41},
+  {"name":"manual unchanged remote","address":"203.0.113.8","auto":false,"manual":41,"expected":41},
+  {"name":"manual explicit limit","address":"203.0.113.8","auto":false,"manual":41,"remoteCap":15,"expected":15}
+]

@@ -272,7 +272,7 @@ fn connections(out: &Path, dark: bool, narrow: bool, images: &mut Vec<Value>) ->
     Ok(())
 }
 
-fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Value>) -> Result<()> {
+fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Value>, sync_only: bool) -> Result<()> {
     let theme = if dark { "dark" } else { "light" };
     let size = if large {
         "large"
@@ -295,7 +295,7 @@ fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Val
         "about",
         "add",
         "device-info",
-    ] {
+    ].into_iter().filter(|scene| !sync_only || *scene == "sync") {
         let ui = MainWindow::new()?;
         ui.global::<Palette>().set_dark(dark);
         ui.set_dark(dark);
@@ -355,6 +355,15 @@ fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Val
         ui.set_updates_managed(true);
         ui.set_update_primary_text("检查更新".into());
         ui.set_update_status("尚未检查更新".into());
+        if scene == "sync" {
+            ui.set_sync_url("http://example.test/dav".into());
+            ui.set_sync_username("ui-preview".into());
+            ui.set_sync_has_password(true);
+            ui.set_sync_password_reusable(true);
+            ui.set_sync_automatic(true);
+            ui.set_sync_interval_index(1);
+            ui.set_sync_last("上次完成：2026-10-29 05:00".into());
+        }
         ui.set_network_address("192.0.2.1".into());
         ui.set_network_addresses("100.64.0.1".into());
         ui.set_network_summary("已保存首选地址和备用地址".into());
@@ -370,6 +379,7 @@ fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Val
                     can_move_up: i > 0,
                     can_move_down: i + 1 < rhremote_core::network::ROUTES.len(),
                     can_disable: true,
+                    toggle_blocked: false,
                 })
                 .collect(),
         ));
@@ -452,6 +462,17 @@ fn forms(out: &Path, dark: bool, narrow: bool, large: bool, images: &mut Vec<Val
             &format!("form-{scene}-bottom-{size}-{theme}"),
             images,
         )?;
+        if scene == "sync" {
+            ui.set_sync_dirty(true);
+            ui.set_sync_interval_index(2);
+            let test = ui.global::<UiTest>();
+            test.set_scroll_delta(10000.);
+            test.set_generation(test.get_generation() + 1);
+            ui.window().take_snapshot()?;
+            capture(&ui, out, &format!("form-sync-draft-{size}-{theme}"), images)?;
+            scroll_bottom(&ui, ui.global::<UiTest>(), "scroll|form")?;
+            capture(&ui, out, &format!("form-sync-draft-bottom-{size}-{theme}"), images)?;
+        }
         ui.hide()?;
     }
     Ok(())
@@ -583,6 +604,11 @@ fn main() -> Result<()> {
         return Err("The output directory already exists".into());
     }
     fs::create_dir(out)?;
+    let sync_only = match std::env::args_os().nth(2) {
+        None => false,
+        Some(value) if value == "sync-only" => true,
+        Some(_) => return Err("Only the optional sync-only mode is supported".into()),
+    };
     slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
         mock_time: true,
         threading: false,
@@ -591,13 +617,15 @@ fn main() -> Result<()> {
     let mut images = Vec::new();
     for dark in [false, true] {
         for narrow in [false, true] {
-            toolbars(out, dark, narrow, &mut images)?;
-            pickers(out, dark, narrow, &mut images)?;
-            connections(out, dark, narrow, &mut images)?;
-            forms(out, dark, narrow, false, &mut images)?;
-            update_states(out, dark, narrow, &mut images)?;
+            if !sync_only {
+                toolbars(out, dark, narrow, &mut images)?;
+                pickers(out, dark, narrow, &mut images)?;
+                connections(out, dark, narrow, &mut images)?;
+                update_states(out, dark, narrow, &mut images)?;
+            }
+            forms(out, dark, narrow, false, &mut images, sync_only)?;
         }
-        forms(out, dark, false, true, &mut images)?;
+        forms(out, dark, false, true, &mut images, sync_only)?;
     }
     fs::write(
         out.join("catalog.json"),

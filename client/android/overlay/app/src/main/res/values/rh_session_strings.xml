@@ -1,0 +1,5 @@
+<resources>
+    <string name="rh_connection_slow">连接较慢，可降低码率</string>
+    <string name="rh_connection_poor">连接质量不佳</string>
+    <string name="rh_connection_slow_summary">连接较慢</string>
+</resources>

@@ -27,7 +27,7 @@ public final class RhPairingStore {
         ComputerDetails saved=previous==null?new ComputerDetails(verified):new ComputerDetails(previous);
         if(previous!=null)saved.update(verified);
         saved.name=saved.name==null?saved.uuid:saved.name;
-        saved.serverCert=pin;saved.pairState=PairingManager.PairState.PAIRED;
+        saved.serverCert=pin;saved.pairState=PairingManager.PairState.PAIRED;saved.rhDiscoveryObservation=null;
         saved.localAddress=persistent(saved.localAddress);saved.remoteAddress=persistent(saved.remoteAddress);saved.ipv6Address=persistent(saved.ipv6Address);
         saved.manualAddress=persistent(saved.manualAddress);
         if(saved.manualAddress==null&&previous!=null)saved.manualAddress=persistent(previous.manualAddress);
@@ -48,7 +48,7 @@ public final class RhPairingStore {
     }
     private static void assignPin(ComputerDetails details,X509Certificate pin) {
         if(!java.util.Objects.equals(pin,details.serverCert)) {
-            details.serverCert=pin;details.pairState=null;details.state=ComputerDetails.State.UNKNOWN;
+            details.serverCert=pin;details.pairState=null;details.state=ComputerDetails.State.UNKNOWN;details.rhDiscoveryObservation=null;
         }
     }
     public static boolean savePoll(ComputerDatabaseManager database,ComputerDetails details,boolean newPc) {

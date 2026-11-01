@@ -20,10 +20,18 @@ exit /b %errorlevel%
 if($LASTEXITCODE -ne 0){throw 'Windows build failed.'}
 & (Join-Path $PSScriptRoot 'test-frame-clock.ps1') -SourceDir $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Native frame clock queue regressions failed.'}
+& (Join-Path $PSScriptRoot 'test-windows-launch-cancellation.ps1') -QtDirectory $QtDir
+if($LASTEXITCODE -ne 0){throw 'Native launch ownership regressions failed.'}
 & (Join-Path $PSScriptRoot 'test-windows-pairing-persistence.ps1') -QtDirectory $QtDir
 if($LASTEXITCODE -ne 0){throw 'Native pairing persistence regressions failed.'}
 & (Join-Path $PSScriptRoot 'test-windows-pairing-key.ps1') -QtDirectory $QtDir
 if($LASTEXITCODE -ne 0){throw 'Native binary pairing key regressions failed.'}
+& (Join-Path $PSScriptRoot 'test-windows-control-accept.ps1') -QtDirectory $QtDir
+if($LASTEXITCODE -ne 0){throw 'Native control accept regressions failed.'}
+& (Join-Path $PSScriptRoot 'test-windows-probe-status.ps1') -QtDirectory $QtDir
+if($LASTEXITCODE-ne0){throw 'Native probe status regressions failed.'}
+& (Join-Path $PSScriptRoot 'test-windows-window-source.ps1') -QtDirectory $QtDir
+if($LASTEXITCODE-ne0){throw 'Native window source regressions failed.'}
 $out=Join-Path $repo 'dist/windows';New-Item -ItemType Directory -Force -Path $out|Out-Null
 $runtime='D:\RHRemoteTools\Moonlight-RHRemote-6.1.0'
 & robocopy $runtime $out /E /NFL /NDL /NJH /NJS /XF *.exe *.ini *.pem *.key *.log portable.dat /XD 'Moonlight Game Streaming Project' 'cache' 'boxart' 'logs'|Out-Null
@@ -32,4 +40,5 @@ Copy-Item -LiteralPath (Join-Path $build 'app/release/RHRemote.exe') -Destinatio
 [IO.File]::WriteAllText((Join-Path $out 'portable.dat'),'')
 Copy-Item -LiteralPath (Join-Path $repo 'client/LICENSE') -Destination (Join-Path $out 'LICENSE') -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out 'RHRemote.exe')|Select-Object Hash,Path
+try{& (Join-Path $PSScriptRoot 'clean-build-artifacts.ps1') -Apply -Protect @($out) | Out-Null}catch{Write-Warning ('Artifact retention deferred: '+$_.Exception.Message)}
 exit 0

@@ -8,9 +8,25 @@ pub fn update_primary_action(state:&Value)->&'static str {
     else {"updates.check"}
 }
 
+pub(crate) fn update_primary_intent(state:&Value,operation:u64)->String {
+    json!([update_primary_action(state),operation,state["availableVersion"],state["pendingRestart"]==true,state["candidateId"]]).to_string()
+}
+pub(crate) fn validate_update_intent(id:&str,args:&Value,state:&Value,operation:u64)->Result<(),String>{
+    if matches!(id,"updates.primary"|"updates.check"|"updates.download"|"updates.install") {
+        if let Some(expected)=args.get("expectedIntent") {
+            if expected.as_str()!=Some(update_primary_intent(state,operation).as_str()) {
+                return Err("更新状态已变化，请重新点击当前操作".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn update_installation_blocked(s: &crate::State) -> Option<&'static str> {
     if s.streaming || s.connecting || s.connection.busy() || s.page == "pair" {
         Some("请先完成或断开当前远程连接")
+    } else if s.diagnostics.busy {
+        Some("请先完成或取消连接诊断")
     } else if s.sync_busy {
         Some("请先完成配置同步")
     } else if s.page == "add" || s.add.busy() {
@@ -59,6 +75,7 @@ impl Controller {
     }
     pub(crate) fn dispatch_update(&self, id: &str, args: &Value) -> Result<Value, String> {
         if id == "updates.state" { return Ok(self.state()["updates"].clone()); }
+        let observed=if args.get("expectedIntent").is_some(){self.platform.update_state()}else{None};
         let mut s = self.state.lock().unwrap();
         if id=="updates.cancel" {
             let operation=args["operationId"].as_u64().filter(|id|*id==s.update_operation).ok_or("更新操作已变化，未执行取消")?;
@@ -70,9 +87,11 @@ impl Controller {
             if s.page!="global-settings" || s.settings_tab!="updates" {return Err("请先打开更新页".into());}
             s.update_details=!s.update_details;s.revision+=1;return Ok(json!({"expanded":s.update_details}));
         }
+        validate_update_intent(id,args,observed.as_ref().unwrap_or(&s.updates),s.update_operation)?;
         if s.updates_busy {
             return Err("更新操作正在进行".into());
         }
+        if let Some(observed)=observed{s.updates=observed;}
         let id = if id == "updates.primary" {
             update_primary_action(&s.updates)
         } else { id };
@@ -82,8 +101,8 @@ impl Controller {
             // so a concurrent edit cannot slip between the decision and installation.
             if crate::interaction::dirty(&s) || crate::interaction::sync_dirty(&s) || crate::device_info::dirty(&s) {
                 drop(s);
-                if let Some(result) = self.navigation_gate("updates.install", &json!({})) { return result; }
-                return self.dispatch_update("updates.install",&json!({}));
+                if let Some(result) = self.navigation_gate("updates.install", args) { return result; }
+                return self.dispatch_update("updates.install",args);
             }
         }
         let preparing = id == "updates.install" && s.updates["pendingRestart"] != true;
@@ -127,8 +146,9 @@ impl Controller {
                 result["deferredReason"] = json!(reason);
                 return Ok(result);
             }
+            let intent=update_primary_intent(&result,s.update_operation);
             drop(s);
-            let continued = self.dispatch("updates.install", json!({}));
+            let continued = self.dispatch("updates.install", json!({"expectedIntent":intent}));
             if continued["ok"] == true { return Ok(continued["result"].clone()); }
             let current = self.state.lock().unwrap();
             if current.updates_busy || update_installation_blocked(&current).is_some() {
@@ -162,7 +182,9 @@ impl Controller {
         }
         let mut s = self.state.lock().unwrap();
         if id=="sync.state" {return Ok(s.sync.clone());}
+        crate::interaction::validate_sync_review(&s.sync,id,&args)?;
         if id=="sync.run" && args["automatic"]==true && s.sync["automaticBlocked"]==true{return Ok(json!({"skipped":true,"reason":"sync_interrupted"}));}
+        if id=="sync.run" && args["automatic"]==true && crate::interaction::sync_review_waiting(&s.sync){return Ok(json!({"skipped":true,"reason":"sync_conflict"}));}
         if id=="sync.run" && args["automatic"]==true && (crate::interaction::automatic_sync_blocked(&s)||s.sync["automatic"]!=true){return Ok(json!({"skipped":true}));}
         if s.sync_busy {
             return Err("同步操作正在进行".into());
@@ -176,6 +198,7 @@ impl Controller {
         if id == "sync.clear" {
             if s.page != "global-settings" || s.settings_tab != "sync" { return Err("请先打开配置同步页".into()); }
             if s.sync["hasPassword"] != true && s.sync["url"].as_str().unwrap_or("").is_empty() { return Err("没有已保存的同步设置".into()); }
+            if !s.sync_clear_pending {s.decision_generation=s.decision_generation.checked_add(1).ok_or("确认操作编号已耗尽")?;s.sync_clear_request_id=s.decision_generation.to_string();}
             s.sync_clear_pending = true;
             s.sync_error.clear();
             s.status.clear();
@@ -184,6 +207,7 @@ impl Controller {
         }
         if id == "sync.clear.resolve" {
             if !s.sync_clear_pending { return Err("没有等待确认的移除操作".into()); }
+            if let Some(expected)=args.get("requestId"){if expected.as_str()!=Some(s.sync_clear_request_id.as_str()){return Err("该移除确认已失效，请使用当前对话框".into());}}
             match args["choice"].as_str() {
                 Some("cancel") => { s.sync_clear_pending=false;s.sync_error=if s.sync["automaticBlocked"]==true{s.sync["error"].as_str().unwrap_or("").into()}else{String::new()};s.revision+=1;return Ok(json!({"cancelled":true})); }
                 Some("remove") => {}
@@ -199,6 +223,8 @@ impl Controller {
             }
             input["shared"] = serde_json::to_value(sync_model::from_state(&s)).unwrap();
         }
+        let previous_transfer_error=s.sync["error"].as_str().unwrap_or("").to_owned();
+        let previous_account=json!([s.sync["url"],s.sync["username"],s.sync["hasPassword"]]);
         s.sync_busy = true;
         s.sync_error.clear();
         s.revision += 1;
@@ -224,12 +250,17 @@ impl Controller {
                     s.status = e.clone();
                 }
                 s.sync_error = e.clone();
-                if s.sync["automaticBlocked"] == true {
+                if s.sync["automaticBlocked"] == true || matches!(id,"sync.run"|"sync.resolve") {
                     s.sync["error"] = json!(e);
+                } else if !previous_transfer_error.is_empty()
+                    && previous_account==json!([s.sync["url"],s.sync["username"],s.sync["hasPassword"]]) {
+                    // Invalid draft input must not replace the last transfer result.
+                    s.sync["error"]=json!(previous_transfer_error);
                 }
                 return Err(e);
             }
         };
+        if matches!(id,"sync.run"|"sync.resolve") {s.sync["error"]=json!("");}
         if let Some(sync) = result.get("sync") {
             s.sync = sync.clone();
         } else if id == "sync.configure" || id == "sync.state" || id == "sync.clear" {
@@ -255,7 +286,8 @@ impl Controller {
                 let shared: sync_model::SharedConfig =
                     serde_json::from_value(shared.clone()).map_err(|e| e.to_string())?;
                 shared.validate()?;
-                let mut next = s.saved.clone();
+                let before = s.saved.clone();
+                let mut next = before.clone();
                 next.apply_shared(&shared);
                 if self.storage.exists() {
                     let dir = self.storage.parent().unwrap().join("sync-backups");
@@ -282,33 +314,8 @@ impl Controller {
                     return Err("本机配置回读不匹配".into());
                 }
                 s.saved = next;
-                let devices: Vec<crate::Device> = shared
-                    .devices
-                    .iter()
-                    .map(|d| {
-                        s.devices
-                            .iter()
-                            .find(|old| old.uuid == d.uuid)
-                            .cloned()
-                            .map(|mut old| {
-                                old.name = d.name.clone();
-                                old.address = d.address.clone();
-                                old.display_name = d.display_name.clone();
-                                old
-                            })
-                            .unwrap_or(crate::Device {
-                                uuid: d.uuid.clone(),
-                                name: d.name.clone(),
-                                display_name: d.display_name.clone(),
-                                address: d.address.clone(),
-                                addresses: Vec::new(),
-                                online: false,
-                                paired: false,
-                                is_self: false,
-                            })
-                    })
-                    .collect();
-                s.devices = devices.clone();
+                crate::device_import::apply(&mut s,&before,&shared);
+                let devices=s.devices.clone();
                 Ok((shared, devices))
             })();
             let (shared, devices) = match applied {
@@ -324,7 +331,7 @@ impl Controller {
             self.sync_progress("restoring", "正在刷新设备状态…");
             let restored = match self
                 .platform
-                .execute("devices.restore", &json!({"devices":devices}))
+                .execute("devices.restore", &json!({"devices":devices,"replace":true}))
             {
                 Ok(value) => value,
                 Err(_) => {
@@ -401,6 +408,41 @@ mod interaction_tests {
     }
     fn controller(platform:Arc<Updates>)->Arc<Controller>{
         Controller::new("test",std::env::temp_dir().join(format!("rhremote-interaction-{}.json",random_token().unwrap())),platform).unwrap()
+    }
+    #[test]
+    fn automatic_sync_and_stale_review_requests_cannot_replace_waiting_content_or_open_a_draft_prompt(){
+        let platform=Arc::new(Updates::default());let c=controller(platform.clone());
+        {let mut s=c.state.lock().unwrap();s.sync=json!({"url":"http://fixture.test/dav","username":"fixture","automatic":true,"hasPassword":true,"conflicts":["devices.host"],"phase":"conflict","reviewId":"new-review"});}
+        assert_eq!(c.dispatch("app.settings.tab",json!({"tab":"sync"}))["ok"],true);
+        assert_eq!(c.dispatch("sync.edit",json!({"key":"username","value":"unsaved"}))["ok"],true);
+        let automatic=c.dispatch("sync.run",json!({"automatic":true}));assert_eq!(automatic["ok"],true);assert_eq!(automatic["result"]["skipped"],true,"{automatic}");
+        for invalid in [json!("true"),json!(1),Value::Null]{assert_eq!(c.dispatch("sync.run",json!({"automatic":invalid}))["ok"],false);}
+        for invalid in [json!("old-review"),json!(""),json!(1)]{assert_eq!(c.dispatch("sync.resolve",json!({"resolution":"remote","reviewId":invalid}))["ok"],false);}
+        assert!(c.state()["navigationPrompt"].is_null());assert_eq!(c.state()["sync"]["reviewId"],"new-review");assert_eq!(c.state()["syncDraft"]["username"],"unsaved");assert!(platform.calls.lock().unwrap().is_empty());
+        let current=c.dispatch("sync.resolve",json!({"resolution":"remote","reviewId":"new-review"}));assert_eq!(current["ok"],true,"{current}");assert!(c.state()["navigationPrompt"].is_object());assert!(platform.calls.lock().unwrap().is_empty());let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn fresh_update_intent_uses_the_live_candidate_instead_of_the_older_controller_cache(){
+        struct Live{snapshot:Mutex<Value>,calls:Mutex<Vec<String>>}
+        impl Platform for Live{
+            fn update_state(&self)->Option<Value>{Some(self.snapshot.lock().unwrap().clone())}
+            fn execute(&self,id:&str,_:&Value)->Result<Value,String>{
+                if id=="updates.state"{return Ok(self.snapshot.lock().unwrap().clone());}
+                if id.starts_with("updates."){self.calls.lock().unwrap().push(id.into());return Ok(self.snapshot.lock().unwrap().clone());}
+                Ok(json!({}))
+            }
+        }
+        let platform=Arc::new(Live{snapshot:Mutex::new(json!({"managed":true,"phase":"idle"})),calls:Mutex::new(vec![])});
+        let c=Controller::new("test",std::env::temp_dir().join(format!("rhremote-update-live-{}.json",random_token().unwrap())),platform.clone()).unwrap();
+        *platform.snapshot.lock().unwrap()=json!({"managed":true,"phase":"available","availableVersion":"9.0.0","candidateId":"package-a"});
+        let expected=c.state()["updates"]["intent"].clone();let result=c.dispatch("updates.primary",json!({"expectedIntent":expected}));assert_eq!(result["ok"],true,"{result}");
+        assert_eq!(*platform.calls.lock().unwrap(),["updates.prepare"]);
+        let expected=c.state()["updates"]["intent"].clone();platform.snapshot.lock().unwrap()["candidateId"]=json!("replacement-same-version");
+        assert_eq!(c.dispatch("updates.primary",json!({"expectedIntent":expected}))["ok"],false);assert_eq!(platform.calls.lock().unwrap().len(),1);let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn update_intent_ignores_progress_notes_and_mirror_but_not_the_selected_package_or_task(){
+        let a=json!({"phase":"available","availableVersion":"9.0.0","candidateId":"package-a"});let mut b=a.clone();b["notes"]=json!("New notes");b["provider"]=json!("gitee");b["progress"]=json!(43);
+        assert_eq!(update_primary_intent(&a,4),update_primary_intent(&b,4));assert_ne!(update_primary_intent(&a,4),update_primary_intent(&b,5));b["candidateId"]=json!("package-b");assert_ne!(update_primary_intent(&a,4),update_primary_intent(&b,4));
+        for malformed in [Value::Null,json!(4),json!([]),json!({})]{assert!(validate_update_intent("updates.primary",&json!({"expectedIntent":malformed}),&a,4).is_err());}
     }
     #[test]
     fn download_completion_must_not_close_a_draft_opened_while_install_was_preparing() {
@@ -482,6 +524,21 @@ mod interaction_tests {
         assert_eq!(c.dispatch("updates.state",json!({}))["ok"],true);assert_eq!(c.dispatch("updates.primary",json!({}))["ok"],false);
         assert_eq!(c.dispatch("app.settings.tab",json!({"tab":"about"}))["ok"],true);
         let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn stale_update_intent_is_rejected_without_starting_work(){
+        let platform=Arc::new(Updates::default());let c=controller(platform.clone());
+        let result=c.dispatch("updates.primary",json!({"expectedIntent":"obsolete-update-state"}));
+        assert_eq!(result["ok"],false,"{result}");assert_eq!(result["error"],"更新状态已变化，请重新点击当前操作");
+        assert!(platform.calls.lock().unwrap().is_empty());assert!(c.take_window_action().is_empty());let _=std::fs::remove_file(&c.storage);
+    }
+    #[test] fn stale_update_intent_does_not_open_a_draft_confirmation(){
+        let platform=Arc::new(Updates::default());let c=controller(platform.clone());
+        c.replace_devices(serde_json::from_value(json!([{"uuid":"host","name":"PC","address":"192.0.2.10","paired":true,"online":true}])).unwrap());
+        c.dispatch("device.settings.open",json!({"uuid":"host"}));c.dispatch("settings.input",json!({"key":"width","value":"unfinished"}));
+        c.state.lock().unwrap().updates=json!({"availableVersion":"9.0.0","phase":"available"});
+        let result=c.dispatch("updates.primary",json!({"expectedIntent":"obsolete-update-state"}));
+        assert_eq!(result["ok"],false,"{result}");assert!(c.state()["navigationPrompt"].is_null());assert_eq!(c.state()["settingsInputs"]["width"],"unfinished");
+        assert!(platform.calls.lock().unwrap().is_empty());let _=std::fs::remove_file(&c.storage);
     }
     #[test] fn update_details_are_a_page_action_and_do_not_start_another_job(){
         let platform=Arc::new(Updates::default());let c=controller(platform.clone());

@@ -8,11 +8,15 @@ public final class RhDisplay {
     private final Request request;private final RhProfile profile;
     private volatile JSONObject data=RhActions.obj();private volatile String error="";
     private volatile boolean initialBeforeCapture;private String requestedInitialSource="";
+    private JSONObject window;
+    public void setWindow(JSONObject selected)throws IOException{RhWindows.resolution(selected,profile.width,profile.height);window=selected;}
+    public boolean isWindow(){return window!=null;}
     public RhDisplay(Context context,String host,byte[] cert,RhProfile profile){this(profile,(path,body)->RhHost.request(context.getApplicationContext(),host,cert,path,body));}
     RhDisplay(RhProfile profile,Request request){this.profile=profile;this.request=request;}
     public JSONObject state(){return RhActions.obj("displays",data.optJSONArray("displays")==null?new JSONArray():data.optJSONArray("displays"),"selected",data.optJSONObject("selected"),"error",error);}
-    public void prepare()throws IOException {data=RhActions.obj();initialBeforeCapture=false;requestedInitialSource="";try(RhStatistics.Scope scope=new RhStatistics.Scope("remote_display_prepare")){select(profile.displayMode,false);}catch(Exception e){error=e.getMessage()==null?"主机屏幕组件不可用":e.getMessage();if(!profile.displayMode.equals("auto"))throw new IOException(error,e);}}
+    public void prepare()throws IOException {data=RhActions.obj();initialBeforeCapture=false;requestedInitialSource="";if(window!=null){data=RhActions.obj("selected",RhActions.obj("kind","window","id",window.optString("id"),"title",window.optString("title"),"width",window.optInt("width"),"height",window.optInt("height")),"displays",new JSONArray());return;}try(RhStatistics.Scope scope=new RhStatistics.Scope("remote_display_prepare")){select(profile.displayMode,false);}catch(Exception e){error=e.getMessage()==null?"主机屏幕组件不可用":e.getMessage();if(!profile.displayMode.equals("auto"))throw new IOException(error,e);}}
     public JSONObject refresh()throws Exception {try{
+        if(window!=null)throw new IOException("当前为窗口串流；请断开后选择其他窗口或桌面");
         JSONObject previous=data.optJSONObject("selected"),next=request.call("/v1/displays",null).getJSONObject("result");
         JSONArray monitors=next.optJSONArray("displays");
         if(previous!=null&&monitors!=null)for(int i=0;i<monitors.length();i++){JSONObject monitor=monitors.getJSONObject(i);if(monitor.optBoolean("available")&&monitor.optString("id").equals(previous.optString("id"))){next.put("selected",monitor);break;}}
@@ -23,6 +27,7 @@ public final class RhDisplay {
     }
     /** The worker prepares a candidate; a live session commits it after local input succeeds. */
     JSONObject prepareSelection(String id)throws Exception {
+        if(window!=null)throw new IOException("窗口串流不能切换为桌面；请先断开");
         if(id==null||id.isEmpty()||id.length()>512)throw new IllegalArgumentException("displayId required");
         String mode=id.equals("auto")?"auto":id.equals("virtual")?"virtual":"physical";
         return request.call("/v1/display/prepare",RhActions.obj("mode",mode,"displayId",mode.equals("physical")?id:"","width",profile.width,"height",profile.height)).getJSONObject("result");
@@ -33,6 +38,7 @@ public final class RhDisplay {
     /** NvHTTP expects a raw query: pre-encoding here would make HttpUrl.Builder.query() escape the percent signs. */
     public String launchQuery()throws IOException {
         initialBeforeCapture=false;requestedInitialSource="";JSONObject selected=data.optJSONObject("selected");String source=selected==null?"":selected.optString("gdi");
+        if(window!=null){requestedInitialSource=window.optString("id");if(!RhWindows.valid(requestedInitialSource))throw new IOException("Invalid window source");return "&rhrdisplay="+requestedInitialSource;}
         if(source.isEmpty())return "";
         String prefix="\\\\.\\DISPLAY";
         if(!source.startsWith(prefix)||source.length()<=prefix.length()||source.length()>31||source.charAt(prefix.length())=='0')throw new IOException("Invalid prepared display source");
@@ -43,12 +49,12 @@ public final class RhDisplay {
     /** Suppress the legacy post-start hotkey only after a matching host acknowledgement. */
     public void acknowledgeInitial(String ack)throws IOException {
         initialBeforeCapture=false;
-        if(ack==null||ack.isEmpty()){RhStatistics.event("initial_display_launch",-1,RhActions.obj("requested",!requestedInitialSource.isEmpty(),"beforeCapture",false));return;}
+        if(ack==null||ack.isEmpty()){if(window!=null)throw new IOException("主机未确认窗口采集，已取消连接");RhStatistics.event("initial_display_launch",-1,RhActions.obj("requested",!requestedInitialSource.isEmpty(),"beforeCapture",false));return;}
         if(requestedInitialSource.isEmpty()||!ack.equals(requestedInitialSource))throw new IOException("The host acknowledged a different initial display");
         initialBeforeCapture=true;
         RhStatistics.event("initial_display_launch",-1,RhActions.obj("requested",true,"beforeCapture",true));
     }
-    public void applyInitial()throws Exception {if(initialBeforeCapture)return;JSONObject selected=data.optJSONObject("selected");if(selected!=null&&selected.optInt("captureIndex")!=data.optInt("initialCaptureIndex"))apply(selected);}
+    public void applyInitial()throws Exception {if(window!=null){if(!initialBeforeCapture)throw new IOException("Window capture was not acknowledged");return;}if(initialBeforeCapture)return;JSONObject selected=data.optJSONObject("selected");if(selected!=null&&selected.optInt("captureIndex")!=data.optInt("initialCaptureIndex"))apply(selected);}
     public void applyCurrent()throws Exception {apply(data.optJSONObject("selected"));}
     private void apply(JSONObject selected)throws Exception {
         if(selected==null)return;int index=selected.optInt("captureIndex");if(index<1||index>12)throw new IllegalStateException("Sunshine supports monitors 1 through 12");

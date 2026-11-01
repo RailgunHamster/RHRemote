@@ -4,6 +4,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 mod config_sync;
 mod devices;
+mod device_bootstrap;
+mod probe_report;
 mod form_models;
 mod view_state;
 mod ui_test;
@@ -11,10 +13,17 @@ mod ui_keyboard;
 mod ui_driver;
 #[cfg(test)]
 mod ui_driver_tests;
+#[cfg(test)]
+mod decision_tests;
+#[cfg(test)]
+mod workspace_flow_tests;
 mod preview_capture;
 mod preview_placement;
 mod network;
 mod native_cleanup;
+mod native_control;
+#[cfg(target_os="windows")]
+mod native_window;
 #[cfg(windows)]
 mod transport_owner;
 #[cfg(windows)]
@@ -31,10 +40,14 @@ mod pairing;
 mod platform;
 mod recovery;
 mod statistics;
+mod window_events;
 mod updates;
 mod update_cancel;
 mod ui_rendering;
+mod floating_keyboard;
 mod device_lookup;
+mod action_queue;
+mod device_probe;
 #[cfg(test)]
 mod form_tests;
 #[cfg(test)]
@@ -49,8 +62,17 @@ mod sync_commit_ui_tests;
 mod focus_clip_tests;
 slint::include_modules!();
 
+fn report_queued_error(controller:&Controller,id:&str,response:&Value){
+    // Refresh errors live beside their retry action; do not leave a second,
+    // unrelated global message after the refresh succeeds.
+    if id!="devices.refresh" && !id.starts_with("device.network.") && response["ok"]!=true && response["ignored"]!=true {
+        controller.message(response["error"].as_str().unwrap_or("操作失败").into());
+    }
+}
+
 fn args_for(id: &str, arg: &str, state: &Value) -> Value {
     match id {
+        "devices.refresh" if !arg.is_empty()=>json!({"uuid":arg}),
         "device.move" => {
             let (uuid, direction) = arg.split_once('|').unwrap_or(("", ""));
             json!({"uuid":uuid,"direction":direction})
@@ -60,13 +82,16 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
             let uuid=fields.next().unwrap_or("");let primary=fields.next().unwrap_or("");let extra=fields.next().unwrap_or("");
             json!({"uuid":uuid,"address":primary.trim(),"addresses":extra.split([',',';','\n']).map(str::trim).filter(|s|!s.is_empty()).collect::<Vec<_>>()})
         }
-        "device.network.diagnose" => json!({"uuid":arg}),
+        "device.network.diagnose" if !arg.starts_with('{')=>json!({"uuid":arg}),
+        "device.network.diagnose"|"device.network.cancel"|"device.network.details.toggle"=>serde_json::from_str(arg).unwrap_or_else(|_|json!({})),
         "updates.cancel"=>json!({"operationId":arg.parse::<u64>().unwrap_or(0)}),
+        "updates.primary" if !arg.is_empty()=>json!({"expectedIntent":arg}),
         "navigation.resolve"|"sync.clear.resolve"=>json!({"choice":arg}),
         "settings.input"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},
         "settings.network.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "statistics.configure" => json!({"enabled":arg=="true"}),
+        "stream.keyboard.floating.set" => json!({"enabled":arg=="true"}),
         "app.settings.tab" | "settings.tab" | "stream.controls.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
         "stream.shortcut" => json!({"shortcut":arg}),
@@ -82,11 +107,13 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
                 json!({})
             }
         }
-        "sync.resolve" => json!({"resolution":arg}),
+        "sync.resolve" => if let Some((resolution,review))=arg.split_once('|'){json!({"resolution":resolution,"reviewId":review})}else{json!({"resolution":arg})},
         "settings.copy_from" | "settings.copy.preview" => json!({"clientId":arg}),
         "settings.save" => json!({}),
-        "device.connect" | "device.pair" | "device.settings.open" | "device.info.open" | "device.select" => json!({"uuid":arg}),
+        "device.window.connect"=>{let(uuid,source)=arg.split_once('|').unwrap_or(("",""));json!({"uuid":uuid,"source":source})},
+        "device.windows.open" | "device.connect" | "device.pair" | "device.settings.open" | "device.info.open" | "device.select" => json!({"uuid":arg}),
         "devices.filter" => json!({"query":arg}),
+        "devices.filter.clear" => json!({"expectedQuery":arg}),
         "device.info.input"=>json!({"displayName":arg}),
         "device.add.submit" | "device.add.input" => json!({"address":arg}),
         "settings.route.move" => {let (route,direction)=arg.split_once('|').unwrap_or(("",""));json!({"route":route,"direction":direction})},
@@ -123,6 +150,19 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         _ => json!({}),
     }
 }
+pub(crate) fn request_owner(ui:&MainWindow,id:&str)->Option<String>{
+    if rhremote_core::is_profile_form_action(id){return Some(ui.get_profile_draft_id().to_string());}
+    match id{"navigation.resolve"=>Some(ui.get_navigation_request_id().to_string()),"sync.clear.resolve"=>Some(ui.get_sync_clear_request_id().to_string()),_=>None}
+}
+pub(crate) fn queued_args(id:&str,arg:&str,state:&Value,owner:Option<String>)->Value{
+    let mut args=args_for(id,arg,state);if let Some(request)=owner{args[if rhremote_core::is_profile_form_action(id){"draftId"}else{"requestId"}]=json!(request);}args
+}
+pub(crate) fn request_close(ui: &MainWindow) -> slint::CloseRequestResponse {
+    // Closing can wait for native cleanup or present an unsaved-draft decision.
+    // Keep the window alive while the existing action worker handles that work.
+    ui.global::<Commands>().invoke_trigger("window.close".into(), "".into());
+    slint::CloseRequestResponse::KeepWindowShown
+}
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let data = std::env::var_os("RHREMOTE_DATA_DIR")
         .filter(|value| !value.is_empty())
@@ -147,17 +187,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     )?);
     let controller = Controller::new("windows", data.join("preferences.json"), native.clone())?;
     native.statistics.lock().unwrap().mark("preferences_loaded");
-    let saved = controller.state()["saved"]["devices"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    if !saved.is_empty() {
-        let rows:Vec<_>=saved.iter().map(|d|json!({"uuid":d["uuid"],"name":d["name"],"address":d["address"],"addresses":d["addresses"].as_array().cloned().unwrap_or_default(),"online":false,"paired":false,"isSelf":false})).collect();
-        use rhremote_core::Platform;
-        native.execute("devices.restore", &json!({"devices":rows}))?;
-    }
-    controller.replace_devices(native.devices.lock().unwrap().clone());
-    native.statistics.lock().unwrap().mark("devices_restored");
+    device_bootstrap::restore(&controller.state()["saved"],&*native)?;
+    controller.replace_devices_pending(native.devices.lock().unwrap().clone());
+    native.statistics.lock().unwrap().mark("devices_loaded_local");
     if let Ok(port) = std::env::var("RHREMOTE_CONTROL_PORT") {
         rhremote_core::start_http(controller.clone(), port.parse()?, token)?;
     }
@@ -165,25 +197,41 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let monitor=std::env::var("RHREMOTE_TEST_MONITOR").ok();
     let coordinates=std::env::var("RHREMOTE_TEST_WINDOW_ORIGIN").ok();
     let preview_origin=preview_placement::origin(passive_preview,monitor.as_deref(),coordinates.as_deref())?;
+    // At this hook the component title has not reached the native attributes.
+    // Allocate the main adapter first, then make subsequent tool windows passive.
+    let creating_overlay=std::rc::Rc::new(std::cell::Cell::new(false));
+    let overlay_attributes=creating_overlay.clone();
+    let window_creation=Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let creation_attributes=window_creation.clone();
     slint::BackendSelector::new()
         .backend_name("winit".into())
         .renderer_name(ui_rendering::renderer().into())
         .with_winit_window_attributes_hook(move |attributes| {
-            if attributes.title == "RHRemote-Moonlight · 串流控制" || passive_preview {
-                attributes.with_active(false)
-            } else {
-                attributes
-            }
+            let overlay=overlay_attributes.get();
+            let active=!passive_preview&&!overlay;
+            let mut records=creation_attributes.lock().unwrap();
+            if records.len()<8{records.push(json!({"role":if overlay{"overlay"}else{"main"},"active":active,"normalActive":!overlay,"preview":passive_preview}));}
+            attributes.with_active(active)
         })
         .select()?;
     let ui = MainWindow::new()?;
+    let _=ui.window();
+    creating_overlay.set(true);
     if let Some((x,y))=preview_origin {ui.window().set_position(slint::PhysicalPosition::new(x,y));}
     ui.set_isolated_preview(std::env::var("RHREMOTE_TEST_MODE").as_deref()==Ok("1") && std::env::var_os("RHREMOTE_DATA_DIR").is_some_and(|v|!v.is_empty()));
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     controller.ui_rendering(ui_rendering::metadata());
     native.statistics.lock().unwrap().mark("ui_backend_selected");
     let toolbar = StreamToolbar::new()?;
+    let keyboard = FloatingKeyboardWindow::new()?;
     let picker = StreamPicker::new()?;
+    if passive_preview {
+        use slint::winit_030::{WinitWindowAccessor,EventResult,winit::event::WindowEvent};
+        for(role,window)in[(window_events::Role::Toolbar,toolbar.window()),(window_events::Role::Keyboard,keyboard.window())]{
+            let mut recorder=window_events::Recorder::new(true,role,native.statistics.clone());
+            window.on_winit_window_event(window_events::compose(move|event:&WindowEvent|recorder.observe(event),|_|EventResult::Propagate));
+        }
+    }
     let shortcuts = rhremote_core::shortcuts();
     ui.set_shortcut_labels(ModelRc::new(VecModel::from(
         shortcuts
@@ -205,29 +253,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     toolbar.set_shortcut_ids(ui.get_shortcut_ids());
     native.statistics.lock().unwrap().mark("ui_created");
     let actions = controller.clone();
-    let (sender, receiver) = std::sync::mpsc::sync_channel::<(String, String, u128, std::time::Instant)>(64);
-    std::thread::spawn(move || {
-        for (id, arg, requested_at_us, queued) in receiver {
-            let args = args_for(&id, &arg, &actions.state());
-            // Network updates must not occupy the navigation/action queue.
-            if id.starts_with("updates.") || rhremote_core::is_session_control_action(&id) || matches!(id.as_str(),"sync.run"|"sync.resolve") {
-                let actions=actions.clone();
-                std::thread::spawn(move||{let response=actions.dispatch(&id,args);if response["ok"]!=true && !id.starts_with("updates.") && !rhremote_core::is_session_control_action(&id){actions.message(response["error"].as_str().unwrap_or("操作失败").into());}});
-                continue;
-            }
-            let response = actions.dispatch_timed(&id, args, Some(rhremote_core::ActionTiming{requested_at_us,queue_wait_us:queued.elapsed().as_micros()}));
-            if response["ok"] != true {
-                actions.message(response["error"].as_str().unwrap_or("操作失败").into());
-            }
-        }
-    });
+    let (sender, receiver) = std::sync::mpsc::sync_channel::<action_queue::Request>(64);
+    std::thread::spawn(move || action_queue::run(actions, receiver));
     let toolbar_sender = sender.clone();
     let toolbar_queue = controller.clone();
     let toolbar_timing = native.clone();
     toolbar.global::<Commands>().on_trigger(move |id, arg| {
         toolbar_timing.ui_test.observe_action(id.as_str());
         if toolbar_sender
-            .try_send((id.to_string(), arg.to_string(), toolbar_timing.statistics.lock().unwrap().now(), std::time::Instant::now()))
+            .try_send((id.to_string(), arg.to_string(), toolbar_timing.statistics.lock().unwrap().now(), std::time::Instant::now(),None))
             .is_err()
         {
             toolbar_queue.message("操作队列已满".into());
@@ -239,13 +273,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     toolbar
         .window()
         .on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+    let keyboard_sender=sender.clone();let keyboard_actions=controller.clone();let keyboard_timing=native.clone();
+    keyboard.global::<Commands>().on_trigger(move|id,arg|{
+        keyboard_timing.ui_test.observe_action(id.as_str());
+        if keyboard_sender.try_send((id.to_string(),arg.to_string(),keyboard_timing.statistics.lock().unwrap().now(),std::time::Instant::now(),None)).is_err(){keyboard_actions.message("操作队列已满".into());}
+        if id=="stream.shortcut"{overlay::focus_stream(&keyboard_actions.state());}
+    });
+    let keyboard_close=controller.clone();keyboard.window().on_close_requested(move||{keyboard_close.dispatch("stream.keyboard.floating.set",json!({"enabled":false}));slint::CloseRequestResponse::KeepWindowShown});
     let picker_sender = sender.clone();
     let picker_actions = controller.clone();
     let picker_timing = native.clone();
     picker.global::<Commands>().on_trigger(move |id, arg| {
         picker_timing.ui_test.observe_action(id.as_str());
         if picker_sender
-            .try_send((id.to_string(), arg.to_string(), picker_timing.statistics.lock().unwrap().now(), std::time::Instant::now()))
+            .try_send((id.to_string(), arg.to_string(), picker_timing.statistics.lock().unwrap().now(), std::time::Instant::now(),None))
             .is_err()
         {
             picker_actions.message("操作队列已满".into());
@@ -265,60 +306,82 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
         let dismiss = controller.clone();
-        picker.window().on_winit_window_event(move |_, event| {
+        let mut recorder=window_events::Recorder::new(passive_preview,window_events::Role::Picker,native.statistics.clone());
+        picker.window().on_winit_window_event(window_events::compose(move|event|recorder.observe(event),move |event| {
             if matches!(event, WindowEvent::Focused(false)) {
                 dismiss.dispatch("stream.menu.close", json!({}));
             }
             EventResult::Propagate
-        });
+        }));
     }
     let queue = controller.clone();
     let ui_timing = native.clone();
+    let decision_view=ui.as_weak();
     ui.global::<Commands>().on_trigger(move |id, arg| {
         ui_timing.ui_test.observe_action(id.as_str());
-        if sender.try_send((id.to_string(), arg.to_string(), ui_timing.statistics.lock().unwrap().now(), std::time::Instant::now())).is_err() {
+        let decision=decision_view.upgrade().and_then(|ui|request_owner(&ui,id.as_str()));
+        if let Some(result)=view_state::dispatch_local_input(&queue,id.as_str(),arg.as_str(),decision.clone()) {
+            if result["ok"]!=true && result["ignored"]!=true {queue.message(result["error"].as_str().unwrap_or("修改失败").into());}
+            return;
+        }
+        if sender.try_send((id.to_string(), arg.to_string(), ui_timing.statistics.lock().unwrap().now(), std::time::Instant::now(),decision)).is_err() {
             queue.message("操作队列已满，请稍后重试".into());
         }
     });
     {
-        use slint::winit_030::{EventResult,WinitWindowAccessor,winit::{event::{WindowEvent,ElementState},keyboard::{Key,NamedKey}}};
-        let controls=controller.clone();let weak=ui.as_weak();let shift=std::cell::Cell::new(false);
-        ui.window().on_winit_window_event(move |_,event| {
+        use slint::winit_030::{EventResult,WinitWindowAccessor,winit::event::{WindowEvent,ElementState}};
+        let weak=ui.as_weak();let shift=std::cell::Cell::new(false);
+        let mut recorder=window_events::Recorder::new(passive_preview,window_events::Role::Main,native.statistics.clone());
+        ui.window().on_winit_window_event(window_events::compose(move|event|recorder.observe(event),move |event| {
             if let WindowEvent::ModifiersChanged(value)=event{shift.set(value.state().shift_key());}
             if let Some(ui)=weak.upgrade(){
                 if let WindowEvent::KeyboardInput{event,..}=event {
-                    let key=match event.logical_key{Key::Named(NamedKey::Escape)=>"Escape",Key::Named(NamedKey::Tab)=>"Tab",Key::Named(NamedKey::Enter)=>"Enter",_=>"Other"};
-                    if ui_keyboard::modal(&ui,&controls,key,event.state==ElementState::Pressed,event.repeat,shift.get()).is_some(){return EventResult::PreventDefault;}
+                    let key=ui_keyboard::native_key_name(&event.logical_key);
+                    if ui_keyboard::modal(&ui,key,event.state==ElementState::Pressed,event.repeat,shift.get()).is_some(){return EventResult::PreventDefault;}
                 }
             }
             EventResult::Propagate
-        });
+        }));
     }
-    let close = controller.clone();
+    let close_view = ui.as_weak();
     ui.window().on_close_requested(move || {
-        let result = close.dispatch("window.close", json!({}));
-        if result["ok"] != true {
-            close.message(result["error"].as_str().unwrap_or("断开失败").into());
-        }
-        slint::CloseRequestResponse::KeepWindowShown
+        close_view.upgrade().map(|ui|request_close(&ui))
+            .unwrap_or(slint::CloseRequestResponse::KeepWindowShown)
     });
     let timer = slint::Timer::default();
     let weak = ui.as_weak();
     let toolbar_weak = toolbar.as_weak();
     let picker_weak = picker.as_weak();
+    let keyboard_weak = keyboard.as_weak();
     let view = controller.clone();
     let preview = data.join("preview.png");
     let mut main_view=view_state::MainView::new(&ui);
+    main_view.refresh(&ui,&controller.state(),|uuid|controller.profile(uuid));
+    native.statistics.lock().unwrap().mark("ui_initial_view_bound");
     let mut toolbar_display_fingerprint = String::new();
     let mut picker_fingerprint = String::new();
     let mut toolbar_follower=overlay::Follower::default();
+    let mut published_window_creation=0;
     let mut ui_driver=ui_driver::Driver::new(native.ui_test.clone(),&ui,&toolbar,&picker);
+    ui_driver.attach_keyboard(&keyboard);
+    let mut keyboard_state=Value::Null;
+    let mut keyboard_feedback=floating_keyboard::Feedback::default();
+    let keyboard_timing=native.clone();
     timer.start(slint::TimerMode::Repeated,Duration::from_millis(100),move||{
         let Some(ui)=weak.upgrade() else{return};
+        let creation=window_creation.lock().unwrap();
+        if creation.len()!=published_window_creation {
+            published_window_creation=creation.len();
+            let mut metadata=ui_rendering::metadata();metadata["windowCreation"]=json!(*creation);
+            view.ui_rendering(metadata);
+        }
+        drop(creation);
         let state=view.state();
         main_view.refresh(&ui,&state,|id|view.profile(id));
         if let Some(toolbar)=toolbar_weak.upgrade(){
             toolbar.set_expanded(state["controls"]==true);
+            toolbar.set_floating_keyboard(state["floatingKeyboard"]==true);
+            toolbar.set_floating_keyboard_error(state["floatingKeyboardError"].as_str().unwrap_or("").into());
             let pending=state["connecting"]==true;
             let canceling=matches!(state["connection"]["phase"].as_str(),Some("cancelling"|"cleaning"));
             toolbar.set_pending(pending);toolbar.set_canceling(canceling);
@@ -339,6 +402,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 toolbar.set_display_index(ui.get_remote_displays().iter().position(|d|d.chosen).map(|i|i as i32).unwrap_or(-1));
             }
             let mut toolbar_state=toolbar_follower.follow(&toolbar,&state);
+            if let Some(keyboard)=keyboard_weak.upgrade(){
+                keyboard_state=floating_keyboard::follow(&keyboard,&state,&keyboard_state);
+                let report=keyboard_feedback.report(&state,&keyboard_state,std::time::Instant::now());
+                if let Some(event)=keyboard_feedback.transition(&state,&report){let _=keyboard_timing.statistics.lock().unwrap().event("floating_keyboard_state",event);}
+                toolbar_state["floatingKeyboard"]=report;
+            }
             if let Some(picker)=picker_weak.upgrade(){
                 let kind=state["streamMenu"].as_str().unwrap_or("");
                 let fingerprint=if kind=="displays"{format!("{kind}:{toolbar_display_fingerprint}")}else{kind.into()};
@@ -363,20 +432,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             _=>{}
         }
         if let Some(request)=view.take_preview_request(){
-            let toolbar=toolbar_weak.upgrade();let picker=picker_weak.upgrade();
+            let toolbar=toolbar_weak.upgrade();let picker=picker_weak.upgrade();let keyboard=keyboard_weak.upgrade();
             let result=match request.window.as_str(){
                 "main"=>preview_capture::capture(ui.window(),&preview,json!({"page":ui.get_page().as_str(),"settingsTab":ui.get_settings_tab().as_str(),"profileTab":ui.get_profile_tab().as_str()})),
                 "toolbar"=>toolbar.as_ref().ok_or_else(||"控制栏不可用".to_string()).and_then(|t|preview_capture::capture(t.window(),&preview.with_file_name("toolbar-preview.png"),json!({"controlsTab":t.get_controls_tab().as_str()}))),
                 "picker"=>picker.as_ref().ok_or_else(||"选择列表不可用".to_string()).and_then(|p|preview_capture::capture(p.window(),&preview.with_file_name("picker-preview.png"),json!({"menu":p.get_kind().as_str()}))),
+                "keyboard"=>keyboard.as_ref().filter(|k|k.window().is_visible()).ok_or_else(||"悬浮键盘未显示".to_string()).and_then(|k|preview_capture::capture(k.window(),&preview.with_file_name("keyboard-preview.png"),json!({"alpha":166}))),
                 _=>Err("未知截图窗口".into()),
             };
             view.preview_complete(&request,result);
         }
     });
+    ui.show()?;
+    native.statistics.lock().unwrap().mark("ui_shown");
     let poll = controller.clone();
     let transport = native.clone();
     std::thread::spawn(move || {
+        transport.statistics.lock().unwrap().mark("devices_check_begin");
         poll.dispatch("devices.refresh", json!({}));
+        transport.statistics.lock().unwrap().mark("devices_check_end");
         loop {
             if let Some((attempt, device, error, cleanup_pending)) = transport.pairing_result() {
                 poll.pairing_complete(attempt, device, error, cleanup_pending);
@@ -421,8 +495,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::thread::sleep(Duration::from_secs(30));
         }
     });
-    ui.show()?;
-    native.statistics.lock().unwrap().mark("ui_shown");
     if let Ok(position) = std::env::var("RHREMOTE_UI_POSITION") {
         if let Some((x, y)) = position.split_once(',') {
             if let (Ok(x), Ok(y)) = (x.parse::<i32>(), y.parse::<i32>()) {
@@ -431,6 +503,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     ui.run()?;
+    native.statistics.lock().unwrap().mark("ui_event_loop_returned");
     Ok(())
 }
 fn native_engine_path(override_path: Option<std::ffi::OsString>, executable: PathBuf) -> PathBuf {

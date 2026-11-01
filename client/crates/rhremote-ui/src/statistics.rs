@@ -15,6 +15,9 @@ pub struct Statistics {
     clock: Instant,
     origin: u128,
     pending_connect: Option<u128>,
+    startup: Option<PathBuf>,
+    startup_written: usize,
+    startup_error: String,
 }
 #[cfg(test)]
 mod tests {
@@ -91,6 +94,7 @@ mod tests {
     fn disabling_statistics_finishes_the_existing_file_but_creates_no_new_one() {
         let (data, mut statistics) = fixture();
         let trace = statistics.session(&json!({})).unwrap().unwrap();
+        let directories=fs::read_dir(data.join("statistics")).unwrap().count();
         statistics.configure(false).unwrap();
         assert_eq!(
             records(&trace.parent().unwrap().join("ui.jsonl"))
@@ -99,7 +103,7 @@ mod tests {
             "trace_end"
         );
         assert!(statistics.session(&json!({})).unwrap().is_none());
-        assert_eq!(fs::read_dir(data.join("statistics")).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(data.join("statistics")).unwrap().count(), directories);
         drop(statistics);
         fs::remove_dir_all(data).unwrap();
     }
@@ -201,6 +205,27 @@ mod tests {
         assert!(s.root.join("retained").exists());
         fs::remove_dir_all(data).unwrap();
     }
+    #[test]
+    fn startup_marks_are_readable_before_any_connection_starts(){
+        let(data,mut statistics)=fixture();statistics.mark("ui_shown");
+        let state=statistics.state();let directory=PathBuf::from(state["startup"].as_str().unwrap());let rows=records(&directory.join("startup.jsonl"));
+        assert_eq!(state["recording"],false);assert_eq!(state["startupError"],"");assert!(state["latest"].is_null());
+        assert_eq!(rows.first().unwrap()["event"],"application_start");assert_eq!(rows.last().unwrap()["event"],"ui_shown");
+        fs::write(directory.join("analysis-complete.json"),b"{}").unwrap();statistics.prune().unwrap();assert!(directory.join("startup.jsonl").is_file(),"an active startup trace was pruned");
+        drop(statistics);fs::remove_dir_all(data).unwrap();
+    }
+    #[test]
+    fn a_startup_write_failure_is_observable_and_does_not_break_later_ui_marks(){
+        let(data,mut statistics)=fixture();let path=statistics.startup.as_ref().unwrap().join("startup.jsonl");fs::remove_file(&path).unwrap();fs::create_dir(&path).unwrap();
+        statistics.mark("ui_shown");assert!(!statistics.state()["startupError"].as_str().unwrap().is_empty());statistics.mark("ui_event_loop_returned");assert!(path.is_dir());
+        drop(statistics);fs::remove_dir_all(data).unwrap();
+    }
+    #[test]
+    fn connection_clock_replacement_does_not_drop_or_duplicate_startup_stages(){
+        let(data,mut statistics)=fixture();statistics.connection_requested(None);statistics.mark("ui_shown");statistics.connection_requested(None);statistics.mark("devices_check_end");
+        let rows=records(&statistics.startup.as_ref().unwrap().join("startup.jsonl"));let events:Vec<_>=rows.iter().map(|row|row["event"].as_str().unwrap()).collect();
+        assert_eq!(events,vec!["application_start","ui_shown","devices_check_end"]);drop(statistics);fs::remove_dir_all(data).unwrap();
+    }
 }
 impl Statistics {
     pub fn new(data: &Path) -> Self {
@@ -221,6 +246,9 @@ impl Statistics {
                 .unwrap_or_default()
                 .as_micros(),
             pending_connect: None,
+            startup: None,
+            startup_written: 0,
+            startup_error: String::new(),
         };
         s.mark("application_start");
         s
@@ -247,6 +275,24 @@ impl Statistics {
         self.app.push(
             json!({"event":event,"ts_us":self.now(),"frame":-1,"thread":"rust-ui","fields":{}}),
         );
+        if self.enabled && self.startup_error.is_empty(){if let Err(error)=self.write_startup(){self.startup_error=error;}}
+    }
+    fn write_startup(&mut self)->Result<(),String>{
+        use std::io::Write;
+        if self.startup.is_none(){
+            fs::create_dir_all(&self.root).map_err(|e|e.to_string())?;
+            let directory=self.root.join(format!("startup-{}-{}",self.origin,&rhremote_core::random_token()?[..12]));
+            fs::create_dir(&directory).map_err(|e|e.to_string())?;
+            fs::write(directory.join("manifest.json"),serde_json::to_vec_pretty(&json!({"schema":"rhremote.statistics/v1","component":"ui-startup","appVersion":env!("CARGO_PKG_VERSION"),"clock":"monotonic_anchored_utc_us","files":["startup.jsonl"],"containsPixels":false,"containsAudio":false})).unwrap()).map_err(|e|e.to_string())?;
+            self.startup=Some(directory);
+        }
+        let mut file=fs::OpenOptions::new().create(true).append(true).open(self.startup.as_ref().unwrap().join("startup.jsonl")).map_err(|e|e.to_string())?;
+        let stages:Vec<_>=self.app.iter().filter(|row|row["event"]!="connect_request_received").collect();
+        for row in &stages[self.startup_written..]{writeln!(file,"{row}").map_err(|e|e.to_string())?;}
+        file.flush().map_err(|e|e.to_string())?;self.startup_written=stages.len();Ok(())
+    }
+    pub(crate) fn recording_session(&self) -> Option<&Path> {
+        (self.enabled && self.recording).then_some(self.latest.as_deref()).flatten()
     }
     pub fn event(&self, event: &str, fields: Value) -> Result<(), String> {
         if !self.enabled || !self.recording {
@@ -263,7 +309,7 @@ impl Statistics {
         Ok(())
     }
     pub fn state(&self) -> Value {
-        json!({"enabled":self.enabled,"recording":self.recording,"directory":self.root,"latest":self.latest,"format":"rhremote.statistics/v1","frameData":"metadata_only","presentSemantics":"Windows render_return is CPU submission completion, not physical scanout"})
+        json!({"enabled":self.enabled,"recording":self.recording,"directory":self.root,"latest":self.latest,"startup":self.startup,"startupError":self.startup_error,"format":"rhremote.statistics/v1","frameData":"metadata_only","presentSemantics":"Windows render_return is CPU submission completion, not physical scanout"})
     }
     pub fn configure(&mut self, enabled: bool) -> Result<Value, String> {
         let path = self.root.parent().unwrap().join("statistics-settings.json");
@@ -273,7 +319,10 @@ impl Statistics {
         )
         .map_err(|e| e.to_string())?;
         self.enabled = enabled;
-        if !enabled {
+        if enabled{
+            if !self.startup_error.is_empty(){self.startup=None;self.startup_written=0;self.startup_error.clear();}
+            if let Err(error)=self.write_startup(){self.startup_error=error.clone();return Err(error);}
+        } else {
             self.finish()?;
         }
         Ok(self.state())
@@ -338,6 +387,8 @@ impl Statistics {
             return Ok(());
         }
         let root = self.root.canonicalize().map_err(|e| e.to_string())?;
+        let startup=self.startup.as_ref().and_then(|path|path.canonicalize().ok());
+        let active=self.recording.then(||self.latest.as_ref().and_then(|path|path.canonicalize().ok())).flatten();
         for entry in fs::read_dir(&root).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let p = entry.path();
@@ -345,6 +396,7 @@ impl Statistics {
                 continue;
             }
             let resolved = p.canonicalize().map_err(|e| e.to_string())?;
+            if startup.as_ref()==Some(&resolved)||active.as_ref()==Some(&resolved){continue;}
             if resolved.parent() != Some(root.as_path()) {
                 continue;
             }

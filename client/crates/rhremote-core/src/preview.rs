@@ -12,6 +12,7 @@ pub(crate) fn request(s: &mut State, action: &str, args: &Value) -> Result<Value
         "view.snapshot" => "main",
         "view.toolbar.snapshot" => "toolbar",
         "view.picker.snapshot" => "picker",
+        "view.keyboard.snapshot" => "keyboard",
         _ => return Err("未知截图窗口".into()),
     };
     let id = match args.get("requestId") {

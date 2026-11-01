@@ -1,5 +1,7 @@
 # Android 诊断任务与页面生命周期
 
+后续本地 preview.149 新增取消、任务条、详情开关及严格通道清理，阶段和当前验证范围见[2026-10-31 记录](ANDROID-DIAGNOSTIC-CANCELLATION-20261031.md)。下文保留 preview.36 当时的证据。
+
 本地 Android preview.36／versionCode 260。Windows 保持 preview.47，未启动桌面测试窗口，未操作 OPPO 或业务服务，未公开发布。
 
 ## 原因与修改

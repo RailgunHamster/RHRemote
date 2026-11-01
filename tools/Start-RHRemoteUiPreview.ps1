@@ -25,7 +25,7 @@ $primary=$target.PositionX -eq 0 -and $target.PositionY -eq 0
 if($primary -and -not $AllowPrimaryDisplay){throw 'Preview must use the secondary display unless the user explicitly authorizes AllowPrimaryDisplay'}
 $origin=([string]($target.PositionX+64))+','+([string]($target.PositionY+64))
 $nativeOrigin=([string]$target.PositionX)+','+([string]$target.PositionY)
-$envNames=@('RHREMOTE_TEST_MODE','RHREMOTE_DATA_DIR','RHREMOTE_CONTROL_PORT','RHREMOTE_CONTROL_TOKEN','RHREMOTE_NATIVE_ENGINE','RHREMOTE_BENCHMARK_NO_INPUT','RHREMOTE_TEST_MONITOR','RHREMOTE_TEST_WINDOW_ORIGIN','RHREMOTE_CLIENT_DISPLAY_ORIGIN')
+$envNames=@('RHREMOTE_TEST_MODE','RHREMOTE_DATA_DIR','RHREMOTE_CONTROL_PORT','RHREMOTE_CONTROL_TOKEN','RHREMOTE_NATIVE_ENGINE','RHREMOTE_BENCHMARK_NO_INPUT','RHREMOTE_TEST_MONITOR','RHREMOTE_TEST_WINDOW_ORIGIN','RHREMOTE_CLIENT_DISPLAY_ORIGIN','SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN')
 $prior=@{};foreach($name in $envNames){$prior[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 try{
  $env:RHREMOTE_TEST_MODE='1';$env:RHREMOTE_DATA_DIR=$data;$env:RHREMOTE_CONTROL_PORT=[string]$Port
@@ -34,9 +34,11 @@ try{
  # SDL chooses its video display separately from the Slint preview window.
  # Pass the physical display origin, not the preview's inset window position.
  $env:RHREMOTE_CLIENT_DISPLAY_ORIGIN=$nativeOrigin
+ # SDL's initial video window is separate from the inactive Slint preview.
+ $env:SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN='1'
  $started=Start-Process -FilePath $exe -WorkingDirectory $package -WindowStyle Hidden -PassThru -RedirectStandardOutput ($RuntimeFile+'.stdout.log') -RedirectStandardError ($RuntimeFile+'.stderr.log')
 }finally{foreach($name in $envNames){[Environment]::SetEnvironmentVariable($name,$prior[$name],'Process')}}
-$record=[ordered]@{pid=$started.Id;exe=$exe;engine=$engine;data=$data;port=$Port;monitor=$Monitor;monitorName=$target.MonitorName;monitorBounds=@{x=$target.PositionX;y=$target.PositionY;width=$target.SourceWidth;height=$target.SourceHeight};origin=$origin;nativeDisplayOrigin=$nativeOrigin;primaryDisplay=$primary;primaryDisplayExplicitlyAllowed=[bool]$AllowPrimaryDisplay;passivePreview=$true;physicalInputDisabled=$true;sourcePreferences=(Join-Path $normal 'preferences.json');sourceSha256=(Get-FileHash (Join-Path $data 'preferences.json') -Algorithm SHA256).Hash}
+$record=[ordered]@{pid=$started.Id;exe=$exe;engine=$engine;data=$data;port=$Port;monitor=$Monitor;monitorName=$target.MonitorName;monitorBounds=@{x=$target.PositionX;y=$target.PositionY;width=$target.SourceWidth;height=$target.SourceHeight};origin=$origin;nativeDisplayOrigin=$nativeOrigin;primaryDisplay=$primary;primaryDisplayExplicitlyAllowed=[bool]$AllowPrimaryDisplay;passivePreview=$true;physicalInputDisabled=$true;nativeActivationSuppressed=$true;sourcePreferences=(Join-Path $normal 'preferences.json');sourceSha256=(Get-FileHash (Join-Path $data 'preferences.json') -Algorithm SHA256).Hash}
 $record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $RuntimeFile -Encoding utf8
 $deadline=[DateTime]::UtcNow.AddSeconds(20)
 do{

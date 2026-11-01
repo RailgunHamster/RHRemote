@@ -21,6 +21,20 @@ Edit-Source 'app/src/main/jni/moonlight-core/moonlight-common-c/src/VideoStream.
 Edit-Source 'app/build.gradle' {
     param($s)
     $s=$s.Replace('applicationId "com.limelight"','applicationId "com.rhremote.client"').Replace('applicationId "com.limelight.root"','applicationId "com.rhremote.client.root"')
+    # Native View checks can use a separate package without replacing a running client.
+    $s=$s.Replace('applicationId "com.rhremote.client"',('applicationId ("com.rhremote.client" + rhUiTestSuffix)')).Replace('applicationId "com.rhremote.client.root"',('applicationId ("com.rhremote.client.root" + rhUiTestSuffix)'))
+    $s="def rhUiTestSuffix = project.findProperty('rhremote.uiTestSuffix') ?: ''`nif (rhUiTestSuffix != '' && !(rhUiTestSuffix ==~ /\.uicheck[0-9]+/)) throw new GradleException('Invalid isolated UI test package suffix')`ndef rhUiTestBuildType = project.findProperty('rhremote.uiTestBuildType') ?: 'debug'`nif (!(rhUiTestBuildType in ['debug', 'release'])) throw new GradleException('Invalid UI test build type')`nif (rhUiTestBuildType == 'release' && rhUiTestSuffix == '') throw new GradleException('Release UI fixtures require an isolated package suffix')`n"+$s
+    # Release View checks exercise shrinking and non-debug product paths while
+    # keeping the fixture Activity out of every normal installable APK.
+    $s=Replace-Once $s 'android {' @'
+android {
+    testBuildType rhUiTestBuildType
+    if (rhUiTestBuildType == 'release') {
+        sourceSets.getByName('release').java.srcDir('src/debug/java')
+        sourceSets.getByName('release').manifest.srcFile('src/debug/AndroidManifest.xml')
+        buildTypes.getByName('release').proguardFile('rhremote-ui-test.pro')
+    }
+'@
     $s=$s.Replace('applicationIdSuffix ".debug"','').Replace('applicationIdSuffix ".unofficial"','')
     $s=$s.Replace('versionName "12.2"',('versionName "'+$Version+'"')).Replace('versionCode = 315',('versionCode = '+$VersionCode))
     # Keep the installed signing identity while disabling Debug in the shipped variant.
@@ -42,8 +56,36 @@ Edit-Source 'app/build.gradle' {
     }
     compileOptions {
 '@)
-    $s=$s.Replace("dependencies {","dependencies {`n    implementation 'androidx.core:core:1.16.0'`n    testImplementation 'junit:junit:4.13.2'`n    testImplementation 'org.robolectric:robolectric:4.17'`n    androidTestImplementation 'androidx.test:runner:1.6.2'`n    androidTestImplementation 'androidx.test.ext:junit:1.2.1'")
+    $s=$s.Replace("dependencies {","dependencies {`n    implementation 'androidx.core:core:1.16.0'`n    testImplementation 'junit:junit:4.13.2'`n    testImplementation 'org.robolectric:robolectric:4.17'`n    androidTestImplementation 'androidx.test:runner:1.6.2'`n    androidTestImplementation 'androidx.test.ext:junit:1.2.1'`n    androidTestImplementation 'com.google.errorprone:error_prone_annotations:2.47.0'")
     return $s
+}
+Edit-Source 'app/src/main/res/layout/activity_game.xml' {
+    param($s)
+    $before=@'
+    <TextView
+        android:id="@+id/notificationOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginRight="10dp"
+        android:layout_marginEnd="10dp"
+        android:layout_marginTop="10dp"
+        android:layout_gravity="right"
+        android:textAppearance="?android:attr/textAppearanceLarge"
+        android:gravity="right"
+        android:background="#80000000"
+        android:preferKeepClear="true"
+        android:visibility="gone" />
+'@
+    $after=@'
+    <com.limelight.rhremote.RhSessionWarning
+        android:id="@+id/notificationOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:preferKeepClear="true"
+        android:visibility="gone" />
+'@
+    return (Replace-Once ($s.Replace("`r`n","`n")) ($before.Replace("`r`n","`n")) ($after.Replace("`r`n","`n")))
 }
 Edit-Source 'app/proguard-rules.pro' {param($s)
     return $s+"`n# Stable JNI bridge and product action interfaces.`n-keep class com.limelight.rhremote.** { *; }`n"
@@ -62,6 +104,16 @@ Edit-Source 'app/src/main/AndroidManifest.xml' {param($s)
 }
 Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.java' {param($s)
     $s=Replace-Once $s '    private ComputerDatabaseManager dbManager;' "    private ComputerDatabaseManager dbManager;`n    private final Object rhPairingStoreLock = new Object();"
+    $s=Replace-Once $s '            NvHTTP http = new NvHTTP(address, portMatchesActiveAddress ? details.httpsPort : 0, idManager.getUniqueId(), details.serverCert,' @'
+            ComputerDetails rhPollSource=new ComputerDetails(details);
+            String rhPollIntent=com.limelight.rhremote.RhDiscoveryObservation.begin(getApplicationContext(),rhPollSource);
+            NvHTTP http = new NvHTTP(address, portMatchesActiveAddress ? details.httpsPort : 0, idManager.getUniqueId(), rhPollSource.serverCert,
+'@
+    $s=Replace-Once $s '                    PlatformBinding.getCryptoProvider(ComputerManagerService.this));' '                    PlatformBinding.getCryptoProvider(ComputerManagerService.this),true);'
+    $s=Replace-Once $s '            ComputerDetails newDetails = http.getComputerDetails(isLikelyOnline);' @'
+            ComputerDetails newDetails = http.getRhDiscoveryDetails(isLikelyOnline);
+            if(newDetails.rhDiscoveryObservation!=null)newDetails.rhDiscoveryObservation=newDetails.rhDiscoveryObservation.bind(rhPollIntent);
+'@
     $persistStart=$s.IndexOf('        // If it''s online, update our persistent state')
     if($persistStart -lt 0){throw 'Android discovery persistence anchor missing'}
     $persistEnd=$s.IndexOf('        // Don''t call the listener if this is a failed lookup of a new PC',$persistStart)
@@ -139,6 +191,25 @@ Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.ja
         }
         public void invalidateStateForComputer(String uuid) {
 '@
+    $invalidate=[regex]::Match($s,'(?ms)^        public void invalidateStateForComputer\(String uuid\) \{\r?\n.*?^        \}')
+    if(-not$invalidate.Success){throw 'Android discovery invalidation anchor missing'}
+    $invalidateBody=@'
+        public void invalidateStateForComputer(String uuid) {
+            PollingTuple target = null;
+            synchronized (pollingTuples) {
+                for (PollingTuple tuple : pollingTuples) {
+                    if (uuid.equals(tuple.computer.uuid)) { target = tuple; break; }
+                }
+            }
+            // A slow poll must not hold the whole device list while we wait.
+            // Keep the selected tuple's network lock; never reacquire the list
+            // under it, or insert an old tuple if it was removed meanwhile.
+            if (target != null) synchronized (target.networkLock) {
+                target.computer.state = ComputerDetails.State.UNKNOWN;
+            }
+        }
+'@
+    $s=$s.Remove($invalidate.Index,$invalidate.Length).Insert($invalidate.Index,$invalidateBody)
     $start=$s.IndexOf('    private void populateExternalAddress(ComputerDetails details) {')
     if($start -lt 0){throw 'Android discovery network anchor missing'}
     $end=$s.IndexOf('    private MdnsDiscoveryListener createDiscoveryListener()', $start)
@@ -192,6 +263,8 @@ Edit-Source 'app/src/main/java/com/limelight/computers/ComputerManagerService.ja
             details.update(polledDetails);
             if (details.activeAddress != null) com.limelight.rhremote.RhNetwork.learn(getApplicationContext(), new ComputerDetails(details), details.activeAddress.address);
 '@
+    $s=& (Join-Path $PSScriptRoot 'patch-android-discovery-failures.ps1') -Text $s
+    $s=& (Join-Path $PSScriptRoot 'patch-android-discovery-network.ps1') -Text $s
     return $s
 }
 Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
@@ -210,6 +283,11 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
 '@
     $s=Replace-Once $s 'private RelativeLayout noPcFoundLayout;' "private RelativeLayout noPcFoundLayout;`n    private com.limelight.rhremote.RhHome rhHome;`n    private boolean rhResumed;`n    private android.os.Bundle rhNavigationState;"
     $s=Replace-Once $s '        super.onCreate(savedInstanceState);' "        super.onCreate(savedInstanceState);`n        rhNavigationState=savedInstanceState;"
+    $s=Replace-Once $s '            setContentView(surfaceView);' @'
+            // This surface only fetches GL_RENDERER once; do not continuously swap empty frames.
+            surfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+            setContentView(new com.limelight.rhremote.RhStartupView(this,surfaceView));
+'@
     $s=Replace-Once $s '    private void initializeViews() {' @'
     private void initializeViews() {
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -227,7 +305,16 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
             public void advanced() { startActivity(new Intent(PcView.this, StreamSettings.class)); }
             public void pair(ComputerDetails d,String pin) { startRhPair(d,pin); }
             public void cancelPair() { RhPairOperation operation=rhPairOperation;if(operation!=null)synchronized(operation){operation.cancelled=true;NvHTTP current=operation.http;if(current!=null)current.cancelRhPairing();} }
-            public void refresh() { if(managerBinder!=null) for(int i=0;i<pcGridAdapter.getCount();i++)managerBinder.invalidateStateForComputer(((ComputerObject)pcGridAdapter.getItem(i)).details.uuid);startComputerUpdates(); }
+            public void refresh() { refresh(null); }
+            public void refresh(String uuid) {
+                final ComputerManagerService.ComputerManagerBinder binder=managerBinder;
+                if(binder==null)throw new IllegalStateException("连接管理器尚未准备好");
+                java.util.List<String> targets=new java.util.ArrayList<>();
+                if(uuid!=null)targets.add(uuid);
+                else for(int i=0;i<pcGridAdapter.getCount();i++)targets.add(((ComputerObject)pcGridAdapter.getItem(i)).details.uuid);
+                com.limelight.rhremote.RhDiscoveryRefresh.request(binder,targets,binder::invalidateStateForComputer);
+                startComputerUpdates();
+            }
             public void setDiscoveryPaused(boolean paused) { if(paused)stopComputerUpdates(false);else startComputerUpdates(); }
         });
         noPcFoundLayout = rhHome.emptyView();
@@ -336,7 +423,21 @@ Edit-Source 'app/src/main/java/com/limelight/PcView.java' {param($s)
 '@
     return $s
 }
+Edit-Source 'app/src/main/java/com/limelight/nvstream/http/ComputerDetails.java' {param($s)
+    $s=Replace-Once $s '    public boolean nvidiaServer;' "    public boolean nvidiaServer;`n    public com.limelight.rhremote.RhDiscoveryObservation rhDiscoveryObservation;"
+    $s=Replace-Once $s '        this.rawAppList = details.rawAppList;' "        this.rawAppList = details.rawAppList;`n        this.rhDiscoveryObservation = details.rhDiscoveryObservation;"
+    return $s
+}
 Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($s)
+    $s=Replace-Once $s '    private static void verifyResponseStatus(XmlPullParser xpp) throws HostHttpResponseException {' '    private static void verifyResponseStatus(XmlPullParser xpp) throws HostHttpResponseException, XmlPullParserException {'
+    $s=Replace-Once $s '        int statusCode = (int)Long.parseLong(xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code"));' @'
+        int statusCode;
+        try {
+            statusCode = (int)Long.parseLong(xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code"));
+        } catch (NumberFormatException invalidStatus) {
+            throw new XmlPullParserException("Missing or invalid response status code", xpp, invalidStatus);
+        }
+'@
     $s=Replace-Once $s '    private X509Certificate serverCert;' "    private X509Certificate serverCert;`n    private final boolean rhStrictPin;`n    private final com.limelight.rhremote.RhHttpRequests rhRequests=new com.limelight.rhremote.RhHttpRequests();"
     $s=Replace-Once $s '    public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {' @'
     public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
@@ -348,7 +449,7 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($
     $s=Replace-Once $s '            public void checkServerTrusted(X509Certificate[] certs, String authType) throws CertificateException {' @'
             public void checkServerTrusted(X509Certificate[] certs, String authType) throws CertificateException {
                 if (rhStrictPin && NvHTTP.this.serverCert != null) {
-                    if (certs.length != 1 || !certs[0].equals(NvHTTP.this.serverCert)) throw new CertificateException("Paired certificate mismatch");
+                    if (certs.length != 1 || !certs[0].equals(NvHTTP.this.serverCert)) throw new com.limelight.rhremote.RhDeviceCheck.PinnedCertificateMismatch();
                     return;
                 }
 '@
@@ -383,6 +484,10 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($
         try { response=executeRhCall(rhOwnedCall,path); }
         catch(IOException|RuntimeException|Error failed) {rhRequest.close();throw failed;}
 '@
+    $deviceCheck=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'android-nvhttp-device-check.java.inc') -Raw
+    $s=Replace-Once $s '    public ComputerDetails getRhConnectionDetails() throws IOException, XmlPullParserException {' ($deviceCheck+"`n    public ComputerDetails getRhConnectionDetails() throws IOException, XmlPullParserException {")
+    $discovery=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'android-nvhttp-discovery.java.inc') -Raw
+    $s=Replace-Once $s '    public ComputerDetails getRhConnectionDetails() throws IOException, XmlPullParserException {' ($discovery+"`n    public ComputerDetails getRhConnectionDetails() throws IOException, XmlPullParserException {")
     $s=Replace-Once $s '        ResponseBody body = response.body();' @'
         ResponseBody originalBody=response.body();
         if(originalBody==null)rhRequest.close();
@@ -405,6 +510,18 @@ Edit-Source 'app/src/main/java/com/limelight/nvstream/http/NvHTTP.java' {param($
 }
 Edit-Source 'app/src/main/java/com/limelight/nvstream/http/PairingManager.java' {param($s)return $s}
 Edit-Source 'app/src/main/java/com/limelight/Game.java' {param($s)
+    $s=Replace-Once $s 'getResources().getString(R.string.slow_connection_msg)' 'getResources().getString(R.string.rh_connection_slow)'
+    $s=Replace-Once $s 'getResources().getString(R.string.poor_connection_msg)' 'getResources().getString(R.string.rh_connection_poor)'
+    $s=Replace-Once $s '    private void setPreferredOrientationForCurrentDisplay() {' @'
+    private void setPreferredOrientationForCurrentDisplay() {
+        // Desktop sessions follow the user's rotation setting. The upstream OSC
+        // keeps its landscape policy because its layout does not support portrait.
+        if (!prefConfig.onscreenController) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+            return;
+        }
+'@
+    $s=Replace-Once $s '        super.onConfigurationChanged(newConfig);' "        super.onConfigurationChanged(newConfig);`n        if(rhTouch != null) rhTouch.cancel();"
     $s=Replace-Once $s '        inputManager.toggleSoftInput(0, 0);' '        if(rhControls != null) rhControls.toggleKeyboardFromGame();'
     $s=Replace-Once $s '        super.onCreate(savedInstanceState);' @'
         super.onCreate(savedInstanceState);
@@ -466,6 +583,9 @@ $overlay=Join-Path $repo 'client/android/overlay'
 New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/main/assets')|Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'client/crates/rhremote-core/src/actions.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-actions.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-shortcuts.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'client/shared/auto-bitrate-setting.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-auto-bitrate.json') -Force
+New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/test/resources')|Out-Null
+Copy-Item -LiteralPath (Join-Path $repo 'client/shared/bitrate-cases.json') -Destination (Join-Path $SourceDir 'app/src/test/resources/rhremote-bitrate-cases.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'client/crates/rhremote-core/src/settings.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-settings.json') -Force
 Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
     $relative=$_.FullName.Substring($overlay.Length+1);$target=Join-Path $SourceDir $relative
@@ -484,10 +604,14 @@ if($LASTEXITCODE -ne 0){throw 'Android recovery adaptation failed.'}
 if($LASTEXITCODE -ne 0){throw 'Android pairing adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-initial-display.py') android $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android initial display adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-window-source.py') android $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Android window source adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-frame-trace.py') android $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android host frame trace adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-android-launch-cancellation.py') $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android launch ownership adaptation failed.'}
 & python (Join-Path $PSScriptRoot 'patch-android-checked-input.py') $SourceDir
 if($LASTEXITCODE -ne 0){throw 'Android checked keyboard adaptation failed.'}
+& python (Join-Path $PSScriptRoot 'patch-android-rtsp-diagnostics.py') $SourceDir
+if($LASTEXITCODE -ne 0){throw 'Android RTSP diagnostics adaptation failed.'}
 Write-Output 'Android RHRemote source prepared. Upstream originals retained locally; no host or device settings changed.'

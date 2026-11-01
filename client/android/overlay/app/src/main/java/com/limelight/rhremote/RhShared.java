@@ -13,14 +13,41 @@ import java.util.*;
 
 /** Portable schema v2: shared host facts and independently owned client × host profiles. */
 public final class RhShared {
+    private static final String MEMBERSHIP="deviceMembershipAuthoritative";
+    private static final String REMOVED="removedSharedDevices";
     private static File file(Context c) { return new File(c.getFilesDir(), "rhremote-shared.json"); }
     public static boolean dark(Context c) { return c.getSharedPreferences("rhremote.global",0).getBoolean("dark",(c.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES); }
     public static void theme(Context c,boolean value) { c.getSharedPreferences("rhremote.global",0).edit().putBoolean("dark",value).apply(); }
-    public static synchronized String clientId(Context c) {
+    /** Local removal history filters stale cache entries, not newly discovered hosts. */
+    static boolean acceptsDiscovery(Context c,JSONObject shared,String uuid){
+        if(uuid==null)return false;JSONArray rows=shared.optJSONArray("devices");
+        if(rows!=null)for(int i=0;i<rows.length();i++)if(uuid.equalsIgnoreCase(rows.optJSONObject(i).optString("uuid")))return true;
+        SharedPreferences prefs=c.getSharedPreferences("rhremote.global",0);
+        try{prefs.getBoolean(MEMBERSHIP,false);return !prefs.getStringSet(REMOVED,Collections.emptySet()).contains(uuid.toLowerCase(Locale.ROOT));}
+        catch(ClassCastException invalid){return false;}
+    }
+    private static Set<String> deviceIds(JSONObject shared){
+        Set<String> ids=new HashSet<>();JSONArray rows=shared.optJSONArray("devices");
+        if(rows!=null)for(int i=0;i<rows.length();i++)ids.add(rows.optJSONObject(i).optString("uuid").toLowerCase(Locale.ROOT));return ids;
+    }
+    private static void recordMembership(Context c,JSONObject before,JSONObject next)throws IOException{
+        SharedPreferences prefs=c.getSharedPreferences("rhremote.global",0);boolean recorded=false;Set<String> previous=Collections.emptySet();
+        try{recorded=prefs.getBoolean(MEMBERSHIP,false);}catch(ClassCastException invalid){recorded=false;}
+        try{previous=prefs.getStringSet(REMOVED,Collections.emptySet());}catch(ClassCastException invalid){recorded=false;}
+        Set<String> removed=new HashSet<>(previous),present=deviceIds(next),retired=deviceIds(before);retired.removeAll(present);removed.addAll(retired);removed.removeAll(present);
+        if(recorded&&removed.equals(previous))return;
+        if(!prefs.edit().putBoolean(MEMBERSHIP,true).putStringSet(REMOVED,removed).commit())throw new IOException("同步设备列表状态保存失败");
+    }
+    public static String clientId(Context c) {
         SharedPreferences prefs=c.getSharedPreferences("rhremote.global",0);
         String id=prefs.getString("clientId","");
-        if(id.isEmpty()) { id="client-"+UUID.randomUUID().toString().replace("-",""); if(!prefs.edit().putString("clientId",id).commit())throw new IllegalStateException("client identity write failed"); }
-        return id;
+        // Reading an existing identity does not depend on an unrelated config commit.
+        if(!id.isEmpty())return id;
+        synchronized(RhShared.class){
+            id=prefs.getString("clientId","");
+            if(id.isEmpty()) { id="client-"+UUID.randomUUID().toString().replace("-",""); if(!prefs.edit().putString("clientId",id).commit())throw new IllegalStateException("client identity write failed"); }
+            return id;
+        }
     }
     public static JSONObject clientInfo() { return RhActions.obj("name",Build.MANUFACTURER+" "+Build.MODEL,"platform","android"); }
     private static JSONObject empty(Context c) { return RhActions.obj("schemaVersion",2,"devices",new JSONArray(),"clients",RhActions.obj(clientId(c),clientInfo()),"profiles",new JSONObject(),"dark",dark(c)); }
@@ -126,8 +153,10 @@ public final class RhShared {
         for(int i=0;i<list.length();i++){JSONObject d=list.optJSONObject(i);if(d!=null&&uuid.equals(d.optString("uuid")))return d.optBoolean("swapButtons");}return false;
     }
     public static String validateDisplayName(String value)throws IOException {String name=value.trim();if(name.getBytes(StandardCharsets.UTF_8).length>256||name.codePoints().anyMatch(Character::isISOControl))throw new IOException("别名不能超过 256 字节，且不能包含控制字符");return name;}
-    public static String alias(Context c,String uuid) {JSONArray list=read(c).optJSONArray("devices");for(int i=0;i<list.length();i++){JSONObject d=list.optJSONObject(i);if(d!=null&&uuid.equals(d.optString("uuid")))return d.optString("displayName");}return "";}
-    public static String displayName(Context c,String uuid,String hostname) {String alias=alias(c,uuid);return alias.isEmpty()?(hostname==null?"电脑":hostname):alias;}
+    public static String alias(Context c,String uuid) {return alias(read(c),uuid);}
+    static String alias(JSONObject shared,String uuid) {JSONArray list=shared.optJSONArray("devices");for(int i=0;i<list.length();i++){JSONObject d=list.optJSONObject(i);if(d!=null&&uuid.equals(d.optString("uuid")))return d.optString("displayName");}return "";}
+    public static String displayName(Context c,String uuid,String hostname) {return displayName(read(c),uuid,hostname);}
+    static String displayName(JSONObject shared,String uuid,String hostname) {String alias=alias(shared,uuid);return alias.isEmpty()?(hostname==null?"电脑":hostname):alias;}
     private static JSONObject metadata(ComputerDetails d,boolean swap,String displayName) {
         ComputerDetails.AddressTuple a=d.manualAddress!=null?d.manualAddress:d.localAddress!=null?d.localAddress:d.activeAddress;
         if(d.uuid==null||a==null||a.port!=47989)return null;
@@ -136,10 +165,10 @@ public final class RhShared {
     public static synchronized JSONObject capture(Context c,Collection<ComputerDetails> computers)throws Exception {
         JSONObject shared=read(c);LinkedHashMap<String,JSONObject> devices=new LinkedHashMap<>();JSONArray old=shared.getJSONArray("devices");
         for(int i=0;i<old.length();i++){JSONObject d=old.getJSONObject(i);devices.put(d.getString("uuid"),d);}
-        for(ComputerDetails d:computers){JSONObject previous=devices.get(d.uuid);JSONObject item=metadata(d,swap(shared,d.uuid),previous==null?"":previous.optString("displayName"));if(item!=null){if(previous!=null){item.put("address",previous.getString("address"));if(previous.has("addresses"))item.put("addresses",previous.getJSONArray("addresses"));}devices.put(d.uuid,item);}}
+        for(ComputerDetails d:computers){JSONObject previous=devices.get(d.uuid);if(previous==null&&!acceptsDiscovery(c,shared,d.uuid))continue;JSONObject item=metadata(d,swap(shared,d.uuid),previous==null?"":previous.optString("displayName"));if(item!=null){if(previous!=null){item.put("address",previous.getString("address"));if(previous.has("addresses"))item.put("addresses",previous.getJSONArray("addresses"));}devices.put(d.uuid,item);}}
         JSONArray list=new JSONArray();JSONObject group=new JSONObject();
         JSONObject existing=shared.getJSONObject("profiles").optJSONObject(clientId(c));if(existing!=null)group=new JSONObject(existing.toString());
-        for(Map.Entry<String,JSONObject> d:devices.entrySet()){list.put(d.getValue());group.put(d.getKey(),RhProfile.load(c,d.getKey()).clientJson());}
+        for(Map.Entry<String,JSONObject> d:devices.entrySet()){list.put(d.getValue());group.put(d.getKey(),RhProfile.load(c,shared,d.getKey()).clientJson());}
         shared.put("devices",list);shared.getJSONObject("clients").put(clientId(c),clientInfo());shared.getJSONObject("profiles").put(clientId(c),group);shared.put("dark",dark(c));validate(shared);write(file(c),shared);return shared;
     }
     public interface AddCommit {ComputerDetails save(ComputerDetails verified)throws Exception;}
@@ -214,7 +243,10 @@ public final class RhShared {
         shared.getJSONObject("profiles").getJSONObject(clientId(c)).put(d.uuid,p.clientJson());validate(shared);write(file(c),shared);
     }
     public static List<ComputerDetails> ordered(Context c,Collection<ComputerDetails> computers) {
-        JSONArray saved=read(c).optJSONArray("devices");Map<String,Integer> rank=new HashMap<>();
+        return ordered(read(c),computers);
+    }
+    static List<ComputerDetails> ordered(JSONObject shared,Collection<ComputerDetails> computers) {
+        JSONArray saved=shared.optJSONArray("devices");Map<String,Integer> rank=new HashMap<>();
         for(int i=0;i<saved.length();i++)rank.put(saved.optJSONObject(i).optString("uuid"),i);
         List<ComputerDetails> rows=new ArrayList<>(computers);rows.sort(Comparator.comparingInt(d->rank.getOrDefault(d.uuid,Integer.MAX_VALUE)));return rows;
     }
@@ -229,8 +261,11 @@ public final class RhShared {
     }
     public static synchronized void apply(Context c,JSONObject shared)throws Exception {
         shared=normalize(shared);File backups=new File(c.getFilesDir(),"sync-backups");if(!backups.exists()&&!backups.mkdirs())throw new IOException("backup directory unavailable");
-        write(new File(backups,"local-"+System.currentTimeMillis()+".json"),read(c));File[] files=backups.listFiles((d,n)->n.startsWith("local-"));
+        JSONObject before=read(c);write(new File(backups,"local-"+System.currentTimeMillis()+".json"),before);File[] files=backups.listFiles((d,n)->n.startsWith("local-"));
         if(files!=null){Arrays.sort(files,Comparator.comparing(File::getName));for(int i=0;i<files.length-20;i++)files[i].delete();}
+        // Record the local policy before replacing the atomic document. If the
+        // replacement fails, its old membership still applies on the next retry.
+        recordMembership(c,before,shared);
         // No foreign group is applied to this client's active preferences.
         write(file(c),shared);theme(c,shared.getBoolean("dark"));
     }

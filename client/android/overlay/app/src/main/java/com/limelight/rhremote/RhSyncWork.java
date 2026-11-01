@@ -35,7 +35,7 @@ final class RhSyncWork {
     synchronized long lastAttempt(){return lastAttempt;}
     synchronized String error(){return error;}
     synchronized String phase(){return phase;}
-    synchronized boolean canAutomaticallySync(){return !running&&!interrupted&&!sync.outcomeUncertain();}
+    synchronized boolean canAutomaticallySync(){return !running&&!interrupted&&!sync.outcomeUncertain()&&!phase.equals("conflict")&&sync.state().optJSONArray("conflicts").length()==0;}
     synchronized JSONObject state(){JSONObject value=sync.state();try{value.put("operationId",operation);value.put("phase",phase);value.put("busy",running);value.put("error",error);value.put("lastAttemptMs",lastAttempt);value.put("interrupted",interrupted);value.put("automaticBlocked",interrupted||sync.outcomeUncertain());}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
     synchronized void attach(Listener value){listener=value;}
     synchronized void detach(Listener value){if(listener==value)listener=null;}
@@ -57,12 +57,17 @@ final class RhSyncWork {
         start(local,resolution,false,worker);
     }
     void start(JSONObject local,String resolution,boolean automatic,Executor worker)throws Exception{
+        start(local,resolution,automatic,null,worker);
+    }
+    void start(JSONObject local,String resolution,boolean automatic,String reviewId,Executor worker)throws Exception{
         // Freeze exactly the configuration that the user submitted for this operation.
         JSONObject captured=new JSONObject(local.toString());
         boolean recorded;
         synchronized(this){
             if(running)throw new IllegalStateException("同步进行中，请稍后保存");
             if(automatic&&(interrupted||sync.outcomeUncertain()))throw new IllegalStateException(INTERRUPTED);
+            if(automatic&&(phase.equals("conflict")||sync.state().optJSONArray("conflicts").length()>0))throw new IllegalStateException("请先处理同步冲突");
+            sync.validateReviewId(reviewId);
             long next=operation+1,now=System.currentTimeMillis();
             recorded=journal.edit().putBoolean("pending",true).putLong("operationId",next).putLong("startedAtMs",now).commit();
             if(recorded){running=true;interrupted=false;error="";phase="syncing";operation=next;lastAttempt=now;}
@@ -73,7 +78,7 @@ final class RhSyncWork {
         if(!recorded)throw new java.io.IOException(error());
         try{worker.execute(()->{
             JSONObject result=null;String failure="",nextPhase="completed";boolean uncertain=false;
-            try{result=sync.run(captured,resolution);}catch(Exception invalid){failure=RhSync.failureMessage(invalid);uncertain=sync.state().optBoolean("awaitingLocalApply")||sync.outcomeUncertain();if(sync.outcomeUncertain())failure+="。远端写入结果未确认，自动同步已暂停，请手动同步核对";}
+            try{result=sync.runReviewed(captured,resolution,reviewId);}catch(Exception invalid){failure=RhSync.failureMessage(invalid);uncertain=sync.state().optBoolean("awaitingLocalApply")||sync.outcomeUncertain();if(sync.outcomeUncertain())failure+="。远端写入结果未确认，自动同步已暂停，请手动同步核对";}
             if(failure.isEmpty()&&result!=null){
                 if(result.has("shared")){
                     try{progress("applying");RhShared.apply(context,result.getJSONObject("shared"));}

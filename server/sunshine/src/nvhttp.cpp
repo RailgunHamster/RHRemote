@@ -36,6 +36,10 @@
 #include "process.h"
 #include "rhremote_frame_trace.h"
 #include "rhremote_initial_display.h"
+#include "rhremote_window_capture.h"
+#ifdef _WIN32
+  #include "platform/windows/window_capture.h"
+#endif
 #include "rhremote_launch_http.h"
 #include "rtsp.h"
 #include "system_tray.h"
@@ -559,7 +563,7 @@ namespace nvhttp {
   }
 
   /** @brief Validate an optional initial source before global display or application changes. @param args Paired HTTPS query. @param session Launch receiving the target. @param tree Error response on rejection. @return Whether launch preparation may continue. */
-  bool prepare_initial_display(const args_t &args, rtsp_stream::launch_session_t &session, pt::ptree &tree) {
+  bool prepare_initial_display(const args_t &args, rtsp_stream::launch_session_t &session, pt::ptree &tree, const rhremote::launch_peer &peer) {
     const auto name = get_arg(args, "rhrdisplay", "");
 #ifdef _WIN32
     constexpr bool supported = true;
@@ -569,6 +573,24 @@ namespace nvhttp {
     // ANNOUNCE inserts an active session before PLAY releases the pending slot.
     // Read pending first so that transition cannot appear idle between two reads.
     const bool pending = rtsp_stream::launch_pending();
+    if (rhremote::is_window_source(name)) {
+      const bool busy = pending || rtsp_stream::session_count() != 0;
+#ifdef _WIN32
+      const auto target = platf::window_capture::resolve(name, peer.certificate);
+      const bool ready = target && target->state() == "ready";
+#else
+      const bool ready = false;
+#endif
+      if (busy || !ready) {
+        tree.put("root.<xmlattr>.status_code", busy ? 409 : 410);
+        tree.put("root.<xmlattr>.status_message", busy ? "Disconnect the existing stream before choosing a window" : "Selected window is unavailable or expired; refresh the window list");
+        tree.put("root.resume", 0);
+        tree.put("root.gamesession", 0);
+        return false;
+      }
+      session.initial_display = name;
+      return true;
+    }
     const auto admission = rhremote::admit_initial_display(name, rtsp_stream::session_count(), pending, supported);
     if (admission == rhremote::initial_display_admission::busy || admission == rhremote::initial_display_admission::invalid) {
       tree.put("root.<xmlattr>.status_code", admission == rhremote::initial_display_admission::busy ? 409 : 400);
@@ -1501,7 +1523,7 @@ namespace nvhttp {
     auto launch_session = make_launch_session(requested_host_audio, args, peer);
     launch_session->ownership = ownership;
 
-    if (!prepare_initial_display(args, *launch_session, tree)) {
+    if (!prepare_initial_display(args, *launch_session, tree, peer)) {
       return;
     }
     if (!launch_checkpoint(ownership, tree)) {
@@ -1511,12 +1533,14 @@ namespace nvhttp {
 
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
-      revert_display_configuration = true;
+      revert_display_configuration = !rhremote::is_window_source(launch_session->initial_display);
 
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      if (!rhremote::is_window_source(launch_session->initial_display)) {
+        display_device::configure_display(config::video, *launch_session);
+      }
       if (!launch_checkpoint(ownership, tree)) {
         return;
       }
@@ -1649,19 +1673,21 @@ namespace nvhttp {
     const auto launch_session = make_launch_session(requested_host_audio, args, peer);
     launch_session->ownership = ownership;
 
-    if (!prepare_initial_display(args, *launch_session, tree)) {
+    if (!prepare_initial_display(args, *launch_session, tree, peer)) {
       return;
     }
     if (!launch_checkpoint(ownership, tree)) {
       return;
     }
     if (no_active_sessions) {
-      revert_display_configuration = true;
+      revert_display_configuration = !rhremote::is_window_source(launch_session->initial_display);
       host_audio = requested_host_audio;
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      if (!rhremote::is_window_source(launch_session->initial_display)) {
+        display_device::configure_display(config::video, *launch_session);
+      }
       if (!launch_checkpoint(ownership, tree)) {
         return;
       }
@@ -1994,6 +2020,52 @@ namespace nvhttp {
       print_req<SunshineHTTPS>(req);
       const auto peer = https_server.verified_requests.peer(req);
       write_launch_result(resp, peer ? pending_launch_cancel(req->parse_query_string(), *peer) : launch_error(401, "Authenticated TLS request identity is unavailable"));
+    };
+
+    https_server.resource["^/rhremote/windows$"]["GET"] = [&https_server, &worker](auto resp, auto req) {
+      const auto peer = https_server.verified_requests.peer(req);
+      if (!peer) {
+        write_launch_result(resp, launch_error(401, "Authenticated TLS request identity is unavailable"));
+        return;
+      }
+      const auto task = [resp, peer] {
+        {
+          std::lock_guard guard(client_auth_mutex());
+          if (!launch_peer_authorized_locked(*peer)) {
+            write_launch_result(resp, launch_error(401, "Client authorization was revoked"));
+            return;
+          }
+        }
+        pt::ptree tree;
+        tree.put("root.<xmlattr>.status_code", 200);
+#ifdef _WIN32
+        tree.put("root.supported", platf::window_capture::supported() ? 1 : 0);
+        tree.put("root.secondaryWindows", 0);
+        for (const auto &entry : platf::window_capture::enumerate(peer->certificate)) {
+          pt::ptree row;
+          row.put("id", entry.id);
+          row.put("title", entry.title);
+          row.put("application", entry.application);
+          row.put("state", entry.state);
+          row.put("width", entry.width);
+          row.put("height", entry.height);
+          tree.add_child("root.Window", row);
+        }
+#else
+        tree.put("root.supported", 0);
+#endif
+        {
+          std::lock_guard guard(client_auth_mutex());
+          if (!launch_peer_authorized_locked(*peer)) {
+            write_launch_result(resp, launch_error(401, "Client authorization was revoked"));
+            return;
+          }
+        }
+        write_launch_result(resp, tree);
+      };
+      if (!worker.submit(task)) {
+        write_launch_result(resp, launch_error(503, "Host state queue is full or closed"));
+      }
     };
 
     https_server.config.reuse_address = true;

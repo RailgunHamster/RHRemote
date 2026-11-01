@@ -8,6 +8,10 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class RhConnectionTest {
+    @Test public void aCompletedSessionWithoutALocalStopFlagIsEndedRatherThanFailed(){RhConnection c=new RhConnection();c.begin("host","winserver");c.frame();c.observeIdle();assertEquals("ended",c.phase);assertEquals("已断开",c.title());assertEquals("",c.error);assertFalse(c.busy());}
+    @Test public void disappearingBeforeTheFirstFrameRemainsARealFailure(){RhConnection c=new RhConnection();c.begin("host","winserver");c.finished(true,"");c.observeIdle();assertEquals("failed",c.phase);assertTrue(c.error.contains("远程画面"));}
+    @Test public void cleanupAndGracefulCallbacksCannotEraseAnExplicitFailure(){RhConnection c=new RhConnection();c.begin("host","winserver");c.frame();c.fail("连接已断开 (-100)");c.gracefulEnd();c.observeIdle();assertEquals("failed",c.phase);assertEquals("连接已断开 (-100)",c.error);}
+    @Test public void gracefulNativeTerminationDoesNotRequireTheLocalDisconnectButton(){RhConnection c=new RhConnection();c.begin("host","winserver");c.frame();c.gracefulEnd();assertEquals("ended",c.phase);assertEquals("",c.error);}
     @Test public void transport_ready_does_not_mean_a_remote_frame_was_received(){
         RhConnection c=new RhConnection();c.begin("host","winserver");c.stage(RhActions.obj("phase","starting"));c.finished(true,"");
         assertEquals("first-frame",c.phase);assertFalse(c.firstFrame);c.frame();assertTrue(c.firstFrame);assertEquals("connected",c.phase);

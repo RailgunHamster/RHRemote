@@ -21,6 +21,7 @@ public final class RhActions {
     private static WeakReference<Activity> streamActivity=new WeakReference<>(null);
     private static volatile RhRecovery recovering;
     private static volatile RhAdmission admitting;
+    private static volatile RhDiagnosticWork inspecting;
     private static JSONArray catalog;private static String token;private static boolean started;
     private static Context appContext;
     private static String lastConnectionError="";
@@ -32,6 +33,7 @@ public final class RhActions {
         try {
             try(InputStream in=context.getAssets().open("rhremote-actions.json")){catalog=new JSONArray(new String(read(in,32768),StandardCharsets.UTF_8));}
             catalog.put(obj("id","stream.scroll.set","label","滚动模式","args",obj("enabled","boolean"),"platforms",new JSONArray().put("android")));
+            catalog.put(obj("id","stream.click-scroll.set","label","点击与滚动","args",obj("enabled","boolean"),"platforms",new JSONArray().put("android")));
             File path=new File(context.getFilesDir(),"rhremote-control-token.txt");
             if(path.exists()){try(InputStream in=new FileInputStream(path)){token=new String(read(in,128),StandardCharsets.US_ASCII).trim();}}
             else{byte[] bytes=new byte[32];new SecureRandom().nextBytes(bytes);StringBuilder s=new StringBuilder();for(byte b:bytes)s.append(String.format(Locale.ROOT,"%02x",b&255));token=s.toString();try(OutputStream out=context.openFileOutput(path.getName(),Context.MODE_PRIVATE)){out.write(token.getBytes(StandardCharsets.US_ASCII));}}
@@ -45,35 +47,64 @@ public final class RhActions {
     public static synchronized boolean attachStream(Target target,Activity owner){
         RhAdmission pending=admitting;
         RhRecovery recovery=recovering;
-        if(pending!=null&&!pending.canAttach()||recovery!=null&&!recovery.canAttach())return false;
+        if(inspecting!=null||pending!=null&&!pending.canAttach()||recovery!=null&&!recovery.canAttach())return false;
         stream=new WeakReference<>(target);streamActivity=new WeakReference<>(owner);if(pending!=null)pending.attached();if(recovery!=null)recovery.attached();return true;
     }
-    static synchronized void beginAdmission(RhAdmission target){if(hasStream())throw new IllegalStateException("请先断开当前连接");admitting=target;}
+    static synchronized void beginAdmission(RhAdmission target){if(inspecting!=null)throw new IllegalStateException("请先完成或取消连接诊断");if(hasStream())throw new IllegalStateException(connectionBlockReason());admitting=target;}
+    static synchronized void beginInspection(RhDiagnosticWork target){if(inspecting!=null||hasStream())throw new IllegalStateException("请先完成当前连接或诊断");inspecting=target;}
+    static synchronized void endInspection(RhDiagnosticWork target){if(inspecting==target)inspecting=null;}
+    static boolean ownsInspection(RhDiagnosticWork target){return target!=null&&inspecting==target;}
+    static boolean inspecting(){return inspecting!=null;}
     static synchronized void endAdmission(RhAdmission target){if(admitting==target)admitting=null;}
     static boolean ownsAdmission(RhAdmission target){return target!=null&&admitting==target;}
     static RhAdmission admission(){return admitting;}
     public static void detachStream(Target target){if(stream.get()==target){stream.clear();streamActivity.clear();}}
     /** A delayed old Activity callback cannot take ownership from the next connection. */
     static boolean belongsElsewhere(Activity owner){
+        if(inspecting!=null)return true;
         if(recovering!=null)return !recovering.belongsTo(owner);
         if(admitting!=null)return !admitting.belongsTo(owner);
         Activity active=streamActivity.get();return active!=null&&active!=owner;
     }
-    static synchronized void beginRecovery(RhRecovery target){if(admitting!=null||recovering!=null&&recovering!=target)throw new IllegalStateException("上一连接尚未清理");recovering=target;}
+    static synchronized void beginRecovery(RhRecovery target){if(inspecting!=null||admitting!=null||recovering!=null&&recovering!=target)throw new IllegalStateException("上一连接尚未清理");recovering=target;}
     static synchronized void endRecovery(Target target){if(recovering==target)recovering=null;}
     static RhRecovery recovery(){return recovering;}
     static boolean ownsRecovery(Target target){return recovering==target;}
     public static boolean hasStream(){return stream.get()!=null||recovering!=null||admitting!=null;}
+    /** Describe the operation holding the connection reservation without reading configuration. */
+    private static String connectionBlockReason(){
+        RhAdmission pending=admitting;
+        if(pending!=null){
+            JSONObject state=pending.state();String phase=state.optString("phase");
+            if(phase.equals("error"))return "连接清理未完成，请先重试取消";
+            if(state.optBoolean("cancelled")||phase.equals("cleaning")||phase.equals("cancelling"))return "正在清理，请稍候";
+            if(phase.equals("pairing"))return "正在配对，请先完成或取消配对";
+            return "正在连接，请先完成或取消当前连接";
+        }
+        RhRecovery recovery=recovering;
+        if(recovery!=null){
+            String phase=recovery.state().optString("phase");
+            if(phase.equals("cancelling"))return "正在清理，请稍候";
+            if(phase.equals("error"))return "当前连接尚未结束，请先取消当前连接";
+            if(phase.equals("starting"))return "正在启动串流，请先完成或取消当前连接";
+            return "正在恢复连接，请先取消当前连接";
+        }
+        return "请先断开当前连接";
+    }
     static String lastConnectionError(){return lastConnectionError;}
     static void clearConnectionError(){lastConnectionError="";}
-    static void connectionError(String message){lastConnectionError=message;Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionFailure(message);}
+    public static void connectionError(String message){lastConnectionError=message;Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionFailure(message);}
     static JSONObject activeState(){Target target=activeTarget();try{return target==null?new JSONObject():target.state();}catch(Exception ignored){return new JSONObject();}}
     static void connectionStopping(String uuid){Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionStopping(uuid);}
+    static void connectionEnded(Activity owner){if(belongsElsewhere(owner))return;Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionEnded(owner.getIntent().getStringExtra(com.limelight.Game.EXTRA_PC_UUID));}
     static void connectionFrame(Activity owner){
         MAIN.post(()->{if(belongsElsewhere(owner))return;String uuid=owner.getIntent().getStringExtra(com.limelight.Game.EXTRA_PC_UUID);
             Target target=home.get();if(target instanceof RhHome)((RhHome)target).connectionFrame(uuid);Target active=stream.get();if(active instanceof RhStreamControls)((RhStreamControls)active).markFirstFrame();});
     }
     private static Target activeTarget(){return recovering!=null?recovering:admitting!=null?admitting:stream.get();}
+    static boolean ownsStream(Target target){return target!=null&&activeTarget()==target;}
+    static boolean ownsHome(Target target){return target!=null&&home.get()==target;}
+    static void attachHome(Target target){home=new WeakReference<>(target);}
     public static JSONObject dispatch(String id,JSONObject args){
         if(Looper.myLooper()==Looper.getMainLooper())return execute(id,args);
         CountDownLatch done=new CountDownLatch(1);JSONObject[] response=new JSONObject[1];MAIN.post(()->{response[0]=execute(id,args);done.countDown();});
@@ -83,7 +114,7 @@ public final class RhActions {
     private static JSONObject execute(String id,JSONObject args){
         if(id.equals("stream.shortcuts.list")){try{return obj("ok",true,"action",id,"result",RhShortcuts.catalog(appContext));}catch(Exception e){return obj("ok",false,"error","shortcut catalog unavailable");}}
         try{boolean known=false;for(int i=0;i<catalog.length();i++)if(id.equals(catalog.getJSONObject(i).getString("id"))){known=true;break;}if(!known)throw new IllegalArgumentException("unknown action");
-            if(hasStream()&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("updates.install")||id.equals("device.network.diagnose")))throw new IllegalStateException("请先断开当前连接");
+            if(hasStream()&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("updates.install")||id.equals("device.network.diagnose")))throw new IllegalStateException(connectionBlockReason());
             Target target=(id.startsWith("stream.")||id.equals("input.gesture"))?activeTarget():home.get();if(target==null)throw new IllegalStateException("action target unavailable");
             return obj("ok",true,"action",id,"result",target.perform(id,args));
         }catch(Exception e){return obj("ok",false,"action",id,"error",e.getMessage()==null?"operation failed":e.getMessage());}

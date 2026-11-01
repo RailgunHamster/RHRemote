@@ -69,6 +69,9 @@ impl Cancellation {
     pub fn path(&self) -> &Path {
         &self.path
     }
+    /// Native writes this signed attempt proof atomically immediately before
+    /// starting the PIN exchange. It does not establish a server acknowledgement.
+    pub fn protocol_started(&self) -> bool { self.read_proof().is_some() }
     fn read_proof(&self) -> Option<Proof> {
         if fs::metadata(&self.path).ok()?.len() > 8192 {
             return None;
@@ -206,11 +209,13 @@ mod tests {
         let a = Cancellation::new(&root, "192.0.2.1", 0).unwrap();
         let b = Cancellation::new(&root, "192.0.2.1", 0).unwrap();
         assert_ne!(a.id(), b.id());
+        assert!(!a.protocol_started());
         let proof = json!({"pairId":a.id(),"salt":"00112233445566778899aabbccddeeff","signature":"a".repeat(512)});
         fs::write(a.path(), proof.to_string()).unwrap();
         fs::write(b.path(), proof.to_string()).unwrap();
         assert!(a.read_proof().is_some());
         assert!(b.read_proof().is_none());
+        assert!(a.protocol_started());assert!(!b.protocol_started());
         a.finish(false);
         b.finish(true);
         fs::remove_dir(root).unwrap();

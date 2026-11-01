@@ -1,0 +1,24 @@
+{
+    "host":  "WINSERVER",
+    "source":  "D:\\git\\RHVideo\\static\\theme.css",
+    "sha256":  "350C4C4403591040BC3216ACECC3E409A520EE3FBAFAC716809FD3040D1232DF",
+    "theme_linked":  true,
+    "tokens":  {
+                   "page":  "#f4f7fc",
+                   "surface":  "#fff",
+                   "surface-soft":  "#f8faff",
+                   "ink":  "#34415b",
+                   "muted":  "#758299",
+                   "line":  "#e5eaf4",
+                   "blue":  "#5274e8",
+                   "blue-soft":  "#edf2ff",
+                   "purple":  "#8b5be2",
+                   "purple-soft":  "#f4efff",
+                   "green":  "#398b72",
+                   "red":  "#c95b70",
+                   "shadow":  "0 5px 22px rgba(47, 68, 112, .045)"
+               },
+    "brand_gradient":  "linear-gradient(145deg, #5274e8, #8b5be2)",
+    "primary_hover":  "#4666d6",
+    "read_only":  true
+}

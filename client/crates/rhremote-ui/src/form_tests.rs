@@ -14,6 +14,20 @@ fn click(ui:&impl ComponentHandle,label:&str){
 }
 
 #[test]
+fn window_picker_keeps_long_rows_inside_the_modal_and_routes_only_available_sources(){
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(i_slint_backend_testing::TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();let ui=MainWindow::new().unwrap();ui.show().unwrap();ui.window().set_size(LogicalSize::new(720.,520.));
+    let source="rhrwindow:0123456789abcdef0123456789abcdef";let title="editor.exe · 1200 × 800 · ".to_string()+&"Long window title ".repeat(40);
+    ui.set_window_picker_uuid("host".into());ui.set_window_picker_rows(ModelRc::new(VecModel::from(vec![crate::RemoteDisplay{id:source.into(),label:title.clone().into(),chosen:false,available:true},crate::RemoteDisplay{id:"unavailable".into(),label:"已最小化".into(),chosen:false,available:false}])));ui.set_window_picker_open(true);
+    let calls=Rc::new(RefCell::new(Vec::new()));let sink=calls.clone();ui.global::<Commands>().on_trigger(move|id,arg|sink.borrow_mut().push((id.to_string(),arg.to_string())));
+    let row=ElementHandle::find_by_accessible_label(&ui,&title).next().unwrap();let p=row.absolute_position();assert!(p.x>=16.&&p.y>=24.);assert!(p.x+row.size().width<=704.);assert!(p.y+row.size().height<=496.);
+    click(&ui,"已最小化");assert!(calls.borrow().is_empty());click(&ui,&title);assert_eq!(&*calls.borrow(),&[("device.window.connect".to_owned(),format!("host|{source}"))]);calls.borrow_mut().clear();
+    ui.set_window_picker_choice(0);crate::ui_keyboard::send(&ui,"Tab",false,false);assert_eq!(ui.get_window_picker_choice(),1);crate::ui_keyboard::send(&ui,"Tab",false,false);assert_eq!(ui.get_window_picker_choice(),3);crate::ui_keyboard::send(&ui,"Tab",true,false);assert_eq!(ui.get_window_picker_choice(),1);crate::ui_keyboard::send(&ui,"Enter",false,false);assert_eq!(&*calls.borrow(),&[("device.window.connect".to_owned(),format!("host|{source}"))]);calls.borrow_mut().clear();
+    ui.set_window_picker_busy(true);crate::ui_keyboard::send(&ui,"Enter",false,false);assert_eq!(&*calls.borrow(),&[("device.windows.close".to_owned(),String::new())]);calls.borrow_mut().clear();ui.set_window_picker_busy(false);crate::ui_keyboard::send(&ui,"Escape",false,false);assert_eq!(&*calls.borrow(),&[("device.windows.close".to_owned(),String::new())]);
+    if let Some(directory)=std::env::var_os("RHREMOTE_WINDOW_UI_EVIDENCE_DIR"){let path=std::path::PathBuf::from(directory).join("windows-window-picker196.png");assert!(!path.exists());ui.window().take_snapshot().unwrap();let frame=ui.window().take_snapshot().unwrap();image::save_buffer(path,frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();}
+    ui.hide().unwrap();
+}
+
+#[test]
 fn device_header_and_profile_tabs_have_balanced_gutters_at_each_scale() {
     use i_slint_backend_testing::{AccessibleRole, TestingBackend, TestingBackendOptions};
     slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
@@ -90,7 +104,7 @@ fn device_header_and_profile_tabs_have_balanced_gutters_at_each_scale() {
 
 #[test]
 fn sync_actions_are_visible_before_account_fields_in_both_window_sizes(){
-    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("sync".into());ui.set_sync_has_password(true);
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("sync".into());ui.set_sync_has_password(true);ui.set_sync_password_reusable(true);
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
     for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
         ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));
@@ -268,6 +282,76 @@ fn session_tabs_keep_disconnect_reachable_and_pending_commands_do_not_send_twice
 }
 
 #[test]
+fn floating_keyboard_switch_stays_visible_above_every_control_tab(){
+    use i_slint_backend_testing::{TestingBackend,TestingBackendOptions};
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    let ui=crate::StreamToolbar::new().unwrap();ui.set_expanded(true);ui.set_device_name("winserver".into());
+    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();
+    ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));
+    ui.show().unwrap();
+    for dark in [false,true]{ui.global::<crate::Palette>().set_dark(dark);
+        for width in [320.,355.,560.]{ui.window().set_size(LogicalSize::new(width,292.));
+            for tab in ["input","displays","audio"]{ui.set_controls_tab(tab.into());
+                for enabled in [false,true]{ui.set_floating_keyboard(enabled);ui.window().take_snapshot().unwrap();
+                    let label=if enabled{"悬浮键盘：开"}else{"悬浮键盘：关"};
+                    let all:Vec<_>=ElementHandle::find_by_accessible_label(&ui,label).filter(|e|e.accessible_role()==Some(i_slint_backend_testing::AccessibleRole::Button)).collect();assert_eq!(all.len(),1,"{label}: {tab}/{width}/{dark}");
+                    let p=all[0].absolute_position();let size=all[0].size();
+                    assert!(p.x>=0.&&p.y>=28.&&p.x+size.width<=width+0.1&&p.y+size.height<=88.,"Switch must remain in the visible header: {tab}/{width}/{dark}: {p:?}/{size:?}");
+                    if width==355. {if let Some(directory)=std::env::var_os("RHREMOTE_FLOATING_ENTRY_EVIDENCE"){
+                        let path=std::path::PathBuf::from(directory).join(format!("toolbar-{tab}-{dark}-{enabled}.png"));assert!(!path.exists());
+                        let frame=ui.window().take_snapshot().unwrap();image::save_buffer(path,frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();
+                    }}
+                    received.borrow_mut().clear();click(&ui,label);
+                    assert_eq!(&*received.borrow(),&[("stream.keyboard.floating.set".into(),(!enabled).to_string())]);
+                    ui.set_busy(true);received.borrow_mut().clear();click(&ui,label);assert!(received.borrow().is_empty());ui.set_busy(false);
+                }
+            }
+        }
+    }
+    ui.hide().unwrap();
+}
+
+#[test]
+fn floating_keyboard_failure_keeps_retry_and_close_visible_at_all_scales(){
+    use i_slint_backend_testing::{TestingBackend,TestingBackendOptions};
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    for dark in [false,true]{for scale in [1.,1.5,2.25]{for width in [355.,560.]{
+        let ui=crate::StreamToolbar::new().unwrap();ui.set_expanded(true);ui.set_floating_keyboard(true);ui.set_device_name("winserver".into());ui.global::<crate::Palette>().set_dark(dark);
+        let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));
+        ui.window().dispatch_event(WindowEvent::ScaleFactorChanged{scale_factor:scale});
+        // The testing adapter's reported scale remains 1. Use physical dimensions
+        // explicitly; logical set_size would accidentally shrink the viewport at 225%.
+        ui.window().set_size(slint::PhysicalSize::new((width*scale)as u32,(292.*scale)as u32));ui.show().unwrap();
+        for message in ["悬浮键盘未显示","窗口过小，放大窗口后重试","远程窗口暂不可用，稍后重试"]{
+            ui.set_floating_keyboard_error(message.into());let frame=ui.window().take_snapshot().unwrap();
+            assert_eq!((frame.width(),frame.height()),((width*scale)as u32,(292.*scale)as u32));
+            for label in [message,"重试","关闭悬浮键盘","断开"]{
+                let e=ElementHandle::find_by_accessible_label(&ui,label).next().unwrap();let p=e.absolute_position();let size=e.size();
+                assert!(p.x>=0.&&p.y>=28.&&p.x+size.width<=width+0.1&&p.y+size.height<=292.1,"{label} clipped at {scale}/{width}/{dark}: {p:?}/{size:?}");
+                if label=="重试"{assert!(p.x+size.width<=width-24.+0.1,"Scrollbar must not cover retry at {scale}/{width}/{dark}");}
+            }
+            for(label,enabled)in[("重试","true"),("关闭悬浮键盘","false")]{received.borrow_mut().clear();click(&ui,label);
+                if received.borrow().is_empty(){
+                    if let Some(directory)=std::env::var_os("RHREMOTE_KEYBOARD_FEEDBACK_EVIDENCE"){
+                        let frame=ui.window().take_snapshot().unwrap();let path=std::path::PathBuf::from(directory).join(format!("failed-{width}-{scale}-{dark}-{enabled}.png"));image::save_buffer(path,frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();
+                    }
+                }
+                assert_eq!(&*received.borrow(),&[("stream.keyboard.floating.set".into(),enabled.into())],"{label} at {scale}/{width}/{dark}, {message}");}
+            ui.set_busy(true);received.borrow_mut().clear();click(&ui,"重试");click(&ui,"关闭悬浮键盘");assert!(received.borrow().is_empty());ui.set_busy(false);
+        }
+        if let Some(directory)=std::env::var_os("RHREMOTE_KEYBOARD_FEEDBACK_EVIDENCE"){
+            let frame=ui.window().take_snapshot().unwrap();let path=std::path::PathBuf::from(directory).join(format!("feedback-{width}-{scale}-{dark}.png"));assert!(!path.exists());image::save_buffer(path,frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();
+        }
+        let handle=ElementHandle::find_by_accessible_label(&ui,"收起").next().unwrap();let before=handle.absolute_position();
+        ui.set_expanded(false);ui.window().take_snapshot().unwrap();let handle=ElementHandle::find_by_accessible_label(&ui,"控制").next().unwrap();assert_eq!(handle.absolute_position(),before);assert_eq!(handle.size(),LogicalSize::new(72.,28.));
+        let badge=ElementHandle::find_by_accessible_label(&ui,"悬浮键盘未显示").next().unwrap();let p=badge.absolute_position();assert!(p.x>=before.x&&p.x+badge.size().width<=before.x+72.&&p.y>=0.&&p.y+badge.size().height<=28.);
+        received.borrow_mut().clear();click(&ui,"控制");assert_eq!(&*received.borrow(),&[("stream.controls.toggle".into(),"".into())]);
+        ui.set_expanded(true);ui.set_floating_keyboard_error("".into());assert!(ElementHandle::find_by_accessible_label(&ui,"重试").next().is_none());
+        ui.hide().unwrap();
+    }}}
+}
+
+#[test]
 fn picker_respects_availability_and_waits_for_success_before_dismissing(){
     i_slint_backend_testing::init_no_event_loop();let ui=crate::StreamPicker::new().unwrap();ui.set_kind("displays".into());ui.set_labels(ModelRc::new(VecModel::from(vec!["不可用屏幕".into(),"显示器 2".into()])));ui.set_values(ModelRc::new(VecModel::from(vec!["missing".into(),"active".into()])));ui.set_enabled_items(ModelRc::new(VecModel::from(vec![false,true])));ui.set_chosen_items(ModelRc::new(VecModel::from(vec![false,true])));
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();ui.window().set_size(LogicalSize::new(320.,300.));click(&ui,"不可用屏幕");assert!(received.borrow().is_empty());click(&ui,"显示器 2");assert_eq!(&*received.borrow(),&[("stream.display.select".into(),"active".into())]);
@@ -308,7 +392,7 @@ fn route_controls_have_named_actions_and_disable_boundaries_and_the_last_path(){
         click_in_form(&ui,"下移局域网");click_in_form(&ui,"上移自建中继");assert_eq!(&*received.borrow(),&[("settings.route.move".into(),"lan|down".into()),("settings.route.move".into(),"relay|up".into())]);
         received.borrow_mut().clear();click_in_form(&ui,"连接路径：公网直连");assert_eq!(&*received.borrow(),&[("settings.route.toggle".into(),"public_direct".into())]);
     }
-    routes.set_vec(vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,..Default::default()}]);received.borrow_mut().clear();
+    routes.set_vec(vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,toggle_blocked:true,..Default::default()}]);received.borrow_mut().clear();
     click_in_form(&ui,"连接路径：局域网");click_in_form(&ui,"上移局域网");click_in_form(&ui,"下移局域网");assert!(received.borrow().is_empty());
     for label in ["首选 IP 或主机名","备用地址","中继服务器"]{click_in_form(&ui,label);}
     ui.hide().unwrap();
@@ -490,7 +574,7 @@ fn disabling_a_focused_button_then_focusing_an_editor_does_not_leave_two_focus_m
 fn tab_reaches_the_offscreen_relay_editor_after_the_route_buttons(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
     ui.set_network_summary("局域网：192.0.2.1\nTailscale：100.64.0.1\nTailscale：fd7a:115c:a1e0::1\n内置直连 / 中继：已配置".into());
-    ui.set_network_routes(ModelRc::new(VecModel::from(rhremote_core::network::ROUTES.iter().enumerate().map(|(index,(key,label))|crate::RouteRow{key:(*key).into(),label:(*label).into(),enabled:true,can_move_up:index>0,can_move_down:index+1<rhremote_core::network::ROUTES.len(),can_disable:true}).collect::<Vec<_>>())));
+    ui.set_network_routes(ModelRc::new(VecModel::from(rhremote_core::network::ROUTES.iter().enumerate().map(|(index,(key,label))|crate::RouteRow{key:(*key).into(),label:(*label).into(),enabled:true,can_move_up:index>0,can_move_down:index+1<rhremote_core::network::ROUTES.len(),can_disable:true,toggle_blocked:false}).collect::<Vec<_>>())));
     ui.set_profile_fields(ModelRc::new(VecModel::from(vec![SettingRow{key:"networkMode".into(),label:"连接网络".into(),kind:"select".into(),option_labels:ModelRc::new(VecModel::from(vec!["自动".into(),"外网".into()])),option_values:ModelRc::new(VecModel::from(vec!["auto".into(),"remote".into()])),..Default::default()}])));
     let focused=Rc::new(RefCell::new(Vec::new()));let reports=focused.clone();let probe=ui.global::<crate::UiTest>();probe.set_enabled(true);probe.set_operation("inspect".into());probe.on_report(move|id,_,_,_,has_focus,_,_,_,_,_,_|{if has_focus{reports.borrow_mut().push(id.to_string());}});
     ui.show().unwrap();ui.window().set_size(LogicalSize::new(1180.,780.));
@@ -583,7 +667,14 @@ fn recovery_failure_keeps_buttons_visible_and_uses_retry_dismiss_keyboard_action
     ui.set_connection_failed(false);ui.set_expanded(true);click(&ui,"Ctrl+Alt+Delete");
     ui.set_connection_failed(true);calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert!(calls.borrow().is_empty());
     let probe=ui.global::<crate::UiTest>();probe.set_enabled(true);probe.set_operation("focus".into());probe.set_target("action|navigation.back||关闭".into());probe.set_generation(1);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));
-    calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Tab",false,false);crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert_eq!(&*calls.borrow(),&[("connection.dismiss".into(),"".into())]);
+    // A long error is a real reading target between the header and recovery actions.
+    // Enter while reading must not dismiss/retry, and PageDown must move the text.
+    let reading_top=ElementHandle::find_by_accessible_label(&ui,&ui.get_connection_error()).next().unwrap().absolute_position().y;
+    calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Tab",false,false);crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert!(calls.borrow().is_empty());
+    crate::ui_keyboard::send_to_window(ui.window(),"PageDown",false,false);ui.window().take_snapshot().unwrap();
+    assert!(ElementHandle::find_by_accessible_label(&ui,&ui.get_connection_error()).next().unwrap().absolute_position().y<reading_top-1.,"Tab must reach the scrollable failure details");
+    assert!(calls.borrow().is_empty());
+    crate::ui_keyboard::send_to_window(ui.window(),"Tab",false,false);crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert_eq!(&*calls.borrow(),&[("connection.dismiss".into(),"".into())]);
     calls.borrow_mut().clear();crate::ui_keyboard::send_to_window(ui.window(),"Tab",false,false);crate::ui_keyboard::send_to_window(ui.window(),"Enter",false,false);assert_eq!(&*calls.borrow(),&[("connection.retry".into(),"".into())]);
     if let Some(directory)=std::env::var_os("RHREMOTE_RECOVERY_EVIDENCE_DIR") {
         let path=std::path::PathBuf::from(directory).join(format!("failure-{width}-{scale}-{dark}.png"));assert!(!path.exists());

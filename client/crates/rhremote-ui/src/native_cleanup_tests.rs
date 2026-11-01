@@ -280,13 +280,16 @@ fn wrong_process_id_cannot_receive_disconnect_and_only_owned_child_is_forced() {
     let decoy = Fixture::new("none");
     f.start_server(decoy.pid, false);
     let queue = Queue::default();
-    let context = f.context(Duration::from_millis(150));
+    // This case must observe the decoy's state response before forcing the
+    // owned child. A 150 ms wall-clock deadline can expire before the fixture
+    // server is scheduled during the parallel suite; it is not a product SLA.
+    let context = f.context(Duration::from_secs(2));
     queue.enqueue(f.take_child(), context, ());
     let result = reports(&queue);
     assert!(result[0].forced && !result[0].confirmed);
     assert_eq!(f.commands.load(Ordering::SeqCst), 0);
     let trace = result[0].control.as_ref().unwrap();
-    assert!(!trace.owned_state_seen && trace.wrong_process_seen);
+    assert!(!trace.owned_state_seen && trace.wrong_process_seen,"control_trace={}",serde_json::to_string(trace).unwrap());
     assert_eq!(trace.disconnect_requests, 0);
     assert!(decoy.alive());
     assert!(!f.alive());

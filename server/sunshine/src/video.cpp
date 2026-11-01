@@ -41,6 +41,7 @@ extern "C" {
 #include "rhremote_qsv_trace.h"
 #include "rhremote_sws_input.h"
 #include "rhremote_video_pacing.h"
+#include "rhremote_window_capture.h"
 #include "sync.h"
 #include "video.h"
 
@@ -1507,6 +1508,18 @@ namespace video {
       current_display_name = display_names.at(current_display_index);
     }
 
+    // An explicit window is a single-source session. Monitor hotkeys and
+    // reinitialization must never replace it with a desktop capture.
+    if (rhremote::is_window_source(initial_display) || rhremote::is_window_source(current_display_name)) {
+      const auto source = initial_display.empty() ? current_display_name : std::string(initial_display);
+      if (!rhremote::window_source_token(source)) {
+        return false;
+      }
+      display_names = {source};
+      current_display_index = 0;
+      return true;
+    }
+
     // Refresh the display names
     auto old_display_names = std::move(display_names);
     display_names = platf::display_names(dev_type);
@@ -2700,7 +2713,8 @@ namespace video {
       1.0f / scalar,
       scalar_tpcoords,
       display_env_logical_width,
-      display_env_logical_height
+      display_env_logical_height,
+      rhremote::is_window_source(config.initial_display) ? config.initial_display : std::string {}
     };
   }
 

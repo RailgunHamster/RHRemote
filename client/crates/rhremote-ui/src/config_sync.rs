@@ -7,6 +7,9 @@ mod dav;
 #[cfg(test)]
 #[path = "config_sync_lock_tests.rs"]
 mod lock_tests;
+#[cfg(test)]
+#[path = "config_sync_process_tests.rs"]
+mod process_tests;
 
 const LIMIT: u64 = 2 * 1024 * 1024;
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -24,6 +27,7 @@ struct Local {
     pending_transfer: bool,
 }
 struct Pending {
+    review_id: String,
     local: SharedConfig,
     remote: SharedConfig,
     etag: String,
@@ -86,7 +90,7 @@ fn http_error(e: ureq::Error) -> String {
             format!("WebDAV 登录失败，请检查账户和权限（HTTP {code}）")
         }
         ureq::Error::Status(412, _) => "远端配置已更新，请重新同步后再处理冲突（HTTP 412）".into(),
-        ureq::Error::Status(423, _) => "另一台设备正在同步，请稍后重试（HTTP 423）".into(),
+        ureq::Error::Status(423, _) => "WebDAV 文件被占用，请稍后重试（HTTP 423）".into(),
         ureq::Error::Status(code @ 300..=399, _) => {
             format!("WebDAV 地址发生重定向，请使用最终目录地址（HTTP {code}）")
         }
@@ -124,7 +128,43 @@ fn http_error(e: ureq::Error) -> String {
     }
 }
 
-fn conflict_items(local: &SharedConfig, remote: &SharedConfig, keys: &[String]) -> Vec<Value> {
+/// Show the values that actually differ instead of identical image-quality summaries.
+struct ReviewField { key:String,label:String,value:String,raw:Value }
+fn changed_fields(left:Option<Vec<ReviewField>>,right:Option<Vec<ReviewField>>)->(String,String,Vec<Value>){
+    let mut keys=Vec::new();
+    for fields in [left.as_ref(),right.as_ref()].into_iter().flatten(){
+        for field in fields{if !keys.contains(&field.key){keys.push(field.key.clone());}}
+    }
+    fn field<'a>(fields:&'a Option<Vec<ReviewField>>,key:&str)->Option<&'a ReviewField>{fields.as_ref()?.iter().find(|field|field.key==key)}
+    keys.retain(|key|field(&left,key).map(|row|&row.raw)!=field(&right,key).map(|row|&row.raw));
+    let render=|fields:&Option<Vec<ReviewField>>|{
+        if fields.is_none(){return "未设置".into();}
+        if keys.is_empty(){return "无差异".into();}
+        keys.iter().map(|key|{let row=field(fields,key);let label=row.or_else(||field(&left,key)).or_else(||field(&right,key)).unwrap();format!("{}：{}",label.label,row.map(|row|row.value.as_str()).unwrap_or("未设置"))}).collect::<Vec<_>>().join("\n")
+    };
+    let rows=keys.iter().map(|key|{let a=field(&left,key);let b=field(&right,key);let label=a.or(b).unwrap();json!({"key":key,"label":label.label,"local":a.map(|row|row.value.as_str()).unwrap_or("未设置"),"remote":b.map(|row|row.value.as_str()).unwrap_or("未设置")})}).collect();
+    (render(&left),render(&right),rows)
+}
+
+pub(crate) fn conflict_items(local: &SharedConfig, remote: &SharedConfig, keys: &[String]) -> Vec<Value> {
+    fn device_fields(config:&SharedConfig,id:&str)->Option<Vec<ReviewField>>{
+        config.devices.iter().find(|device|device.uuid==id).map(|device|{
+            let row=|key:&str,label:&str,value:String,raw:Value|ReviewField{key:key.into(),label:label.into(),value,raw};
+            vec![
+                row("name","设备名称",device.name.clone(),json!(device.name)),
+                row("displayName","显示名称",if device.display_name.is_empty(){"未设置".into()}else{format!("“{}”",device.display_name)},json!(device.display_name)),
+                row("address","首选地址",device.address.clone(),json!(device.address)),
+                row("addresses","备用地址",if device.addresses.is_empty(){"未设置".into()}else{device.addresses.iter().map(|address|format!("“{address}”")).collect::<Vec<_>>().join("、")},json!(device.addresses)),
+                row("swapButtons","左右键交换",if device.swap_buttons{"开启"}else{"关闭"}.into(),json!(device.swap_buttons)),
+            ]
+        })
+    }
+    fn profile_fields(config:&SharedConfig,key:&str)->Option<Vec<ReviewField>>{
+        config.profiles.iter().find_map(|(client,profiles)|profiles.iter().find(|(host,_)|key==format!("profiles.{client}.{host}")).map(|(_,profile)|{
+            let mut raw=serde_json::to_value(profile).unwrap();raw["bitrateAuto"]=json!(profile.bitrate_auto);
+            rhremote_core::profile_fields(&profile.to_profile(),None).into_iter().map(|field|ReviewField{raw:raw[&field.key].clone(),key:field.key,label:field.label,value:field.value}).collect()
+        }))
+    }
     fn device_name(config: &SharedConfig, id: &str) -> String {
         config
             .devices
@@ -197,7 +237,12 @@ fn conflict_items(local: &SharedConfig, remote: &SharedConfig, keys: &[String]) 
         else {
             local.profiles.iter().find_map(|(client,profiles)|profiles.keys().find(|host|key==&format!("profiles.{client}.{host}")).map(|host|format!("连接配置：{} → {}",local.clients.get(client).map(|c|c.name.as_str()).unwrap_or("客户端"),device_name(local,host)))).unwrap_or_else(||"其他配置".into())
         };
-        json!({"key":key,"label":label,"local":describe(local,key),"remote":describe(remote,key)})
+        let (left,right,fields)=if let Some(id)=key.strip_prefix("devices."){
+            changed_fields(device_fields(local,id),device_fields(remote,id))
+        }else if key.starts_with("profiles."){
+            changed_fields(profile_fields(local,key),profile_fields(remote,key))
+        }else{(describe(local,key),describe(remote,key),Vec::new())};
+        json!({"key":key,"label":label,"local":left,"remote":right,"fields":fields})
     }).collect()
 }
 impl ConfigSync {
@@ -241,7 +286,7 @@ impl ConfigSync {
             .map(|p| conflict_items(&p.local, &p.remote, &conflicts))
             .unwrap_or_default();
         let blocked=self.local.pending_transfer||self.local.pending_apply||self.awaiting.is_some();
-        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":conflicts,"conflictItems":items,"awaitingLocalApply":self.awaiting.is_some(),"outcomeUncertain":self.local.pending_transfer,"automaticBlocked":blocked,"phase":if self.awaiting.is_some(){"applying"}else if self.pending.is_some(){"conflict"}else if blocked{"interrupted"}else if self.local.last_sync_ms>0{"completed"}else{"idle"},"error":if blocked{"上次同步结果尚未确认，自动同步已暂停，请手动同步核对"}else{""}})
+        json!({"url":self.local.url,"username":self.local.username,"automatic":self.local.automatic,"intervalMinutes":interval(&json!({}),self.local.interval_minutes).unwrap(),"hasPassword":!self.local.credential_id.is_empty(),"lastSyncMs":self.local.last_sync_ms,"conflicts":conflicts,"conflictItems":items,"reviewId":self.pending.as_ref().map(|p|p.review_id.as_str()).unwrap_or(""),"awaitingLocalApply":self.awaiting.is_some(),"outcomeUncertain":self.local.pending_transfer,"automaticBlocked":blocked,"phase":if self.awaiting.is_some(){"applying"}else if self.pending.is_some(){"conflict"}else if blocked{"interrupted"}else if self.local.last_sync_ms>0{"completed"}else{"idle"},"error":if blocked{"上次同步结果尚未确认，自动同步已暂停，请手动同步核对"}else{""}})
     }
     pub fn configure(&mut self, args: &Value) -> Result<Value, String> {
         let address = args["url"].as_str().ok_or("url required")?.trim();
@@ -299,7 +344,13 @@ impl ConfigSync {
         self.locking=None;
         Ok(self.state())
     }
+    #[cfg(test)]
     pub fn run(&mut self, local: SharedConfig, resolution: Resolution) -> Result<Value, String> {
+        self.run_reviewed(local,resolution,None)
+    }
+    /// Bind a UI resolution to the snapshot it displayed, before vault or DAV access.
+    pub fn run_reviewed(&mut self, local:SharedConfig,resolution:Resolution,expected:Option<&str>)->Result<Value,String>{
+        self.validate_review(expected)?;
         self.awaiting=None;
         local.validate()?;
         let address = endpoint(&self.local.url)?;
@@ -316,6 +367,9 @@ impl ConfigSync {
             .map_err(|error| if self.local.pending_transfer {
                 format!("{error}。远端写入结果未确认，自动同步已暂停，请手动同步核对")
             } else {error})
+    }
+    fn validate_review(&self,expected:Option<&str>)->Result<(),String>{
+        if expected.is_some_and(|id|id.is_empty()||self.pending.as_ref().is_none_or(|pending|pending.review_id!=id)){Err("同步冲突内容已更新，请重新查看后再选择".into())}else{Ok(())}
     }
     fn exchange_negotiated(&mut self, agent:&ureq::Agent, address:&str, auth:&str, local:SharedConfig, resolution:Resolution)->Result<Value,String> {
         let locking=match self.locking {Some(value)=>value,None=>{let value=dav::supported(agent,address,auth)?;self.locking=Some(value);value}};
@@ -399,7 +453,9 @@ impl ConfigSync {
         let merged = if let Some(ref remote) = remote {
             let result = merge(&local, remote, self.local.base.as_ref(), resolution);
             if !result.conflicts.is_empty() {
+                let review_id=if let Some(pending)=self.pending.as_ref().filter(|pending|pending.local==local&&pending.remote==*remote&&Some(&pending.etag)==etag.as_ref()){pending.review_id.clone()}else{rhremote_core::random_token()?};
                 self.pending = Some(Pending {
+                    review_id,
                     local,
                     remote: remote.clone(),
                     etag: etag.clone().unwrap(),
@@ -535,6 +591,8 @@ impl ConfigSync {
         next.pending_apply = false;
         next.pending_transfer = false;
         atomic(&path, &next)?;
+        #[cfg(test)]
+        process_tests::after_account(&self.directory);
         let persisted: Local =
             serde_json::from_slice(&fs::read(path).map_err(|_| "同步完成状态无法读取，请重试")?)
                 .map_err(|_| "同步完成状态无效，请重试")?;
@@ -759,7 +817,7 @@ mod tests {
         let address = format!("http://{}/dav", server.server_addr());
         let body = serde_json::to_string(&remote).unwrap();
         let worker = std::thread::spawn(move || {
-            for version in [1, 2] {
+            for version in [1, 1, 2] {
                 let request = server
                     .recv_timeout(Duration::from_secs(5))
                     .unwrap()
@@ -778,6 +836,9 @@ mod tests {
             .exchange(&address, "Basic test", local.clone(), Resolution::Review)
             .unwrap();
         assert_eq!(result["conflicts"][0], "profiles.pc.self");
+        let review=sync.state()["reviewId"].as_str().unwrap().to_owned();assert!(!review.is_empty());
+        sync.exchange(&address,"Basic test",local.clone(),Resolution::Review).unwrap();assert_eq!(sync.state()["reviewId"],review);
+        let before=sync.state();assert!(sync.run_reviewed(local.clone(),Resolution::Remote,Some("older-review")).unwrap_err().contains("内容已更新"));assert_eq!(sync.state(),before);
         assert!(result.get("shared").is_none());
         assert!(
             sync.exchange(&address, "Basic test", local, Resolution::Remote)
@@ -875,6 +936,35 @@ mod tests {
         fs::remove_dir_all(sync.directory).unwrap();
     }
     #[test]
+    fn conflict_review_identifies_every_client_setting_instead_of_repeating_image_quality() {
+        let local=config();let original=local.profiles["pc"]["self"].clone();
+        let mut data=serde_json::to_value(&original).unwrap();data["bitrateAuto"]=json!(false);
+        for(key,value)in data.as_object().unwrap(){
+            let next=match value{
+                Value::Bool(flag)=>json!(!flag),
+                Value::Number(number)=>if key=="volume"{json!(99)}else{json!(number.as_u64().unwrap()+if key=="width"||key=="height"{2}else{1})},
+                Value::String(_)=>{if key=="relayUrl"{json!("https://relay.example.test/")}else{rhremote_core::settings_catalog().as_array().unwrap().iter().find(|field|field["key"]==*key).and_then(|field|field["options"].as_array()).and_then(|options|options.iter().find(|option|option[0]!=*value)).unwrap_or_else(||panic!("No alternative for {key}"))[0].clone()}},
+                Value::Array(values)=>{let mut values=values.clone();values.rotate_left(1);json!(values)},
+                _=>panic!("Unexpected profile field {key}"),
+            };
+            let mut changed=data.clone();changed[key]=next;let incoming:rhremote_core::sync_model::ClientProfile=serde_json::from_value(changed).unwrap();incoming.to_profile().validate().unwrap();
+            let mut remote=local.clone();remote.profiles.get_mut("pc").unwrap().insert("self".into(),incoming);
+            let item=conflict_items(&local,&remote,&["profiles.pc.self".into()]).remove(0);
+            assert_ne!(item["local"],item["remote"],"{key} was hidden behind an identical summary");
+            assert_ne!(item["local"],"无差异","{key} did not reach the comparison");
+        }
+    }
+    #[test]
+    fn backup_addresses_placeholder_names_and_missing_nodes_remain_distinguishable() {
+        let local=config();let mut remote=local.clone();remote.devices[0].addresses=vec!["100.64.0.2".into()];
+        let key=format!("devices.{}",local.devices[0].uuid);let item=conflict_items(&local,&remote,&[key.clone()]).remove(0);
+        assert_eq!(item["local"],"备用地址：未设置");assert!(item["remote"].as_str().unwrap().contains("100.64.0.2"));
+        let mut remote=local.clone();remote.devices[0].display_name="未设置".into();let item=conflict_items(&local,&remote,&[key.clone()]).remove(0);
+        assert_ne!(item["local"],item["remote"]);assert!(item["remote"].as_str().unwrap().contains("“未设置”"));
+        remote.devices.clear();let item=conflict_items(&local,&remote,&[key]).remove(0);assert_eq!(item["remote"],"未设置");
+        let key="profiles.pc.self".into();remote=local.clone();remote.profiles.clear();let item=conflict_items(&local,&remote,&[key]).remove(0);assert_eq!(item["remote"],"未设置");assert!(item["local"].as_str().unwrap().contains("25 Mbps"));
+    }
+    #[test]
     fn conflict_summaries_show_names_values_and_client_specific_profiles() {
         let mut local = config();
         local.devices[0].display_name = "工作电脑".into();
@@ -909,6 +999,7 @@ mod tests {
         assert_eq!(items[3]["local"], "工作电脑");
         let mut sync = fixture();
         sync.pending = Some(Pending {
+            review_id: "fixture-review".into(),
             local,
             remote,
             etag: "\"1\"".into(),

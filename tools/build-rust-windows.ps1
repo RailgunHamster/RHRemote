@@ -13,4 +13,5 @@ try{
  Copy-Item -LiteralPath (Join-Path $repo 'target/debug/RHRemote.exe') -Destination (Join-Path $out 'RHRemote.exe') -Force
  Copy-Item -LiteralPath (Join-Path $repo 'client/LICENSE') -Destination (Join-Path $out 'LICENSE') -Force
  Get-FileHash -LiteralPath (Join-Path $out 'RHRemote.exe') -Algorithm SHA256|Select-Object Hash,Path
+ try{& (Join-Path $PSScriptRoot 'clean-build-artifacts.ps1') -Apply -Protect @($out) | Out-Null}catch{Write-Warning ('Artifact retention deferred: '+$_.Exception.Message)}
 }finally{Pop-Location}

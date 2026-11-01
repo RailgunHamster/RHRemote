@@ -4,7 +4,7 @@ use std::{collections::VecDeque, path::Path, sync::Mutex};
 const HISTORY: usize = 64;
 const QUEUED: usize = 8;
 pub(crate) const KEYS: &[&str] = &[
-    "Tab", "Enter", "Escape", "Space", "Up", "Down", "Left", "Right", "Home", "End",
+    "Tab", "Enter", "Escape", "Space", "Up", "Down", "Left", "Right", "Home", "End", "PageUp", "PageDown",
 ];
 
 #[derive(Clone, Debug)]
@@ -28,8 +28,8 @@ impl Request {
             return Err("未知界面测试操作".into());
         }
         let window = args["window"].as_str().unwrap_or("main");
-        if !["main", "toolbar", "picker"].contains(&window) {
-            return Err("window 须为 main / toolbar / picker".into());
+        if !["main", "toolbar", "picker", "keyboard"].contains(&window) {
+            return Err("window 须为 main / toolbar / picker / keyboard".into());
         }
         let control = args["control"].as_str().unwrap_or("");
         let action_id = args["actionId"].as_str().unwrap_or("");
@@ -41,8 +41,20 @@ impl Request {
             if !args["argument"].is_null() && !args["argument"].is_string() || argument.len() > 512 || argument.contains(['|', '\0', '\r', '\n']) {
                 return Err("argument 须为有效的按钮参数".into());
             }
-            if !control.is_empty() || !args["key"].is_null() || args["shift"] == true || args["repeat"] == true {
-                return Err("activate 通过动作定位按钮，不能同时指定控件或按键".into());
+            if !args["control"].is_null() && !args["control"].is_string() {
+                return Err("control 须为 inspect 返回的当前按钮标识".into());
+            }
+            if !control.is_empty() {
+                let action_prefix=format!("action|{action_id}|");
+                let navigation_id=format!("nav|{action_id}");
+                if control.len()>1024 || control.contains(['\0','\r','\n'])
+                    || !(control.starts_with(&action_prefix) || window=="main" && control==navigation_id) {
+                    return Err("control 须与 actionId 对应".into());
+                }
+                if !argument.is_empty() { return Err("control 和 argument 不能同时指定".into()); }
+            }
+            if !args["key"].is_null() || args["shift"] == true || args["repeat"] == true {
+                return Err("activate 不能同时指定按键".into());
             }
         }
         if !args["expectedPending"].is_null() && (operation != "activate" || window != "toolbar" || !args["expectedPending"].is_boolean()) {
@@ -109,13 +121,29 @@ struct Inner {
 pub(crate) struct Bridge {
     pub enabled: bool,
     inner: Mutex<Inner>,
+    native_state_fault: Mutex<Option<(u32, u8)>>,
 }
 impl Bridge {
     pub fn new(enabled: bool) -> Self {
         Self {
             enabled,
             inner: Mutex::new(Inner::default()),
+            native_state_fault: Mutex::new(None),
         }
+    }
+    pub(crate) fn fail_native_state(&self, pid: u32, polls: u8) -> Result<Value, String> {
+        if !self.enabled { return Err("界面测试接口仅在隔离测试预览中启用".into()); }
+        if pid == 0 || !(1..=8).contains(&polls) { return Err("测试故障需要本次进程及 1–8 次读取".into()); }
+        *self.native_state_fault.lock().unwrap() = Some((pid, polls));
+        Ok(json!({"accepted":true,"synthetic":true,"processId":pid,"polls":polls}))
+    }
+    pub(crate) fn take_native_state_fault(&self, current: Option<u32>) -> bool {
+        if !self.enabled { return false; }
+        let mut slot = self.native_state_fault.lock().unwrap();
+        let Some((pid, polls)) = *slot else { return false };
+        if Some(pid) != current { *slot = None; return false; }
+        *slot = if polls == 1 { None } else { Some((pid, polls - 1)) };
+        true
     }
     pub fn execute(&self, action: &str, args: &Value) -> Result<Value, String> {
         if !self.enabled {
@@ -245,6 +273,26 @@ pub(crate) fn isolated(data: &Path, default: &Path, mode: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn native_state_faults_are_disabled_outside_the_isolated_bridge() {
+        let bridge = Bridge::new(false);
+        assert!(bridge.fail_native_state(123, 1).is_err());
+        assert!(!bridge.take_native_state_fault(Some(123)));
+    }
+    #[test]
+    fn native_state_faults_expire_and_cannot_follow_another_process() {
+        let bridge = Bridge::new(true);
+        assert!(bridge.fail_native_state(0, 1).is_err());
+        assert!(bridge.fail_native_state(123, 0).is_err());
+        assert!(bridge.fail_native_state(123, 9).is_err());
+        bridge.fail_native_state(123, 2).unwrap();
+        assert!(bridge.take_native_state_fault(Some(123)));
+        assert!(bridge.take_native_state_fault(Some(123)));
+        assert!(!bridge.take_native_state_fault(Some(123)));
+        bridge.fail_native_state(123, 2).unwrap();
+        assert!(!bridge.take_native_state_fault(Some(124)));
+        assert!(!bridge.take_native_state_fault(Some(123)));
+    }
+    #[test]
     fn semantic_activation_rejects_ambiguous_parameters_and_keeps_the_pending_guard_in_its_identity() {
         let plain = Request::parse("activate", &json!({"window":"toolbar","actionId":"stream.disconnect"})).unwrap();
         let guarded = Request::parse("activate", &json!({"window":"toolbar","actionId":"stream.disconnect","expectedPending":true})).unwrap();
@@ -252,6 +300,28 @@ mod tests {
         for args in [json!({}), json!({"actionId":"bad|id"}), json!({"actionId":"x","argument":7}), json!({"actionId":"x","argument":"bad|argument"}), json!({"actionId":"x","control":"old-caption"}), json!({"actionId":"x","key":"Enter"}), json!({"actionId":"x","expectedPending":true}), json!({"actionId":"x","window":"toolbar","expectedPending":"true"}), json!({"actionId":"x","activateWindow":true})] {
             assert!(Request::parse("activate", &args).is_err(), "{args}");
         }
+    }
+    #[test]
+    fn exact_button_selection_is_action_bound_and_part_of_request_identity() {
+        let up=Request::parse("activate",&json!({"actionId":"device.move","control":"action|device.move|host|up|上移"})).unwrap();
+        let down=Request::parse("activate",&json!({"actionId":"device.move","control":"action|device.move|host|down|下移"})).unwrap();
+        assert_eq!(up.control,"action|device.move|host|up|上移");assert!(up.argument.is_empty());assert_ne!(up.signature(),down.signature());
+        let bridge=Bridge::new(true);
+        let args=json!({"requestId":"exact-once","actionId":"device.add.cancel","control":"action|device.add.cancel||返回设备"});
+        let queued=bridge.execute("view.ui.activate",&args).unwrap();assert_eq!(bridge.execute("view.ui.activate",&args).unwrap(),queued);
+        assert!(bridge.execute("view.ui.activate",&json!({"requestId":"exact-once","actionId":"device.add.cancel","control":"action|device.add.cancel||取消"})).is_err());
+    }
+    #[test]
+    fn exact_selection_rejects_other_actions_invalid_ids_and_mixed_selectors() {
+        for args in [
+            json!({"actionId":"device.add.cancel","control":"action|device.add.submit||添加"}),
+            json!({"actionId":"device.add.cancel","control":"device|host"}),
+            json!({"actionId":"device.add.cancel","control":"nav|device.add.cancel","window":"toolbar"}),
+            json!({"actionId":"device.add.cancel","control":7}),
+            json!({"actionId":"device.add.cancel","control":"action|device.add.cancel||取消\n"}),
+            json!({"actionId":"device.add.cancel","control":"action|device.add.cancel||取消","argument":"other"}),
+            json!({"actionId":"device.add.cancel","control":"action|device.add.cancel||取消","key":"Enter"}),
+        ]{assert!(Request::parse("activate",&args).is_err(),"{args}");}
     }
     #[test]
     fn activation_is_explicit_main_focus_only_and_part_of_the_request_identity() {
@@ -316,6 +386,7 @@ mod tests {
     #[test]
     fn only_explicit_app_keys_and_valid_targets_are_accepted() {
         let b = Bridge::new(true);
+        for key in ["PageUp","PageDown"]{assert!(b.execute("view.ui.key",&json!({"key":key})).is_ok());}
         for args in [
             json!({"key":"Win+R"}),
             json!({"key":"Enter","window":"other-app"}),

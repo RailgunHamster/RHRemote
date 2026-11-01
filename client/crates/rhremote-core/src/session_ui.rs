@@ -63,6 +63,73 @@ mod tests {
         c.dispatch("stream.controls.toggle", json!({}));
         c
     }
+    #[test]
+    fn floating_keyboard_is_a_local_switch_and_requires_a_live_stream(){
+        let c=fixture(Arc::new(Host{pending:None,fail:std::sync::atomic::AtomicBool::new(false)}));
+        let saved=c.state()["saved"].clone();
+        assert_eq!(c.dispatch("stream.keyboard.floating.set",json!({"enabled":"yes"}))["ok"],false);assert_eq!(c.state()["controls"],true);
+        assert_eq!(c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}))["ok"],true);assert_eq!(c.state()["floatingKeyboard"],true);assert_eq!(c.state()["controls"],false);assert_eq!(c.state()["saved"],saved);
+        c.dispatch("stream.keyboard.floating.set",json!({"enabled":false}));c.stream_state(false,json!({"phase":"idle"}));assert_eq!(c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}))["ok"],false);assert_eq!(c.state()["floatingKeyboard"],false);
+    }
+    fn keyboard_report(c:&Controller,request:u64,code:&str,visible:bool)->Value{
+        json!({"floatingKeyboard":{"session":c.stream_epoch(),"request":request,"feedbackCode":code,"visible":visible}})
+    }
+    #[test]
+    fn floating_keyboard_feedback_is_visible_without_overwriting_remote_errors(){
+        let c=fixture(Arc::new(Host{pending:None,fail:std::sync::atomic::AtomicBool::new(false)}));
+        let saved=c.state()["saved"].clone();
+        c.dispatch("stream.controls.tab",json!({"tab":"audio"}));
+        c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}));
+        let request=c.state()["floatingKeyboardRequest"].as_u64().unwrap_or(0);
+        let report=keyboard_report(&c,request,"region",false);
+        {let mut s=c.state.lock().unwrap();s.control_action.error="Existing remote failure".into();s.control_action.message="远程操作失败".into();}
+        c.toolbar_state(report.clone());
+        assert_eq!(c.state()["controls"],true,"A local keyboard failure must not remain hidden behind a closed control panel");
+        assert_eq!(c.state()["controlsTab"],"input");
+        assert_eq!(c.state()["floatingKeyboardError"],"悬浮键盘未显示");
+        assert_eq!(c.state()["saved"],saved);
+        assert_eq!(c.state()["controlAction"]["error"],"Existing remote failure");
+        c.dispatch("stream.controls.toggle",json!({}));
+        c.toolbar_state(report);
+        assert_eq!(c.state()["controls"],false,"The same failure must respect the user's decision to collapse the panel");
+        c.dispatch("stream.keyboard.floating.set",json!({"enabled":false}));
+        assert_eq!(c.state()["floatingKeyboardError"],"");
+        let _=std::fs::remove_file(&c.storage);
+    }
+    #[test]
+    fn floating_keyboard_retry_replaces_the_request_and_ignores_old_results(){
+        let c=fixture(Arc::new(Host{pending:None,fail:std::sync::atomic::AtomicBool::new(false)}));
+        c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}));
+        let old=c.state()["floatingKeyboardRequest"].as_u64().unwrap_or(0);
+        c.toolbar_state(keyboard_report(&c,old,"region",false));
+        assert_eq!(c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}))["ok"],true);
+        let current=c.state()["floatingKeyboardRequest"].as_u64().unwrap_or(0);
+        assert!(current>old,"Explicit re-enable must retry a cached local render failure");
+        assert_eq!(c.state()["controls"],false);
+        assert_eq!(c.state()["floatingKeyboardError"],"");
+        c.toolbar_state(keyboard_report(&c,old,"region",false));
+        assert_eq!(c.state()["floatingKeyboardError"],"");
+        c.toolbar_state(keyboard_report(&c,current,"small",false));
+        assert_eq!(c.state()["floatingKeyboardError"],"窗口过小，放大窗口后重试");
+        c.toolbar_state(keyboard_report(&c,old,"",true));
+        assert_eq!(c.state()["floatingKeyboardError"],"窗口过小，放大窗口后重试");
+        c.toolbar_state(keyboard_report(&c,current,"",true));
+        assert_eq!(c.state()["floatingKeyboardError"],"");
+        let _=std::fs::remove_file(&c.storage);
+    }
+    #[test]
+    fn floating_keyboard_feedback_cannot_reach_a_replacement_session(){
+        let c=fixture(Arc::new(Host{pending:None,fail:std::sync::atomic::AtomicBool::new(false)}));
+        c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}));
+        let request=c.state()["floatingKeyboardRequest"].as_u64().unwrap_or(0);
+        let old=keyboard_report(&c,request,"region",false);
+        c.dispatch("stream.disconnect",json!({}));
+        c.stream_state(false,json!({"phase":"disconnected","nativeCleanupPending":false}));
+        connect(&c);
+        c.toolbar_state(old);
+        assert!(c.state()["floatingKeyboardError"].as_str().unwrap_or("").is_empty());
+        let _=std::fs::remove_file(&c.storage);
+    }
     fn connect(c: &Controller) {
         assert_eq!(
             c.dispatch("device.connect", json!({"uuid":"host"}))["ok"],
@@ -117,12 +184,17 @@ mod tests {
             std::thread::spawn(move || task.dispatch("stream.audio.volume", json!({"volume":37})));
         started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(c.state()["controlAction"]["busy"], true);
+        assert_eq!(c.dispatch("stream.keyboard.floating.set", json!({"enabled":true}))["ok"], false);
+        assert_eq!(c.state()["floatingKeyboard"], false);
+        assert_eq!(c.state()["controls"], true);
         assert_eq!(c.dispatch("stream.stats.toggle", json!({}))["ok"], false);
         assert_eq!(
             c.dispatch("stream.controls.tab", json!({"tab":"displays"}))["ok"],
             true
         );
         assert_eq!(c.dispatch("stream.disconnect", json!({}))["ok"], true);
+        assert_eq!(c.dispatch("stream.keyboard.floating.set", json!({"enabled":true}))["ok"], false);
+        assert_eq!(c.state()["floatingKeyboard"], false);
         c.stream_state(
             false,
             json!({"phase":"disconnected","nativeCleanupPending":false}),
@@ -248,10 +320,32 @@ pub fn is_control_action(id: &str) -> bool {
     )
 }
 pub(crate) fn clear(s: &mut State) {
+    s.floating_keyboard_error.clear();
     s.control_action = ControlAction {
         sequence: s.control_action.sequence + 1,
         ..Default::default()
     };
+}
+pub(crate) fn keyboard_feedback(s: &mut State, report: &Value) {
+    // Reports belong to the snapshot used by the UI, never a replacement session or retry.
+    if !s.streaming || s.connecting || s.connection.stopping || !s.floating_keyboard
+        || report["session"].as_u64()!=Some(s.stream_epoch)
+        || report["request"].as_u64()!=Some(s.floating_keyboard_request) { return; }
+    let message=match report["feedbackCode"].as_str().unwrap_or("") {
+        "small"=>"窗口过小，放大窗口后重试",
+        "window-unavailable"=>"远程窗口暂不可用，稍后重试",
+        "geometry"|"open"|"handle"|"region-init"|"region"|"unsupported"=>"悬浮键盘未显示",
+        _ if report["visible"]==true=>"",
+        _=>return,
+    };
+    if s.floating_keyboard_error==message { return; }
+    s.floating_keyboard_error=message.into();
+    if !message.is_empty() {
+        s.controls=true;
+        s.controls_tab="input".into();
+        s.stream_menu.clear();
+    }
+    s.revision+=1;
 }
 fn group(id: &str) -> &'static str {
     match id {

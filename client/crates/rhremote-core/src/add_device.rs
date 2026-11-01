@@ -260,9 +260,11 @@ impl Controller {
             sync_model::from_state(&candidate).validate()?;
             self.persist(&next)?;
             let existed = s.devices.iter().any(|d| d.uuid == device.uuid);
+            let needs_check=s.devices.iter().find(|old|old.uuid==device.uuid).is_none_or(|old|old.address!=device.address || old.addresses!=device.addresses);
             self.platform.added_device(&device);
             s.saved = next;
             s.devices = candidate.devices;
+            if needs_check {s.clear_device_checks(&device.uuid);if !s.devices_pending.contains(&device.uuid){s.devices_pending.push(device.uuid.clone());}}
             s.selected = device.uuid.clone();
             s.device_query.clear();
             s.page = "devices".into();
@@ -402,6 +404,7 @@ mod tests {
         assert_eq!(f.c.state()["selected"], "new-host");
         assert_eq!(f.c.state()["deviceQuery"], "");
         assert_eq!(f.c.state()["page"], "devices");
+        assert_eq!(f.c.state()["devicesPending"],json!(["new-host"]),"public discovery does not verify this installation's pairing");
         assert_eq!(f.host.published.lock().unwrap().len(), 1);
     }
     #[test]

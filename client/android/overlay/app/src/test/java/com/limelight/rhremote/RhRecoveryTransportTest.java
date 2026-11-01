@@ -81,6 +81,7 @@ public class RhRecoveryTransportTest {
         wrongUuid=true;body.countDown();start();assertTrue(request.await(2,TimeUnit.SECONDS));awaitReleased();
         assertNull(Shadows.shadowOf(activity).getNextStartedActivity());assertEquals(1,NativeTransport.starts);assertTrue(NativeTransport.stops>=2);
         JSONObject attempt=RhNetwork.state().getJSONArray("attempts").getJSONObject(0);assertFalse(attempt.getBoolean("ok"));assertEquals("uuid_mismatch",attempt.getString("error"));
+        assertTrue(RhActions.lastConnectionError(),RhActions.lastConnectionError().contains("设备标识"));assertFalse(RhActions.lastConnectionError().contains("不可达或"));
     }
     @Test public void realResolverHoldsTheSuccessfulRouteUntilGameControllerHandoff()throws Exception{
         body.countDown();start();assertTrue(request.await(2,TimeUnit.SECONDS));Intent next=null;long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);

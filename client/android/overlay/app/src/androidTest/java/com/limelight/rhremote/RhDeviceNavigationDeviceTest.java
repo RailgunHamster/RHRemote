@@ -40,6 +40,25 @@ public final class RhDeviceNavigationDeviceTest {
     private final JSONArray steps = new JSONArray();
     private JSONArray devices;
     private int orientationChanges;
+    private boolean fontAudit;
+    private final JSONArray textClipping = new JSONArray();
+
+    private void inspectText(View view, String step) throws Exception {
+        if (view.getVisibility() != View.VISIBLE) return;
+        if (view instanceof TextView) {
+            TextView text = (TextView) view;
+            Rect visible = new Rect();
+            if (text.length() > 0 && text.getLayout() != null && text.getGlobalVisibleRect(visible)
+                    && visible.width() == text.getWidth() && visible.height() == text.getHeight()) {
+                int room = text.getHeight() - text.getCompoundPaddingTop() - text.getCompoundPaddingBottom();
+                if (text.getLayout().getHeight() > room) textClipping.put(RhActions.obj("step", step,
+                        "text", text.getText().toString(), "height", text.getHeight(), "contentHeight", room,
+                        "textHeight", text.getLayout().getHeight(), "fontPixels", text.getTextSize()));
+            }
+        }
+        if (view instanceof ViewGroup) for (int i = 0; i < ((ViewGroup) view).getChildCount(); i++)
+            inspectText(((ViewGroup) view).getChildAt(i), step);
+    }
 
     private Object field(Object owner, String name) throws Exception {
         Field value = owner.getClass().getDeclaredField(name);
@@ -193,6 +212,8 @@ public final class RhDeviceNavigationDeviceTest {
         instrument.runOnMainSync(() -> {
             View decor = activity.getWindow().getDecorView();
             decor.jumpDrawablesToCurrentState();
+            if (fontAudit) try { inspectText(decor, name); }
+            catch (Exception error) { throw new RuntimeException(error); }
             frame[0] = Bitmap.createBitmap(decor.getWidth(), decor.getHeight(), Bitmap.Config.ARGB_8888);
             decor.draw(new Canvas(frame[0]));
         });
@@ -240,6 +261,13 @@ public final class RhDeviceNavigationDeviceTest {
                 assertEquals(back.getHeight(), visible.height());
             });
             capture("back-" + page[0].replace('.', '-') + "-" + (wide ? "wide-" : "portrait-") + theme);
+            if (page[0].equals("app.settings.open")) {
+                for (String tab : new String[]{"sync", "appearance", "about"}) {
+                    action("app.settings.tab", RhActions.obj("tab", tab));
+                    capture("global-" + tab + "-" + (wide ? "wide-" : "portrait-") + theme);
+                }
+                action("app.settings.tab", RhActions.obj("tab", "updates"));
+            }
             click("返回设备");
             assertEquals("devices", state().getString("page"));
             assertEquals(uuid, state().getString("selected"));
@@ -252,7 +280,9 @@ public final class RhDeviceNavigationDeviceTest {
         assertTrue("Dedicated emulator only", android.os.Build.HARDWARE.equals("ranchu") || android.os.Build.HARDWARE.equals("goldfish"));
         String run = InstrumentationRegistry.getArguments().getString("navigationRun", "");
         assertTrue("Fresh explicit navigationRun required", run.matches("[a-zA-Z0-9_-]{1,64}"));
+        fontAudit = InstrumentationRegistry.getArguments().getString("navigationFontAudit", "false").equals("true");
         Context context = instrument.getTargetContext();
+        if (fontAudit) assertEquals(2f, context.getResources().getConfiguration().fontScale, 0.001f);
         File shared = new File(context.getFilesDir(), "rhremote-shared.json");
         byte[] originalBytes = Files.readAllBytes(shared.toPath());
         JSONObject original = RhShared.read(context);
@@ -300,6 +330,19 @@ public final class RhDeviceNavigationDeviceTest {
                 assertProfile(first, false);
                 assertEquals(Integer.toString(changedFirst), state().getJSONObject("settingsInputs").getString("volume"));
                 capture("portrait-draft-" + theme);
+                for (String tab : new String[]{"video", "input", "network", "advanced"}) {
+                    action("settings.tab", RhActions.obj("tab", tab));
+                    assertEquals(Integer.toString(changedFirst), state().getJSONObject("settingsInputs").getString("volume"));
+                    assertEquals(baseline, RhShared.canonical(RhShared.read(context)));
+                    instrument.runOnMainSync(() -> {
+                        View save = control("保存");Rect visible = new Rect();
+                        assertTrue(save.getGlobalVisibleRect(visible));
+                        assertEquals(save.getHeight(), visible.height());
+                        assertEquals(save.getWidth(), visible.width());
+                    });
+                    capture("portrait-" + tab + "-draft-" + theme);
+                }
+                action("settings.tab", RhActions.obj("tab", "audio"));
                 choose(second, false);
                 assertProfile(first, false);
                 decision(AlertDialog.BUTTON_NEGATIVE);
@@ -341,14 +384,22 @@ public final class RhDeviceNavigationDeviceTest {
             }
             RhShared.write(new File(folder, "result.json"), RhActions.obj("version", com.limelight.BuildConfig.VERSION_NAME,
                     "actualPcView", true, "actualViewControls", true, "realOrientationChanges", orientationChanges,
+                    "fontScale", context.getResources().getConfiguration().fontScale,
+                    "fontAudit", fontAudit, "textClipping", textClipping,
                     "streamStarted", false, "syncStarted", false, "updateStarted", false,
                     "systemInputInjected", false, "osScreenshots", false, "steps", steps));
+            if (fontAudit) assertEquals("Native form text is clipped; inspect result.json", 0, textClipping.length());
         } finally {
             if (activity != null) instrument.runOnMainSync(() -> {
                 activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
                 activity.finish();
             });
             instrument.waitForIdleSync();
+            long finishDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (activity != null && !activity.isDestroyed()) {
+                assertTrue("Retire the owned Activity before restoring files", System.nanoTime() < finishDeadline);
+                Thread.sleep(20);
+            }
             RhShared.apply(context, original);
             try (FileOutputStream output = new FileOutputStream(shared)) { output.write(originalBytes); }
             RhShared.theme(context, originalTheme);

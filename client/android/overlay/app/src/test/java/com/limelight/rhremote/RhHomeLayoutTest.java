@@ -61,6 +61,10 @@ public final class RhHomeLayoutTest {
         assertEquals("host-2",home.state().getString("selected"));
         assertEquals(before,RhShared.canonical(RhShared.read(activity)));home.dispose();
     }
+    private View described(View view,String name){if(name.contentEquals(view.getContentDescription()==null?"":view.getContentDescription()))return view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){View result=described(((ViewGroup)view).getChildAt(i),name);if(result!=null)return result;}return null;}
+    @Test public void aFilteredOutDeviceRowCannotReplaceTheCurrentSelection()throws Exception{
+        setup();layout(1200,800);View old=described(root,"选择设备 winserver");assertNotNull(old);home.perform("device.select",RhActions.obj("uuid","host-1"));home.perform("devices.filter",RhActions.obj("query","Claw"));old.performClick();assertEquals("Filtered-out row changed the selected device","host-1",home.state().getString("selected"));assertEquals("Claw",home.state().getString("deviceQuery"));View current=described(root,"选择设备 Claw");assertNotNull(current);current.performClick();assertEquals("host-2",home.state().getString("selected"));home.dispose();
+    }
     @Test @Config(sdk=35) public void safeInsetsStayOutsideAllNavigationAndContent()throws Exception {
         setup();ViewCompat.dispatchApplyWindowInsets(root,new WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.systemBars(),Insets.of(12,28,16,24)).build());layout(1008,672);
         assertEquals(12,root.getPaddingLeft());assertEquals(28,root.getPaddingTop());assertEquals(16,root.getPaddingRight());assertEquals(24,root.getPaddingBottom());assertButtonsInsideParents();home.dispose();

@@ -88,7 +88,7 @@ public class RhDavLeaseTest {
     @Test public void busyOrRejectedWritesKeepTheOriginalBaseAndReleaseOwnedLocks()throws Exception {
         for(boolean busy:new boolean[]{true,false})try(Peer peer=new Peer(original)){
             peer.busy=busy;peer.failPut=!busy;RhSync sync=configure(peer,original);
-            try{sync.run(original,"review");fail("Rejected operation reported success");}catch(IOException expected){String message=RhSync.failureMessage(expected);assertTrue(message,message.contains(busy?"另一台设备":"重新同步"));}
+            try{sync.run(original,"review");fail("Rejected operation reported success");}catch(IOException expected){String message=RhSync.failureMessage(expected);assertTrue(message,message.contains(busy?"文件被占用":"重新同步"));}
             assertEquals(1,sync.state().getLong("lastSyncMs"));assertFalse(sync.state().getBoolean("awaitingLocalApply"));assertEquals(busy?0:1,Collections.frequency(peer.methods,"UNLOCK"));
         }
     }

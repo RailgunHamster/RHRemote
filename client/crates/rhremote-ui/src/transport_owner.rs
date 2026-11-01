@@ -46,6 +46,7 @@ impl Process {
     }
     fn inspect_while_running<T>(
         &self,
+        until: Instant,
         inspect: impl FnOnce(&Self) -> Result<T, String>,
     ) -> Result<Option<T>, String> {
         if self.ended() {
@@ -56,7 +57,9 @@ impl Process {
             // Image queries can fail during teardown before the process handle
             // signals. Only a signaled original handle proves it is safe to skip.
             Err(error) => {
-                if unsafe { WaitForSingleObject(self.0, 10) == WAIT_OBJECT_0 } {
+                let remaining = until.saturating_duration_since(Instant::now());
+                let milliseconds = remaining.as_millis().min(u128::from(u32::MAX - 1)) as u32;
+                if unsafe { WaitForSingleObject(self.0, milliseconds) == WAIT_OBJECT_0 } {
                     Ok(None)
                 } else {
                     Err(error)
@@ -157,7 +160,7 @@ impl Owner {
             native,
         })
     }
-    fn children(&self) -> Result<Vec<Process>, String> {
+    fn children(&self, until: Instant) -> Result<Vec<Process>, String> {
         let exited = self.process.times()?.1;
         let mut result = Vec::new();
         for (pid, parent) in processes()? {
@@ -180,7 +183,7 @@ impl Owner {
                     ));
                 }
             };
-            let selected = child.inspect_while_running(|process| {
+            let selected = child.inspect_while_running(until, |process| {
                 let (created, _) = process.times()?;
                 if created < self.created || exited != 0 && created > exited {
                     return Ok(false);
@@ -198,7 +201,7 @@ impl Owner {
     pub fn drain(&self, limit: Duration) -> Result<usize, String> {
         let until = Instant::now() + limit;
         std::thread::sleep(Duration::from_millis(75));
-        let children = match self.children() {
+        let children = match self.children(until) {
             Ok(v) => v,
             Err(error) => {
                 while Instant::now() < until {
@@ -282,7 +285,7 @@ mod tests {
     }
     fn selected(owner: &Owner, pid: u32) -> bool {
         owner
-            .children()
+            .children(Instant::now() + Duration::from_secs(3))
             .unwrap()
             .iter()
             .any(|p| unsafe { windows::Win32::System::Threading::GetProcessId(p.0) } == pid)
@@ -349,7 +352,7 @@ mod tests {
         let mut child = gated_child();
         let process = Process::open(child.0.id()).unwrap();
         assert!(!process.ended());
-        let result = process.inspect_while_running(|process| {
+        let result = process.inspect_while_running(Instant::now() + Duration::from_secs(3), |process| {
             let mut input = child.0.stdin.take().unwrap();
             input.write_all(b"release\n").unwrap();
             drop(input);
@@ -375,7 +378,7 @@ mod tests {
         let mut child = gated_child();
         let process = Process::open(child.0.id()).unwrap();
         let result =
-            process.inspect_while_running(|_| Err::<PathBuf, _>("live fixture denial".into()));
+            process.inspect_while_running(Instant::now(), |_| Err::<PathBuf, _>("live fixture denial".into()));
         assert_eq!(result, Err("live fixture denial".into()));
         assert!(!process.ended());
         assert!(child.0.try_wait().unwrap().is_none());
@@ -387,8 +390,30 @@ mod tests {
         let process = Process::open(child.0.id()).unwrap();
         release(&mut child);
         assert_eq!(
-            process.inspect_while_running::<PathBuf>(|_| panic!("An exited process was queried")),
+            process.inspect_while_running::<PathBuf>(Instant::now(), |_| panic!("An exited process was queried")),
             Ok(None)
         );
+    }
+    #[test]
+    fn query_error_during_a_delayed_exit_keeps_the_original_handle_until_signaled() {
+        let mut child = gated_child();
+        let process = Process::open(child.0.id()).unwrap();
+        let mut input = child.0.stdin.take().unwrap();
+        let (failed, observed) = std::sync::mpsc::channel();
+        let release = std::thread::spawn(move || {
+            observed.recv().unwrap();
+            std::thread::sleep(Duration::from_millis(80));
+            input.write_all(b"release\n").unwrap();
+        });
+        let began = Instant::now();
+        let result = process.inspect_while_running(began + Duration::from_secs(3), |_| {
+            failed.send(()).unwrap();
+            Err::<PathBuf, _>("owned delayed-exit query failure".into())
+        });
+        assert_eq!(result, Ok(None));
+        assert!(began.elapsed() >= Duration::from_millis(80));
+        assert!(process.ended());
+        assert!(child.0.wait().unwrap().success());
+        release.join().unwrap();
     }
 }

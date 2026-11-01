@@ -26,9 +26,26 @@ public class RhFormFlowTest {
     List<View> views(View v){List<View> out=new ArrayList<>();if(v.getVisibility()!=View.VISIBLE)return out;out.add(v);if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)out.addAll(views(((ViewGroup)v).getChildAt(i)));return out;}
     Button button(String text){for(View v:views(root))if(v instanceof Button&&((Button)v).getText().toString().equals(text))return(Button)v;throw new AssertionError("Missing button "+text);}
     EditText edit(String description){for(View v:views(root))if(v instanceof EditText&&description.contentEquals(v.getContentDescription()))return(EditText)v;throw new AssertionError("Missing field "+description);}
-    void layout(int width,int height){for(int i=0;i<4;i++){root.requestLayout();root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
+    void forceLayout(View v){v.forceLayout();if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++)forceLayout(((ViewGroup)v).getChildAt(i));}
+    // A width transition may rebuild the form chrome during layout. Measure those new children too.
+    void layout(int width,int height){for(int i=0;i<4;i++){forceLayout(root);root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
     boolean inScroll(View v){for(android.view.ViewParent p=v.getParent();p instanceof View;p=p.getParent())if(p instanceof ScrollView)return true;return false;}
     void profile()throws Exception{home.perform("device.settings.open",RhActions.obj("uuid","host"));layout(360,800);}
+    String settingLabel(String key)throws Exception{org.json.JSONArray fields=RhSettings.catalog(activity);for(int i=0;i<fields.length();i++)if(fields.getJSONObject(i).getString("key").equals(key))return fields.getJSONObject(i).getString("label");throw new AssertionError("Missing setting "+key);}
+    @Test public void automaticBitrateKeepsManualDraftAndDisablesTheActualEditor()throws Exception{
+        profile();String label=settingLabel("bitrateMbps"),autoLabel=settingLabel("bitrateAuto");EditText manual=edit(label);manual.setText("41");
+        CheckBox auto=null;for(View v:views(root))if(v instanceof CheckBox&&autoLabel.contentEquals(((CheckBox)v).getText()))auto=(CheckBox)v;assertNotNull(auto);auto.performClick();
+        assertTrue(home.state().getJSONObject("draft").getBoolean("bitrateAuto"));assertFalse(edit(label).isEnabled());assertEquals("41",edit(label).getText().toString());
+        for(String id:new String[]{"settings.input","settings.set","settings.step"})try{home.perform(id,RhActions.obj("key","bitrateMbps","value",id.equals("settings.input")?"13":13,"direction","up"));fail("Disabled manual editor accepted "+id);}catch(IllegalStateException expected){}
+        home.perform("settings.tab",RhActions.obj("tab","audio"));home.perform("settings.tab",RhActions.obj("tab","video"));assertFalse(edit(label).isEnabled());
+        home.perform("settings.cancel",RhActions.obj());assertFalse(RhProfile.load(activity,"host").bitrateAuto);
+        profile();edit(label).setText("unfinished");home.perform("settings.set",RhActions.obj("key","bitrateAuto","value",true));assertFalse(edit(label).isEnabled());
+        home.perform("settings.set",RhActions.obj("key","bitrateAuto","value",false));assertTrue(edit(label).isEnabled());assertEquals("unfinished",edit(label).getText().toString());
+        button("保存").performClick();assertEquals("bitrateMbps",home.state().getString("settingsErrorField"));home.perform("settings.set",RhActions.obj("key","bitrateAuto","value",true));button("保存").performClick();
+        assertTrue(RhProfile.load(activity,"host").bitrateAuto);assertEquals(25,RhProfile.load(activity,"host").bitrateMbps);
+        secondDevice();assertFalse(RhProfile.load(activity,"retired-second").bitrateAuto);
+        home.perform("device.settings.open",RhActions.obj("uuid","host"));assertTrue(home.state().getJSONObject("draft").getBoolean("bitrateAuto"));
+    }
     @Test public void partialNumericInputSurvivesTabsAndInvalidSavePreservesTheForm()throws Exception{
         profile();String before=RhShared.canonical(RhShared.read(activity));
         String widthLabel=null;org.json.JSONArray catalog=RhSettings.catalog(activity);for(int i=0;i<catalog.length();i++)if(catalog.getJSONObject(i).getString("key").equals("width"))widthLabel=catalog.getJSONObject(i).getString("label");
@@ -36,12 +53,78 @@ public class RhFormFlowTest {
         home.perform("settings.tab",RhActions.obj("tab","audio"));home.perform("settings.tab",RhActions.obj("tab","video"));assertEquals("",edit(widthLabel).getText().toString());
         button("保存").performClick();assertEquals("width",home.state().getString("settingsErrorField"));assertEquals("settings",home.state().getString("page"));assertEquals(before,RhShared.canonical(RhShared.read(activity)));assertEquals("",edit(widthLabel).getText().toString());
     }
+    @Test public void failedSaveKeepsTheCurrentEditorAndItsCursor()throws Exception{
+        profile();layout(840,700);String widthLabel=settingLabel("width");EditText original=edit(widthLabel);original.setText("1");assertTrue(original.requestFocusFromTouch());original.setSelection(1);
+        button("保存").performClick();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertEquals("width",home.state().getString("settingsErrorField"));assertSame("Validation must not replace an editor that is still being used",original,edit(widthLabel));assertTrue(original.hasFocus());assertEquals(1,original.getSelectionStart());assertEquals("1",original.getText().toString());
+    }
+    @Test public void leavingAnInvalidFormCancelsItsQueuedFocus()throws Exception{
+        profile();EditText original=edit(settingLabel("width"));original.setText("");button("保存").performClick();
+        home.perform("app.settings.open",RhActions.obj());home.perform("navigation.resolve",RhActions.obj("choice","discard"));View primary=root.findViewWithTag("updates.primary");assertNotNull(primary);assertTrue(primary.requestFocusFromTouch());
+        Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertTrue("A retired validation callback took focus from the new page",primary.hasFocus());assertEquals("updates",home.state().getString("settingsTab"));assertTrue(home.state().isNull("draft"));
+    }
     @Test public void backDecisionSupportsStayDiscardAndSaveThroughTheSameActions()throws Exception{
         profile();home.perform("settings.input",RhActions.obj("key","bitrateMbps","value","37"));
         assertTrue(home.goBack());assertEquals("unsaved-device",home.state().getJSONObject("navigationPrompt").getString("kind"));
         AlertDialog dialog=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();dialog.getButton(AlertDialog.BUTTON_NEUTRAL).performClick();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertTrue(home.state().isNull("navigationPrompt"));assertEquals("37",home.state().getJSONObject("settingsInputs").getString("bitrateMbps"));
         home.perform("app.settings.tab",RhActions.obj("tab","about"));home.perform("navigation.resolve",RhActions.obj("choice","save"));assertEquals(37,RhProfile.load(activity,"host").bitrateMbps);assertEquals("about",home.state().getString("settingsTab"));
         profile();home.perform("settings.input",RhActions.obj("key","fps","value","24"));home.perform("devices.open",RhActions.obj());home.perform("navigation.resolve",RhActions.obj("choice","discard"));assertEquals("devices",home.state().getString("page"));assertEquals(30,RhProfile.load(activity,"host").fps);
+    }
+    private void secondDevice()throws Exception{ComputerDetails d=new ComputerDetails();d.uuid="retired-second";d.name="Claw";d.manualAddress=new ComputerDetails.AddressTuple("192.0.2.87",47989);home.update(d);}
+    @Test public void aRetiredInputConnectionCannotEditAnotherDevicesDraft()throws Exception{
+        secondDevice();profile();EditText old=edit(settingLabel("bitrateMbps"));old.requestFocus();android.view.inputmethod.InputConnection connection=old.onCreateInputConnection(new android.view.inputmethod.EditorInfo());assertNotNull(connection);int original=RhProfile.load(activity,"host").bitrateMbps;
+        home.perform("device.settings.open",RhActions.obj("uuid","retired-second"));EditText current=edit(settingLabel("bitrateMbps"));current.setText("22");connection.setSelection(0,old.length());connection.commitText("64",1);Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertEquals("An old IME changed the current device", "22",home.state().getJSONObject("settingsInputs").getString("bitrateMbps"));assertEquals("22",current.getText().toString());
+        android.view.inputmethod.InputConnection live=current.onCreateInputConnection(new android.view.inputmethod.EditorInfo());assertNotNull(live);live.setSelection(0,current.length());live.commitText("24",1);assertEquals("24",home.state().getJSONObject("settingsInputs").getString("bitrateMbps"));button("保存").performClick();assertEquals(24,RhProfile.load(activity,"retired-second").bitrateMbps);assertEquals(original,RhProfile.load(activity,"host").bitrateMbps);
+    }
+    @Test public void aRetiredSaveButtonCannotSaveTheReplacementDevicesDraft()throws Exception{
+        secondDevice();profile();Button old=button("保存");home.perform("device.settings.open",RhActions.obj("uuid","retired-second"));edit(settingLabel("bitrateMbps")).setText("22");String saved=RhShared.canonical(RhShared.read(activity));old.performClick();
+        assertEquals("An old button saved the replacement device", "settings",home.state().getString("page"));assertEquals("retired-second",home.state().getString("selected"));assertTrue(home.state().getBoolean("settingsDirty"));assertEquals(saved,RhShared.canonical(RhShared.read(activity)));button("保存").performClick();assertEquals(22,RhProfile.load(activity,"retired-second").bitrateMbps);
+    }
+    @Test public void aRetiredRouteCallbackCannotChangeTheReplacementDevice()throws Exception{
+        secondDevice();profile();home.perform("settings.tab",RhActions.obj("tab","network"));CheckBox old=(CheckBox)described("连接路径：局域网");home.perform("device.settings.open",RhActions.obj("uuid","retired-second"));String routes=home.state().getJSONObject("draft").getJSONArray("routeOrder").toString();old.performClick();assertEquals("Old checkbox changed a new route list",routes,home.state().getJSONObject("draft").getJSONArray("routeOrder").toString());
+        CheckBox current=(CheckBox)described("连接路径：局域网");current.performClick();assertNotEquals(routes,home.state().getJSONObject("draft").getJSONArray("routeOrder").toString());home.perform("settings.cancel",RhActions.obj());
+    }
+    @Test public void aRetiredSelectionCallbackCannotChangeTheReplacementDevice()throws Exception{
+        secondDevice();profile();Spinner spinner=(Spinner)described(settingLabel("codec"));AdapterView.OnItemSelectedListener callback=spinner.getOnItemSelectedListener();int other=(spinner.getSelectedItemPosition()+1)%spinner.getCount();home.perform("device.settings.open",RhActions.obj("uuid","retired-second"));String codec=home.state().getJSONObject("draft").getString("codec");callback.onItemSelected(spinner,null,other,other);assertEquals("Old selection changed a new codec",codec,home.state().getJSONObject("draft").getString("codec"));
+    }
+    @Test public void retiredSaveDecisionCannotConfirmADifferentNavigation()throws Exception{
+        profile();String saved=RhShared.canonical(RhShared.read(activity));home.perform("settings.input",RhActions.obj("key","bitrateMbps","value","37"));home.goBack();AlertDialog old=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();old.getButton(AlertDialog.BUTTON_NEUTRAL).performClick();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        home.perform("app.settings.tab",RhActions.obj("tab","about"));AlertDialog current=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();assertNotSame(old,current);assertTrue(current.isShowing());old.getButton(AlertDialog.BUTTON_POSITIVE).performClick();old.cancel();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertTrue("Old save decision resolved the new prompt",current.isShowing());assertEquals("settings",home.state().getString("page"));assertEquals("37",home.state().getJSONObject("settingsInputs").getString("bitrateMbps"));assertEquals(saved,RhShared.canonical(RhShared.read(activity)));current.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertEquals("about",home.state().getString("settingsTab"));assertEquals(saved,RhShared.canonical(RhShared.read(activity)));
+    }
+    private void seedSavedSyncAccount()throws Exception{
+        // Only an already-saved account is needed here; no crypto or network is exercised.
+        org.json.JSONObject account=RhActions.obj("url","http://example.test/isolated-dav/","username","fixture-user","ciphertext","fixture-not-decrypted","automatic",false,"intervalMinutes",15);RhShared.write(new java.io.File(activity.getFilesDir(),"webdav-local.json"),account);java.lang.reflect.Field syncField=RhHome.class.getDeclaredField("sync");syncField.setAccessible(true);java.lang.reflect.Field local=RhSync.class.getDeclaredField("local");local.setAccessible(true);local.set(syncField.get(home),account);
+    }
+    @Test public void changedWebdavAccountExplainsRequiredPasswordWithoutReplacingFocusedInputs()throws Exception{
+        seedSavedSyncAccount();home.perform("app.settings.tab",RhActions.obj("tab","sync"));layout(360,800);
+        EditText password=edit("密码"),url=edit("WebDAV 目录地址（HTTP / HTTPS）");
+        assertEquals("已保存，留空保留",password.getHint().toString());assertTrue(home.state().getBoolean("syncPasswordReusable"));
+        url.requestFocus();url.setText("https://another.test/dav/");
+        assertSame(url,edit("WebDAV 目录地址（HTTP / HTTPS）"));assertSame(password,edit("密码"));assertTrue(url.hasFocus());
+        assertEquals("请填写 WebDAV 密码",password.getHint().toString());assertFalse(home.state().getBoolean("syncPasswordReusable"));
+        boolean note=false;for(View view:views(root))if(view instanceof TextView&&"地址或用户名已更改，请重新填写密码。".contentEquals(((TextView)view).getText()))note=true;assertTrue(note);
+        button("保存").performClick();assertTrue(home.state().getString("syncError").contains("密码"));assertTrue(home.state().getBoolean("syncDirty"));assertSame(url,edit("WebDAV 目录地址（HTTP / HTTPS）"));assertSame(password,edit("密码"));assertEquals("https://another.test/dav/",url.getText().toString());
+        assertEquals("http://example.test/isolated-dav/",home.state().getJSONObject("sync").getString("url"));
+        home.perform("sync.cancel",RhActions.obj());assertEquals("已保存，留空保留",edit("密码").getHint().toString());assertTrue(home.state().getBoolean("syncPasswordReusable"));
+        EditText user=edit("用户名"),samePassword=edit("密码");user.requestFocus();user.setText("another-user");assertSame(samePassword,edit("密码"));assertTrue(user.hasFocus());assertFalse(home.state().getBoolean("syncPasswordReusable"));assertEquals("请填写 WebDAV 密码",samePassword.getHint().toString());
+    }
+    @Test public void cancellationBeforeTheShowCallbackCannotAccessARetiredRemovalDialog()throws Exception{
+        seedSavedSyncAccount();home.perform("app.settings.tab",RhActions.obj("tab","sync"));home.perform("sync.clear",RhActions.obj());AlertDialog dialog=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();dialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertFalse(dialog.isShowing());assertTrue(home.state().isNull("syncClearPrompt"));assertTrue(home.state().getJSONObject("sync").getBoolean("hasPassword"));
+    }
+    @Test public void retiredRemovalDecisionCannotRemoveTheCurrentSavedAccount()throws Exception{
+        seedSavedSyncAccount();
+        home.perform("app.settings.tab",RhActions.obj("tab","sync"));home.perform("sync.clear",RhActions.obj());AlertDialog old=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();old.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        home.perform("sync.clear",RhActions.obj());AlertDialog current=(AlertDialog)org.robolectric.shadows.ShadowDialog.getLatestDialog();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertNotSame(old,current);old.getButton(AlertDialog.BUTTON_POSITIVE).performClick();old.cancel();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertTrue("Old remove decision resolved the new prompt",current.isShowing());assertEquals("http://example.test/isolated-dav/",home.state().getJSONObject("sync").getString("url"));assertTrue(home.state().getJSONObject("sync").getBoolean("hasPassword"));current.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertTrue(home.state().isNull("syncClearPrompt"));assertTrue(home.state().getJSONObject("sync").getBoolean("hasPassword"));
+    }
+    @Test public void editorsFromAReplacedHomeCannotChangeTheCurrentDraft()throws Exception{
+        profile();EditText retired=edit(settingLabel("bitrateMbps"));RhHome previous=home;
+        try{
+            home=new RhHome(activity,new RhHome.Actions(){public void connect(ComputerDetails d){throw new AssertionError();}public void add(String a){}public void advanced(){}public void pair(ComputerDetails d,String pin){}public void cancelPair(){}public void refresh(){}});ComputerDetails d=new ComputerDetails();d.uuid="host";d.name="winserver";d.manualAddress=new ComputerDetails.AddressTuple("192.168.0.104",47989);home.update(d);root=((ViewGroup)activity.findViewById(android.R.id.content)).getChildAt(0);profile();EditText current=edit(settingLabel("bitrateMbps"));current.setText("22");
+            retired.setText("64");assertEquals("Old editor reached the current draft","22",home.state().getJSONObject("settingsInputs").getString("bitrateMbps"));previous.dispose();retired.setText("66");assertEquals("22",home.state().getJSONObject("settingsInputs").getString("bitrateMbps"));current.setText("24");assertEquals("24",home.state().getJSONObject("settingsInputs").getString("bitrateMbps"));
+        }finally{previous.dispose();}
     }
     @Test public void untouchedSettingsCanSelectADeviceWithoutLeavingAHiddenDraft()throws Exception{
         profile();home.perform("device.select",RhActions.obj("uuid","host"));assertEquals("devices",home.state().getString("page"));assertTrue(home.state().isNull("draft"));assertTrue(home.state().isNull("navigationPrompt"));
@@ -58,7 +141,7 @@ public class RhFormFlowTest {
         button("取消").performClick();assertEquals(before,RhShared.canonical(RhShared.read(activity)));
     }
     @Test public void saveBarAndCategoryNavigationRemainOutsideTheScrollableBody()throws Exception{
-        profile();for(int[] size:new int[][]{{360,800},{640,360},{1008,672}}){layout(size[0],size[1]);Button save=button("保存"),back=button("概览");assertFalse(inScroll(save));assertFalse(inScroll(back));int[] location=new int[2];save.getLocationInWindow(location);assertTrue(location[1]>=0&&location[1]+save.getHeight()<=size[1]);assertTrue(save.getHeight()>=48);}
+        profile();for(int[] size:new int[][]{{360,800},{640,360},{1008,672}}){layout(size[0],size[1]);String sizeLabel=size[0]+"x"+size[1];Button save=button("保存"),back=button("概览");assertFalse("Save in body at "+sizeLabel,inScroll(save));assertFalse("Back in body at "+sizeLabel,inScroll(back));int[] location=new int[2];save.getLocationInWindow(location);assertTrue("Save clipped at "+sizeLabel+": y="+location[1]+", height="+save.getHeight(),location[1]>=0&&location[1]+save.getHeight()<=size[1]);assertTrue("Save too small at "+sizeLabel,save.getHeight()>=48);}
     }
     @Test public void webdavInputIsRetainedOnFailureAndLeavingUsesADecision()throws Exception{
         home.perform("app.settings.tab",RhActions.obj("tab","sync"));layout(360,800);

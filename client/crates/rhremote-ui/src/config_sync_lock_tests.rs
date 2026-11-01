@@ -329,7 +329,7 @@ fn lock_contention_or_rejected_put_never_advances_the_merge_base() {
         let mut f = Fixture::new();
         let error = f.run(&server, config, Resolution::Review).unwrap_err();
         assert!(error.contains(if busy {
-            "另一台设备"
+            "文件被占用"
         } else {
             "重新同步"
         }));

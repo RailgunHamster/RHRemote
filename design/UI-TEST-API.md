@@ -2,17 +2,28 @@
 
 日常操作沿用 `/v1/action` 的共享业务动作目录；例如 `device.settings.open`、`settings.input`、`settings.save`、`updates.primary`。按钮与这些接口进入同一控制器，不必控制桌面来执行操作。
 
-控件测试另增加五个动作，用于检查业务动作覆盖不到的焦点、弹出菜单及按键分发。它们复用同一 Windows 程序、Slint 控件及模态键盘处理函数，不另做一套界面。
+控件测试另提供控件检查、精确执行、焦点、弹出菜单及按键分发。它们复用同一 Windows 程序、Slint 控件及模态键盘处理函数，不另做一套界面。
 
 | 动作 | 参数 | 作用 |
 | --- | --- | --- |
 | `view.ui.inspect` | `window` | 返回当前窗口实际已实例化的控件 |
 | `view.ui.focus` | `control`, `window` | 聚焦 inspect 返回的可用控件 |
+| `view.ui.activate` | `actionId`, `control` 或 `argument`, `window` | 执行当前唯一匹配的真实按钮；重复动作或复合参数使用 inspect 返回的完整 control |
 | `view.ui.key` | `key`, `shift`, `repeat`, `window` | 向应用自己的控件分发键盘事件 |
 | `view.ui.scroll` | `control`, `pixels`, `window` | 滚动指定内容区，限制在内容边界内；负数向下 |
 | `view.ui.result` | `id` | 读取异步请求结果 |
 
-`window` 默认为 `main`，也可为实际存在的 `toolbar` / `picker` 会话窗口。支持的按键为 Tab、Enter、Escape、Space、Up、Down、Left、Right、Home、End。没有任意文本、系统快捷键或跨进程输入功能。输入内容通过原有业务接口修改。
+`window` 默认为 `main`，也可为实际存在的 `toolbar` / `picker` / `keyboard` 会话窗口。支持的按键为 Tab、Enter、Escape、Space、Up、Down、Left、Right、Home、End、PageUp、PageDown。没有任意文本、系统快捷键或跨进程输入功能。输入内容通过原有业务接口修改。
+
+本地 preview.184 的连接设置及 WebDAV 保存错误分别提供 `scroll|profile-error`、`scroll|sync-error`；仅在错误存在时返回，长文本可通过 `view.ui.scroll` 阅读。存在溢出时可用 `view.ui.focus` 聚焦，再用 Up／Down／PageUp／PageDown／Home／End 阅读；相同错误的刷新保留位置，新的错误回到开头。错误原文仍由既有业务状态返回，`view.ui.inspect` 的控件标签为“保存错误详情”。PowerShell 调用工具同步支持两个翻页键。[布局、原生控件与接口验证](WINDOWS-SAVE-ERROR-20261101.md)
+
+确认弹窗支持 Enter 或 Space 执行当前焦点选项，首次按下才执行，重复事件和松开不再次确认。自绘按钮、侧栏、设备行及菜单项同样消费但忽略 `repeat=true` 的 Enter／Space；普通按下仍执行一次。输入框中的重复空格及方向键仍传给原生编辑控件。`repeat` 表示按键自动重复，不是要求接口重试业务动作；未触发动作时 `commandIds` 为空，仍可正常返回 complete。
+
+搜索文字在模型、设备列表和实际编辑框之间双向绑定；`devices.filter` 的 UI 编辑直接进入原 Controller 的本地校验与状态更新，不排在网络动作后等待。外部设置或清空查询后，后续按键应编辑新文本；重复输入及当前证明范围见[原生失败与修正](WINDOWS-SEARCH-REBIND-20261030.md)。
+
+preview.133 将已确认的表单输入、勾选和选择值接回模型。`device.add.input`、`device.info.input/reset`、`sync.edit`、`settings.input/network.edit/set/step/route.move/route.toggle` 与搜索一样，在 UI 回调中只更新原控制器的内存草稿；配置动作保留来源草稿 ID。保存、同步、连接、更新及串流音量继续异步执行。外部回填、取消、草稿更换后还需检查同一控件的后续回调，不能仅检查顶层状态；失败对照和实际副屏验证见[表单刷新记录](WINDOWS-FORM-REBIND-20261030.md)。
+
+确认键与原生窗口关闭请求复用按钮的 Commands 回调和后台队列，确认请求的 ID 在回调时从其来源界面捕获。控件请求 `complete` 表示该次事件已投递／回调已发出，不代表保存、连接或清理完成；调用方还须等控制器状态，并在保存场景核对持久文件。`commandIds` 由共享回调记录一次，不另为确认键追加记录。[队列边界与验证](WINDOWS-MODAL-QUEUE-20261030.md)
 
 接口只在显式 `RHREMOTE_TEST_MODE=1`、且 `RHREMOTE_DATA_DIR` 指向已存在并与日常数据目录不同的隔离配置时启用。即便误把日常目录写进环境变量，规范化路径相同也不会启用。这些请求仍需既有控制接口令牌。隔离预览启动时不激活窗口；事件不经过系统 SendInput，也不要求将窗口置于前台。
 
@@ -38,6 +49,10 @@ scroll|form
 ```
 
 测试脚本应先 inspect，从当前页面选择标识，避免依赖固定坐标。
+
+`activate` 始终要求 `actionId`。省略 `control` 时按动作和简单 `argument` 查找，仍拒绝多个匹配。传入 `control` 时精确匹配当前按钮 ID，由真实控件回调提供参数，不再解析请求中的复合参数；例如设备排序的 `uuid|up`。`control` 必须与动作对应，不能同时提供非空 `argument`。完整 ID 包含当前文案，文案改变或控件移除后需要重新 inspect；未提供 control 的既有语义匹配继续支持文案变化。
+
+精确定位保留可见性、启用状态、对话框、当前会话及 `expectedPending` 检查，不激活窗口、不发送系统输入。两处取消入口可以各自定位，不会任选其中一个；重复 `requestId` 仍按原参数去重。
 
 ```powershell
 & .\tools\Invoke-RHRemoteUiTest.ps1 -Port 48775 -Operation inspect

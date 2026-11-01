@@ -230,6 +230,7 @@ fn main_scene(
             ui.set_page("global-settings".into());
             ui.set_settings_tab("sync".into());
             ui.set_sync_has_password(true);
+            ui.set_sync_password_reusable(true);
             ui.set_sync_clear_prompt(true);
             ui.set_sync_error("同步设置未能移除，请重试".into());
             ("移除", "sync.clear.resolve", "remove")

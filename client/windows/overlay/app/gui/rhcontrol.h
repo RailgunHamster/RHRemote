@@ -24,6 +24,7 @@
 #include "rhstatistics.h"
 #include "rhparentlifetime.h"
 #include "rhlaunchattempt.h"
+#include "rhcontrolaccept.h"
 #include <memory>
 #include <stdexcept>
 
@@ -71,7 +72,7 @@ struct RhRuntime {
     }
     static void terminated(int code){cancelLaunch();auto& r=get();r.terminationCode=code;r.routeFatal=code==ML_ERROR_PROTECTED_CONTENT||code==ML_ERROR_FRAME_CONVERSION;r.retryEligible=r.firstFrame.load()&&!r.localDisconnect.load()&&!r.routeFatal.load();r.routeRetryEligible=!r.firstFrame.load()&&!r.localDisconnect.load()&&(code==ML_ERROR_NO_VIDEO_TRAFFIC||code==ML_ERROR_NO_VIDEO_FRAME||code==ML_ERROR_UNEXPECTED_EARLY_TERMINATION);status("interrupted",QString("串流中断 (%1)").arg(code));}
     static void stageFailed(int stage,int code){cancelLaunch();auto& r=get();r.routeRetryEligible=!r.firstFrame.load()&&!r.localDisconnect.load()&&(stage==STAGE_RTSP_HANDSHAKE||stage==STAGE_CONTROL_STREAM_START||stage==STAGE_VIDEO_STREAM_START||stage==STAGE_AUDIO_STREAM_START||stage==STAGE_INPUT_STREAM_START);status("error",QString("%1 (%2)").arg(QString::fromLocal8Bit(LiGetStageName(stage))).arg(code));}
-    static void stream(bool value){auto& r=get();{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;}}if(value)status("connected");else{QString error;{QMutexLocker lock(&r.mutex);error=r.error;}status(error.isEmpty()?"disconnected":"error",error);}}
+    static void stream(bool value){auto& r=get();std::shared_ptr<RhLaunchAttempt> launch;{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;launch=r.pendingLaunch;}}if(launch)launch->handedOff();if(value)status("connected");else{QString error;{QMutexLocker lock(&r.mutex);error=r.error;}status(error.isEmpty()?"disconnected":"error",error);}}
     static void performance(const QString& text){auto& r=get();QMutexLocker lock(&r.mutex);r.stats=text;r.statsAt=QDateTime::currentMSecsSinceEpoch();}
 };
 
@@ -92,17 +93,24 @@ class RhControl : public QObject {
 #endif
     class Server final : public QThread {
     public:
-        RhControl* owner;quint16 port;QByteArray token;
+        RhControl* owner;quint16 port;QByteArray token;quint64 requestSequence=0;
         Server(RhControl* o,quint16 p,QByteArray t):owner(o),port(p),token(t){}
-        void handle(QTcpSocket* owned){
+        static void trace(const QString& event,quint64 request,QJsonObject fields={}){
+            if(!RhStatistics::active())return;
+            fields["request"]=double(request);RhStatistics::event(event,-1,fields);
+        }
+        void handle(QTcpSocket* owned,quint64 request){
             QScopedPointer<QTcpSocket> socket(owned);QElapsedTimer clock;clock.start();
+            trace("control_request_begin",request);
                 QByteArray data;int split=-1;bool valid=true;
                 while((split=data.indexOf("\r\n\r\n"))<0){
                     if(clock.elapsed()>5000||(!socket->bytesAvailable()&&!socket->waitForReadyRead(1000))){valid=false;break;}
                     data+=socket->readAll();if(data.size()>16384){valid=false;break;}
                 }
-                if(!valid)return;
+                if(!valid){trace("control_read_failed",request,{{"stage","headers"},{"elapsed_ms",double(clock.elapsed())},{"bytes",data.size()},{"socket_error",int(socket->error())}});return;}
                 const auto lines=data.left(split).split('\n');const auto first=lines.value(0).trimmed().split(' ');
+                const QString endpoint=first.value(1)=="/v1/state"?"state":first.value(1)=="/v1/disconnect"?"disconnect":"other";
+                trace("control_headers_read",request,{{"endpoint",endpoint},{"elapsed_ms",double(clock.elapsed())},{"bytes",data.size()}});
                 QByteArray auth;int length=0;bool origin=false;
                 for(const auto& raw:lines){auto line=raw.trimmed();int colon=line.indexOf(':');if(colon<0)continue;auto key=line.left(colon).toLower();auto value=line.mid(colon+1).trimmed();if(key=="authorization")auth=value;if(key=="origin")origin=true;if(key=="content-length"){bool ok=false;length=value.toInt(&ok);if(!ok)valid=false;}if(key=="transfer-encoding")valid=false;}
                 int status=200;QJsonObject result;
@@ -113,21 +121,31 @@ class RhControl : public QObject {
                     while(body.size()<length){if(clock.elapsed()>5000||!socket->waitForReadyRead(1000)){valid=false;break;}body+=socket->readAll();if(body.size()>8192){valid=false;break;}}
                     QJsonParseError error;auto document=length?QJsonDocument::fromJson(body.left(length),&error):QJsonDocument(QJsonObject());
                     if(!valid||(length&&(error.error!=QJsonParseError::NoError||!document.isObject()))){status=400;result={{"ok",false},{"error","invalid JSON body"}};}
-                    else result=owner->route(first[0],first[1],document.object(),status);
+                    else {
+                        trace("control_route_begin",request,{{"endpoint",endpoint},{"elapsed_ms",double(clock.elapsed())}});
+                        result=owner->route(first[0],first[1],document.object(),status);
+                        trace("control_route_end",request,{{"endpoint",endpoint},{"elapsed_ms",double(clock.elapsed())},{"status",status},
+                            {"first_frame",result.value("firstFrame").toBool()},{"streaming",result.value("streaming").toBool()}});
+                    }
                 }
                 auto payload=QJsonDocument(result).toJson(QJsonDocument::Compact);
-                socket->write("HTTP/1.1 "+QByteArray::number(status)+" Result\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);
-                socket->waitForBytesWritten(1000);socket->disconnectFromHost();
+                const auto queued=socket->write("HTTP/1.1 "+QByteArray::number(status)+" Result\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);
+                const bool flushed=socket->waitForBytesWritten(1000);
+                trace("control_write_end",request,{{"elapsed_ms",double(clock.elapsed())},{"queued",double(queued)},{"pending",double(socket->bytesToWrite())},
+                    {"wait_completed",flushed},{"socket_error",int(socket->error())},{"status",status}});
+                socket->disconnectFromHost();
         }
         void run() override {
             QTcpServer listener;QList<QThread*> workers;
-            if(!listener.listen(QHostAddress::LocalHost,port)){qWarning("RHRemote control port unavailable");return;}
+            if(!listener.listen(QHostAddress::LocalHost,port)){trace("control_listen_failed",0,{{"port",port},{"socket_error",int(listener.serverError())}});qWarning("RHRemote control port unavailable");return;}
+            trace("control_listening",0,{{"port",listener.serverPort()}});
             while(!isInterruptionRequested()){
                 for(int i=workers.size()-1;i>=0;i--)if(workers[i]->isFinished()){auto thread=workers.takeAt(i);thread->wait();delete thread;}
-                if(!listener.waitForNewConnection(100))continue;
-                auto socket=listener.nextPendingConnection();if(!socket)continue;
-                if(workers.size()>=8){delete socket;continue;}
-                socket->setParent(nullptr);auto worker=QThread::create([this,socket]{handle(socket);});socket->moveToThread(worker);workers.append(worker);worker->start();
+                const bool pending=listener.hasPendingConnections();auto socket=RhControlAccept::next(listener);if(!socket)continue;
+                const auto request=++requestSequence;
+                trace("control_accepted",request,{{"pending",pending},{"workers",workers.size()},{"port",port}});
+                if(workers.size()>=8){trace("control_worker_limit",request);delete socket;continue;}
+                socket->setParent(nullptr);auto worker=QThread::create([this,socket,request]{handle(socket,request);});socket->moveToThread(worker);workers.append(worker);worker->start();
             }
             listener.close();for(auto worker:workers){worker->wait();delete worker;}
         }
@@ -190,6 +208,7 @@ class RhControl : public QObject {
         }
         if(path=="/v1/displays"||path=="/v1/display"){
             if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}
+            {QMutexLocker lock(&r.mutex);if(r.selectedDisplay["kind"].toString()=="window"){status=409;return {{"ok",false},{"error","当前为窗口串流；请断开后选择其他窗口或桌面"}};}}
             QString address;QSslCertificate cert;{QMutexLocker lock(&r.mutex);address=r.hostAddress;cert=r.hostCert;}
             QJsonObject request;QString endpoint="/v1/displays";
             if(path=="/v1/display") {const auto id=body["displayId"].toString();if(id.isEmpty()||id.size()>512){status=400;return {{"ok",false},{"error","displayId required"}};}endpoint="/v1/display/prepare";request={{"mode",id=="auto"?"auto":id=="virtual"?"virtual":"physical"},{"displayId",id=="auto"||id=="virtual"?"":id},{"width",profile["width"]},{"height",profile["height"]}};}

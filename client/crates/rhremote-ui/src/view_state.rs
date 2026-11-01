@@ -8,6 +8,29 @@ use serde_json::Value;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
+fn apply_diagnostics(ui:&MainWindow,state:&Value){
+    let job=&state["diagnostics"];let selected=state["selected"].as_str().unwrap_or("");let own=!selected.is_empty()&&job["uuid"]==selected;
+    let busy=job["busy"]==true;let phase=job["phase"].as_str().unwrap_or("idle");let retry=phase=="cleanup-error";let failed=own&&matches!(phase,"error"|"cleanup-error");
+    let stale=own&&!busy&&job["requestIntent"]!=state["diagnosticRequestIntent"];
+    let summary=if own&&busy{match phase{"cleanup-error"=>job["error"].as_str().unwrap_or("诊断清理失败"),"cancelling"=>"正在取消诊断，等待通道清理…","cleaning"=>"正在清理诊断通道…",_=>"正在诊断连接…"}.to_owned()}
+        else if busy{format!("{} 正在诊断连接，完成或取消后可重试",job["name"].as_str().unwrap_or("另一台设备"))}
+        else if failed{job["error"].as_str().unwrap_or("诊断失败，请重试").to_owned()}
+        else if own&&phase=="completed"{format!("{}\n{}",if stale{"上次诊断结果（连接设置已更改）"}else{"诊断完成"},if !job["result"]["selectedAddress"].is_string(){"未找到可用地址，请查看详情"}else if job["result"]["hostError"].is_string(){"设备信息可达，辅助服务未通过"}else{"设备信息可达，视频尚未验证"})}
+        else if own&&phase=="cancelled"{"已取消诊断".into()}else{"尚未诊断".into()};
+    ui.set_diagnostic_start_disabled(busy||state["closing"]==true||state["streaming"]==true||state["connecting"]==true||state["connection"]["busy"]==true||state["updates"]["phase"]=="installing");
+    ui.set_diagnostic_summary(summary.into());ui.set_diagnostic_busy(busy);ui.set_diagnostic_own(own);ui.set_diagnostic_failed(failed);
+    ui.set_diagnostic_start_label(if own&&busy{if phase=="running"{"诊断中…"}else{"正在清理…"}}else{"诊断连接"}.into());
+    ui.set_diagnostic_start_args(serde_json::json!({"uuid":selected,"draftId":state["profileDraftId"],"expectedIntent":state["diagnosticRequestIntent"],"expectedOperationId":job["operationId"]}).to_string().into());
+    ui.set_diagnostic_can_cancel(job["canCancel"]==true);ui.set_diagnostic_cancel_label(if retry{"重试清理"}else{"取消诊断"}.into());
+    ui.set_diagnostic_cancel_args(serde_json::json!({"operationId":job["operationId"],"expectedAction":job["cancelAction"]}).to_string().into());
+    ui.set_diagnostic_details_visible(own&&!busy&&matches!(phase,"completed"|"error"));ui.set_diagnostic_details_expanded(job["detailsExpanded"]==true);
+    ui.set_diagnostic_details_args(serde_json::json!({"uuid":selected,"operationId":job["operationId"],"expectedExpanded":job["detailsExpanded"]==true}).to_string().into());
+    ui.set_network_report(if job["result"].is_object(){network::report_text(&job["result"])}else{job["error"].as_str().unwrap_or("").to_owned()}.into());
+    ui.set_diagnostic_banner(busy&&!(own&&state["page"]=="settings"&&state["profileTab"]=="network"));
+    ui.set_diagnostic_banner_text(format!("{} · {}",job["name"].as_str().unwrap_or(""),if retry{"诊断清理失败"}else if phase=="cancelling"{"正在取消诊断"}else{"正在诊断连接"}).into());
+    ui.set_diagnostic_banner_failed(retry);
+    ui.set_diagnostic_reveal_key(format!("{}|{}|{}|{}",job["uuid"],job["operationId"],phase,job["detailsExpanded"]).into());
+}
 fn sync_summary(state:&Value)->&'static str{
     let sync=&state["sync"];
     if state["syncBusy"]==true {"同步进行中"}
@@ -29,10 +52,27 @@ fn sync_summary_prioritizes_the_current_outcome_over_an_old_success(){
     state["syncError"]=serde_json::json!("");assert_eq!(sync_summary(&state),"上次同步已完成");
 }
 
+/// These operations only validate and mutate in-memory drafts. Commit them before
+/// a render can copy an older value into a controlled editor. Persistence, network
+/// work and native stream commands must stay on the asynchronous command queue.
+pub(crate) fn dispatch_local_input(
+    controller: &rhremote_core::Controller, id: &str, text: &str, owner: Option<String>,
+) -> Option<Value> {
+    if !matches!(id, "devices.filter" | "devices.filter.clear" | "device.add.input" | "device.info.input" | "device.info.reset"
+        | "sync.edit" | "settings.input" | "settings.network.edit" | "settings.set"
+        | "settings.step" | "settings.route.move" | "settings.route.toggle") { return None; }
+    // Only boolean toggles need the current draft to resolve their next value.
+    let state = if id == "settings.set" && text.split_once('=').is_some_and(|(_, value)| value == "toggle") {
+        controller.state()
+    } else { Value::Null };
+    Some(controller.dispatch(id, crate::queued_args(id, text, &state, owner)))
+}
+
 pub(crate) struct MainView {
     revision: u64,
     profile_model: Rc<VecModel<SettingRow>>,
     profile_fingerprint: String,
+    profile_control_values: Vec<(slint::SharedString, slint::SharedString, i32)>,
 }
 impl MainView {
     pub fn new(ui: &MainWindow) -> Self {
@@ -42,6 +82,7 @@ impl MainView {
             revision: u64::MAX,
             profile_model,
             profile_fingerprint: String::new(),
+            profile_control_values: Vec::new(),
         }
     }
     pub fn refresh(
@@ -69,6 +110,7 @@ impl MainView {
         ui.set_update_primary_installs(
             rhremote_core::update_primary_action(&state["updates"]) == "updates.install",
         );
+        ui.set_update_intent(state["updates"]["intent"].as_str().unwrap_or("").into());
         ui.set_update_install_hint(state["updateInstallHint"].as_str().unwrap_or("").into());
         ui.set_update_phase(state["updates"]["phase"].as_str().unwrap_or("").into());
         ui.set_update_progress(state["updates"]["progress"].as_i64().unwrap_or(0) as i32);
@@ -78,6 +120,7 @@ impl MainView {
         ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
         ui.set_update_details(state["updateDetails"] == true);
         if next != self.revision {
+            apply_diagnostics(ui,state);
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"] == true);
             ui.set_trace_path(
                 state["statistics"]["tracing"]["latest"]
@@ -87,6 +130,14 @@ impl MainView {
             );
             self.revision = next;
             ui.set_page(state["page"].as_str().unwrap_or("devices").into());
+            let windows=&state["windowPicker"];
+            ui.set_window_picker_open(windows["open"]==true);
+            ui.set_window_picker_busy(windows["busy"]==true);
+            ui.set_window_picker_uuid(windows["uuid"].as_str().unwrap_or("").into());
+            ui.set_window_picker_error(windows["error"].as_str().unwrap_or("").into());
+            ui.set_window_picker_rows(ModelRc::new(VecModel::from(windows["rows"].as_array().into_iter().flatten().map(|row|RemoteDisplay{id:row["id"].as_str().unwrap_or("").into(),label:format!("{} · {} · {} × {}{}",row["title"].as_str().unwrap_or("窗口"),row["application"].as_str().unwrap_or(""),row["width"],row["height"],if row["state"]=="minimized"{" · 已最小化"}else if row["available"]!=true{" · 不可用"}else{""}).into(),chosen:false,available:row["available"]==true}).collect::<Vec<_>>())));
+
+            ui.set_profile_draft_id(state["profileDraftId"].as_str().unwrap_or("").into());
             ui.set_info_name(
                 state["infoDraft"]["displayName"]
                     .as_str()
@@ -115,9 +166,11 @@ impl MainView {
             ui.set_control_requests_pending(state["controlRequests"].as_u64().unwrap_or(0) > 0);
             ui.set_settings_dirty(state["settingsDirty"] == true);
             ui.set_settings_error(state["settingsError"].as_str().unwrap_or("").into());
-            if !ui.get_navigation_prompt() && state["navigationPrompt"].is_object() {
+            let navigation_id=state["navigationPrompt"]["requestId"].as_str().unwrap_or("");
+            if state["navigationPrompt"].is_object() && (!ui.get_navigation_prompt() || ui.get_navigation_request_id()!=navigation_id) {
                 ui.set_navigation_choice(0);
             }
+            ui.set_navigation_request_id(navigation_id.into());
             ui.set_navigation_prompt(state["navigationPrompt"].is_object());
             ui.set_navigation_message(
                 state["navigationPrompt"]["message"]
@@ -125,9 +178,11 @@ impl MainView {
                     .unwrap_or("")
                     .into(),
             );
-            if !ui.get_sync_clear_prompt() && state["syncClearPrompt"].is_object() {
+            let clear_id=state["syncClearPrompt"]["requestId"].as_str().unwrap_or("");
+            if state["syncClearPrompt"].is_object() && (!ui.get_sync_clear_prompt() || ui.get_sync_clear_request_id()!=clear_id) {
                 ui.set_sync_clear_choice(0);
             }
+            ui.set_sync_clear_request_id(clear_id.into());
             ui.set_sync_clear_prompt(state["syncClearPrompt"].is_object());
             let sync_form = if state["syncDraft"].is_object() {
                 &state["syncDraft"]
@@ -151,7 +206,9 @@ impl MainView {
                 _ => 0,
             });
             ui.set_sync_has_password(state["sync"]["hasPassword"] == true);
+            ui.set_sync_password_reusable(state["syncPasswordReusable"]==true);
             ui.set_sync_busy(state["syncBusy"] == true);
+            ui.set_sync_review_id(state["sync"]["reviewId"].as_str().unwrap_or("").into());
             ui.set_sync_progress_text(match state["sync"]["phase"].as_str(){Some("applying")=>"正在应用…",Some("restoring")=>"正在刷新…",Some("recording")=>"正在保存…",_=>"同步中…"}.into());
             form_models::update_sync_conflicts(ui, &state["sync"]["conflictItems"]);
             ui.set_sync_last(sync_summary(state).into());
@@ -167,10 +224,22 @@ impl MainView {
             );
             ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
             let devices = state["devices"].as_array().cloned().unwrap_or_default();
+            ui.set_devices_refreshing(state["devicesRefreshing"]==true);
+            ui.set_devices_refresh_error(state["devicesRefreshError"].as_str().unwrap_or("").into());
             let selected = state["selected"].as_str().unwrap_or("");
+            let pending=state["devicesPending"].as_array();
             let rows: Vec<DeviceRow> = devices
                 .iter()
-                .map(|d| DeviceRow {
+                .map(|d| {
+                    let uuid=d["uuid"].as_str().unwrap_or("");
+                    let current=state["deviceChecks"].get(uuid).and_then(|value|serde_json::from_value::<rhremote_core::DeviceCheck>(value.clone()).ok());
+                    let retained=state["deviceTrustChecks"].get(uuid).and_then(|value|serde_json::from_value::<rhremote_core::DeviceCheck>(value.clone()).ok());
+                    let check=retained.as_ref().or(current.as_ref());
+                    let hint=match (&current,&retained){
+                        (Some(current),Some(previous)) if current!=previous=>format!("本次检查：{}。上次检查：{}",current.label(),previous.hint()),
+                        _=>check.map(|check|check.hint()).unwrap_or("").to_owned(),
+                    };
+                    DeviceRow {
                     uuid: d["uuid"].as_str().unwrap_or("").into(),
                     name: d["displayName"]
                         .as_str()
@@ -191,6 +260,9 @@ impl MainView {
                     .into(),
                     status: if d["isSelf"] == true {
                         "本机"
+                    } else if let Some(check)=&check {check.label()
+                    } else if pending.is_some_and(|ids|ids.contains(&d["uuid"])) {
+                        if state["devicesRefreshing"]==true{"检查中…"}else{"待检查"}
                     } else if d["online"] != true {
                         "离线"
                     } else if d["paired"] == true {
@@ -200,9 +272,14 @@ impl MainView {
                     }
                     .into(),
                     paired: d["paired"] == true,
-                    online: d["online"] == true,
+                    online: d["online"] == true && !check.as_ref().is_some_and(|check|check.blocks_connection()),
                     is_self: d["isSelf"] == true,
-                })
+                    pending: pending.is_some_and(|ids|ids.contains(&d["uuid"])),
+                    check_retry:check.is_some_and(|check|check.blocks_connection() || check.repair_required() && d["online"]!=true && pending.is_some_and(|ids|ids.contains(&d["uuid"]))),
+                    check_failed:check.as_ref().is_some_and(|check|check.repair_required()||!matches!(check.outcome,rhremote_core::CheckOutcome::Paired|rhremote_core::CheckOutcome::Unpaired)),
+                    check_hint:hint.into(),
+                    repair_required:check.as_ref().is_some_and(|check|check.repair_required()),
+                }})
                 .collect();
             ui.set_selected_device(
                 rows.iter()
@@ -267,14 +344,6 @@ impl MainView {
                 }
                 .into(),
             );
-            ui.set_network_report(
-                if state["network"]["uuid"] == selected {
-                    network::report_text(&state["network"])
-                } else {
-                    "尚未诊断".into()
-                }
-                .into(),
-            );
             let client_id = state["saved"]["clientId"].as_str().unwrap_or("");
             ui.set_profile_tab(state["profileTab"].as_str().unwrap_or("video").into());
             let order: Vec<&str> = state["draft"]["routeOrder"]
@@ -296,6 +365,7 @@ impl MainView {
                         can_move_up: index > 0,
                         can_move_down: index + 1 < order.len(),
                         can_disable: order.len() > 1,
+                        toggle_blocked: order.len() <= 1,
                     });
                 }
             }
@@ -383,7 +453,11 @@ impl MainView {
                 state["settingsInputs"],
                 state["settingsErrorField"]
             );
-            if fingerprint != self.profile_fingerprint {
+            // Two-way widgets can change a row before validation. A rejected edit
+            // must restore the authoritative value even when its draft is unchanged.
+            let control_values: Vec<_> = self.profile_model.iter()
+                .map(|row| (row.key, row.input_text, row.selected_index)).collect();
+            if fingerprint != self.profile_fingerprint || control_values != self.profile_control_values {
                 self.profile_fingerprint = fingerprint;
                 let rows: Vec<SettingRow> = state["settingsCatalog"]
                     .as_array()
@@ -398,6 +472,7 @@ impl MainView {
                     .map(|f| {
                         let key = f["key"].as_str().unwrap();
                         let value = &state["draft"][key];
+                        let disabled = key=="bitrateMbps" && state["draft"]["bitrateAuto"]==true;
                         let opts = f["options"].as_array().cloned().unwrap_or_default();
                         let labels: Vec<slint::SharedString> = opts
                             .iter()
@@ -413,13 +488,13 @@ impl MainView {
                             kind: f["type"].as_str().unwrap_or("").into(),
                             help: f["help"].as_str().unwrap_or("").into(),
                             flag: value == true,
+                            disabled,
                             number: value.as_i64().unwrap_or(0) as i32,
-                            input_text: state["settingsInputs"][key]
-                                .as_str()
+                            input_text: state["settingsInputs"][key].as_str().filter(|_|!disabled)
                                 .map(str::to_owned)
                                 .unwrap_or_else(|| value.to_string())
                                 .into(),
-                            invalid: state["settingsErrorField"] == key,
+                            invalid: !disabled && state["settingsErrorField"] == key,
                             minimum: f["min"].as_i64().unwrap_or(0) as i32,
                             maximum: f["max"].as_i64().unwrap_or(100) as i32,
                             step: f["step"].as_i64().unwrap_or(1) as i32,
@@ -430,6 +505,8 @@ impl MainView {
                         }
                     })
                     .collect();
+                self.profile_control_values = rows.iter()
+                    .map(|row| (row.key.clone(), row.input_text.clone(), row.selected_index)).collect();
                 if self.profile_model.row_count() == rows.len()
                     && (rows.is_empty()
                         || self
@@ -506,6 +583,7 @@ impl MainView {
             ui.set_profile_height(p.height as i32);
             ui.set_fps(p.fps as i32);
             ui.set_bitrate(p.bitrate_mbps as i32);
+            ui.set_bitrate_auto(p.bitrate_auto);
             ui.set_codec(p.codec.into());
             ui.set_profile_audio_enabled(p.audio_enabled);
             ui.set_profile_display(p.display_mode.into());
@@ -526,6 +604,16 @@ impl MainView {
                     .unwrap_or("")
                     .into(),
             );
+            let error_key=state["settingsErrorField"].as_str().unwrap_or("");
+            let failed=state["page"]=="settings" && !error_key.is_empty()
+                && state["settingsError"].as_str().is_some_and(|value|!value.is_empty());
+            let focus=ui.global::<crate::ProfileErrorFocus>();
+            focus.set_target_key(if failed{error_key}else{""}.into());
+            focus.set_allowed(failed && !state["navigationPrompt"].is_object()
+                && !state["syncClearPrompt"].is_object() && state["navigation"]["locked"]!=true);
+            let request=if failed{state["settingsErrorRequest"].as_u64().filter(|id|*id>0)
+                .map(|id|format!("{}:{id}",state["profileDraftId"].as_str().unwrap_or(""))).unwrap_or_default()}else{String::new()};
+            focus.set_request_id(request.into());
         }
     }
 }

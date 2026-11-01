@@ -1,11 +1,11 @@
 param(
  [ValidateSet('inspect','focus','key','scroll','activate','result')][string]$Operation='inspect',
- [ValidateSet('main','toolbar','picker')][string]$Window='main',
+ [ValidateSet('main','toolbar','picker','keyboard')][string]$Window='main',
  [string]$Control,
  [string]$ActionId,
  [string]$Argument='',
  [bool]$ExpectedPending,
- [ValidateSet('Tab','Enter','Escape','Space','Up','Down','Left','Right','Home','End')][string]$Key,
+ [ValidateSet('Tab','Enter','Escape','Space','Up','Down','Left','Right','Home','End','PageUp','PageDown')][string]$Key,
  [switch]$Shift,
  [switch]$Repeat,
  [switch]$ActivateWindow,
@@ -31,7 +31,7 @@ if ($Operation -eq 'result') {
 $arguments=@{window=$Window;requestId=$(if($RequestId){$RequestId}else{'ui-'+[guid]::NewGuid().ToString('N')})}
 if($ActivateWindow){if($Operation -ne 'focus' -or $Window -ne 'main'){throw 'ActivateWindow is restricted to an explicit main-window focus request'};$arguments.activateWindow=$true}
 switch ($Operation) {
- 'activate' { if (-not $ActionId) { throw 'ActionId is required for activate' }; $arguments.actionId=$ActionId; $arguments.argument=$Argument; if($PSBoundParameters.ContainsKey('ExpectedPending')){$arguments.expectedPending=$ExpectedPending} }
+ 'activate' { if (-not $ActionId) { throw 'ActionId is required for activate' }; $arguments.actionId=$ActionId; if($Control){if($Argument){throw 'Control and Argument cannot be combined for activate'};$arguments.control=$Control}else{$arguments.argument=$Argument}; if($PSBoundParameters.ContainsKey('ExpectedPending')){$arguments.expectedPending=$ExpectedPending} }
  'focus' { if (-not $Control) { throw 'Control is required for focus' }; $arguments.control=$Control }
  'key' { if (-not $Key) { throw 'Key is required' }; $arguments.key=$Key; $arguments.shift=[bool]$Shift; $arguments.repeat=[bool]$Repeat }
  'scroll' { if (-not $Control) { throw 'Control is required for scroll' }; $arguments.control=$Control; $arguments.pixels=$Pixels }

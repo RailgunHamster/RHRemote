@@ -9,7 +9,10 @@ import java.util.regex.Pattern;
 
 /** One actual launch/resume, independent of its possibly cancelled HTTP response. */
 public final class RhLaunchAttempt {
-    public enum Result { PENDING, UNSUPPORTED, CANCELLED, HANDED_OFF, FINISHED, EXPIRED, FAILED }
+    // Default host initial-ping expiry is 10 s. Include one polling interval,
+    // bounded HTTPS completion and scheduling margin before declaring a timeout.
+    public static final long CLEANUP_TIMEOUT_MS=15000;
+    public enum Result { PENDING, UNSUPPORTED, CANCELLED, CLAIMED, HANDED_OFF, FINISHED, EXPIRED, FAILED }
     public interface Cleanup { String send(String credential)throws Exception; }
     private static final Pattern SECRET=Pattern.compile("(?i)(rhremoteLaunchToken=)[0-9a-f]{64}");
     private final boolean supported;
@@ -34,7 +37,10 @@ public final class RhLaunchAttempt {
         result=Result.HANDED_OFF;done.countDown();
     }
     public static boolean acknowledged(Result result){return result==Result.CANCELLED||result==Result.HANDED_OFF||result==Result.FINISHED||result==Result.EXPIRED;}
-    public static Result reply(String value){if("cancelled".equals(value))return Result.CANCELLED;if("handed_off".equals(value))return Result.HANDED_OFF;if("finished".equals(value))return Result.FINISHED;if("expired".equals(value))return Result.EXPIRED;return Result.FAILED;}
+    // The host claims a slot at ANNOUNCE, before PLAY/control setup succeeds.
+    // Only our native connectionStarted callback proves actual handoff. Otherwise
+    // keep the cleanup lease until the same host request finishes or expires.
+    public static Result reply(String value){if("cancelled".equals(value))return Result.CANCELLED;if("handed_off".equals(value))return Result.CLAIMED;if("finished".equals(value))return Result.FINISHED;if("expired".equals(value))return Result.EXPIRED;return Result.FAILED;}
     public void cancel(){
         final CountDownLatch completion;
         synchronized(this){

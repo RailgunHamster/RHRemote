@@ -28,6 +28,7 @@ pub(crate) struct Driver {
     samples: Arc<Mutex<Vec<Value>>>,
     pending: Option<Pending>,
     generation: i32,
+    keyboard: Option<slint::Weak<crate::FloatingKeyboardWindow>>,
 }
 impl Driver {
     pub fn new(
@@ -52,7 +53,12 @@ impl Driver {
             samples,
             pending: None,
             generation: 0,
+            keyboard: None,
         }
+    }
+    pub fn attach_keyboard(&mut self,keyboard:&crate::FloatingKeyboardWindow){
+        self.keyboard=Some(keyboard.as_weak());let samples=self.samples.clone();let global=keyboard.global::<UiTest>();global.set_enabled(self.bridge.enabled);
+        global.on_report(move|id,kind,label,enabled,focused,checked,expanded,width,height,scroll_y,scroll_maximum|{let mut samples=samples.lock().unwrap();if samples.len()>=512{return;}samples.push(json!({"id":id.as_str(),"kind":kind.as_str(),"label":label.as_str(),"enabled":enabled,"focused":focused,"checked":if kind=="checkbox"{json!(checked)}else{Value::Null},"expanded":if kind=="combobox"{json!(expanded)}else{Value::Null},"logicalSize":{"width":width,"height":height},"scroll":if kind=="scroll"{json!({"y":scroll_y,"minimumY":-scroll_maximum,"maximumY":0.})}else{Value::Null},"window":"keyboard"}));});
     }
     fn issue(
         &mut self,
@@ -78,6 +84,7 @@ impl Driver {
         match request.window.as_str() {
             "toolbar" => set!(toolbar),
             "picker" => set!(picker),
+            "keyboard" => if let Some(keyboard)=self.keyboard.as_ref().and_then(|w|w.upgrade()){set!(keyboard)},
             _ => set!(ui),
         }
     }
@@ -97,9 +104,11 @@ impl Driver {
         toolbar: &StreamToolbar,
         picker: &StreamPicker,
     ) -> Result<Vec<Value>, String> {
+        let keyboard=self.keyboard.as_ref().and_then(|w|w.upgrade());
         let window = match request.window.as_str() {
             "toolbar" => toolbar.window(),
             "picker" => picker.window(),
+            "keyboard" => keyboard.as_ref().ok_or("悬浮键盘不可用")?.window(),
             _ => ui.window(),
         };
         // Rendering instantiates conditional controls and drains Slint's pending
@@ -154,9 +163,11 @@ impl Driver {
             .map(|item| item["id"].clone())
             .collect();
         use slint::winit_030::WinitWindowAccessor;
+        let keyboard=self.keyboard.as_ref().and_then(|w|w.upgrade());
         let window = match request.window.as_str() {
             "toolbar" => toolbar.window(),
             "picker" => picker.window(),
+            "keyboard" => keyboard.as_ref().ok_or("悬浮键盘不可用")?.window(),
             _ => ui.window(),
         };
         let active = window.with_winit_window(|window| window.has_focus());
@@ -186,8 +197,17 @@ impl Driver {
             return Err("视频等待状态已变化，按钮未执行".into());
         }
         let prefix = format!("action|{}|{}|", request.action_id, request.argument);
-        let matches: Vec<_> = samples.iter().filter(|item| item["kind"] == "button"
-            && item["id"].as_str().is_some_and(|id| id.starts_with(&prefix))).collect();
+        let navigation_id=format!("nav|{}",request.action_id);
+        let matches: Vec<_> = samples.iter().filter(|item| {
+            if !request.control.is_empty() {
+                item["id"]==request.control && (item["kind"]=="button"
+                    || request.window=="main" && item["kind"]=="navigation")
+            }else{
+                item["kind"] == "button" && item["id"].as_str().is_some_and(|id| id.starts_with(&prefix))
+                    || request.window=="main" && request.argument.is_empty()
+                        && item["kind"]=="navigation" && item["id"]==navigation_id
+            }
+        }).collect();
         if matches.len() != 1 { return Err("当前没有唯一对应的可见按钮".into()); }
         let button = matches[0];
         let id = button["id"].as_str().ok_or("按钮标识无效")?;
@@ -200,8 +220,9 @@ impl Driver {
         let label = button["label"].clone();
         let pending = toolbar.get_pending();
         self.issue(&target, "activate", ui, toolbar, picker);
+        let keyboard=self.keyboard.as_ref().and_then(|w|w.upgrade());
         let window = match request.window.as_str() {
-            "toolbar" => toolbar.window(), "picker" => picker.window(), _ => ui.window(),
+            "toolbar" => toolbar.window(), "picker" => picker.window(), "keyboard"=>keyboard.as_ref().ok_or("悬浮键盘不可用")?.window(), _ => ui.window(),
         };
         // Drain this widget callback in the same UI turn as lookup. Native input,
         // window activation and a later caption-based focus request are unnecessary.
@@ -337,7 +358,8 @@ impl Driver {
             && (state["streaming"] != true && state["connecting"] != true
                 && !(request.window == "toolbar" && recovery_card)
                 || request.window == "picker"
-                    && state["streamMenu"].as_str().unwrap_or("").is_empty())
+                    && state["streamMenu"].as_str().unwrap_or("").is_empty()
+                || request.window=="keyboard" && state["toolbar"]["floatingKeyboard"]["visible"]!=true)
         {
             self.bridge
                 .finish(&request.id, Err("当前没有该会话窗口".into()));
@@ -350,19 +372,17 @@ impl Driver {
         }
         let phase = if request.operation == "key" {
             if request.window == "main" {
-                if let Some(action) = crate::ui_keyboard::send(
-                    ui,
-                    controller,
-                    &request.key,
-                    request.shift,
-                    request.repeat,
-                ) {
-                    self.bridge.observe_action(action);
-                }
+                // The shared Commands callback records the action once and queues
+                // it with its rendered request owner, just like a button click.
+                crate::ui_keyboard::send(ui, &request.key, request.shift, request.repeat);
             } else {
+                let keyboard=self.keyboard.as_ref().and_then(|w|w.upgrade());
+                if request.window=="keyboard"&&keyboard.is_none(){self.bridge.finish(&request.id,Err("悬浮键盘不可用".into()));return;}
                 crate::ui_keyboard::send_to_window(
                     if request.window == "toolbar" {
                         toolbar.window()
+                    } else if request.window=="keyboard" {
+                        keyboard.as_ref().unwrap().window()
                     } else {
                         picker.window()
                     },

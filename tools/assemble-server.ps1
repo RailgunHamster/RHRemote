@@ -20,3 +20,4 @@ $commit=(& git -C $repo rev-parse HEAD).Trim()
 $metadata=New-RHRPackageManifest $out $commit $EngineCommit
 $null=Test-RHRPackage $out
 [pscustomobject]@{directory=$out;product=$metadata.product;files=$metadata.files.Count;commit=$commit;manifestSha256=(Get-FileHash -LiteralPath (Join-Path $out 'server-package.json')).Hash}
+try{& (Join-Path $PSScriptRoot 'clean-build-artifacts.ps1') -Apply -Protect @($out,$SunshineDirectory,$HostDirectory) | Out-Null}catch{Write-Warning ('Artifact retention deferred: '+$_.Exception.Message)}

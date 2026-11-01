@@ -1,4 +1,13 @@
 [
+ {"id":"tab","label":"Tab","keys":[9]},
+ {"id":"shift-tab","label":"Shift+Tab","keys":[16,9]},
+ {"id":"arrow-up","label":"↑","keys":[38]},
+ {"id":"arrow-left","label":"←","keys":[37]},
+ {"id":"arrow-down","label":"↓","keys":[40]},
+ {"id":"arrow-right","label":"→","keys":[39]},
+ {"id":"enter","label":"Enter","keys":[13]},
+ {"id":"backspace","label":"Backspace","keys":[8]},
+ {"id":"delete","label":"Delete","keys":[46]},
  {"id":"ctrl-alt-delete","label":"Ctrl+Alt+Delete","secureAttention":true,"keys":[]},
  {"id":"ctrl-alt-left","label":"Ctrl+Alt+←","keys":[17,18,37]},
  {"id":"ctrl-alt-right","label":"Ctrl+Alt+→","keys":[17,18,39]},

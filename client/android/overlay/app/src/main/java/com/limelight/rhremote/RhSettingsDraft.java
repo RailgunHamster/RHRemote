@@ -15,6 +15,7 @@ final class RhSettingsDraft {
         for(int i=0;i<catalog.length();i++){
             JSONObject field=catalog.getJSONObject(i);if(!field.getString("type").equals("number"))continue;
             String key=field.getString("key"),label=field.getString("label"),tab=field.getString("tab");
+            if(key.equals("bitrateMbps")&&profile.bitrateAuto)continue;
             String text=inputs.containsKey(key)?inputs.get(key):String.valueOf(value.getInt(key));int number;
             try{number=Integer.parseInt(text.trim());}catch(NumberFormatException invalid){throw new Invalid(key,tab,label+"：请输入整数");}
             int min=field.getInt("min"),max=field.getInt("max");if(number<min||number>max)throw new Invalid(key,tab,label+"：范围为 "+min+"–"+max);

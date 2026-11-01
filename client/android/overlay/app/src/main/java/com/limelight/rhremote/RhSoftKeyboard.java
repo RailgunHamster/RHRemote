@@ -69,8 +69,11 @@ final class RhSoftKeyboard {
     }
     private void poll(long ticket){
         if(disposed||!pending||ticket!=generation)return;
-        Boolean value=observed();if(value!=null){if(!value.equals(lastObserved)){lastObserved=value;RhStatistics.event("ime_observed",-1,RhActions.obj("request",ticket,"visible",value));}lastVisible=value;if(value==target&&backend.settled()){if(!value)ownsShow=false;finish(value,"");return;}}
-        if(SystemClock.uptimeMillis()-started>=2000){cancelUnconfirmedShow();finish(lastVisible,target?"键盘未打开":"键盘未关闭");return;}
+        Boolean value=observed();boolean deadline=SystemClock.uptimeMillis()-started>=2000;
+        // Prefer settled animation during normal operation. At the deadline the
+        // observed target state is success, not a reason to undo a visible IME.
+        if(value!=null){if(!value.equals(lastObserved)){lastObserved=value;RhStatistics.event("ime_observed",-1,RhActions.obj("request",ticket,"visible",value));}lastVisible=value;if(value==target&&(backend.settled()||deadline)){if(!value)ownsShow=false;finish(value,"");return;}}
+        if(deadline){cancelUnconfirmedShow();finish(lastVisible,target?"键盘未打开":"键盘未关闭");return;}
         handler.postDelayed(check,50);
     }
     private void finish(boolean visible,String failure){RhStatistics.event("ime_request_end",-1,RhActions.obj("request",generation,"visible",visible,"error",failure,"elapsedMs",SystemClock.uptimeMillis()-started));pending=false;error=failure;cancelCheck();Completion done=completion;completion=null;if(done!=null)done.done(visible,failure);}

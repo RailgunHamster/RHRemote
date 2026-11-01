@@ -1,5 +1,9 @@
 # 同步写入结果未确认与状态说明
 
+后续：Android 五个服务器提交／本机保存边界已使用既有 DAV 服务完成真实进程退出、冷启动与手动恢复，见[2026-10-30 验证](SYNC-COMMIT-PROCESS-EXIT-20261030.md)。下文保留 preview.68 当时的验证范围。
+
+Windows 后续已在测试可执行文件中，通过正式 ConfigSync／Controller、实际文件和既有 DAV 服务验证五个对应进程中断点，见[Windows 后续记录](WINDOWS-SYNC-PROCESS-EXIT-20261030.md)；设备恢复使用替身、控件使用软件后端，不替代正常客户端的物理运行验证。
+
 本地最终版本：Windows / Android `0.2.11-preview.68`，Android versionCode `286`。未发布，未覆盖日常 Windows 客户端；OPPO 本轮未操作。
 
 ## 原因与行为

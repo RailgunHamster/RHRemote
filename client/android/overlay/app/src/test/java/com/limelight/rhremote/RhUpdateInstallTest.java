@@ -355,4 +355,42 @@ public class RhUpdateInstallTest {
         assertFalse(home.state().getBoolean("updatesBusy"));assertTrue(home.state().getJSONObject("updates").getBoolean("downloaded"));assertNull(next());assertEquals(1,Requests.downloads);
         button(activity.getWindow().getDecorView(),"安装更新").performClick();awaitUpdate();assertInstaller(next());assertEquals(1,Requests.downloads);
     }
+    private void updateLayout(){View root=activity.findViewById(android.R.id.content);root.measure(View.MeasureSpec.makeMeasureSpec(1008,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(672,View.MeasureSpec.EXACTLY));root.layout(0,0,1008,672);}
+    private void updateTouch(Button target,int action,long down){android.view.MotionEvent event=android.view.MotionEvent.obtain(down,android.os.SystemClock.uptimeMillis(),action,target.getWidth()/2f,target.getHeight()/2f,0);event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);try{assertTrue(target.dispatchTouchEvent(event));}finally{event.recycle();}}
+    private void updateCandidate(JSONObject candidate)throws Exception{
+        org.robolectric.util.ReflectionHelpers.setField(updates,"available",new JSONObject(candidate.toString()));org.robolectric.util.ReflectionHelpers.setField(updates,"phase","available");org.robolectric.util.ReflectionHelpers.setField(updates,"ready",false);
+        java.lang.reflect.Method refresh=RhHome.class.getDeclaredMethod("refreshUpdateControls");refresh.setAccessible(true);refresh.invoke(home);updateLayout();
+    }
+    @Test public void queuedCheckCannotTurnIntoDownloadWhenACandidateArrives()throws Exception{
+        home=newHome();updates=org.robolectric.util.ReflectionHelpers.getField(home,"updates");home.perform("app.settings.open",RhActions.obj());updateLayout();Button primary=(Button)activity.getWindow().getDecorView().findViewWithTag("updates.primary");
+        long down=android.os.SystemClock.uptimeMillis();updateTouch(primary,android.view.MotionEvent.ACTION_DOWN,down);updateTouch(primary,android.view.MotionEvent.ACTION_UP,down);updateCandidate(manifest);idle();awaitUpdate();
+        assertEquals("The old Check gesture downloaded an APK",0,Requests.downloads);assertEquals(0,Requests.checks);assertNull(next());
+    }
+    @Test public void heldInstallCannotSwitchToAnotherArtifactWithTheSameVersionAndLabel()throws Exception{
+        page();updateLayout();Button primary=(Button)activity.getWindow().getDecorView().findViewWithTag("updates.primary");long down=android.os.SystemClock.uptimeMillis();updateTouch(primary,android.view.MotionEvent.ACTION_DOWN,down);
+        JSONObject other=new JSONObject(manifest.toString());other.put("sha256",String.join("",java.util.Collections.nCopies(64,"1")));updateCandidate(other);assertEquals("下载并安装",primary.getText().toString());updateTouch(primary,android.view.MotionEvent.ACTION_UP,down);idle();awaitUpdate();
+        assertEquals("A changed artifact was downloaded by an old gesture",0,Requests.downloads);assertNull(next());
+    }
+    @Test public void staleUpdateIntentIsRejectedBeforeStartingAnyWork()throws Exception{
+        home=newHome();try{home.perform("updates.primary",RhActions.obj("expectedIntent","obsolete-update-state"));fail("Stale update intent accepted");}catch(IllegalStateException expected){assertEquals("更新状态已变化，请重新点击当前操作",expected.getMessage());}
+        assertFalse(home.state().getBoolean("updatesBusy"));assertEquals(0,Requests.checks);assertEquals(0,Requests.downloads);assertNull(next());
+    }
+    @Test public void noteChangesKeepOneFreshDownloadAndInstallerHandoff()throws Exception{
+        page();updateLayout();Button primary=(Button)activity.getWindow().getDecorView().findViewWithTag("updates.primary");long down=android.os.SystemClock.uptimeMillis();updateTouch(primary,android.view.MotionEvent.ACTION_DOWN,down);
+        JSONObject same=new JSONObject(manifest.toString());same.put("notes","Only notes changed");updateCandidate(same);updateTouch(primary,android.view.MotionEvent.ACTION_UP,down);idle();awaitUpdate();
+        assertEquals(1,Requests.downloads);assertInstaller(next());assertNull(next());
+    }
+    @Test public void staleUpdateIntentCannotInterruptAnUnsavedDeviceForm()throws Exception{
+        page();String intent=home.state().getJSONObject("updates").getString("intent");com.limelight.nvstream.http.ComputerDetails device=new com.limelight.nvstream.http.ComputerDetails();device.uuid="update-stale-draft";device.name="Fixture";device.manualAddress=new com.limelight.nvstream.http.ComputerDetails.AddressTuple("192.0.2.1",47989);home.update(device);
+        home.perform("device.settings.open",RhActions.obj("uuid",device.uuid));home.perform("settings.input",RhActions.obj("key","fps","value","unfinished"));JSONObject other=new JSONObject(manifest.toString());other.put("sha256",String.join("",java.util.Collections.nCopies(64,"1")));updateCandidate(other);
+        try{home.perform("updates.primary",RhActions.obj("expectedIntent",intent));fail("Stale action interrupted draft");}catch(IllegalStateException expected){}
+        assertTrue(home.state().isNull("navigationPrompt"));assertEquals("unfinished",home.state().getJSONObject("settingsInputs").getString("fps"));assertEquals(0,Requests.downloads);assertNull(next());
+    }
+    @Test public void heldCancelCannotCancelANewerRealDownload()throws Exception{
+        page();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));idle();updateLayout();
+        Button cancel=(Button)activity.getWindow().getDecorView().findViewWithTag("updates.cancel");long down=android.os.SystemClock.uptimeMillis();updateTouch(cancel,android.view.MotionEvent.ACTION_DOWN,down);long old=home.state().getJSONObject("updates").getLong("operationId");
+        home.perform("updates.cancel",RhActions.obj("operationId",old));awaitUpdate();Requests.entered=new CountDownLatch(1);Requests.release=new CountDownLatch(1);home.perform("updates.install",RhActions.obj());assertTrue(Requests.entered.await(3,TimeUnit.SECONDS));idle();updateLayout();
+        long current=home.state().getJSONObject("updates").getLong("operationId");assertTrue(current>old);updateTouch(cancel,android.view.MotionEvent.ACTION_UP,down);idle();assertFalse(home.state().getJSONObject("updates").getBoolean("cancelRequested"));assertTrue(home.state().getBoolean("updatesBusy"));
+        home.perform("updates.cancel",RhActions.obj("operationId",current));awaitUpdate();assertEquals(2,Requests.downloads);assertNull(next());
+    }
 }

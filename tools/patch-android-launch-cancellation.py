@@ -40,7 +40,10 @@ def patch(root):
                 .connectTimeout(1500,java.util.concurrent.TimeUnit.MILLISECONDS).readTimeout(1500,java.util.concurrent.TimeUnit.MILLISECONDS)
                 .callTimeout(3000,java.util.concurrent.TimeUnit.MILLISECONDS).build();
             String reply=cleanup.openHttpConnectionToString(bounded,cleanup.getHttpsUrl(true),"rhremote/launch/cancel","rhremoteLaunchToken="+credential);
-            return getXmlString(reply,"RHLaunchState",true);
+            String state=getXmlString(reply,"RHLaunchState",true);
+            String known=java.util.Arrays.asList("cancelled","handed_off","finished","expired").contains(state)?state:"unknown";
+            com.limelight.rhremote.RhStatistics.event("launch_cleanup_reply",-1,com.limelight.rhremote.RhActions.obj("state",com.limelight.rhremote.RhLaunchAttempt.reply(known).name().toLowerCase(java.util.Locale.ROOT)));
+            return state;
         });
         boolean stop;synchronized(rhLaunchLock){if(rhLaunch!=previous)throw new IOException("Another launch owns this client");rhLaunch=attempt;stop=rhLaunchStopped;}
         if(stop){attempt.cancel();throw new IOException("Launch cancelled");}

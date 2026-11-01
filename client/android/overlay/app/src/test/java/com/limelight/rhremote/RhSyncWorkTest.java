@@ -37,6 +37,11 @@ public class RhSyncWorkTest {
         assertEquals("同步进行中",RhHome.syncSummary(state,true,""));state.put("conflicts",new JSONArray()).put("automaticBlocked",false);assertEquals("同步失败，请查看下方提示",RhHome.syncSummary(state,false,"HTTP 401"));
         assertTrue(RhHome.syncSummary(state,false,"").startsWith("上次完成："));
     }
+    @Test public void automaticWorkCannotReplaceAConflictWhileWaitingForTheUsersChoice()throws Exception{
+        work.start(RhShared.read(activity),"review",queued::add);complete();assertEquals("conflict",work.phase());assertFalse(work.canAutomaticallySync());long operation=work.state().getLong("operationId");
+        try{work.start(RhShared.read(activity),"review",true,queued::add);fail("Automatic request replaced review");}catch(IllegalStateException expected){assertTrue(expected.getMessage().contains("同步冲突"));}
+        assertTrue(queued.isEmpty());assertEquals(operation,work.state().getLong("operationId"));assertEquals(1,Network.runs);
+    }
     RhSyncWork coldOwner()throws Exception{java.lang.reflect.Field shared=RhSyncWork.class.getDeclaredField("shared");shared.setAccessible(true);shared.set(null,null);return RhSyncWork.shared(activity);}
     @Test public void aColdOwnerReportsTheInterruptedOperationWithoutReplayingIt()throws Exception{
         work.start(RhShared.read(activity),"review",queued::add);long attempted=work.lastAttempt(),operation=work.state().getLong("operationId");
@@ -53,7 +58,7 @@ public class RhSyncWorkTest {
         try{work.start(RhShared.read(activity),"review",true,retry::add);fail("Automatic replay accepted");}catch(IllegalStateException expected){assertTrue(expected.getMessage().contains("结果未确认"));}
         assertFalse(work.canAutomaticallySync());assertTrue(retry.isEmpty());assertEquals(0,Network.runs);
         work.start(RhShared.read(activity),"review",retry::add);assertTrue(work.busy());retry.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();
-        assertEquals("conflict",work.phase());assertEquals(1,Network.runs);assertTrue(work.canAutomaticallySync());assertEquals("idle",coldOwner().phase());
+        assertEquals("conflict",work.phase());assertEquals(1,Network.runs);assertFalse(work.canAutomaticallySync());assertEquals("idle",coldOwner().phase());
     }
     @Test public void invalidJournalTypesBecomeActionableFeedbackInsteadOfCrashingStartup()throws Exception{
         activity.getSharedPreferences("rhremote.sync.operations",0).edit().putString("pending","invalid").commit();work=coldOwner();
@@ -116,9 +121,9 @@ public class RhSyncWorkTest {
     }
     @Test public void conflictReviewShowsNamesAndTheValuesBeingChosenInsteadOfStorageKeys()throws Exception{
         JSONObject left=RhShared.read(activity);left.put("devices",new JSONArray().put(RhActions.obj("uuid","host-123","name","Workstation","displayName","工作电脑","address","192.0.2.1")));
-        left.getJSONObject("clients").put("pad-123",RhActions.obj("name","平板","platform","android"));left.getJSONObject("profiles").put("pad-123",RhActions.obj("host-123",RhActions.obj("width",1920,"height",1080,"fps",30,"bitrateMbps",25)));
+        left.getJSONObject("clients").put("pad-123",RhActions.obj("name","平板","platform","android"));left.getJSONObject("profiles").put("pad-123",RhActions.obj("host-123",RhProfile.load(activity,"host-123").clientJson()));
         JSONObject right=new JSONObject(left.toString());right.getJSONArray("devices").getJSONObject(0).put("displayName","远端名称");right.getJSONObject("profiles").getJSONObject("pad-123").getJSONObject("host-123").put("bitrateMbps",40);right.put("dark",!left.getBoolean("dark"));
-        JSONArray review=RhSync.review(left,right,new JSONArray().put("devices.host-123").put("profiles.pad-123.host-123").put("appearance.dark").put("deviceOrder"));
+        JSONArray review=RhSync.review(activity,left,right,new JSONArray().put("devices.host-123").put("profiles.pad-123.host-123").put("appearance.dark").put("deviceOrder"));
         assertEquals("远程设备：工作电脑",review.getJSONObject(0).getString("label"));assertTrue(review.getJSONObject(0).getString("remote").contains("远端名称"));
         assertEquals("连接配置：平板 → 工作电脑",review.getJSONObject(1).getString("label"));assertTrue(review.getJSONObject(1).getString("local").contains("25 Mbps"));assertTrue(review.getJSONObject(1).getString("remote").contains("40 Mbps"));
         assertEquals("主题",review.getJSONObject(2).getString("label"));assertNotEquals(review.getJSONObject(2).getString("local"),review.getJSONObject(2).getString("remote"));assertEquals("工作电脑",review.getJSONObject(3).getString("local"));

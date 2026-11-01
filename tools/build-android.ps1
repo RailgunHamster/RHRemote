@@ -4,6 +4,10 @@ param([string]$SourceDir='D:\RHRemoteTools\moonlight-android-v12.2-source',[swit
  [ValidateSet('debug','release')][string]$BuildType='release')
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot -Parent
+$out=Join-Path $repo 'dist/android'
+$apkName='RHRemote-v'+$Version+$(if($BuildType-eq'debug'){'-debug'})+'.apk'
+$apkFile=Join-Path $out $apkName
+if(Test-Path -LiteralPath $apkFile){throw ('Android artifact already exists; use a new version: '+$apkFile)}
 $cargoTarget=if($env:CARGO_TARGET_DIR){[IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)}else{Join-Path $repo 'target'}
 $toolchain=Join-Path $NdkDir 'toolchains/llvm/prebuilt/windows-x86_64/bin'
 $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=Join-Path $toolchain 'aarch64-linux-android26-clang.cmd'
@@ -29,9 +33,9 @@ try {
     $testArgs=@();if($BuildTests-and$BuildType-eq'release'){$testArgs+=@('-Pandroid.onlyEnableUnitTestForTheTestedBuildType=false')}
     & $gradle --no-daemon --console=plain @proxyArgs @testArgs @tasks
     if($LASTEXITCODE -ne 0){throw 'Android build failed.'}
-    $repo=Split-Path $PSScriptRoot -Parent;$out=Join-Path $repo 'dist/android'
     New-Item -ItemType Directory -Force -Path $out|Out-Null
-    $apkName='RHRemote-v'+$Version+$(if($BuildType-eq'debug'){'-debug'})+'.apk'
-    Copy-Item -LiteralPath ('app/build/outputs/apk/nonRoot/'+$BuildType+'/app-nonRoot-'+$BuildType+'.apk') -Destination (Join-Path $out $apkName) -Force
+    $builtApk=Join-Path (Get-Location).Path ('app/build/outputs/apk/nonRoot/'+$BuildType+'/app-nonRoot-'+$BuildType+'.apk')
+    [IO.File]::Copy($builtApk,$apkFile,$false)
     Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $apkName)|Select-Object Hash,Path
+    try{& (Join-Path $PSScriptRoot 'clean-build-artifacts.ps1') -Apply -Protect @((Join-Path $out $apkName)) | Out-Null}catch{Write-Warning ('Artifact retention deferred: '+$_.Exception.Message)}
 }finally{Pop-Location}

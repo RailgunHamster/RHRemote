@@ -1,6 +1,6 @@
 [package]
 name = "rhremote-ui"
-version = "0.2.11-preview.70"
+version = "0.2.11"
 edition.workspace = true
 license.workspace = true
 build = "build.rs"
@@ -8,6 +8,13 @@ build = "build.rs"
 [features]
 # Explicit diagnostic build for comparison with the former WGL UI path.
 ui-opengl = ["slint/renderer-femtovg"]
+# Explicit Windows-only local lifecycle diagnostic; excluded from normal targets.
+ui-overlay-probe = []
+
+[[example]]
+name = "overlay_lifecycle_probe"
+path = "examples/overlay_lifecycle_probe.rs"
+required-features = ["ui-overlay-probe"]
 
 [lib]
 name = "rhremote"

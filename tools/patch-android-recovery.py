@@ -27,12 +27,13 @@ def patch(root):
     private volatile boolean rhCleanupComplete,rhNativeStopped;
     public void rhCancelConnection(){if(rhRecovery!=null)rhRecovery.background();}
     public void rhTestInterrupt(){if(rhRecovery==null)throw new IllegalStateException("no recovery controller");rhRecovery.interruptForTest();}
+    public boolean rhNoteProtocolFailure(int code,String reason){if(rhRecovery==null)return false;rhRecovery.noteProtocolFailure(code,reason);return true;}
     private void rhStopForRetry(java.util.function.Consumer<Boolean> completed){
         runOnUiThread(()->{
             displayedFailureDialog=true;stopConnection();
             new Thread(()->{
                 boolean done=false;
-                try{done=rhStopped.await(12,java.util.concurrent.TimeUnit.SECONDS)&&rhCleanupComplete;}
+                try{done=rhStopped.await(com.limelight.rhremote.RhLaunchAttempt.CLEANUP_TIMEOUT_MS+2000,java.util.concurrent.TimeUnit.MILLISECONDS)&&rhCleanupComplete;}
                 catch(InterruptedException e){Thread.currentThread().interrupt();}
                 final boolean cleaned=done;runOnUiThread(()->completed.accept(cleaned));
                 if(!done){
@@ -50,11 +51,12 @@ def patch(root):
         rhProfile.applyNetwork(getIntent().getStringExtra(EXTRA_HOST),prefConfig);
         rhRecovery=new com.limelight.rhremote.RhRecovery(this,rhProfile,this::rhStopForRetry);"""),
         ("        StreamConfiguration config = new StreamConfiguration.Builder()", "        decoderRenderer.rhFrameReady=rhRecovery::frame;\n        StreamConfiguration config = new StreamConfiguration.Builder()"),
+        ('        com.limelight.rhremote.RhStatistics.event("connection_ready");', '        com.limelight.rhremote.RhStatistics.event("connection_ready");\n        if(rhRecovery!=null)rhRecovery.connected();'),
         ("            attemptedConnection = true;", "            attemptedConnection = true;\n            connecting = true;"),
         ("        super.onStop();", "        super.onStop();\n        if(rhRecovery!=null)rhRecovery.background();"),
         ("                    conn.stop();", """                    try{
                         try(com.limelight.rhremote.RhStatistics.Scope scope=new com.limelight.rhremote.RhStatistics.Scope("native_client_stop")){conn.stop();rhNativeStopped=true;}
-                        try(com.limelight.rhremote.RhStatistics.Scope scope=new com.limelight.rhremote.RhStatistics.Scope("native_starter_join")){rhCleanupComplete=conn.rhAwaitStopped(10000);}
+                        try(com.limelight.rhremote.RhStatistics.Scope scope=new com.limelight.rhremote.RhStatistics.Scope("native_starter_join")){rhCleanupComplete=conn.rhAwaitStopped(com.limelight.rhremote.RhLaunchAttempt.CLEANUP_TIMEOUT_MS);}
                     }
                     finally{rhStopped.countDown();}"""),
         ("""            }.start();
@@ -109,9 +111,12 @@ def patch(root):
                     if(rhStopped)return;
                     e.printStackTrace();"""),
         ("""                } catch (HostHttpResponseException e) {
-                    e.printStackTrace();""", """                } catch (HostHttpResponseException e) {
+                    e.printStackTrace();
+                    context.connListener.displayMessage(e.getMessage());""", """                } catch (HostHttpResponseException e) {
                     if(rhStopped)return;
-                    e.printStackTrace();"""),
+                    boolean rhOwnedFailure=context.connListener instanceof com.limelight.Game&&((com.limelight.Game)context.connListener).rhNoteProtocolFailure(e.getErrorCode(),e.getErrorMessage());
+                    e.printStackTrace();
+                    if(!rhOwnedFailure)context.connListener.displayMessage(e.getMessage());"""),
         ("context.connListener.stageFailed(appName, MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989, 0);", "context.connListener.stageFailed(appName, com.limelight.rhremote.RhRecoveryPolicy.networkError(e)?MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989:0, 0);"),
         ("""                } catch (InterruptedException e) {
                     context.connListener.displayMessage""", """                } catch (InterruptedException e) {

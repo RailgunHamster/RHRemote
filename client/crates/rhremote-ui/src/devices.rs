@@ -93,7 +93,7 @@ mod tests {
         i_slint_backend_testing::init_no_event_loop();
         let ui = MainWindow::new().unwrap();
         ui.window().set_size(LogicalSize::new(1180., 780.));
-        let rows = vec![DeviceRow {uuid:"test-server".into(),name:"winserver".into(),host_name:"winserver".into(),address:"192.168.0.104".into(),search_addresses:"100.73.139.109".into(),status:"已配对".into(),online:true,paired:true,is_self:false}];
+        let rows = vec![DeviceRow {uuid:"test-server".into(),name:"winserver".into(),host_name:"winserver".into(),address:"192.168.0.104".into(),search_addresses:"100.73.139.109".into(),status:"已配对".into(),online:true,paired:true,is_self:false,pending:false,check_retry:false,check_failed:false,check_hint:Default::default(),repair_required:false}];
         update_devices(&ui, rows.clone());
         ui.set_selected_uuid(rows[0].uuid.clone());
         ui.set_selected_device(rows[0].clone());

@@ -33,9 +33,12 @@ public class RhSessionMenuTest {
     }
     Game game;RhStreamControls controls;
     void create(boolean dark){
+        create(dark,false);
+    }
+    void create(boolean dark,boolean withWarning){
         Keyboard.rejectKey=0;
         game=Robolectric.buildActivity(KeyProbeGame.class).get();game.setIntent(new Intent().putExtra(Game.EXTRA_PC_NAME,"Fixture workstation").putExtra(Game.EXTRA_PC_UUID,"fixture"));
-        RhShared.theme(game,dark);FrameLayout root=new FrameLayout(game);TextView stats=new TextView(game);stats.setId(R.id.performanceOverlay);root.addView(stats);View surface=new View(game);surface.setId(R.id.surfaceView);surface.setFocusableInTouchMode(true);root.addView(surface);game.setContentView(root);assertTrue(surface.requestFocusFromTouch());
+        RhShared.theme(game,dark);FrameLayout root=new FrameLayout(game);TextView stats=new TextView(game);stats.setId(R.id.performanceOverlay);root.addView(stats);View surface=new View(game);surface.setId(R.id.surfaceView);surface.setFocusableInTouchMode(true);root.addView(surface);if(withWarning){RhSessionWarning warning=new RhSessionWarning(game);warning.setId(R.id.notificationOverlay);warning.setVisibility(View.GONE);root.addView(warning,new FrameLayout.LayoutParams(-2,-2));}game.setContentView(root);assertTrue(surface.requestFocusFromTouch());
         RhProfile profile=RhProfile.load(game,"fixture");RhTouchController touch=new RhTouchController(new RhTouchController.TouchSink(){public void button(byte b,boolean down){throw new AssertionError("No remote input expected");}public void position(short x,short y,short w,short h){throw new AssertionError();}public void relative(short x,short y){throw new AssertionError();}public void scroll(short value){throw new AssertionError();}public void horizontalScroll(short value){throw new AssertionError();}},surface,profile);
         controls=RhStreamControls.install(game,touch,new PreferenceConfiguration(),profile,null);assertNotNull(controls);controls.markConnected();controls.markFirstFrame();Shadows.shadowOf(Looper.getMainLooper()).idle();
         try{Field owner=Game.class.getDeclaredField("rhControls");owner.setAccessible(true);owner.set(game,controls);}catch(Exception failure){throw new AssertionError(failure);}
@@ -48,6 +51,18 @@ public class RhSessionMenuTest {
     void layout(){View root=game.findViewById(android.R.id.content);for(int i=0;i<3;i++){root.measure(View.MeasureSpec.makeMeasureSpec(1080,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(720,View.MeasureSpec.EXACTLY));root.layout(0,0,1080,720);}}
     boolean key(int action,int code,int modifiers){long time=android.os.SystemClock.uptimeMillis();return game.dispatchKeyEvent(new KeyEvent(time,time,action,code,0,modifiers,KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,InputDevice.SOURCE_KEYBOARD));}
     void toggle()throws Exception{controls.perform("stream.controls.toggle",RhActions.obj());layout();}
+    @Test public void callbacksFromHiddenSessionControlsDoNotChangeTheCurrentSession()throws Exception{
+        create(false);toggle();View oldMode=button("直接点击"),oldScroll=button("滚动模式"),oldStats=button("统计：关");
+        controls.perform("stream.controls.tab",RhActions.obj("tab","audio"));layout();
+        oldMode.performClick();oldScroll.performClick();oldStats.performClick();
+        assertFalse("Hidden input button changed pointer mode",controls.state().getBoolean("trackpad"));
+        assertFalse("Hidden input switch changed scrolling",controls.state().getBoolean("scrollMode"));
+        assertFalse("Hidden input button changed statistics",controls.state().getBoolean("showStats"));
+        View oldAudio=game.findViewById(android.R.id.content).findViewWithTag("stream.audio.toggle");assertNotNull(oldAudio);boolean before=controls.state().getBoolean("audioEnabled");toggle();oldAudio.performClick();
+        assertEquals("Collapsed panel changed audio",before,controls.state().getBoolean("audioEnabled"));
+        toggle();controls.perform("stream.controls.tab",RhActions.obj("tab","input"));layout();oldMode.performClick();assertTrue("Current input button stopped working",controls.state().getBoolean("trackpad"));
+        oldScroll.performClick();assertTrue(controls.state().getBoolean("scrollMode"));oldStats.performClick();assertTrue(controls.state().getBoolean("showStats"));
+    }
     RhStreamPanel panel()throws Exception{Field field=RhStreamControls.class.getDeclaredField("panel");field.setAccessible(true);return (RhStreamPanel)field.get(controls);}
     @Test public void aFailedDisplaySwitchKeepsThePreviousMonitorSelectedAndCanRetry()throws Exception{
         create(false);toggle();Keyboard.events.clear();RhProfile profile=RhProfile.load(game,"fixture");
@@ -75,6 +90,22 @@ public class RhSessionMenuTest {
         RhDisplay display=new RhDisplay(RhProfile.load(game,"fixture"),(path,body)->RhActions.obj("result",RhActions.obj("selected",RhActions.obj("id",body.optString("displayId"),"captureIndex",2))));display.select("old",false);Keyboard.rejectKey=113;
         try{display.select("next",true);fail("Rejected input committed selection");}catch(IllegalStateException expected){assertTrue(expected.getMessage().contains("-2"));}assertEquals("old",display.state().getJSONObject("selected").getString("id"));
     }
+    @Test public void pendingScreenChangeRejectsDisabledControlActionsButKeepsLocalNavigation()throws Exception{
+        create(false);toggle();java.util.concurrent.CountDownLatch reached=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);java.util.concurrent.atomic.AtomicReference<Thread> worker=new java.util.concurrent.atomic.AtomicReference<>();
+        org.json.JSONObject old=RhActions.obj("id","old","captureIndex",1),next=RhActions.obj("id","next","captureIndex",2);
+        RhDisplay display=new RhDisplay(RhProfile.load(game,"fixture"),(path,body)->{if(body.optString("displayId").equals("next")){worker.set(Thread.currentThread());reached.countDown();assertTrue(release.await(3,java.util.concurrent.TimeUnit.SECONDS));}return RhActions.obj("result",RhActions.obj("selected",body.optString("displayId").equals("next")?next:old));});display.select("old",false);
+        Field field=RhStreamControls.class.getDeclaredField("display");field.setAccessible(true);field.set(controls,display);
+        try{
+            controls.perform("stream.display.select",RhActions.obj("displayId","next"));assertTrue(reached.await(2,java.util.concurrent.TimeUnit.SECONDS));controls.perform("stream.controls.tab",RhActions.obj("tab","input"));layout();org.json.JSONObject before=controls.state();
+            for(String title:new String[]{"直接点击","键盘","统计：关","悬浮键盘","滚动模式"})assertFalse(title,button(title).isEnabled());
+            controls.perform("stream.controls.tab",RhActions.obj("tab","displays"));layout();for(String title:new String[]{"移动画面","还原缩放"})assertFalse(title,button(title).isEnabled());controls.perform("stream.controls.tab",RhActions.obj("tab","input"));layout();
+            for(String id:new String[]{"stream.mode.toggle","stream.keyboard.toggle","stream.pan.toggle","stream.zoom.reset","stream.keyboard.floating.set","stream.scroll.set"}){
+                try{controls.perform(id,RhActions.obj("enabled",true));fail("Disabled control accepted: "+id);}catch(IllegalStateException expected){assertEquals("上一项会话操作尚未完成",expected.getMessage());}
+            }
+            org.json.JSONObject after=controls.state();for(String key:new String[]{"trackpad","pan","scrollMode","floatingKeyboard","keyboardPending","keyboardTargetVisible"})assertEquals(key,before.get(key),after.get(key));assertEquals(before.getJSONObject("zoom").toString(),after.getJSONObject("zoom").toString());assertTrue(after.getJSONObject("controlAction").getBoolean("busy"));
+            controls.perform("stream.controls.tab",RhActions.obj("tab","audio"));layout();assertEquals("audio",controls.state().getString("controlsTab"));assertTrue(button("收起").isEnabled());assertTrue(button("断开").isEnabled());
+        }finally{controls.dispose();release.countDown();if(worker.get()!=null){worker.get().join(3000);assertFalse(worker.get().isAlive());}Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    }
     org.json.JSONObject screens(){org.json.JSONArray values=new org.json.JSONArray().put(RhActions.obj("id","physical","name","LG","width",1920,"height",1080,"available",true)).put(RhActions.obj("id","virtual","virtual",true,"width",2520,"height",1680,"available",true));return RhActions.obj("displays",values,"selected",values.optJSONObject(0));}
     void screens(RhStreamPanel panel,org.json.JSONObject data,boolean busy){panel.update(false,false,false,100,data,busy,"");panel.updateControls(true,false,1,busy,"displays",busy?"正在读取屏幕…":"屏幕列表已刷新","");layout();}
     @Test public void refreshingAFocusedMonitorKeepsNavigationLocalAndRestoresItsRow()throws Exception{
@@ -100,16 +131,36 @@ public class RhSessionMenuTest {
         create(false);toggle();assertTrue(button("统计：关").requestFocusFromTouch());panel().setTab("audio");layout();assertTrue("Hidden page kept or lost focus",button("声音").hasFocus());press(KeyEvent.KEYCODE_A,0);assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
     }
     @Test public void videoTransformUpdatesTheOpenPanelWithoutAnotherControlAction()throws Exception{
-        create(false);toggle();Field field=RhStreamControls.class.getDeclaredField("touch");field.setAccessible(true);RhTouchController touch=(RhTouchController)field.get(controls);touch.inject(RhActions.obj("gesture","pinch","factor",1.5));
+        create(false);toggle();panel().setTab("displays");Field field=RhStreamControls.class.getDeclaredField("touch");field.setAccessible(true);RhTouchController touch=(RhTouchController)field.get(controls);touch.inject(RhActions.obj("gesture","pinch","factor",1.5));
         assertEquals(1.5,controls.state().getJSONObject("zoom").getDouble("scale"),.001);assertNotNull("Live zoom label is stale",findText(game.findViewById(android.R.id.content),"缩放 150%"));touch.resetZoom();assertNotNull(findText(game.findViewById(android.R.id.content),"缩放 100%"));
     }
     @Test public void aHiddenZoomLabelDoesNotPublishViewChangesUntilShown()throws Exception{
-        create(false);Field field=RhStreamControls.class.getDeclaredField("touch");field.setAccessible(true);RhTouchController touch=(RhTouchController)field.get(controls);TextView label=(TextView)findText(game.findViewById(android.R.id.content),"缩放 100%");assertNotNull(label);int[] changes={0};label.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){changes[0]++;}public void afterTextChanged(android.text.Editable value){}});
-        touch.inject(RhActions.obj("gesture","pinch","factor",1.5));assertEquals(0,changes[0]);toggle();assertEquals("缩放 150%",label.getText().toString());assertEquals(1,changes[0]);panel().setTab("audio");touch.inject(RhActions.obj("gesture","pinch","factor",1.2));assertEquals(1,changes[0]);panel().setTab("input");assertEquals("缩放 180%",label.getText().toString());assertEquals(2,changes[0]);controls.dispose();touch.resetZoom();assertEquals("Disposed controls retained the transform callback",2,changes[0]);
+        create(false);Field field=RhStreamControls.class.getDeclaredField("touch");field.setAccessible(true);RhTouchController touch=(RhTouchController)field.get(controls);
+        assertTrue(controls.state().getJSONObject("controlsLayout").getBoolean("created"));assertFalse(controls.state().getBoolean("controls"));
+        TextView label=(TextView)findText(game.findViewById(android.R.id.content),"缩放 100%");assertNotNull(label);int[] changes={0};label.addTextChangedListener(new android.text.TextWatcher(){public void beforeTextChanged(CharSequence s,int start,int count,int after){}public void onTextChanged(CharSequence s,int start,int before,int count){changes[0]++;}public void afterTextChanged(android.text.Editable value){}});
+        touch.inject(RhActions.obj("gesture","pinch","factor",1.5));assertEquals("Hidden zoom must not rewrite the prepared label",0,changes[0]);toggle();assertSame(label,findText(game.findViewById(android.R.id.content),"缩放 100%"));
+        assertEquals(0,changes[0]);panel().setTab("displays");assertEquals("缩放 150%",label.getText().toString());assertEquals(1,changes[0]);panel().setTab("audio");touch.inject(RhActions.obj("gesture","pinch","factor",1.2));assertEquals(1,changes[0]);panel().setTab("displays");assertEquals("缩放 180%",label.getText().toString());assertEquals(2,changes[0]);controls.dispose();touch.resetZoom();assertEquals("Disposed controls retained the transform callback",2,changes[0]);
+    }
+    @Test public void screenTransformFeedbackStaysWithItsControlsAndClearsAfterANewGesture()throws Exception{
+        create(false);toggle();panel().setTab("displays");
+        controls.perform("stream.pan.toggle",RhActions.obj());assertEquals("displays",controls.state().getJSONObject("controlAction").getString("group"));
+        controls.perform("stream.pan.toggle",RhActions.obj());controls.perform("stream.zoom.reset",RhActions.obj());
+        assertEquals("displays",controls.state().getJSONObject("controlAction").getString("group"));assertNotNull(findText(game.findViewById(android.R.id.content),"缩放已还原"));
+        controls.perform("input.gesture",RhActions.obj("gesture","pinch","factor",1.25));
+        assertEquals("",controls.state().getJSONObject("controlAction").getString("message"));assertNull(findText(game.findViewById(android.R.id.content),"缩放已还原"));assertNotNull(findText(game.findViewById(android.R.id.content),"缩放 125%"));
     }
     View findText(View view,String text){if(view instanceof TextView&&text.contentEquals(((TextView)view).getText()))return view;if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++){View found=findText(((ViewGroup)view).getChildAt(i),text);if(found!=null)return found;}return null;}
     void press(int code,int modifiers){key(KeyEvent.ACTION_DOWN,code,modifiers);key(KeyEvent.ACTION_UP,code,modifiers);Shadows.shadowOf(Looper.getMainLooper()).idle();}
     @Test public void scrollModeSwitchAndApiStayInSyncAndPanExitsTheMode()throws Exception{create(false);toggle();Button control=(Button)button("滚动模式");control.performClick();assertTrue(controls.state().getBoolean("scrollMode"));controls.perform("stream.scroll.set",RhActions.obj("enabled",true));assertTrue(controls.state().getBoolean("scrollMode"));controls.perform("stream.pan.toggle",RhActions.obj());assertFalse(controls.state().getBoolean("scrollMode"));assertTrue(controls.state().getBoolean("pan"));assertFalse(((android.widget.Switch)control).isChecked());controls.perform("stream.scroll.set",RhActions.obj("enabled",true));assertFalse(controls.state().getBoolean("pan"));assertTrue(((android.widget.Switch)control).isChecked());}
+    @Test public void sessionSwitchEnterUpdatesTheSameModelAndNeverReachesTheRemoteKeyboard()throws Exception{
+        for(boolean dark:new boolean[]{false,true}){
+            create(dark);toggle();Switch scroll=(Switch)button("滚动模式");assertTrue(scroll.isFocusable());assertTrue(scroll.isClickable());assertTrue(scroll.requestFocusFromTouch());
+            press(KeyEvent.KEYCODE_ENTER,0);assertTrue(scroll.isChecked());assertTrue(controls.state().getBoolean("scrollMode"));
+            press(KeyEvent.KEYCODE_ENTER,0);assertFalse(scroll.isChecked());assertFalse(controls.state().getBoolean("scrollMode"));
+            controls.perform("stream.scroll.set",RhActions.obj("enabled",true));assertTrue(scroll.isChecked());assertTrue(scroll.hasFocus());
+            assertTrue("Local switch keys reached the remote",((KeyProbeGame)game).remoteKeys.isEmpty());controls.dispose();controls=null;
+        }
+    }
     @Test public void tabAndDirectionNavigationStayInsideLocalControlsAndEnterUsesTheirAction()throws Exception{
         create(false);toggle();assertTrue(button("操作").requestFocusFromTouch());
         press(KeyEvent.KEYCODE_TAB,0);assertTrue("Tab should focus the next category",button("屏幕").hasFocus());
@@ -119,7 +170,7 @@ public class RhSessionMenuTest {
         press(KeyEvent.KEYCODE_A,0);assertEquals("Keys owned by controls must not reach the remote keyboard",java.util.Collections.emptyList(),((KeyProbeGame)game).remoteKeys);
     }
     @Test public void openingControlsTakesLocalFocusAndCollapsingRestoresTheVideo()throws Exception{
-        create(false);assertTrue("Initial video focus",game.findViewById(R.id.surfaceView).hasFocus());toggle();assertTrue("Opening focuses the handle",button("收起").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue("Tab focuses Disconnect",button("断开").hasFocus());toggle();assertTrue("Closing restores video focus",game.findViewById(R.id.surfaceView).hasFocus());assertTrue("No remote calls: "+((KeyProbeGame)game).remoteKeys,((KeyProbeGame)game).remoteKeys.isEmpty());
+        create(false);assertTrue("Initial video focus",game.findViewById(R.id.surfaceView).hasFocus());toggle();assertTrue("Opening focuses the handle",button("收起").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue("Tab focuses the first header control",button("悬浮键盘").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue("Tab continues to Disconnect",button("断开").hasFocus());toggle();assertTrue("Closing restores video focus",game.findViewById(R.id.surfaceView).hasFocus());assertTrue("No remote calls: "+((KeyProbeGame)game).remoteKeys,((KeyProbeGame)game).remoteKeys.isEmpty());
     }
     @Test public void aLocalKeyReleaseRemainsLocalAfterThePanelCloses()throws Exception{
         create(false);toggle();assertTrue(button("操作").requestFocusFromTouch());assertTrue(key(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_TAB,0));
@@ -134,8 +185,10 @@ public class RhSessionMenuTest {
     }
     @Test public void tabWrapsAndSkipsDisabledAndHiddenControls()throws Exception{
         create(false);toggle();assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("统计：关").hasFocus());
-        button("统计：关").setEnabled(false);assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("滚动模式").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
-        button("滚动模式").setEnabled(false);press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("还原缩放").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
+        button("统计：关").setEnabled(false);assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("点击与滚动").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
+        button("点击与滚动").setEnabled(false);press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("滚动模式").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
+        button("滚动模式").setEnabled(false);press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("Ctrl+Alt+Delete").hasFocus());assertFalse(game.findViewById(android.R.id.content).findViewWithTag("stream.zoom.reset").isShown());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
+        button("悬浮键盘").setEnabled(false);press(KeyEvent.KEYCODE_TAB,0);assertTrue("Disabled header switch is skipped",button("断开").hasFocus());assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
     }
     @Test public void escapeCollapsesControlsWithoutOpeningExitOrSendingARemoteEscape()throws Exception{
         create(false);toggle();assertTrue(button("操作").requestFocusFromTouch());assertTrue(key(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_ESCAPE,0));assertTrue(controls.state().getBoolean("controls"));assertTrue(key(KeyEvent.ACTION_UP,KeyEvent.KEYCODE_ESCAPE,0));assertFalse(controls.state().getBoolean("controls"));assertFalse(controls.state().getBoolean("exitPrompt"));assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
@@ -191,5 +244,26 @@ public class RhSessionMenuTest {
         escape(oldMenu);assertTrue("Old Escape closed the new menu",currentMenu.isShowing());oldMenu.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();oldMenu.cancel();Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(currentMenu.isShowing());assertEquals("shortcuts",controls.state().getString("streamMenu"));escape(currentMenu);
         controls.perform("stream.exit.request",RhActions.obj());AlertDialog oldExit=dialog("exitDialog");controls.perform("stream.exit.resolve",RhActions.obj("choice","stay"));controls.perform("stream.exit.request",RhActions.obj());AlertDialog currentExit=dialog("exitDialog");
         escape(oldExit);assertTrue("Old Escape resolved the new exit decision",currentExit.isShowing());oldExit.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();oldExit.cancel();Shadows.shadowOf(Looper.getMainLooper()).idle();assertTrue(currentExit.isShowing());assertTrue(controls.state().getBoolean("exitPrompt"));currentExit.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();Shadows.shadowOf(Looper.getMainLooper()).idle();assertFalse(controls.state().getBoolean("exitPrompt"));assertTrue(controls.state().getBoolean("connected"));assertFalse(game.isFinishing());
+    }
+    @Test public void callbacksFromAnOlderControllerCannotOperateItsReplacementBeforeDisposal()throws Exception{
+        create(false);toggle();View oldMode=button("直接点击");java.util.List<String> received=new java.util.ArrayList<>();RhActions.Target replacement=new RhActions.Target(){public org.json.JSONObject perform(String id,org.json.JSONObject args){received.add(id);return RhActions.obj("accepted",true);}public org.json.JSONObject state(){return RhActions.obj("connected",true,"firstFrame",true);}};
+        assertTrue(RhActions.attachStream(replacement));
+        try{oldMode.performClick();assertTrue("Old controller reached the replacement: "+received,received.isEmpty());RhActions.click("stream.controls.toggle",RhActions.obj());assertEquals(java.util.Collections.singletonList("stream.controls.toggle"),received);}
+        finally{RhActions.detachStream(replacement);}
+    }
+    @Test public void clickScrollSwitchAndCatalogActionUseTheRealSessionController()throws Exception{
+        create(false);toggle();assertTrue(RhActions.dispatch("stream.click-scroll.set",RhActions.obj("enabled",true)).getBoolean("ok"));
+        assertTrue(controls.state().getBoolean("clickScrollMode"));assertFalse(controls.state().getBoolean("scrollMode"));assertFalse(controls.state().getBoolean("trackpad"));
+        android.widget.Switch choice=game.findViewById(android.R.id.content).findViewWithTag("stream.click-scroll.set");assertNotNull(choice);assertTrue(choice.isChecked());
+        choice.requestRectangleOnScreen(new android.graphics.Rect(0,0,choice.getWidth(),choice.getHeight()),true);layout();choice.performClick();Shadows.shadowOf(Looper.getMainLooper()).idle();
+        assertFalse(controls.state().getBoolean("clickScrollMode"));assertFalse(choice.isChecked());assertEquals("stream.click-scroll.set",controls.state().getJSONObject("controlAction").getString("action"));
+        assertTrue(RhActions.dispatch("stream.click-scroll.set",RhActions.obj("enabled",true)).getBoolean("ok"));
+        assertTrue(RhActions.dispatch("stream.scroll.set",RhActions.obj("enabled",true)).getBoolean("ok"));assertFalse(controls.state().getBoolean("clickScrollMode"));assertTrue(controls.state().getBoolean("scrollMode"));assertFalse(choice.isChecked());
+    }
+    @Test public void clickScrollCannotChangeDuringAnotherOperationOrBeforeConnection()throws Exception{
+        create(false);Field busy=RhStreamControls.class.getDeclaredField("displayBusy");busy.setAccessible(true);busy.setBoolean(controls,true);
+        assertFalse(RhActions.dispatch("stream.click-scroll.set",RhActions.obj("enabled",true)).getBoolean("ok"));assertFalse(controls.state().getBoolean("clickScrollMode"));
+        busy.setBoolean(controls,false);Field connected=RhStreamControls.class.getDeclaredField("connected");connected.setAccessible(true);connected.setBoolean(controls,false);
+        assertFalse(RhActions.dispatch("stream.click-scroll.set",RhActions.obj("enabled",true)).getBoolean("ok"));assertFalse(controls.state().getBoolean("clickScrollMode"));
     }
 }

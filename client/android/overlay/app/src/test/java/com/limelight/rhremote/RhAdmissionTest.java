@@ -46,6 +46,7 @@ public class RhAdmissionTest {
     boolean discoveryPaused;int discoveryResumes;
     boolean transferred;String result;CountDownLatch release;
     String launchFailure="";
+    AtomicInteger windowReads=new AtomicInteger(),windowPreparations=new AtomicInteger();
     RhActions.Target stream=new RhActions.Target(){public JSONObject state(){return RhActions.obj();}public JSONObject perform(String id,JSONObject args){return RhActions.obj();}};
     @Before public void setup(){
         Transport.stops=0;Transport.fail=false;
@@ -67,6 +68,11 @@ public class RhAdmissionTest {
         });
     }
     private void run(){queued.removeFirst().run();idle();}
+    @Test public void readOnlyAdmissionCleansUpWithoutWaitingForAGameHandoff()throws Exception{
+        operation=make();operation.start(op->()->{try{op.completeRead();}catch(IOException error){throw new RuntimeException(error);}});run();
+        assertTrue(RhActions.hasStream());assertEquals(0,finishes.get());assertEquals("cleaning",operation.state().getString("phase"));run();
+        assertFalse(RhActions.hasStream());assertFalse(transferred);assertEquals(1,finishes.get());assertEquals("",RhActions.lastConnectionError());Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(16));assertEquals(1,finishes.get());assertEquals("",RhActions.lastConnectionError());
+    }
     private void navigationViews(View view,boolean locked){if(view.getTag() instanceof String&&((String)view.getTag()).startsWith("nav:")){assertEquals(!locked,view.isEnabled());assertEquals(!locked,view.isFocusable());assertEquals(locked?.45f:1f,view.getAlpha(),.001f);}if(view instanceof ViewGroup)for(int i=0;i<((ViewGroup)view).getChildCount();i++)navigationViews(((ViewGroup)view).getChildAt(i),locked);}
     private void rejectNew(){
         try{make().start(op->()->{});fail("Previous task must keep its reservation");}catch(IllegalStateException expected){}
@@ -148,6 +154,8 @@ public class RhAdmissionTest {
         public Runnable prepareConnect(ComputerDetails d,RhAdmission op)throws Exception{
             try(RhAdmission.Watch request=op.watch(()->{})){entered.countDown();if(!release.await(3,TimeUnit.SECONDS))throw new IOException("test gate timed out");if(!launchFailure.isEmpty())throw new IOException(launchFailure);return ()->launches.incrementAndGet();}
         }
+        public JSONObject windows(ComputerDetails d,RhAdmission op){windowReads.incrementAndGet();return RhActions.obj("supported",true,"windows",new org.json.JSONArray().put(RhActions.obj("id",RhWindowsTest.SOURCE,"title","Editor","application","editor.exe","width",1200,"height",800,"state","ready","available",true)));}
+        public Runnable prepareWindowConnect(ComputerDetails d,RhAdmission op,JSONObject window)throws Exception{windowPreparations.incrementAndGet();assertEquals(RhWindowsTest.SOURCE,window.getString("id"));throw new IOException("fixture window connection failure");}
     };}
     private Button button(View view,String text){
         if(view instanceof Button&&((Button)view).getText().toString().equals(text))return (Button)view;
@@ -157,6 +165,38 @@ public class RhAdmissionTest {
     private void awaitIdle()throws Exception{
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
         do{idle();if(!RhActions.hasStream())return;Thread.sleep(10);}while(System.nanoTime()<end);fail("Admission did not finish");
+    }
+    @Test public void windowPickerReadDoesNotLaunchAStreamAndManualRetryKeepsTheWindow()throws Exception{
+        release=new CountDownLatch(0);home=new RhHome(activity,callbacks(new CountDownLatch(0)));home.update(device());
+        assertTrue(RhActions.dispatch("device.windows.open",RhActions.obj("uuid","host")).getBoolean("ok"));awaitIdle();assertEquals(1,windowReads.get());assertEquals(0,launches.get());assertTrue(home.state().getJSONObject("windows").getBoolean("open"));assertEquals("",RhActions.lastConnectionError());
+        assertTrue(RhActions.dispatch("device.window.connect",RhActions.obj("uuid","host","source",RhWindowsTest.SOURCE)).getBoolean("ok"));awaitIdle();assertEquals(1,windowPreparations.get());assertEquals("failed",home.state().getJSONObject("connection").getString("phase"));assertEquals(RhWindowsTest.SOURCE,home.state().getJSONObject("connection").getJSONObject("window").getString("id"));
+        assertTrue(RhActions.dispatch("connection.retry",RhActions.obj()).getBoolean("ok"));awaitIdle();assertEquals(2,windowPreparations.get());assertEquals(0,launches.get());home.dispose();
+    }
+    @Test public void homeConnectionApiCannotBypassAnUnresolvedIdentityFailure()throws Exception{
+        for(String outcome:new String[]{"auth_rejected","certificate_mismatch","unpaired"}){
+            release=new CountDownLatch(1);CountDownLatch entered=new CountDownLatch(1);home=new RhHome(activity,callbacks(entered));ComputerDetails target=device();RhShared.capture(activity,java.util.Collections.singleton(target));
+            JSONObject report=RhDeviceCheck.report(target.uuid,target.uuid,"https",true,outcome,System.nanoTime());report.put("phase","server_info");report.put("requestIntent",RhDeviceCheck.intent(activity,RhShared.read(activity),target));
+            java.util.Map<String,JSONObject> checks=org.robolectric.util.ReflectionHelpers.getField(RhDiagnosticWork.shared(activity),"checks");checks.put(target.uuid,report);home.update(target);
+            assertNotNull(button(activity.getWindow().getDecorView(),"重新配对"));assertFalse(home.state().getJSONArray("devices").getJSONObject(0).getBoolean("canConnect"));
+            JSONObject response=RhActions.dispatch("device.connect",RhActions.obj("uuid",target.uuid));assertFalse("Connection API bypassed "+outcome+": "+response,response.getBoolean("ok"));assertFalse(RhActions.hasStream());assertEquals(1,entered.getCount());home.dispose();
+        }
+    }
+    @Test public void homePairApiWaitsForNewNetworkEvidence()throws Exception{
+        release=new CountDownLatch(1);CountDownLatch entered=new CountDownLatch(1);home=new RhHome(activity,callbacks(entered));ComputerDetails target=device();RhShared.capture(activity,java.util.Collections.singleton(target));
+        android.net.Network first=org.robolectric.util.ReflectionHelpers.callConstructor(android.net.Network.class,org.robolectric.util.ReflectionHelpers.ClassParameter.from(int.class,201));
+        android.net.Network second=org.robolectric.util.ReflectionHelpers.callConstructor(android.net.Network.class,org.robolectric.util.ReflectionHelpers.ClassParameter.from(int.class,202));RhNetworkObservation.available(first);
+        JSONObject report=RhDeviceCheck.report(target.uuid,target.uuid,"https",true,"certificate_mismatch",System.nanoTime());report.put("phase","server_info");report.put("requestIntent",RhDeviceCheck.intent(activity,RhShared.read(activity),target));
+        java.util.Map<String,JSONObject> checks=org.robolectric.util.ReflectionHelpers.getField(RhDiagnosticWork.shared(activity),"checks");checks.put(target.uuid,report);RhNetworkObservation.available(second);target.state=ComputerDetails.State.UNKNOWN;home.update(target);
+        assertNotNull(button(activity.getWindow().getDecorView(),"检查连接"));assertEquals("device.check",home.state().getJSONArray("devices").getJSONObject(0).getString("primaryAction"));
+        for(String id:new String[]{"device.pair","device.connect"})assertFalse("API skipped network recheck: "+id,RhActions.dispatch(id,RhActions.obj("uuid",target.uuid,"pin","1234")).getBoolean("ok"));
+        assertFalse(RhActions.hasStream());assertEquals(1,entered.getCount());
+    }
+    @Test public void homeOfflineRepairUsesCheckAndCannotStartPairingThroughTheApi()throws Exception{
+        release=new CountDownLatch(1);CountDownLatch entered=new CountDownLatch(1);home=new RhHome(activity,callbacks(entered));ComputerDetails target=device();target.state=ComputerDetails.State.OFFLINE;RhShared.capture(activity,java.util.Collections.singleton(target));
+        JSONObject report=RhDeviceCheck.report(target.uuid,target.uuid,"https",true,"auth_rejected",System.nanoTime());report.put("phase","server_info");report.put("reachabilityCurrent",false);report.put("requestIntent",RhDeviceCheck.intent(activity,RhShared.read(activity),target));
+        java.util.Map<String,JSONObject> checks=org.robolectric.util.ReflectionHelpers.getField(RhDiagnosticWork.shared(activity),"checks");checks.put(target.uuid,report);home.update(target);
+        String primary=home.state().getJSONArray("devices").getJSONObject(0).getString("primaryAction");JSONObject response=RhActions.dispatch("device.pair",RhActions.obj("uuid",target.uuid,"pin","1234"));
+        assertFalse("Offline repair API started "+primary+": "+response,response.getBoolean("ok"));assertEquals("device.check",primary);assertNotNull(button(activity.getWindow().getDecorView(),"检查连接"));assertFalse(RhActions.hasStream());assertEquals(1,entered.getCount());
     }
     @Test public void homeFailureHasOneRetryActionAndKeepsDeviceQueryAndProfiles()throws Exception{
         release=new CountDownLatch(1);CountDownLatch entered=new CountDownLatch(1);launchFailure="certificate mismatch";
@@ -206,8 +246,23 @@ public class RhAdmissionTest {
         release=new CountDownLatch(0);home=new RhHome(activity,callbacks(new CountDownLatch(0)));home.update(device());
         assertTrue(RhActions.dispatch("device.pair",RhActions.obj("uuid","host","pin","1234")).getBoolean("ok"));
         long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);do{idle();if(home.state().getBoolean("pairing"))break;Thread.sleep(10);}while(System.nanoTime()<end);
-        assertTrue(home.state().getBoolean("pairing"));assertTrue(RhActions.dispatch("pair.cancel",RhActions.obj()).getBoolean("ok"));assertEquals(1,pairCancels.get());
+        assertTrue(home.state().getBoolean("pairing"));assertEquals("pairing",home.state().getJSONObject("connection").getString("phase"));assertEquals("等待确认配对",home.state().getJSONObject("connection").getString("title"));assertEquals("pair",home.state().getString("page"));
+        for(String id:new String[]{"device.connect","device.pair","updates.install","device.network.diagnose"}){
+            JSONObject response=RhActions.dispatch(id,RhActions.obj("uuid","host"));assertFalse(response.toString(),response.getBoolean("ok"));assertEquals("正在配对，请先完成或取消配对",response.getString("error"));
+        }
+        assertTrue(RhActions.dispatch("pair.cancel",RhActions.obj()).getBoolean("ok"));assertEquals(1,pairCancels.get());
+        assertEquals("cancelling",home.state().getJSONObject("connection").getString("phase"));assertEquals("正在清理，请稍候",RhActions.dispatch("device.connect",RhActions.obj("uuid","host")).getString("error"));
         assertTrue(RhActions.hasStream());home.pairFinished(false,"已取消配对");awaitIdle();assertEquals(0,launches.get());
+    }
+    @Test public void blockedActionsIdentifyPreparationAndCleanupInsteadOfAnActiveStream()throws Exception{
+        RhActions.initialize(activity,stream);operation=make();operation.start(op->launches::incrementAndGet);
+        for(String id:new String[]{"device.connect","device.pair","updates.install","device.network.diagnose"}){
+            JSONObject response=RhActions.dispatch(id,RhActions.obj());assertFalse(response.toString(),response.getBoolean("ok"));assertEquals("正在连接，请先完成或取消当前连接",response.getString("error"));
+        }
+        operation.cancel();run();Transport.fail=true;run();
+        assertEquals("连接清理未完成，请先重试取消",RhActions.dispatch("device.connect",RhActions.obj()).getString("error"));assertTrue(RhActions.hasStream());assertEquals(0,launches.get());
+        Transport.fail=false;operation.cancel();run();assertFalse(RhActions.hasStream());
+        assertTrue(RhActions.attachStream(stream));assertEquals("请先断开当前连接",RhActions.dispatch("device.connect",RhActions.obj()).getString("error"));
     }
     @Test public void busySyncAndUpdateWorkersCannotQueueTheConnectionBehindDownloads()throws Exception{
         java.util.concurrent.ExecutorService background=org.robolectric.util.ReflectionHelpers.getStaticField(RhHome.class,"NETWORK");

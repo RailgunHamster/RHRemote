@@ -159,9 +159,40 @@ mod region {
         Ok(json!({"applied":true,"mode":"window_region","key":key,"points":points}))
     }
 
+    pub(super) fn keyboard(hwnd:HWND,scale:f32,keys:&[crate::floating_keyboard::Key],previous:&Value)->Result<Value,String>{
+        let mut pid=0;unsafe{GetWindowThreadProcessId(hwnd,Some(&mut pid));}if pid!=std::process::id(){return Err("Keyboard window is not owned by this UI".into());}
+        if !scale.is_finite()||scale<=0.||keys.is_empty(){return Err("Invalid keyboard geometry".into());}
+        let(mut client,mut window,mut origin)=(RECT::default(),RECT::default(),POINT::default());unsafe{GetClientRect(hwnd,&mut client).map_err(|e|e.to_string())?;GetWindowRect(hwnd,&mut window).map_err(|e|e.to_string())?;if !ClientToScreen(hwnd,&mut origin).as_bool(){return Err("Cannot locate keyboard window".into());}}
+        let(x,y)=(origin.x-window.left,origin.y-window.top);let mut rects=vec![];
+        for key in keys{let r=((key.x*scale).round()as i32,(key.y*scale).round()as i32,((key.x+key.width)*scale).round()as i32,((key.y+key.height)*scale).round()as i32);if r.0<0||r.1<0||r.2>client.right||r.3>client.bottom||r.2<=r.0||r.3<=r.1{return Err("Keyboard key escaped its viewport".into());}rects.push(r);}
+        let fingerprint=json!({"hwnd":format!("{}",hwnd.0 as usize),"scale":scale,"offsetX":x,"offsetY":y,"rects":rects});if previous["applied"]==true&&previous["key"]==fingerprint{return Ok(previous.clone());}
+        let shape=OwnedRegion::empty()?;for &(left,top,right,bottom)in&rects{let key=OwnedRegion::round(x+left,y+top,x+right,y+bottom,(10.*scale).round()as i32)?;if unsafe{CombineRgn(Some(shape.0),Some(shape.0),Some(key.0),RGN_OR)}==RGN_ERROR{return Err("Cannot combine keyboard keys".into());}}
+        if unsafe{SetWindowRgn(hwnd,Some(shape.0),true)}==0{return Err("Cannot apply keyboard region".into());}std::mem::forget(shape);
+        let actual=OwnedRegion::empty()?;if unsafe{GetWindowRgn(hwnd,actual.0)}==RGN_ERROR{return Err("Cannot read keyboard region".into());}
+        let centers=rects.iter().all(|&(l,t,r,b)|actual.contains(x+(l+r)/2,y+(t+b)/2));let center_excluded=!actual.contains(x+client.right/2,y+client.bottom/2);let corners_excluded=!actual.contains(x,y)&&!actual.contains(x+client.right-1,y+client.bottom-1);
+        if !centers||!center_excluded||!corners_excluded{return Err("Keyboard click regions do not match visible keys".into());}
+        Ok(json!({"applied":true,"mode":"key_regions","key":fingerprint,"keyCentersIncluded":centers,"centerExcluded":center_excluded,"cornersExcluded":corners_excluded}))
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
+        #[test]
+        fn floating_key_regions_round_trip_on_an_owned_hidden_native_window() {
+            use windows::core::w;
+            let hwnd=unsafe{CreateWindowExW(WINDOW_EX_STYLE::default(),w!("STATIC"),w!("RHRemote hidden region test"),WS_POPUP,0,0,840,560,None,None,None,None)}.unwrap();
+            struct Hidden(HWND);impl Drop for Hidden{fn drop(&mut self){unsafe{let _=DestroyWindow(self.0);}}}
+            let _owned=Hidden(hwnd);
+            assert!(!unsafe{IsWindowVisible(hwnd)}.as_bool());
+            for(w,h,scale)in[(840,560,1.),(360,800,1.),(960,720,2.),(320,240,1.)]{
+                unsafe{SetWindowPos(hwnd,None,0,0,w,h,SWP_NOACTIVATE|SWP_NOZORDER)}.unwrap();
+                let keys=crate::floating_keyboard::layout(w as f32/scale,h as f32/scale);
+                let value=keyboard(hwnd,scale,&keys,&Value::Null).unwrap();
+                assert_eq!(value["applied"],true);assert_eq!(value["keyCentersIncluded"],true);assert_eq!(value["centerExcluded"],true);assert_eq!(value["cornersExcluded"],true);
+                assert_eq!(keyboard(hwnd,scale,&keys,&value).unwrap(),value);
+                assert!(!unsafe{IsWindowVisible(hwnd)}.as_bool());
+            }
+        }
         #[test]
         fn expanded_toolbar_excludes_top_sides_and_retains_the_grouped_panel() {
             for scale in [1.0, 1.25, 1.5, 2.0] {
@@ -242,4 +273,9 @@ pub fn toolbar_shape(
     }
     region::apply(hwnd, scale, expanded, previous)
         .unwrap_or_else(|error| json!({"applied":false,"mode":"window_region","error":error}))
+}
+
+#[cfg(windows)]
+pub fn keyboard_shape(hwnd:windows::Win32::Foundation::HWND,scale:f32,keys:&[crate::floating_keyboard::Key],previous:&Value)->Value{
+    region::keyboard(hwnd,scale,keys,previous).unwrap_or_else(|error|json!({"applied":false,"mode":"key_regions","error":error}))
 }

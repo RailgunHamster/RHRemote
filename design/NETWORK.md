@@ -43,6 +43,10 @@ Windows 可以从本机 Tailscale 的节点列表发现名称完全匹配的候�
 
 `device.network.diagnose` 可传入一次性的 `address` / `addresses`，用于验证备用地址，无需修改设备保存的地址。诊断使用设置页当前草稿的网络选择；正常连接使用已保存的参数。Windows 运行主机端诊断前需断开串流。
 
+Android 本地 preview.149 同样要求诊断与串流互斥，并固定开始时的完整地址及配置；可通过 `device.network.cancel` 取消，等待清理结束后重试。结果摘要位于按钮上方，详细记录由 `device.network.details.toggle` 展开，离开当前页后仍可取消任务。[状态、取消及平台性能对照](ANDROID-DIAGNOSTIC-CANCELLATION-20261031.md)
+
+Windows 本地 preview.150 的诊断也改为独立、可取消的任务，开始接口立即返回接受状态，后续见主状态 `diagnostics`。普通导航不再等诊断网络 I/O，主机检查和通道清理完成前仍禁止并发连接；清理失败可显式重试。`network.state` 继续提供路径观察，不把诊断 UDP 或端口可达当作已显示视频。[原生资源、接口和范围](WINDOWS-DIAGNOSTIC-TASK-20261031.md)
+
 统一主机服务新增接口，均要求已有 Sunshine 配对证书进行双向 TLS：
 
 - `GET /v1/network`：返回本机 Tailscale 地址与运行状态，不返回令牌、节点私钥或完整状态文件。
