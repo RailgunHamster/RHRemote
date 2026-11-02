@@ -54,6 +54,9 @@ mod action_queue;
 mod device_probe;
 #[cfg(test)]
 mod form_tests;
+#[cfg(all(test,windows))]
+#[path="../../../vendor/i-slint-backend-winit/renderer/layered_bitmap.rs"]
+mod keyboard_bitmap;
 #[cfg(test)]
 mod sync_ui_tests;
 #[cfg(test)]
@@ -445,7 +448,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 "main"=>preview_capture::capture(ui.window(),&preview,json!({"page":ui.get_page().as_str(),"settingsTab":ui.get_settings_tab().as_str(),"profileTab":ui.get_profile_tab().as_str()})),
                 "toolbar"=>toolbar.as_ref().ok_or_else(||"控制栏不可用".to_string()).and_then(|t|preview_capture::capture(t.window(),&preview.with_file_name("toolbar-preview.png"),json!({"controlsTab":t.get_controls_tab().as_str()}))),
                 "picker"=>picker.as_ref().ok_or_else(||"选择列表不可用".to_string()).and_then(|p|preview_capture::capture(p.window(),&preview.with_file_name("picker-preview.png"),json!({"menu":p.get_kind().as_str()}))),
-                "keyboard"=>keyboard.as_ref().filter(|k|k.window().is_visible()).ok_or_else(||"悬浮键盘未显示".to_string()).and_then(|k|preview_capture::capture(k.window(),&preview.with_file_name("keyboard-preview.png"),json!({"alpha":166}))),
+                "keyboard"=>keyboard.as_ref().filter(|k|k.window().is_visible()).ok_or_else(||"悬浮键盘未显示".to_string()).and_then(|k|preview_capture::capture(k.window(),&preview.with_file_name("keyboard-preview.png"),json!({"backgroundAlpha":80,"contrast":"dual-outline","backgroundSampling":false}))),
                 _=>Err("未知截图窗口".into()),
             };
             view.preview_complete(&request,result);

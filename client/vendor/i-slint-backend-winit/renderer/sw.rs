@@ -16,9 +16,14 @@ use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 
 use super::WinitCompatibleRenderer;
+#[cfg(windows)]
+#[path = "layered.rs"]
+mod layered;
 
 pub struct WinitSoftwareRenderer {
     renderer: SoftwareRenderer,
+    #[cfg(windows)]
+    layered: RefCell<layered::Surface>,
     _context: RefCell<Option<softbuffer::Context<Arc<winit::window::Window>>>>,
     surface: RefCell<
         Option<softbuffer::Surface<Arc<winit::window::Window>, Arc<winit::window::Window>>>,
@@ -76,6 +81,8 @@ impl WinitSoftwareRenderer {
     ) -> Result<Box<dyn WinitCompatibleRenderer>, PlatformError> {
         Ok(Box::new(Self {
             renderer: SoftwareRenderer::new(),
+            #[cfg(windows)]
+            layered: RefCell::new(layered::Surface::default()),
             _context: RefCell::new(None),
             surface: RefCell::new(None),
         }))
@@ -86,7 +93,7 @@ impl super::WinitCompatibleRenderer for WinitSoftwareRenderer {
     fn render(&self, window: &i_slint_core::api::Window) -> Result<DrawOutcome, PlatformError> {
         let size = window.size();
 
-        let Some((width, height)) = size.width.try_into().ok().zip(size.height.try_into().ok())
+        let Some((width, height)) = NonZeroU32::new(size.width).zip(NonZeroU32::new(size.height))
         else {
             // Nothing to render
             return Ok(DrawOutcome::Success);
@@ -99,6 +106,12 @@ impl super::WinitCompatibleRenderer for WinitSoftwareRenderer {
         };
 
         let winit_window = surface.window().clone();
+
+        #[cfg(windows)]
+        if let Some(hwnd) = layered::target(&winit_window) {
+            self.layered.borrow_mut().render(&self.renderer,&winit_window,hwnd,width.get(),height.get())?;
+            return Ok(DrawOutcome::Success);
+        }
 
         surface
             .resize(width, height)
@@ -207,6 +220,8 @@ impl super::WinitCompatibleRenderer for WinitSoftwareRenderer {
     }
 
     fn suspend(&self) -> Result<(), PlatformError> {
+        #[cfg(windows)]
+        { *self.layered.borrow_mut() = layered::Surface::default(); }
         drop(self.surface.borrow_mut().take());
         drop(self._context.borrow_mut().take());
         Ok(())

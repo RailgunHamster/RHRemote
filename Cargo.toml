@@ -16,7 +16,7 @@ serde_json = "1"
 debug = 1
 
 [patch.crates-io]
-# Slint 1.18.1 plus the upstream Windows repaint fix, PR #13568.
+# Slint 1.18.1 plus PR #13568 and an opt-in per-pixel keyboard presenter.
 i-slint-backend-winit = { path = "client/vendor/i-slint-backend-winit" }
 # Slint 1.18.1 plus the upstream nested-clip Tab traversal fix.
 i-slint-core = { path = "client/vendor/i-slint-core" }

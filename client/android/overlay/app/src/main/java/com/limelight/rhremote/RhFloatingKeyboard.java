@@ -23,7 +23,7 @@ final class RhFloatingKeyboard {
     RhFloatingKeyboard(Context context,ViewGroup parent,Actions actions){
         this.parent=parent;buttonVisible=!context.getSharedPreferences("rhremote.global",0).getBoolean("hideKeyboardButton",false);
         layer=new FrameLayout(context);layer.setTag("floating-keyboard");layer.setClickable(false);layer.setFocusable(false);
-        simpleLayer=new FrameLayout(context);simpleLayer.setTag("simple-floating-keyboard");table=new FrameLayout(context);table.setBackground(background(RhShared.dark(context)?"#8c151b29":"#8cecf1fb"));
+        simpleLayer=new FrameLayout(context);simpleLayer.setTag("simple-floating-keyboard");table=new FrameLayout(context);
         try{catalog=RhKeyboard.catalog(context);}catch(Exception error){throw new IllegalStateException("Keyboard catalog unavailable",error);}
         for(int i=0;i<catalog.length();i++){
             JSONObject key=catalog.optJSONObject(i);String id=key.optString("id");Button button=button(context,key.optString("label"),key.optString("description"));button.setTag("floating-key:"+id);
@@ -45,11 +45,30 @@ final class RhFloatingKeyboard {
     }
     private boolean canUse(View view){return !disposed&&ready&&!obscured&&view.isEnabled()&&RhViewOrigin.visibleWithin(parent,view)&&view.getLocalVisibleRect(new Rect());}
     private int dp(float value){return Math.round(value*layer.getResources().getDisplayMetrics().density);}
-    private GradientDrawable background(String color){GradientDrawable value=new GradientDrawable();value.setColor(Color.parseColor(color));value.setCornerRadius(dp(8));value.setStroke(dp(1),Color.parseColor(RhShared.dark(layer.getContext())?"#737a8eae":"#7397a8cd"));return value;}
+    // No sheet behind the keys: gaps expose the unmodified remote image. Each
+    // translucent key has opposing edges so one remains visible on either tone.
+    private Drawable background(String color){return new Drawable(){
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);private int opacity=255;
+        private void color(int value){paint.setColor(value);paint.setAlpha(Color.alpha(value)*opacity/255);}
+        @Override public void draw(Canvas canvas){RectF rect=new RectF(getBounds());float pixel=layer.getResources().getDisplayMetrics().density;rect.inset(pixel*.5f,pixel*.5f);paint.setStyle(Paint.Style.FILL);color(Color.parseColor(color));canvas.drawRoundRect(rect,dp(6),dp(6),paint);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(pixel);color(0xe6101724);canvas.drawRoundRect(rect,dp(6),dp(6),paint);rect.inset(pixel,pixel);color(0xb8ffffff);canvas.drawRoundRect(rect,dp(5),dp(5),paint);}
+        @Override public void setAlpha(int value){opacity=value;invalidateSelf();}
+        @Override public void setColorFilter(ColorFilter value){paint.setColorFilter(value);invalidateSelf();}
+        @Override public int getOpacity(){return PixelFormat.TRANSLUCENT;}
+    };}
+    private final class ContrastButton extends Button{
+        ContrastButton(Context context){super(context);}
+        @Override protected void onDraw(Canvas canvas){
+            android.text.Layout text=getLayout();if(text!=null){
+                android.text.TextPaint paint=getPaint();int color=paint.getColor();Paint.Style style=paint.getStyle();float stroke=paint.getStrokeWidth();
+                int save=canvas.save();canvas.translate(getCompoundPaddingLeft()-getScrollX(),getExtendedPaddingTop()+(getHeight()-getExtendedPaddingTop()-getExtendedPaddingBottom()-text.getHeight())/2f-getScrollY());
+                paint.setColor(0xff101724);paint.setStyle(Paint.Style.STROKE);paint.setStrokeWidth(dp(2));paint.setStrokeJoin(Paint.Join.ROUND);text.draw(canvas);canvas.restoreToCount(save);
+                paint.setColor(color);paint.setStyle(style);paint.setStrokeWidth(stroke);
+            }super.onDraw(canvas);
+        }
+    }
     private Button button(Context context,String label,String description){
-        Button button=new Button(context);button.setText(label);button.setContentDescription(description);button.setAllCaps(false);button.setMaxLines(1);button.setHorizontallyScrolling(false);button.setGravity(Gravity.CENTER);button.setPadding(dp(2),0,dp(2),0);button.setMinWidth(0);button.setMinimumWidth(0);button.setMinHeight(0);button.setMinimumHeight(0);button.setStateListAnimator(null);button.setElevation(0);button.setFocusable(false);button.setFocusableInTouchMode(false);button.setAutoSizeTextTypeUniformWithConfiguration(8,14,1,android.util.TypedValue.COMPLEX_UNIT_SP);
-        boolean dark=RhShared.dark(context);button.setTextColor(Color.parseColor(dark?"#eef3ff":"#263653"));
-        StateListDrawable background=new StateListDrawable();background.addState(new int[]{android.R.attr.state_selected},background(dark?"#dc4163ac":"#dcacc6ff"));background.addState(new int[]{android.R.attr.state_pressed},background(dark?"#e630405e":"#e6dce6ff"));background.addState(new int[]{},background(dark?"#a6202a3e":"#a6f6f8ff"));button.setBackground(background);return button;
+        Button button=new ContrastButton(context);button.setText(label);button.setContentDescription(description);button.setAllCaps(false);button.setMaxLines(1);button.setHorizontallyScrolling(false);button.setGravity(Gravity.CENTER);button.setPadding(dp(2),0,dp(2),0);button.setMinWidth(0);button.setMinimumWidth(0);button.setMinHeight(0);button.setMinimumHeight(0);button.setStateListAnimator(null);button.setElevation(0);button.setFocusable(false);button.setFocusableInTouchMode(false);button.setAutoSizeTextTypeUniformWithConfiguration(8,14,1,android.util.TypedValue.COMPLEX_UNIT_SP);button.setTypeface(button.getTypeface(),Typeface.BOLD);button.setTextColor(Color.WHITE);
+        StateListDrawable background=new StateListDrawable();background.addState(new int[]{android.R.attr.state_selected},background("#b0294c87"));background.addState(new int[]{android.R.attr.state_pressed},background("#c0294c87"));background.addState(new int[]{},background("#5018202e"));button.setBackground(background);return button;
     }
     boolean enabled(){return enabled;}boolean buttonVisible(){return buttonVisible;}String layoutName(){return simple?"simple":"full";}
     private void configureLayout(){for(Map.Entry<String,Button> entry:keys.entrySet()){Button key=entry.getValue();FrameLayout target=simple&&SIMPLE.contains(entry.getKey())?simpleLayer:table;if(key.getParent()!=target){((ViewGroup)key.getParent()).removeView(key);target.addView(key,new FrameLayout.LayoutParams(dp(40),dp(40)));}key.setVisibility(View.VISIBLE);}}
@@ -90,7 +109,7 @@ final class RhFloatingKeyboard {
     private Rect bounds(View view){Rect r=new Rect();view.getDrawingRect(r);layer.offsetDescendantRectToMyCoords(view,r);return r;}
     JSONObject state(){JSONArray positions=new JSONArray();boolean visible=layer.getVisibility()==View.VISIBLE&&(simple?simpleLayer:vertical).getVisibility()==View.VISIBLE;
         for(Map.Entry<String,Button> entry:keys.entrySet()){Button key=entry.getValue();Rect r=bounds(key),clip=bounds(vertical);boolean showing=visible&&key.getVisibility()==View.VISIBLE&&(simple?SIMPLE.contains(entry.getKey()):Rect.intersects(r,clip));positions.put(RhActions.obj("id",entry.getKey(),"visible",showing,"selected",key.isSelected(),"x",r.left,"y",r.top,"width",r.width(),"height",r.height()));}
-        Rect r=bounds(toggle);return RhActions.obj("enabled",enabled,"layout",layoutName(),"visible",visible,"ready",ready,"buttonVisible",buttonVisible,"backgroundAlpha",166,"scrollable",table.getWidth()>horizontal.getWidth()||table.getHeight()>vertical.getHeight(),"toggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&toggle.getVisibility()==View.VISIBLE,"x",r.left,"y",r.top,"width",r.width(),"height",r.height()),"keys",positions);
+        Rect r=bounds(toggle);return RhActions.obj("enabled",enabled,"layout",layoutName(),"visible",visible,"ready",ready,"buttonVisible",buttonVisible,"backgroundAlpha",80,"contrast","dual-outline","backgroundSampling",false,"scrollable",table.getWidth()>horizontal.getWidth()||table.getHeight()>vertical.getHeight(),"toggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&toggle.getVisibility()==View.VISIBLE,"x",r.left,"y",r.top,"width",r.width(),"height",r.height()),"keys",positions);
     }
     void dispose(){if(disposed)return;disposed=true;ViewCompat.setOnApplyWindowInsetsListener(layer,null);ViewCompat.setWindowInsetsAnimationCallback(layer,null);parent.removeOnLayoutChangeListener(layoutListener);parent.removeView(layer);}
 }

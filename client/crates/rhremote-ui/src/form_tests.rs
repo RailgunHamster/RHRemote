@@ -233,6 +233,47 @@ fn ended_session_offers_reconnect_beside_its_status_and_back_at_the_top(){
 }
 
 #[test]
+fn floating_keyboard_keeps_opaque_glyphs_and_clear_gaps_over_light_dark_and_busy_images(){
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(i_slint_backend_testing::TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    let keyboard=crate::FloatingKeyboardWindow::new().unwrap();
+    keyboard.window().set_size(LogicalSize::new(1180.,780.));keyboard.show().unwrap();
+    for(simple,name)in[(false,"full"),(true,"simple")]{
+        let keys=if simple{crate::floating_keyboard::simple_layout(1180.,780.)}else{crate::floating_keyboard::layout(1180.,780.)};
+        keyboard.set_keys(crate::floating_keyboard::model(&keys));
+        for dark in [false,true]{
+            keyboard.global::<crate::Palette>().set_dark(dark);
+            let frame=keyboard.window().take_snapshot().unwrap();
+            let pixels=image::RgbaImage::from_raw(frame.width(),frame.height(),frame.as_bytes().to_vec()).unwrap();
+            assert_eq!(pixels.get_pixel(590,100)[3],0,"Unused remote area must be transparent");
+            for key in &keys{
+                let(x,y)=(key.x as u32,key.y as u32);
+                let fill=pixels.get_pixel(x+8,y+5)[3];assert!((75..=90).contains(&fill),"{} fill {fill}",key.id);
+                let mut white=0;let mut outline=0;
+                for py in y+4..y+key.height as u32-4{for px in x+3..x+key.width as u32-3{
+                    let p=pixels.get_pixel(px,py);if p[3]>=240&&p[0]>=220&&p[1]>=220&&p[2]>=220{white+=1;}if p[3]>=230&&p[0]<60&&p[1]<65&&p[2]<75{outline+=1;}
+                }}
+                // Tiny punctuation glyphs can consist entirely of antialiased
+                // edge pixels. Check solid stems on representative labels.
+                if matches!(key.id,"tab"|"enter"|"ctrl-left"){assert!(white>1,"{} has no opaque lettering",key.id);assert!(outline>1,"{} has no dark glyph outline",key.id);}
+            }
+            if !dark{if let Some(directory)=std::env::var_os("RHREMOTE_KEYBOARD_EVIDENCE"){
+                std::fs::create_dir_all(&directory).unwrap();
+                let mut comparison=image::RgbaImage::new(1180,if simple{780*3}else{350*3});
+                for background in 0..3{
+                    let mut canvas=image::RgbaImage::from_fn(1180,780,|x,y|{
+                        let rgb=match background{0=>[255,255,255],1=>[17,23,34],_=>if(x/37+y/29)%2==0{[205,225,244]}else{[60,86,118]}};
+                        let rgb=if y%32<2&&x%190<152{match background{0=>[160,170,180],1=>[105,125,155],_=>[120,145,170]}}else{rgb};image::Rgba([rgb[0],rgb[1],rgb[2],255])
+                    });
+                    image::imageops::overlay(&mut canvas,&pixels,0,0);
+                    if simple{image::imageops::replace(&mut comparison,&canvas,0,(background*780)as i64);}else{let crop=image::imageops::crop_imm(&canvas,0,430,1180,350).to_image();image::imageops::replace(&mut comparison,&crop,0,(background*350)as i64);}
+                }
+                comparison.save(std::path::PathBuf::from(directory).join(format!("keyboard-contrast-{name}-windows.png"))).unwrap();
+            }}
+        }
+    }keyboard.hide().unwrap();
+}
+
+#[test]
 fn the_single_update_action_remains_visible_when_failure_details_are_long(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("updates".into());ui.set_updates_managed(true);ui.set_update_phase("error".into());ui.set_update_status("CNB / GitHub：请求超时。".repeat(100).into());ui.set_update_primary_text("重新检查".into());
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();

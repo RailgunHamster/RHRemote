@@ -246,6 +246,8 @@ component ActionButton inherits Rectangle {
     in property <bool> subtle:false;
     in property <bool> has-icon:false;
     in property <bool> remember-focus:true;
+    // Keyboard transparency belongs to the key surface, never to its lettering.
+    in property <bool> keyboard-key:false;
     in property <image> icon;
     out property <bool> focused:key-focus.has-focus;
     callback focused-in();
@@ -255,12 +257,22 @@ component ActionButton inherits Rectangle {
     horizontal-stretch:0;
     height: 38px;
     border-radius: 8px;
-    background: root.disabled ? Palette.soft : root.primary ? (touch.has-hover ? #4666d6 : Palette.blue) : root.chosen ? Palette.soft : touch.has-hover ? Palette.soft : root.subtle ? Palette.page : Palette.surface;
+    background: root.keyboard-key ? (root.chosen ? #294c87b0 : touch.pressed ? #294c87c0 : touch.has-hover ? #18202e88 : #18202e50) : root.disabled ? Palette.soft : root.primary ? (touch.has-hover ? #4666d6 : Palette.blue) : root.chosen ? Palette.soft : touch.has-hover ? Palette.soft : root.subtle ? Palette.page : Palette.surface;
     forward-focus: key-focus;
-    border-color: key-focus.has-focus || root.chosen ? Palette.blue : Palette.line;
+    border-color: root.keyboard-key ? #101724e6 : key-focus.has-focus || root.chosen ? Palette.blue : Palette.line;
     border-width: (root.primary || root.subtle) && !key-focus.has-focus && !root.chosen ? 0px : 1px;
     if root.has-icon:Image{source:root.icon; x:12px;y:(parent.height - self.height)/2;width:16px;height:16px;colorize:root.disabled ? Palette.muted : root.primary ? white : root.chosen ? Palette.blue : Palette.ink;}
-    label := Text {x:root.has-icon ? 28px : 0px;width:parent.width - self.x;text:root.text;overflow:root.elide-text ? elide : clip;color:root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:root.font-size;}
+    if root.keyboard-key:Rectangle{x:1px;y:1px;width:parent.width - 2px;height:parent.height - 2px;border-radius:5px;border-width:1px;border-color:root.chosen ? #a8ccff : #ffffffb8;background:transparent;}
+    // Four offset glyphs work with both the software and GPU renderers. They keep
+    // an opaque dark outline even over a white document or a detailed image.
+    if root.keyboard-key:Rectangle{
+        for offset in [{x:-1,y:0},{x:1,y:0},{x:0,y:-1},{x:0,y:1}]:Text{
+            x:offset.x*1px;y:offset.y*1px;width:parent.width;height:parent.height;
+            text:root.text;color:#101724;font-size:root.font-size;font-weight:600;
+            horizontal-alignment:center;vertical-alignment:center;
+        }
+    }
+    label := Text {x:root.has-icon ? 28px : 0px;width:parent.width - self.x;text:root.text;overflow:root.elide-text ? elide : clip;color:root.keyboard-key ? (root.disabled ? #c4cad4 : white) : root.disabled ? Palette.muted : root.primary ? white : Palette.ink;horizontal-alignment:center;vertical-alignment:center;font-size:root.font-size;font-weight:root.keyboard-key ? 600 : 400;}
     // Slint 1.18.1 ignores FocusOut on disabled FocusScope items. Keep delivery
     // enabled and gate focus entry/actions so a former focus marker can clear.
     key-focus := FocusScope {focus-on-click:root.available;focus-on-tab-navigation:root.available;key-pressed(event)=>{if(root.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){root.invoke-action();}return accept;}return reject;}}
@@ -443,8 +455,8 @@ export component FloatingKeyboardWindow inherits Window {
     in property <bool> busy;
     for key in root.keys:ActionButton{
         x:key.x*1px;y:key.y*1px;width:key.width*1px;height:key.height*1px;min-width:1px;
-        text:key.label;accessible-label:key.description;action-id:key.action;argument:key.argument;chosen:key.chosen;
-        disabled:root.busy;border-radius:6px;remember-focus:false;font-size:key.width<32 ? 9px : 11px;
+        text:key.id=="backspace" ? "Backspace" : key.label;accessible-label:key.description;action-id:key.action;argument:key.argument;chosen:key.chosen;
+        disabled:root.busy;keyboard-key:true;border-radius:6px;remember-focus:false;font-size:key.width<32 ? 10px : 12px;
     }
 }
 

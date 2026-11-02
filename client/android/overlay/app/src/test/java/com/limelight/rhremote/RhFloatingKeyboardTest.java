@@ -62,6 +62,18 @@ public final class RhFloatingKeyboardTest {
         setup(840,560);keyboard.setEnabled(false);View layer=root.findViewWithTag("floating-keyboard");MotionEvent event=MotionEvent.obtain(1,1,MotionEvent.ACTION_DOWN,420,150,0);try{assertFalse(layer.dispatchTouchEvent(event));}finally{event.recycle();}
     }
     @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void opaqueOutlinedLetteringAndTranslucentKeysStayLegibleWithoutABackingSheet()throws Exception{
+        setup(1080,720);java.io.File directory=new java.io.File("build/reports/rhremote-keyboard-contrast");assertTrue(directory.isDirectory()||directory.mkdirs());
+        for(String mode:new String[]{"full","simple"}){keyboard.setLayout(mode);layout();Bitmap overlay=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);root.draw(new Canvas(overlay));
+            assertEquals(0,Color.alpha(overlay.getPixel(width/2,100)));Rect tab=bounds(key("tab"));assertEquals(80,Color.alpha(overlay.getPixel(tab.left+8,tab.top+5)));
+            int white=0,outline=0;for(int y=tab.top+4;y<tab.bottom-4;y++)for(int x=tab.left+3;x<tab.right-3;x++){int p=overlay.getPixel(x,y);if(Color.alpha(p)>=250&&Color.red(p)>=240&&Color.green(p)>=240&&Color.blue(p)>=240)white++;if(Color.alpha(p)>=250&&Color.red(p)<40&&Color.green(p)<45&&Color.blue(p)<55)outline++;}
+            assertTrue("Opaque letters missing",white>3);assertTrue("Dark glyph outline missing",outline>3);assertEquals(Color.WHITE,key("tab").getCurrentTextColor());
+            if(mode.equals("full")){View table=root.findViewWithTag("floating-key:tab");ViewGroup parent=(ViewGroup)table.getParent();Rect area=bounds(parent);assertEquals("The gap must expose the remote frame",0,Color.alpha(overlay.getPixel(area.left+2,area.top+2)));}
+            for(int background=0;background<3;background++){Bitmap image=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);Canvas canvas=new Canvas(image);canvas.drawColor(background==0?Color.WHITE:0xff111722);Paint paint=new Paint();if(background==2)for(int y=0;y<height;y+=29)for(int x=0;x<width;x+=37){paint.setColor((x/37+y/29)%2==0?0xffcde1f4:0xff3c5676);canvas.drawRect(x,y,x+37,y+29,paint);}canvas.drawBitmap(overlay,0,0,null);try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(directory,"keyboard-"+mode+"-"+background+".png"))){assertTrue(image.compress(Bitmap.CompressFormat.PNG,100,out));}image.recycle();}
+            overlay.recycle();
+        }assertEquals(80,keyboard.state().getInt("backgroundAlpha"));assertFalse(keyboard.state().getBoolean("backgroundSampling"));
+    }
+    @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     public void completeKeyboardRendersWithTranslucentSurfacesInBothOrientations()throws Exception{
         java.io.File directory=new java.io.File("build/reports/rhremote-full-keyboard");assertTrue(directory.isDirectory()||directory.mkdirs());
         for(int[] size:new int[][]{{1080,720},{360,800}}){setup(size[0],size[1]);Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);root.draw(new Canvas(bitmap));assertEquals(0,Color.alpha(bitmap.getPixel(20,100)));Rect tab=bounds(key("tab"));int alpha=Color.alpha(bitmap.getPixel(tab.left+8,tab.top+8));assertTrue("Key must be translucent: "+alpha,alpha>64&&alpha<255);try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(directory,"keyboard-"+width+"x"+height+".png"))){assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG,100,out));}bitmap.recycle();keyboard.dispose();}

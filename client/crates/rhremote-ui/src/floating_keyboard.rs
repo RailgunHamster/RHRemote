@@ -49,7 +49,7 @@ pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous
     unsafe{
         use raw_window_handle::{HasWindowHandle,RawWindowHandle};
         use slint::winit_030::WinitWindowAccessor;
-        use windows::Win32::{Foundation::{COLORREF,HWND,POINT,RECT},Graphics::Gdi::{ClientToScreen,CreateRectRgn,DeleteObject,SetWindowRgn},UI::WindowsAndMessaging::*};
+        use windows::{core::w,Win32::{Foundation::{HANDLE,HWND,POINT,RECT},Graphics::Gdi::{ClientToScreen,CreateRectRgn,DeleteObject,SetWindowRgn},UI::WindowsAndMessaging::*}};
         let Some(owner)=crate::overlay::owned_window(state)else{let _=window.hide();return json!({"visible":false,"reason":"native-window-unavailable"});};
         if IsIconic(owner).as_bool(){let _=window.hide();return json!({"visible":false,"reason":"native-minimized"});}
         if !IsWindowVisible(owner).as_bool(){let _=window.hide();return json!({"visible":false,"reason":"native-hidden"});}
@@ -73,16 +73,18 @@ pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous
         if fresh{let empty=CreateRectRgn(0,0,0,0);if empty.is_invalid()||SetWindowRgn(hwnd,Some(empty),false)==0{if !empty.is_invalid(){let _=DeleteObject(empty.into());}let _=window.hide();return json!({"visible":false,"error":"无法初始化悬浮按键区域","errorCode":"region-init","source":source});}}
         let style=GetWindowLongPtrW(hwnd,GWL_EXSTYLE);let desired=(style&!(WS_EX_APPWINDOW.0 as isize))|(WS_EX_TOOLWINDOW.0|WS_EX_NOACTIVATE.0|WS_EX_LAYERED.0)as isize;
         if style!=desired{SetWindowLongPtrW(hwnd,GWL_EXSTYLE,desired);}
-        let mut alpha=0u8;let mut alpha_flags=LAYERED_WINDOW_ATTRIBUTES_FLAGS::default();
-        let opacity=(if fresh||previous["alpha"]!=166{SetLayeredWindowAttributes(hwnd,COLORREF(0),166,LWA_ALPHA).is_ok()}else{true})
-            &&GetLayeredWindowAttributes(hwnd,None,Some(&mut alpha),Some(&mut alpha_flags)).is_ok()
-            &&alpha==166&&(alpha_flags&LWA_ALPHA)==LWA_ALPHA;
+        // Opt in only this owned keyboard to the software renderer's layered
+        // presenter. Global alpha would fade the glyphs along with the key fill.
+        // Do not call SetLayeredWindowAttributes: it disables UpdateLayeredWindow.
+        let opacity=SetPropW(hwnd,w!("RHRemote.KeyboardPerPixel"),Some(HANDLE(1usize as *mut _))).is_ok()
+            &&!GetPropW(hwnd,w!("RHRemote.KeyboardPerPixel")).is_invalid();
+        if fresh{window.window().request_redraw();}
         if previous["geometry"]!=fingerprint||fresh{window.window().set_size(slint::PhysicalSize::new(width as u32,height as u32));window.window().set_position(slint::PhysicalPosition::new(origin.x,origin.y));}
         if GetWindowLongPtrW(hwnd,GWLP_HWNDPARENT)!=owner.0 as isize{SetWindowLongPtrW(hwnd,GWLP_HWNDPARENT,owner.0 as isize);}
         if previous["geometry"]!=fingerprint||fresh{let _=SetWindowPos(hwnd,Some(HWND_TOP),origin.x,origin.y,width,height,SWP_NOACTIVATE|SWP_SHOWWINDOW|SWP_NOZORDER);}
         let shape=crate::ui_rendering::keyboard_shape(hwnd,scale,&keys,&previous["shape"]);
         if !opacity||shape["applied"]!=true{let _=window.hide();return json!({"visible":false,"error":"悬浮键盘点击区域或透明度未能设置","errorCode":"region","shape":shape,"source":source});}
-        return json!({"visible":true,"geometry":fingerprint,"shape":shape,"alpha":166,"keys":keys.iter().map(|k|json!({"id":k.id,"x":k.x,"y":k.y,"width":k.width,"height":k.height})).collect::<Vec<_>>()});
+        return json!({"visible":true,"geometry":fingerprint,"shape":shape,"alpha":255,"backgroundAlpha":80,"transparency":"per-pixel","contrast":"dual-outline","backgroundSampling":false,"keys":keys.iter().map(|k|json!({"id":k.id,"x":k.x,"y":k.y,"width":k.width,"height":k.height})).collect::<Vec<_>>()});
     }
     #[cfg(target_os = "linux")]
     {
