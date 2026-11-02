@@ -23,7 +23,7 @@ pub(crate) fn validate_update_intent(id:&str,args:&Value,state:&Value,operation:
 }
 
 pub(crate) fn update_installation_blocked(s: &crate::State) -> Option<&'static str> {
-    if s.streaming || s.connecting || s.connection.busy() || s.page == "pair" {
+    if s.streaming || s.connecting || s.connection.busy() || s.page == "pair" || s.desktop_open_requests>0 {
         Some("请先完成或断开当前远程连接")
     } else if s.diagnostics.busy {
         Some("请先完成或取消连接诊断")
@@ -107,7 +107,7 @@ impl Controller {
             update_primary_action(&s.updates)
         } else { id };
         if id == "updates.install" {
-            if let Some(reason) = update_installation_blocked(&s) { return Err(reason.into()); }
+            if let Some(reason) = update_installation_blocked(&s).or_else(||self.desktop_installation_hint()) { return Err(reason.into()); }
             // Navigation and admission are separate lock acquisitions. Recheck here
             // so a concurrent edit cannot slip between the decision and installation.
             if crate::interaction::dirty(&s) || crate::interaction::sync_dirty(&s) || crate::device_info::dirty(&s) {
@@ -152,7 +152,7 @@ impl Controller {
         };
         s.updates = result.clone();
         if preparing && result["pendingRestart"] == true {
-            if let Some(reason) = update_installation_blocked(&s) {
+            if let Some(reason) = update_installation_blocked(&s).or_else(||self.desktop_installation_hint()) {
                 result["installDeferred"] = json!(true);
                 result["deferredReason"] = json!(reason);
                 return Ok(result);
@@ -162,7 +162,7 @@ impl Controller {
             let continued = self.dispatch("updates.install", json!({"expectedIntent":intent}));
             if continued["ok"] == true { return Ok(continued["result"].clone()); }
             let current = self.state.lock().unwrap();
-            if current.updates_busy || update_installation_blocked(&current).is_some() {
+            if current.updates_busy || update_installation_blocked(&current).is_some() || self.desktop_installation_hint().is_some() {
                 let mut ready = current.updates.clone();
                 ready["installDeferred"] = json!(true);
                 return Ok(ready);
@@ -180,7 +180,7 @@ impl Controller {
             let mut s=self.state.lock().unwrap();
             if id=="proxy.state"{return Ok(s.proxy.clone());}
             if s.page!="global-settings"||s.settings_tab!="proxy"{return Err("请先打开代理设置页".into());}
-            if s.streaming||s.connecting||s.connection.busy()||s.sync_busy||s.updates_busy||s.installing_update||s.diagnostics.busy{return Err("请先结束连接、同步或更新操作，再修改代理".into());}
+            if s.streaming||s.connecting||s.connection.busy()||s.desktop_open_requests>0||s.sync_busy||s.updates_busy||s.installing_update||s.diagnostics.busy||self.desktop_installation_hint().is_some(){return Err("请先结束连接、同步或更新操作，再修改代理".into());}
             s.proxy_error.clear();
             match id {
                 "proxy.edit"=>{let key=args["key"].as_str().ok_or("代理字段缺失")?;let value=args["value"].clone();match key{"enabled"|"updates"|"sync"|"remote" if value.is_boolean()=>{},"host"|"protocol"|"port" if value.as_str().is_some_and(|s|s.len()<=253)=>{},_=>return Err("代理字段无效".into())};let mut draft=s.proxy_draft.clone().unwrap_or_else(||s.proxy.clone());draft[key]=value;s.proxy_draft=Some(draft);},

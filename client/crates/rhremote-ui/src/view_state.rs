@@ -70,6 +70,7 @@ pub(crate) fn dispatch_local_input(
 
 pub(crate) struct MainView {
     revision: u64,
+    sessions_fingerprint:String,
     profile_model: Rc<VecModel<SettingRow>>,
     profile_fingerprint: String,
     profile_control_values: Vec<(slint::SharedString, slint::SharedString, i32)>,
@@ -80,6 +81,7 @@ impl MainView {
         ui.set_profile_fields(ModelRc::from(profile_model.clone()));
         Self {
             revision: u64::MAX,
+            sessions_fingerprint:String::new(),
             profile_model,
             profile_fingerprint: String::new(),
             profile_control_values: Vec::new(),
@@ -96,7 +98,7 @@ impl MainView {
         let device_context = matches!(
             state["page"].as_str(),
             Some(_)
-        ) && state["streaming"] != true && state["connecting"] != true;
+        ) && state["streaming"] != true && state["connecting"] != true && !state["desktopSession"].is_object();
         let navigation_width = 0.0;
         let list_width = if device_context {
             if compact { 224.0 } else { 276.0 }
@@ -119,7 +121,13 @@ impl MainView {
         ui.set_update_operation(state["updates"]["operationId"].as_u64().unwrap_or(0).to_string().into());
         ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
         ui.set_update_details(state["updateDetails"] == true);
-        if next != self.revision {
+        let sessions=state["desktopSessions"]["items"].as_array();
+        let sessions_fingerprint=state["desktopSessions"].to_string();
+        let selected_session=sessions.into_iter().flatten().find(|s|s["uuid"]==state["selected"] && s["alive"]==true);
+        ui.set_selected_has_session(selected_session.is_some());
+        ui.set_selected_session_id(selected_session.and_then(|s|s["id"].as_str()).unwrap_or("").into());
+        if next != self.revision || self.sessions_fingerprint!=sessions_fingerprint {
+            self.sessions_fingerprint=sessions_fingerprint;
             apply_diagnostics(ui,state);
             ui.set_test_mode(state["statistics"]["tracing"]["enabled"] == true);
             ui.set_trace_path(
@@ -269,7 +277,9 @@ impl MainView {
                             .or(Some(d)),
                     )
                     .into(),
-                    status: if d["isSelf"] == true {
+                    status: if let Some(session)=sessions.into_iter().flatten().find(|s|s["uuid"]==d["uuid"] && s["alive"]==true) {
+                        match session["phase"].as_str(){Some("connected")=>"已连接",Some("reconnecting")=>"正在恢复连接",Some("failed")=>"连接失败",Some("ended"|"cancelled")=>"已断开",_=>"连接中…"}
+                    } else if d["isSelf"] == true {
                         "本机"
                     } else if let Some(check)=&check {check.label()
                     } else if pending.is_some_and(|ids|ids.contains(&d["uuid"])) {

@@ -3,11 +3,25 @@ use serde_json::{Value, json};
 
 pub(crate) fn extend(catalog: &mut Value) {
     let Some(rows) = catalog.as_array_mut() else { return };
-    for row in rows {
+    for row in rows.iter_mut() {
         let Some(platforms) = row["platforms"].as_array_mut() else { continue };
         if platforms.iter().any(|value| value == "windows") && !platforms.iter().any(|value| value == "linux") {
             platforms.push(json!("linux"));
         }
+    }
+}
+pub(crate) fn extend_actions(catalog:&mut Value) {
+    let Some(rows)=catalog.as_array_mut() else{return};
+    for (id,label,args) in [
+        ("session.list","读取远程窗口",json!({})),
+        ("session.state","读取指定远程窗口状态",json!({"sessionId":"session id"})),
+        ("session.activate","切换到远程窗口",json!({"sessionId":"session id"})),
+        ("session.close","关闭远程窗口",json!({"sessionId":"session id"})),
+        ("session.action","操作指定远程窗口",json!({"sessionId":"session id","action":"stream action id","args":{}})),
+        ("session.preferences","保存会话键盘偏好",json!({"sessionId":"session id","changes":{}})),
+        ("window.activate","激活窗口",json!({})),
+    ] {
+        if !rows.iter().any(|row|row["id"]==id){rows.push(json!({"id":id,"label":label,"args":args,"platforms":["windows"]}));}
     }
 }
 

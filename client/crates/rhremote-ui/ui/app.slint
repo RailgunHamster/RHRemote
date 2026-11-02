@@ -785,11 +785,15 @@ export component StreamPicker inherits Window {
     }
 }
 export component MainWindow inherits Window {
+    in property <string> session-name;
+    in property <bool> session-window;
+    in property <bool> selected-has-session;
+    in property <string> selected-session-id;
     init => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     changed dark => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     icon:@image-url("../../../shared/icons/rhremote.svg");
-    title:root.isolated-preview ? "RHRemote-Moonlight · 测试预览" : "RHRemote-Moonlight";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
-    private property <bool> device-context:!root.streaming && !root.connecting;
+    title:root.session-name!="" ? root.session-name+" · RHRemote-Moonlight" : root.isolated-preview ? "RHRemote-Moonlight · 测试预览" : "RHRemote-Moonlight";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
+    private property <bool> device-context:!root.session-window && !root.streaming && !root.connecting;
     private property <bool> narrow-profile:content-pane.width<560px;
     in property <bool> isolated-preview;
     background:Palette.page;default-font-family:"Microsoft YaHei UI";default-font-size:14px;
@@ -1007,7 +1011,7 @@ export component MainWindow inherits Window {
                                             Text {text:"桌面连接";font-size:16px;font-weight:600;color:Palette.ink;}
                                             Text {text:root.selected-device.is-self ? "本机不支持连接自身" : root.selected-device.check-hint!="" ? root.selected-device.check-hint : root.selected-device.pending ? "配对状态尚未确认" : root.selected-device.paired ? "已配对" : "连接前需要配对";font-size:12px;color:root.selected-device.check-failed ? Palette.failure : Palette.muted;wrap:word-wrap;}
                                             HorizontalLayout {spacing:8px;
-                                                ActionButton {text:root.selected-device.is-self ? "本机" : root.selected-device.check-retry ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.repair-required ? "重新配对" : root.selected-device.pending && !root.selected-device.paired ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.paired ? "连接" : "配对";action-id:(root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) ? "devices.refresh" : root.selected-device.repair-required ? "device.pair" : root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-uuid;primary:true;disabled:root.diagnostic-busy || root.selected-device.is-self || root.control-requests-pending || ((root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) && root.devices-refreshing);min-width:112px;}
+                                                ActionButton {text:root.selected-has-session ? "切换到窗口" : root.selected-device.is-self ? "本机" : root.selected-device.check-retry ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.repair-required ? "重新配对" : root.selected-device.pending && !root.selected-device.paired ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.paired ? "连接" : "配对";action-id:root.selected-has-session ? "session.activate" : (root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) ? "devices.refresh" : root.selected-device.repair-required ? "device.pair" : root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-has-session ? root.selected-session-id : root.selected-uuid;primary:true;disabled:!root.selected-has-session && (root.diagnostic-busy || root.selected-device.is-self || root.control-requests-pending || ((root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) && root.devices-refreshing));min-width:112px;}
                                                 if root.selected-device.pending && root.selected-device.online && !root.selected-device.is-self && !root.selected-device.check-retry && !root.selected-device.repair-required: ActionButton{text:"配对";action-id:"device.pair";argument:root.selected-uuid;disabled:root.diagnostic-busy || root.control-requests-pending;}
                                                 ActionButton{text:"选择窗口";action-id:"device.windows.open";argument:root.selected-uuid;disabled:root.window-picker-busy || root.diagnostic-busy || root.selected-device.is-self || !root.selected-device.paired || root.selected-device.check-retry || root.selected-device.repair-required || root.control-requests-pending;}
                                                 Rectangle{horizontal-stretch:1;}

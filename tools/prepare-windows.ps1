@@ -300,6 +300,27 @@ Edit-Source 'app/streaming/session.h' {param($s)
     return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    using RhProbeKey=std::tuple<SDL_Window*,int,int,int,int,int>;`n    RhProbeCache<RhProbeKey,IVideoDecoder> m_RhProbeCache;`n    RhWindowBridge m_RhWindowBridge;`n    int m_RhAudioProbeConfig=-1;`n    bool m_RhAudioProbeOk=false;`n    void execInternal();")
 }
 Edit-Source 'app/streaming/session.cpp' {param($s)
+    $s=Replace-Once $s '    SDL_Rect usableBounds;' @'
+    // The Rust UI and SDL select displays independently. An explicit test
+    // monitor must never silently fall back to the user's primary display.
+    const QString clientOrigin = qEnvironmentVariable("RHREMOTE_CLIENT_DISPLAY_ORIGIN");
+    if (!clientOrigin.isEmpty()) {
+        const QStringList coordinates = clientOrigin.split(',');
+        bool xOk=false,yOk=false;
+        const int x=coordinates.value(0).toInt(&xOk),y=coordinates.value(1).toInt(&yOk);
+        int selected=-1,matches=0;
+        if(coordinates.size()==2&&xOk&&yOk) {
+            for(int i=0;i<SDL_GetNumVideoDisplays();i++) {
+                SDL_Rect bounds;
+                if(SDL_GetDisplayBounds(i,&bounds)==0&&bounds.x==x&&bounds.y==y){selected=i;matches++;}
+            }
+        }
+        if(matches!=1)qFatal("RHRemote requested client display is absent or ambiguous; no primary fallback");
+        displayIndex=selected;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,"RHRemote selected client display: origin=%d,%d index=%d",x,y,selected);
+    }
+    SDL_Rect usableBounds;
+'@
     $s=Replace-Once $s '    } catch (const GfeHttpResponseException& e) {' @'
     } catch (const GfeHttpResponseException& e) {
         auto& runtime=RhRuntime::get();

@@ -39,6 +39,8 @@ pub fn focus_stream(state: &Value) {
     #[cfg(windows)]
     unsafe {
         if let Some(owner) = owned_window(state) {
+            use windows::Win32::UI::WindowsAndMessaging::*;
+            if IsIconic(owner).as_bool(){let _=ShowWindow(owner,SW_RESTORE);}
             let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(owner);
         }
     }

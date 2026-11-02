@@ -36,6 +36,7 @@ pub mod sync_model;
 pub mod network;
 pub mod bitrate;
 mod desktop_catalog;
+mod desktop_sessions;
 pub mod proxy;
 pub mod keyboard;
 
@@ -45,7 +46,7 @@ pub fn settings_catalog() -> Value {
     let fields=catalog.as_array_mut().unwrap();if !fields.iter().any(|field|field["key"]=="bitrateAuto"){let at=fields.iter().position(|field|field["key"]=="bitrateMbps").unwrap_or(fields.len());fields.insert(at,serde_json::from_str(include_str!("../../../shared/auto-bitrate-setting.json")).unwrap());}desktop_catalog::extend(&mut catalog);catalog
 }
 pub fn catalog() -> Value {
-    let mut catalog=serde_json::from_str(ACTIONS).expect("compiled action catalog");desktop_catalog::extend(&mut catalog);catalog
+    let mut catalog=serde_json::from_str(ACTIONS).expect("compiled action catalog");desktop_catalog::extend(&mut catalog);desktop_catalog::extend_actions(&mut catalog);catalog
 }
 pub fn shortcuts() -> Value {
     serde_json::from_str(include_str!("../../../shared/shortcuts.json")).unwrap()
@@ -254,6 +255,8 @@ pub struct State {
     #[serde(skip)]
     connect_in_flight: bool,
     #[serde(skip)]
+    desktop_open_requests:usize,
+    #[serde(skip)]
     stream_epoch: u64,
     pub audio_enabled: bool,
     pub volume: u32,
@@ -322,6 +325,12 @@ pub struct ActionTiming {
     pub queue_wait_us: u128,
 }
 pub trait Platform: Send + Sync {
+    /// A desktop browser delegates validated connection requests to independent windows.
+    fn separate_sessions(&self) -> bool { false }
+    fn session_only(&self) -> bool { false }
+    fn sessions_state(&self) -> Option<Value> { None }
+    fn session_identity(&self) -> Option<Value> { None }
+    fn persist_session_preferences(&self, _saved:&Saved) -> Option<Result<(),String>> { None }
     /// Local task construction only; all I/O and cleanup run on its own worker.
     fn prepare_diagnostic(&self,_device:&Device,_profile:&Profile)->Option<Result<Box<dyn DiagnosticTask>,String>>{None}
     /// Construct a cancellable authenticated window-list request without starting a stream.
@@ -418,6 +427,7 @@ impl Controller {
                 connection: connection::Connection::default(),
                 closing: false,
                 connect_in_flight: false,
+                desktop_open_requests:0,
                 stream_epoch: 0,
                 audio_enabled: false,
                 volume: 100,
@@ -500,6 +510,14 @@ impl Controller {
         value["navigationPrompt"]=if let Some(pending)=&s.pending_navigation{json!({"requestId":pending.request_id,"kind":if pending.info{"unsaved-info"}else if pending.sync{"unsaved-sync"}else{"unsaved-device"},"title":"保存更改？","message":if pending.info{"设备名称有未保存的更改。"}else if pending.sync{"WebDAV 设置有未保存的更改。"}else{"连接设置有未保存的更改。"}})}else{Value::Null};
         drop(s);
         // Read progress without taking the updater's network/installation lock.
+        if let Some(sessions)=self.platform.sessions_state() {
+            if sessions["busy"]==true {
+                value["proxyBusy"]=json!(true);
+                value["updateInstallHint"]=json!("请先关闭所有远程窗口");
+            }
+            value["desktopSessions"]=sessions;
+        }
+        if let Some(session)=self.platform.session_identity(){value["desktopSession"]=session;}
         if let Some(updates) = self.platform.update_state() { value["updates"] = updates; }
         value["updates"]["operationId"]=json!(update_operation);
         value["updates"]["intent"]=json!(global_settings::update_primary_intent(&value["updates"],update_operation));
@@ -608,6 +626,9 @@ impl Controller {
             s.window_action = "window.close".into();
         }
         connection::observe(&mut s, streaming, &statistics);
+        if self.platform.session_only() && s.page=="devices" && s.connection.operation=="connect" {
+            s.page="connection".into();
+        }
         if !streaming&&!s.connecting&&!s.connection.busy(){s.controls=false;s.floating_keyboard=false;s.keyboard_modifiers.clear();}
         s.statistics = statistics;
         s.revision += 1;
@@ -650,6 +671,7 @@ impl Controller {
         s.revision += 1;
     }
     fn persist(&self, saved: &Saved) -> Result<(), String> {
+        if let Some(result)=self.platform.persist_session_preferences(saved){return result;}
         if let Some(parent) = self.storage.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -665,9 +687,19 @@ impl Controller {
         if !catalog().as_array().unwrap().iter().any(|a| a["id"] == id) {
             return json!({"ok":false,"error":"unknown action","action":id});
         }
+        if self.platform.session_only() {
+            if matches!(id,"devices.open"|"connection.dismiss"|"navigation.back") {
+                let _=self.platform.execute("session.return",&json!({}));
+                return self.dispatch("window.close",json!({}));
+            }
+            if !desktop_sessions::session_action(id) {
+                return json!({"ok":false,"action":id,"error":"请在设备主窗口中修改此设置"});
+            }
+        }
+        if let Some(error)=self.detached_session_block(id){return json!({"ok":false,"action":id,"error":error});}
         let profile_origin=args.get("draftId").cloned();
         if !interaction::profile_origin_matches(&self.state.lock().unwrap(),id,profile_origin.as_ref()){return interaction::ignored_profile_action(id);}
-        let result = if let Some(result)=self.update_installation_gate(id,&args){result} else if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
+        let result = if let Some(result)=self.update_installation_gate(id,&args){result} else if id=="session.preferences" {self.apply_session_preferences(&args)} else if id=="navigation.resolve" {self.resolve_navigation(args)} else if id=="navigation.back" {
             let page={let s=self.state.lock().unwrap();if s.pending_navigation.is_some(){"decision".into()}else{s.page.clone()}};
             let clear_pending=self.state.lock().unwrap().sync_clear_pending;
             let action=if clear_pending {"sync.clear.resolve"} else {match page.as_str(){"decision"=>"navigation.resolve","profile-copy"=>"settings.copy.cancel","connection"=>{let s=self.state.lock().unwrap();if !s.connection.busy(){"connection.dismiss"}else if s.connection.operation=="pair"{"pair.cancel"}else{"stream.disconnect"}},"add"=>"device.add.cancel","pair"=>"pair.cancel",_=>"devices.open"}};
@@ -676,6 +708,8 @@ impl Controller {
             self.dispatch_add(id,args)
         } else if id.starts_with("device.info.") {
             self.dispatch_info(id,args)
+        } else if id.starts_with("session.") {
+            self.platform.execute(id,&args)
         } else if id.starts_with("updates.") {
             self.dispatch_update(id,&args)
         } else if id.starts_with("proxy.") || id.starts_with("sync.") || id.starts_with("app.settings.") {
@@ -1025,6 +1059,7 @@ impl Controller {
             }
             "window.minimize"
             | "window.maximize"
+            | "window.activate"
             | "window.close"
             => {
                 if id == "window.close" {
@@ -1092,6 +1127,15 @@ impl Controller {
                             let (width,height)=window_source::resolution(&window,args["profile"]["width"].as_u64().unwrap_or(1920) as u32,args["profile"]["height"].as_u64().unwrap_or(1080) as u32)?;
                             args["profile"]["width"]=json!(width);args["profile"]["height"]=json!(height);
                         }
+                    }
+                    if id == "device.connect" && self.platform.separate_sessions() {
+                        args["saved"]=serde_json::to_value(&s.saved).map_err(|e|e.to_string())?;
+                        s.page="devices".into();s.revision+=1;s.desktop_open_requests+=1;
+                        drop(s);
+                        self.platform.connection_requested(timing);
+                        let result=self.platform.execute("session.open",&args);
+                        self.state.lock().unwrap().desktop_open_requests-=1;
+                        return result;
                     }
                     if id == "device.connect" {
                         session_ui::clear(&mut s);s.controls_tab="input".into();
@@ -1238,12 +1282,17 @@ pub fn start_http(
     port: u16,
     token: String,
 ) -> Result<std::thread::JoinHandle<()>, String> {
+    start_http_endpoint(controller,port,token).map(|(_,thread)|thread)
+}
+/// Bind the API atomically, including port zero for private per-session endpoints.
+pub fn start_http_endpoint(controller:Arc<Controller>,port:u16,token:String)->Result<(u16,std::thread::JoinHandle<()>),String>{
     if token.len() < 32 {
         return Err("control token must be at least 32 characters".into());
     }
     let server = tiny_http::Server::http((std::net::Ipv4Addr::LOCALHOST, port))
         .map_err(|e| e.to_string())?;
-    Ok(std::thread::spawn(move || {
+    let bound_port=server.server_addr().to_ip().ok_or("control API is not TCP")?.port();
+    Ok((bound_port,std::thread::spawn(move || {
         let update_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let sync_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let session_request = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1279,6 +1328,17 @@ pub fn start_http(
                     {
                         Some(v) => {
                             let id = v["id"].as_str().unwrap_or("");
+                            if matches!(id,"session.action"|"session.activate"|"session.close") {
+                                let controller=controller.clone();let id=id.to_owned();let args=v.get("args").cloned().unwrap_or(json!({}));
+                                std::thread::spawn(move||{
+                                    let value=controller.dispatch(&id,args);let status=if value["ok"]==true{200}else{422};
+                                    let response=tiny_http::Response::from_string(value.to_string()).with_status_code(status)
+                                        .with_header(tiny_http::Header::from_bytes("Content-Type","application/json; charset=utf-8").unwrap())
+                                        .with_header(tiny_http::Header::from_bytes("Cache-Control","no-store").unwrap());
+                                    let _=request.respond(response);
+                                });
+                                continue;
+                            }
                             // Keep state/navigation HTTP calls responsive while a
                             // synchronous network operation waits on its server.
                             if matches!(id,"updates.primary"|"updates.check"|"updates.download"|"updates.install"|"sync.run"|"sync.resolve") || is_session_control_action(id) {
@@ -1325,7 +1385,7 @@ pub fn start_http(
                 .with_header(tiny_http::Header::from_bytes("Cache-Control", "no-store").unwrap());
             let _ = request.respond(response);
         }
-    }))
+    })))
 }
 
 #[cfg(test)]

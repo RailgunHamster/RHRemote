@@ -1,4 +1,4 @@
-use rhremote_core::Controller;
+use rhremote_core::{Controller,Platform};
 use serde_json::{Value, json};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -39,6 +39,8 @@ pub fn run_transport_worker() -> Option<Result<(), String>> {
 mod overlay;
 mod pairing;
 mod platform;
+#[cfg(windows)]
+mod sessions;
 mod recovery;
 mod statistics;
 mod window_events;
@@ -47,6 +49,8 @@ mod release_notes;
 mod update_history;
 mod proxy;
 mod update_cancel;
+#[cfg(windows)]
+mod update_splash;
 mod ui_rendering;
 mod floating_keyboard;
 #[cfg(target_os = "linux")]
@@ -82,6 +86,7 @@ fn report_queued_error(controller:&Controller,id:&str,response:&Value){
 fn args_for(id: &str, arg: &str, state: &Value) -> Value {
     match id {
         "devices.refresh" if !arg.is_empty()=>json!({"uuid":arg}),
+        "session.activate"|"session.close"=>json!({"sessionId":arg}),
         "device.move" => {
             let fields:Vec<_>=arg.split('|').collect();if fields.len()==3{return json!({"uuid":fields[0],"targetUuid":fields[1],"placement":fields[2]});}
             let (uuid, direction) = arg.split_once('|').unwrap_or(("", ""));
@@ -180,6 +185,8 @@ pub(crate) fn request_close(ui: &MainWindow) -> slint::CloseRequestResponse {
     slint::CloseRequestResponse::KeepWindowShown
 }
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    let session=sessions::ChildContext::from_args()?;
     let data = std::env::var_os("RHREMOTE_DATA_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -194,18 +201,42 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var_os("RHREMOTE_NATIVE_ENGINE"),
         std::env::current_exe()?,
     );
-    let native = Arc::new(platform::NativePlatform::new(
-        engine,
-        token.clone(),
-        data.clone(),
-    )?);
+    #[cfg(windows)]
+    let native=Arc::new(if let Some(context)=session.clone(){platform::NativePlatform::for_desktop_session(engine.clone(),token.clone(),context)?}else{platform::NativePlatform::new(engine.clone(),token.clone(),data.clone())?});
+    #[cfg(not(windows))]
+    let native=Arc::new(platform::NativePlatform::new(engine,token.clone(),data.clone())?);
     let controller = Controller::new(platform_paths::PLATFORM, data.join("preferences.json"), native.clone())?;
     native.statistics.lock().unwrap().mark("preferences_loaded");
-    device_bootstrap::restore(&controller.state()["saved"],&*native)?;
-    controller.replace_devices_pending(native.devices.lock().unwrap().clone());
+    if !native.session_only(){
+        device_bootstrap::restore(&controller.state()["saved"],&*native)?;
+        controller.replace_devices_pending(native.devices.lock().unwrap().clone());
+    }
     native.statistics.lock().unwrap().mark("devices_loaded_local");
+    #[cfg(not(windows))]
     if let Ok(port) = std::env::var("RHREMOTE_CONTROL_PORT") {
         rhremote_core::start_http(controller.clone(), port.parse()?, token)?;
+    }
+    #[cfg(windows)]
+    {
+        let requested=std::env::var("RHREMOTE_CONTROL_PORT").ok().map(|p|p.parse::<u16>()).transpose()?.unwrap_or(0);
+        let (port,_server)=rhremote_core::start_http_endpoint(controller.clone(),requested,token.clone())?;
+        if let Some(session)=&session {
+            session.publish_endpoint(port)?;
+            let owner=controller.clone();
+            std::thread::spawn(move||{
+                use std::io::Read;
+                let mut byte=[0u8;1];while std::io::stdin().read(&mut byte).is_ok_and(|n|n>0){}
+                owner.dispatch("window.close",json!({}));
+            });
+            native.statistics.lock().unwrap().event("desktop_session_bootstrap",json!({"sessionId":session.launch.id,"elapsedMs":rhremote_core::now_ms().saturating_sub(session.launch.requested_at_ms)}))?;
+            if controller.state()["windowAction"]!="window.close" {
+                let response=controller.start_desktop_session(session.launch.device.clone(),session.launch.window.clone());
+                if response["ok"]!=true{controller.message(response["error"].as_str().unwrap_or("连接失败").into());}
+            }
+        }else{
+            let manager=sessions::Manager::new(data.clone(),engine,port,token)?;
+            native.sessions.set(manager).map_err(|_|"会话管理重复初始化")?;
+        }
     }
     let passive_preview=native.ui_test.enabled;
     let monitor=std::env::var("RHREMOTE_TEST_MONITOR").ok();
@@ -234,6 +265,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some((x,y))=preview_origin {ui.window().set_position(slint::PhysicalPosition::new(x,y));}
     ui.set_isolated_preview(std::env::var("RHREMOTE_TEST_MODE").as_deref()==Ok("1") && std::env::var_os("RHREMOTE_DATA_DIR").is_some_and(|v|!v.is_empty()));
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+    #[cfg(windows)]
+    if let Some(session)=&session {
+        let d=&session.launch.device;ui.set_session_window(true);ui.set_session_name(if d.display_name.is_empty(){d.name.as_str()}else{d.display_name.as_str()}.into());
+    }
     controller.ui_rendering(ui_rendering::metadata());
     native.statistics.lock().unwrap().mark("ui_backend_selected");
     let toolbar = StreamToolbar::new()?;
@@ -443,7 +478,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             view.toolbar_state(toolbar_state);
             if let Some(picker)=picker_weak.upgrade(){ui_driver.tick(&ui,&toolbar,&picker,&view);}
         }
+        #[cfg(windows)]
+        if keyboard_timing.sessions.get().is_some_and(|sessions|sessions.take_return()) {view.dispatch("window.activate",json!({}));}
         match view.take_window_action().as_str(){
+            "window.activate"=>activate_window(&ui,&state,keyboard_timing.session_only()),
             "window.minimize"=>ui.window().set_minimized(true),"window.maximize"=>ui.window().set_maximized(!ui.window().is_maximized()),"window.close"=>{let _=slint::quit_event_loop();},
             _=>{}
         }
@@ -464,9 +502,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let poll = controller.clone();
     let transport = native.clone();
     std::thread::spawn(move || {
-        transport.statistics.lock().unwrap().mark("devices_check_begin");
-        poll.dispatch("devices.refresh", json!({}));
-        transport.statistics.lock().unwrap().mark("devices_check_end");
+        if !transport.session_only(){
+            transport.statistics.lock().unwrap().mark("devices_check_begin");
+            poll.dispatch("devices.refresh", json!({}));
+            transport.statistics.lock().unwrap().mark("devices_check_end");
+        }
         loop {
             if let Some((attempt, device, error, cleanup_pending)) = transport.pairing_result() {
                 poll.pairing_complete(attempt, device, error, cleanup_pending);
@@ -480,6 +520,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::thread::sleep(Duration::from_millis(250));
         }
     });
+    if !native.session_only(){
     let automatic = controller.clone();
     std::thread::spawn(move || {
         let mut last_attempt = 0u64;
@@ -511,6 +552,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::thread::sleep(Duration::from_secs(30));
         }
     });
+    }
     if let Ok(position) = std::env::var("RHREMOTE_UI_POSITION") {
         if let Some((x, y)) = position.split_once(',') {
             if let (Ok(x), Ok(y)) = (x.parse::<i32>(), y.parse::<i32>()) {
@@ -521,6 +563,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     ui.run()?;
     native.statistics.lock().unwrap().mark("ui_event_loop_returned");
     Ok(())
+}
+fn activate_window(ui:&MainWindow,state:&Value,session:bool){
+    #[cfg(windows)]
+    if session&&unsafe{overlay::owned_window(state)}.is_some(){overlay::focus_stream(state);return;}
+    let _=(state,session);
+    ui.window().set_minimized(false);let _=ui.show();
+    use slint::winit_030::WinitWindowAccessor;
+    ui.window().with_winit_window(|window|window.focus_window());
 }
 fn native_engine_path(override_path: Option<std::ffi::OsString>, executable: PathBuf) -> PathBuf {
     override_path

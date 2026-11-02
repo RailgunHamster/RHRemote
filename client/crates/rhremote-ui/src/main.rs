@@ -7,5 +7,6 @@ fn main() {
     velopack::VelopackApp::build().run();
     if let Err(error) = rhremote::run() {
         eprintln!("RHRemote: {error}");
+        std::process::exit(1);
     }
 }

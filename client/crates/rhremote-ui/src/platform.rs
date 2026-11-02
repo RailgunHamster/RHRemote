@@ -693,6 +693,10 @@ pub struct NativePlatform {
     stop_requested: AtomicBool,
     stop_submission: Mutex<()>,
     closing: AtomicBool,
+    #[cfg(windows)]
+    pub sessions:std::sync::OnceLock<Arc<crate::sessions::Manager>>,
+    #[cfg(windows)]
+    pub session:Option<Arc<crate::sessions::ChildContext>>,
 }
 impl NativePlatform {
     pub fn new(engine: PathBuf, token: String, data: PathBuf) -> Result<Self, String> {
@@ -796,7 +800,21 @@ impl NativePlatform {
             stop_requested: AtomicBool::new(false),
             stop_submission: Mutex::new(()),
             closing: AtomicBool::new(false),
+            #[cfg(windows)]
+            sessions:std::sync::OnceLock::new(),
+            #[cfg(windows)]
+            session:None,
         })
+    }
+    #[cfg(windows)]
+    pub fn for_desktop_session(engine:PathBuf,token:String,context:Arc<crate::sessions::ChildContext>)->Result<Self,String>{
+        // ComputerManager rewrites the entire host array. Give each process its
+        // own snapshot so an older window can never undo a newer pairing.
+        crate::sessions::prepare_identity(&context.launch)?;
+        let mut native=Self::new(engine,token,context.launch.runtime.clone())?;
+        *native.devices.lock().unwrap()=vec![context.launch.device.clone()];
+        if context.launch.statistics{native.statistics.lock().unwrap().configure(true)?;}
+        native.session=Some(context);Ok(native)
     }
     fn launcher(&self) -> LaunchContext {
         LaunchContext {
@@ -1412,6 +1430,10 @@ impl NativePlatform {
             value["pairingPhase"]=json!(pair.phase());
         }
         value["nativeCleanupPending"] = json!(cleanup_pending);
+        #[cfg(windows)]
+        if self.closing.load(Ordering::Acquire)&&self.sessions.get().is_some_and(|s|s.busy()){
+            value["nativeCleanupPending"]=json!(true);
+        }
         if self.stop_requested.load(Ordering::SeqCst) && cleanup_pending {
             value["phase"] = json!("cancelling");
             value["streaming"] = json!(false);
@@ -1585,6 +1607,26 @@ impl NativePlatform {
     }
 }
 impl Platform for NativePlatform {
+    fn separate_sessions(&self)->bool{
+        #[cfg(windows)]{self.sessions.get().is_some()}
+        #[cfg(not(windows))]{false}
+    }
+    fn session_only(&self)->bool{
+        #[cfg(windows)]{self.session.is_some()}
+        #[cfg(not(windows))]{false}
+    }
+    fn sessions_state(&self)->Option<Value>{
+        #[cfg(windows)]{self.sessions.get().map(|s|s.snapshot())}
+        #[cfg(not(windows))]{None}
+    }
+    fn session_identity(&self)->Option<Value>{
+        #[cfg(windows)]{self.session.as_ref().map(|s|s.identity())}
+        #[cfg(not(windows))]{None}
+    }
+    fn persist_session_preferences(&self,saved:&rhremote_core::Saved)->Option<Result<(),String>>{
+        #[cfg(windows)]{self.session.as_ref().map(|s|s.persist(saved))}
+        #[cfg(not(windows))]{let _=saved;None}
+    }
     fn prepare_diagnostic(&self,device:&Device,profile:&rhremote_core::Profile)->Option<Result<Box<dyn rhremote_core::DiagnosticTask>,String>>{
         Some(diagnostic::Task::new(self,device,profile).map(|task|Box::new(task) as Box<dyn rhremote_core::DiagnosticTask>))
     }
@@ -1624,6 +1666,12 @@ impl Platform for NativePlatform {
         };
         match action {
             #[cfg(windows)]
+            "session.open"=>self.sessions.get().ok_or("会话管理尚未就绪")?.open(args,self.statistics.lock().unwrap().state()["enabled"]==true),
+            #[cfg(windows)]
+            "session.return"=>self.session.as_ref().ok_or("不是远程窗口")?.return_to_devices(),
+            #[cfg(windows)]
+            id if id.starts_with("session.")=>self.sessions.get().ok_or("会话管理尚未就绪")?.execute(id,args),
+            #[cfg(windows)]
             "view.ui.native-window" => self.test_native_window(args),
             "view.ui.native-state-fault" => {
                 if !self.ui_test.enabled { return Err("界面测试接口仅在隔离测试预览中启用".into()); }
@@ -1640,7 +1688,13 @@ impl Platform for NativePlatform {
             id if id.starts_with("view.ui.")=>self.ui_test.execute(id,args),
             "engine.close" => {
                 self.closing.store(true,Ordering::SeqCst);
-                let result=self.stop_owned();
+                #[cfg(windows)]
+                let sessions_pending=self.sessions.get().is_some_and(|sessions|sessions.close_all()["cleanupPending"]==true);
+                let result=self.stop_owned().map(|mut value|{
+                    #[cfg(windows)]
+                    if sessions_pending{value["cleanupPending"]=json!(true);}
+                    value
+                });
                 if result.is_err(){self.closing.store(false,Ordering::SeqCst);}
                 result
             },
@@ -1798,6 +1852,7 @@ impl LaunchContext {
             .env_remove("RHREMOTE_CONTROL_TOKEN")
             .env_remove("RHREMOTE_TARGET_UUID");
         command.env_remove("RHREMOTE_PAIR_ID").env_remove("RHREMOTE_PAIR_CANCEL_FILE");
+        command.env_remove("RHREMOTE_PARENT_CONTROL_TOKEN");
         command.env_remove("RHREMOTE_PROBE_OPERATION").env_remove("RHREMOTE_PROBE_ID").env_remove("RHREMOTE_PROBE_REPORT").env_remove("RHREMOTE_NETWORK_METADATA");
         command.current_dir(&self.native_data);
         command

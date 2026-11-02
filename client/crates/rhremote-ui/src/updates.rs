@@ -286,7 +286,9 @@ impl Updates {
         // only discard this exact updater-owned cache after it fails verification.
         if verify_cached(&directory,target)? {
             self.check_cancelled()?;
-            self.verified=Some(candidate_id(target));self.refresh();self.status("downloaded","更新已下载，可安装更新");return Ok(());
+            self.verified=Some(candidate_id(target));self.refresh();self.status("downloaded","更新已下载，可安装更新");
+            #[cfg(windows)]crate::update_splash::warm_up();
+            return Ok(());
         }else{
             self.check_cancelled()?;
             let path=cached_path(&directory,target)?;
@@ -303,6 +305,7 @@ impl Updates {
         if !verify_cached(&directory,target)?{return Err("更新缓存与所选安装包不一致，请重试下载".into());}
         self.check_cancelled()?;
         self.verified=Some(candidate_id(target));
+        #[cfg(windows)]crate::update_splash::warm_up();
         self.refresh();self.status("downloaded","更新已下载，可安装更新");Ok(())
     }
     pub fn execute(&mut self,id:&str)->Result<Value,String> {
@@ -330,7 +333,13 @@ impl Updates {
                         return Err("更新缓存与所选安装包不一致，请重试下载".into());
                     }
                     self.status("applying","正在重启 RHRemote 并安装更新");
-                    manager.wait_exit_then_apply_updates(pending,false,true,Vec::<String>::new()).map_err(|e|e.to_string())?;
+                    #[cfg(windows)]
+                    let transition=velopack::locator::auto_locate_app_manifest(velopack::locator::LocationContext::FromCurrentExe).ok()
+                        .and_then(|locator|crate::update_splash::launch(&manager.get_current_version_as_string(),&pending.Version,&locator.get_root_dir()));
+                    #[cfg(windows)]let silent=transition.is_some();
+                    #[cfg(not(windows))]let silent=false;
+                    manager.wait_exit_then_apply_updates(pending,silent,true,Vec::<String>::new()).map_err(|e|e.to_string())?;
+                    #[cfg(windows)]if let Some(transition)=transition{transition.commit();}
                 },
                 _=>return Err("unknown update action".into()),
             }
