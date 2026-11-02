@@ -1,6 +1,22 @@
 import { ProgressIndicator, ScrollView as BaseScrollView, LineEdit as BaseLineEdit, CheckBox as BaseCheckBox, SpinBox as BaseSpinBox, ComboBox as BaseComboBox, Palette as WidgetPalette } from "std-widgets.slint";
 
 export global Commands { callback trigger(string,string); }
+export struct NoteBlock {text:styled-text,level:int,prefix:string,indent:float,code:bool,quote:bool,rule:bool}
+export struct ReleaseHistoryRow {version:string,published:string,expanded:bool,blocks:[NoteBlock]}
+component ReleaseNotes inherits VerticalLayout {
+    in property <[NoteBlock]> blocks;
+    spacing:12px;
+    for block in root.blocks:Rectangle{
+        min-height:block.rule?1px:note.preferred-height+(block.code||block.quote?24px:0px);
+        background:block.rule?Palette.line:block.code?Palette.page:transparent;border-radius:block.code?6px:0px;
+        HorizontalLayout{
+            padding-left:block.indent*1px+(block.code||block.quote?12px:0px);padding-right:block.code?12px:0px;padding-top:block.code||block.quote?12px:0px;padding-bottom:block.code||block.quote?12px:0px;spacing:10px;
+            if block.prefix!="":Text{text:block.prefix;color:Palette.ink;width:22px;font-size:14px;}
+            note:=StyledText{text:block.text;visible:!block.rule;default-color:Palette.ink;default-font-size:block.level==1?24px:block.level==2?18px:block.level>2?16px:14px;default-font-family:block.code?"Consolas":"";link-color:Palette.blue;link-clicked(url)=>{Commands.trigger("updates.notes.open",url);}}
+        }
+        if block.quote:Rectangle{width:3px;background:Palette.line;}
+    }
+}
 export global ModalContext {
     in-out property <string> allowed-action;
     out property <bool> active:ModalContext.allowed-action!="";
@@ -831,6 +847,12 @@ export component MainWindow inherits Window {
     in property <bool> updates-pending;
     in property <string> update-version;
     in property <string> update-notes;
+    in property <[NoteBlock]> update-note-blocks;
+    in property <bool> update-history-expanded;
+    in property <bool> update-history-busy;
+    in property <string> update-history-error;
+    in property <[ReleaseHistoryRow]> update-history;
+    in property <string> update-history-key;
     in-out property <int> update-source-index;
     in-out property <bool> proxy-enabled;
     in-out property <int> proxy-protocol-index;
@@ -1261,7 +1283,7 @@ export component MainWindow inherits Window {
                             }
                             Text{text:root.updates-managed ? "首选源不可用时自动尝试另一来源。" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
                             if root.updates-available: Text{text:"可用版本："+root.update-version;color:Palette.ink;}
-                            if root.update-notes!="":Text{text:root.update-notes;color:Palette.muted;wrap:word-wrap;font-size:13px;}
+                            if root.update-notes!="":ReleaseNotes{blocks:root.update-note-blocks;}
                             if root.updates-busy: Rectangle {height:4px;background:Palette.line;border-radius:2px;
                                 Rectangle {height:parent.height;width:parent.width * (root.update-phase=="downloading" ? root.update-progress / 100 : 0.12);background:Palette.blue;border-radius:2px;}
                             }
@@ -1269,6 +1291,18 @@ export component MainWindow inherits Window {
                             if root.update-phase=="error":HorizontalLayout{ActionButton{text:root.update-details ? "收起详情" : "查看详情";action-id:"updates.details.toggle";chosen:root.update-details;}Rectangle{horizontal-stretch:1;}}
                             if root.update-phase=="error" && root.update-details:Text{text:root.update-status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                             Text{text:root.streaming || root.connecting ? "请先断开远程连接再安装更新。" : "安装时会重启 RHRemote。";color:Palette.muted;wrap:word-wrap;font-size:12px;}
+                            Rectangle{height:1px;background:Palette.line;}
+                            HorizontalLayout{ActionButton{text:root.update-history-expanded?"收起历史更新记录":"历史更新记录";action-id:"updates.history.toggle";chosen:root.update-history-expanded;}Rectangle{horizontal-stretch:1;}}
+                            if root.update-history-expanded:VerticalLayout{spacing:16px;
+                                if root.update-history-busy:Text{text:"正在加载历史更新记录…";color:Palette.muted;wrap:word-wrap;}
+                                if root.update-history-error!="":Text{text:root.update-history-error;color:Palette.failure;wrap:word-wrap;}
+                                HorizontalLayout{ActionButton{text:root.update-history-error!=""?"重试加载历史记录":"刷新历史记录";action-id:"updates.history.refresh";disabled:root.update-history-busy;}Rectangle{horizontal-stretch:1;}}
+                                for release in root.update-history:VerticalLayout{spacing:10px;
+                                    HorizontalLayout{ActionButton{text:(release.expanded?"▾ ":"▸ ")+"v"+release.version;action-id:"updates.history.entry.toggle";argument:release.version;chosen:release.expanded;}Text{text:release.published;color:Palette.muted;vertical-alignment:center;wrap:word-wrap;font-size:12px;}Rectangle{horizontal-stretch:1;}}
+                                    if release.expanded:ReleaseNotes{blocks:release.blocks;}
+                                }
+                                if root.update-history.length==0 && !root.update-history-busy:Text{text:"暂无历史更新记录";color:Palette.muted;}
+                            }
                         }
                         if root.settings-tab=="about": VerticalLayout{spacing:16px;
                             SettingsCard {HorizontalLayout{spacing:16px;Image{source:@image-url("../../../shared/icons/rhremote.svg");width:48px;height:48px;}VerticalLayout{spacing:5px;Text{text:"RHRemote";font-size:22px;font-weight:600;color:Palette.ink;}Text{text:"Moonlight · "+root.app-version;color:Palette.muted;font-size:13px;}}Rectangle{horizontal-stretch:1;}}}

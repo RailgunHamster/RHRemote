@@ -36,7 +36,13 @@ if($digests.Count-ne1-or$digests[0]-ine$ExpectedSignerSha256){throw 'APK signer 
 $notes=Join-Path $repo ('design/RELEASE-NOTES-v'+$Version+'.md')
 if(-not(Test-Path -LiteralPath $notes)){throw 'Release notes are missing'}
 . (Join-Path $PSScriptRoot 'release-notes.ps1')
+$historyPath=Join-Path $repo 'client/shared/release-history.json'
+$history=[IO.File]::ReadAllText($historyPath)|ConvertFrom-Json
+$historyCurrent=@($history.releases|Where-Object version -ceq $Version)
+if($history.schemaVersion-ne1-or$historyCurrent.Count-ne1){throw 'Refresh and commit the public release history before building this version'}
+if(-not$PSBoundParameters.ContainsKey('PublishedAt')){$PublishedAt=[DateTimeOffset]$historyCurrent[0].publishedAt}
 $releaseNotes=New-RHRemoteReleaseNotes -Notes ([IO.File]::ReadAllText($notes)) -PublishedAt $PublishedAt
+if($historyCurrent[0].notes-cne$releaseNotes.notes){throw 'Committed history notes differ from the current release notes'}
 foreach($asset in $feed.Assets){$asset|Add-Member -NotePropertyName NotesMarkdown -NotePropertyValue $releaseNotes.notes -Force}
 $feed|Add-Member -NotePropertyName PublishedAt -NotePropertyValue $releaseNotes.publishedAt -Force
 $out=Join-Path $repo ('dist/release-candidates/'+$Version+'-'+[guid]::NewGuid().ToString('N'))
@@ -45,6 +51,7 @@ foreach($name in @('RHRemote-win-Setup.exe','RHRemote-win-Portable.zip','release
 [IO.File]::WriteAllText((Join-Path $out 'releases.win.json'),($feed|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 $apkName="RHRemote-Android-$Version-arm64-v8a.apk"
 Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $out $apkName)
+Copy-Item -LiteralPath $historyPath -Destination (Join-Path $out 'releases.history.json')
 if($ServerArchive){
  $serverFile=Get-Item -LiteralPath $ServerArchive
  if($serverFile.PSIsContainer-or$serverFile.Name-ne("RHRemote-Sunshine-$ServerVersion-win-x64.zip")){throw 'Unexpected server archive identity'}

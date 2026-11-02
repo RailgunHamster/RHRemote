@@ -18,7 +18,7 @@ RHRemote 同时维护远程桌面客户端 **RHRemote-Moonlight** 和主机端 *
 
 Windows 使用 `RHRemote-win-Setup.exe` 安装，或解压 Portable.zip 后运行。Android 使用 arm64-v8a APK，包名为 `com.rhremote.client`，可与原版 Moonlight 并存。升级保留同一应用身份和签名，不要先卸载。
 
-当前 Windows / Android 正式版为 v0.2.17，默认从 CNB 更新，可在“设置 → 更新 → 首选更新源”选择 GitHub；首选源失败时自动尝试另一来源。Ubuntu 使用 `.deb` 手动覆盖升级。Windows 使用导航、设备列表和详情分栏；Android 按可用宽度切换分栏或列表／详情页面。Android 沿用已有签名，Windows 尚无代码签名证书。待验收项见 [TODO](TODO.md)。
+当前 Windows / Android 正式版为 v0.2.18，默认从 CNB 更新，可在“设置 → 更新 → 首选更新源”选择 GitHub；首选源失败时自动尝试另一来源。Ubuntu 使用 `.deb` 手动覆盖升级。Windows 使用导航、设备列表和详情分栏；Android 按可用宽度切换分栏或列表／详情页面。Android 沿用已有签名，Windows 尚无代码签名证书。待验收项见 [TODO](TODO.md)。
 
 后续版本只维护 CNB 和 GitHub。共享目录仅保留一套支持在线更新的 Windows / Android 首次安装包，不再逐版复制或保存预览包，见[发布渠道与共享目录规则](docs/CNB-RELEASES.md#发布渠道与共享目录)。
 

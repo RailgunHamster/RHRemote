@@ -43,6 +43,8 @@ mod recovery;
 mod statistics;
 mod window_events;
 mod updates;
+mod release_notes;
+mod update_history;
 mod proxy;
 mod update_cancel;
 mod ui_rendering;
@@ -95,6 +97,8 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "updates.primary" if !arg.is_empty()=>json!({"expectedIntent":arg}),
         "proxy.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":if matches!(key,"enabled"|"updates"|"sync"|"remote"){json!(value=="true")}else{json!(value)}})},
         "updates.source.set"=>json!({"source":arg.strip_prefix("source=").unwrap_or(arg)}),
+        "updates.history.entry.toggle"=>json!({"version":arg}),
+        "updates.notes.open"=>json!({"url":arg}),
         "navigation.resolve"|"sync.clear.resolve"=>json!({"choice":arg}),
         "settings.input"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},

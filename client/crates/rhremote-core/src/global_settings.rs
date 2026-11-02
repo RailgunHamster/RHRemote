@@ -87,6 +87,11 @@ impl Controller {
             if s.page!="global-settings" || s.settings_tab!="updates" {return Err("请先打开更新页".into());}
             s.update_details=!s.update_details;s.revision+=1;return Ok(json!({"expanded":s.update_details}));
         }
+        if id.starts_with("updates.history."){
+            if s.page!="global-settings"||s.settings_tab!="updates"{return Err("请先打开更新页".into());}
+            drop(s);let history=self.platform.execute(id,args)?;let mut s=self.state.lock().unwrap();s.updates["history"]=history.clone();s.revision+=1;return Ok(history);
+        }
+        if id=="updates.notes.open"{drop(s);return self.platform.execute(id,args);}
         validate_update_intent(id,args,observed.as_ref().unwrap_or(&s.updates),s.update_operation)?;
         if s.updates_busy {
             return Err("更新操作正在进行".into());

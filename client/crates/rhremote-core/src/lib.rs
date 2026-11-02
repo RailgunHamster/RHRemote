@@ -8,6 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 mod global_settings;
+pub mod release_history;
 #[cfg(test)]
 mod sync_commit_tests;
 pub use global_settings::update_primary_action;

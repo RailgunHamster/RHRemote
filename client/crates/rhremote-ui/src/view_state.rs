@@ -228,7 +228,11 @@ impl MainView {
                     .unwrap_or("")
                     .into(),
             );
-            ui.set_update_notes(state["updates"]["notes"].as_str().unwrap_or("").into());
+            let notes=state["updates"]["notes"].as_str().unwrap_or("");if ui.get_update_notes().as_str()!=notes{ui.set_update_notes(notes.into());ui.set_update_note_blocks(crate::release_notes::model(notes));}
+            let history=&state["updates"]["history"];
+            ui.set_update_history_expanded(history["expanded"]==true);ui.set_update_history_busy(history["busy"]==true);ui.set_update_history_error(history["error"].as_str().unwrap_or("").into());
+            let excluded=if state["updates"]["notes"].as_str().unwrap_or("").is_empty(){""}else{state["updates"]["availableVersion"].as_str().or(state["updates"]["currentVersion"].as_str()).unwrap_or("")};
+            let key=serde_json::json!([history["items"],history["expandedVersions"],excluded]).to_string();if ui.get_update_history_key().as_str()!=key{ui.set_update_history(crate::release_notes::history(&history["items"],&history["expandedVersions"],excluded));ui.set_update_history_key(key.into());}
             ui.set_update_status(state["updates"]["status"].as_str().unwrap_or("").into());
             let devices = state["devices"].as_array().cloned().unwrap_or_default();
             ui.set_devices_refreshing(state["devicesRefreshing"]==true);

@@ -684,6 +684,7 @@ pub struct NativePlatform {
     network: Arc<crate::network::Network>,
     updates: Mutex<crate::updates::Updates>,
     update_snapshot: Arc<Mutex<Value>>,
+    update_history:crate::update_history::History,
     update_cancel: Arc<crate::update_cancel::Control>,
     pub statistics: Arc<Mutex<crate::statistics::Statistics>>,
     pub ui_test: Arc<crate::ui_test::Bridge>,
@@ -701,6 +702,7 @@ impl NativePlatform {
         let updates=crate::updates::Updates::new();
         updates.load_source(&data);
         let update_snapshot=updates.snapshot();
+        let update_history=crate::update_history::History::new(update_snapshot.clone());
         let update_cancel=updates.cancellation();
         let native_data = data.join("engine-state");
         fs::create_dir_all(&native_data).map_err(|e| e.to_string())?;
@@ -785,6 +787,7 @@ impl NativePlatform {
             network: Arc::new(crate::network::Network::default()),
             updates: Mutex::new(updates),
             update_snapshot,
+            update_history,
             update_cancel,
             statistics: Arc::new(Mutex::new(statistics)),
             ui_test,
@@ -1659,7 +1662,9 @@ impl Platform for NativePlatform {
             }
             "proxy.state" => Ok(rhremote_core::proxy::Settings::load(self.native_data.parent().ok_or("应用配置目录不可用")?)?.form()),
             "proxy.configure" => {let settings=rhremote_core::proxy::Settings::from_form(args)?;settings.save(self.native_data.parent().ok_or("应用配置目录不可用")?)?;self.update_snapshot.lock().unwrap()["proxy"]=settings.form();self.network.release_transport();Ok(settings.form())},
-            "updates.source.set" => self.updates.lock().unwrap().set_source(self.native_data.parent().ok_or("应用配置目录不可用")?,args["source"].as_str().ok_or("请选择更新源")?),
+            "updates.source.set" => {let value=self.updates.lock().unwrap().set_source(self.native_data.parent().ok_or("应用配置目录不可用")?,args["source"].as_str().ok_or("请选择更新源")?)?;self.update_history.source_changed();Ok(value)},
+            id if id.starts_with("updates.history.")=>self.update_history.execute(id,args),
+            "updates.notes.open"=>crate::release_notes::open_link(args["url"].as_str().ok_or("链接地址无效")?),
             id if id.starts_with("updates.") => self.updates.lock().unwrap().execute(id),
             "sync.state" => Ok(self.sync.lock().unwrap().state()),
             "sync.configure" => self.sync.lock().unwrap().configure(args),

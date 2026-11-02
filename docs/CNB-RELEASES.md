@@ -21,6 +21,8 @@
 
 在保存加密 CNB 令牌的 Windows 发布机使用 PowerShell 7：
 
+每个新版本构建前，先运行 `tools/update-release-history.ps1 -Version <版本>`，将当前正式版的说明和时间加入 `client/shared/release-history.json` 并提交，再构建客户端和准备发布目录。候选目录会包含 `releases.history.json`；客户端首次展开历史区时从首选更新源读取，失败尝试备用源，并保留包内记录供离线查看。准备脚本核对当前版本说明和发布时间，避免历史数据遗漏或与安装包说明不一致。历史区和各版本正文默认折叠，相关按钮使用 `updates.history.*` 动作；Markdown 链接使用 `updates.notes.open`。
+
 ```powershell
 ./tools/publish-cnb.ps1 -CandidateDirectory <已审核发布目录> -Commit <精确提交> -BundlePath <公开源码bundle> -ValidateOnly
 ./tools/publish-cnb.ps1 -CandidateDirectory <已审核发布目录> -Commit <精确提交> -BundlePath <公开源码bundle>

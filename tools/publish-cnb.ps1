@@ -76,13 +76,14 @@ try {
  $latest=Invoke-RHRemoteCnbApi $client $token "/$repository/-/releases/latest" -AllowMissing
  if($latest -and $latest.tag_name -match '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -gt [version]$plan.version){throw 'A newer stable CNB release exists; refusing rollback'}
  $null=Invoke-RHRemoteCnbApi $client $token "/$repository/-/releases/$($release.id)" PATCH @{prerelease=$false;draft=$false;make_latest='true'}
- foreach($name in @('releases.win.json','releases.android.json')){
+ $feeds=@('releases.win.json','releases.android.json');if($names.ContainsKey('releases.history.json')){$feeds+='releases.history.json'}
+ foreach($name in $feeds){
   $asset=$plan.artifacts|Where-Object fileName -ceq $name
   $destination=Join-Path $scratch ('latest-'+$name)
   $null=Receive-RHRemoteCnbPublicFile $client (Get-RHRemoteCnbPublicUrl $repository latest $name) $destination 2MB
   Assert-RHRemoteCnbFile (Get-Item -LiteralPath $destination) $asset.size $asset.sha256
  }
- $result=@{version=$plan.version;repository=$repository;commit=$Commit;anonymousAssets=@($plan.artifacts).Count;latestFeeds=2;credentialCopied=$false;completedUtc=[DateTime]::UtcNow.ToString('o')}
+ $result=@{version=$plan.version;repository=$repository;commit=$Commit;anonymousAssets=@($plan.artifacts).Count;latestFeeds=$feeds.Count;credentialCopied=$false;completedUtc=[DateTime]::UtcNow.ToString('o')}
  $result|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $candidate 'cnb-publication.json') -Encoding utf8
  $result|ConvertTo-Json -Compress
 }catch{Write-Output ('Failure type: '+$_.Exception.GetType().Name);Write-Output $_.ScriptStackTrace;throw "CNB publication stopped at $stage; credential-bearing diagnostics suppressed. Existing artifacts were not overwritten."}finally{if($client){$client.Dispose()};if($secret){$secret.Dispose()};$token=$null;if($lock){$lock.Dispose()}}

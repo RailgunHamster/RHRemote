@@ -56,7 +56,7 @@ android {
     }
     compileOptions {
 '@)
-    $s=$s.Replace("dependencies {","dependencies {`n    implementation 'androidx.core:core:1.16.0'`n    testImplementation 'junit:junit:4.13.2'`n    testImplementation 'org.robolectric:robolectric:4.17'`n    androidTestImplementation 'androidx.test:runner:1.6.2'`n    androidTestImplementation 'androidx.test.ext:junit:1.2.1'`n    androidTestImplementation 'com.google.errorprone:error_prone_annotations:2.47.0'")
+    $s=$s.Replace("dependencies {","dependencies {`n    implementation 'io.noties.markwon:core:4.6.2'`n    implementation 'androidx.core:core:1.16.0'`n    testImplementation 'junit:junit:4.13.2'`n    testImplementation 'org.robolectric:robolectric:4.17'`n    androidTestImplementation 'androidx.test:runner:1.6.2'`n    androidTestImplementation 'androidx.test.ext:junit:1.2.1'`n    androidTestImplementation 'com.google.errorprone:error_prone_annotations:2.47.0'")
     return $s
 }
 Edit-Source 'app/src/main/res/layout/activity_game.xml' {
@@ -584,6 +584,7 @@ New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/main/as
 Copy-Item -LiteralPath (Join-Path $repo 'client/crates/rhremote-core/src/actions.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-actions.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-shortcuts.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/keyboard.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-keyboard.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'client/shared/release-history.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-release-history.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/auto-bitrate-setting.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-auto-bitrate.json') -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/test/resources')|Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/bitrate-cases.json') -Destination (Join-Path $SourceDir 'app/src/test/resources/rhremote-bitrate-cases.json') -Force

@@ -18,6 +18,8 @@ import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.PairingManager;
 import java.util.*;
+import org.json.JSONObject;
+import org.json.JSONArray;
 
 /** Native RHRemote shell. Device browsing and session admission use the same action dispatcher. */
 public final class RhHome implements RhActions.Target {
@@ -94,6 +96,7 @@ public final class RhHome implements RhActions.Target {
     private ProgressBar updateProgress;
     private RhBoundAction.Button updateCancel,updatePrimary;
     private TextView updateVersion,updateNotes;
+    private RhReleaseNotes releaseNotes;private Button historyToggle,historyRefresh;private LinearLayout historyBody,historyItems;private TextView historyStatus;private String historyKey="";
     private Spinner updateSource;
     private org.json.JSONObject proxyDraft;
     private String proxyError="";
@@ -938,6 +941,8 @@ public final class RhHome implements RhActions.Target {
             }
             case "sync.run":case "sync.resolve":if(draft!=null)throw new IllegalStateException("请先保存或取消设备设置");startSync(id.equals("sync.run")?"review":args.getString("resolution"),id.equals("sync.run")&&args.optBoolean("automatic"),args.has("reviewId")?args.getString("reviewId"):null);break;
             case "updates.state":return updateWork.state();
+            case "updates.notes.open":android.net.Uri link=android.net.Uri.parse(args.getString("url"));if(!Arrays.asList("http","https").contains(link.getScheme())||link.getHost()==null||link.getUserInfo()!=null)throw new IllegalArgumentException("只支持 HTTP / HTTPS 链接");activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,link));return RhActions.obj("opened",true);
+            case "updates.history.toggle":case "updates.history.refresh":case "updates.history.entry.toggle":if(!pageId.equals("global-settings")||!settingsTab.equals("updates"))throw new IllegalStateException("请先打开更新页");updateWork.history.execute(id,args);refreshUpdateControls();return updateWork.history.state();
             case "updates.source.set":updateWork.setSource(args.getString("source"));refreshUpdateControls();break;
             case "updates.cancel":updateWork.cancel(args.getLong("operationId"));break;
             case "updates.details.toggle":if(!pageId.equals("global-settings")||!settingsTab.equals("updates"))throw new IllegalStateException("请先打开更新页");updateDetails=!updateDetails;refreshUpdateControls();break;
@@ -974,10 +979,13 @@ public final class RhHome implements RhActions.Target {
         updateStatus=text("",15,ink,false);updateStatus.setPadding(0,dp(16),0,dp(12));summary.addView(updateStatus);
         updateDetailsToggle=button("查看详情",false,()->invoke("updates.details.toggle",RhActions.obj()));updateDetailsToggle.setTag("updates.details.toggle");summary.addView(updateDetailsToggle);
         updateFailureDetails=text("",13,muted,false);updateFailureDetails.setContentDescription("更新错误详情");summary.addView(updateFailureDetails);
-        updateNotes=text("",13,muted,false);updateNotes.setContentDescription("更新日志");updateNotes.setPadding(0,dp(12),0,dp(8));summary.addView(updateNotes);
+        if(releaseNotes==null)releaseNotes=new RhReleaseNotes(activity,url->invoke("updates.notes.open",RhActions.obj("url",url)));updateNotes=text("",14,ink,false);updateNotes.setContentDescription("更新日志");updateNotes.setLineSpacing(dp(3),1f);updateNotes.setPadding(0,dp(12),0,dp(8));summary.addView(updateNotes);
         updateBytes=text("",13,muted,false);updateBytes.setPadding(0,dp(12),0,dp(8));summary.addView(updateBytes);
         updateProgress=new ProgressBar(activity,null,android.R.attr.progressBarStyleHorizontal);updateProgress.setProgressTintList(android.content.res.ColorStateList.valueOf(blue));updateProgress.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(blue));summary.addView(updateProgress,new LinearLayout.LayoutParams(-1,dp(4)));
         formFooter.setVisibility(View.VISIBLE);formFooter.removeAllViews();LinearLayout commands=row();commands.setGravity(Gravity.END);updateInstallNotice=text("",12,muted,false);commands.addView(updateInstallNotice,new LinearLayout.LayoutParams(0,-2,1));updatePrimary=boundButton("检查更新",true);updatePrimary.setTag("updates.primary");commands.addView(updatePrimary);updateCancel=boundButton("取消",false);updateCancel.setTag("updates.cancel");LinearLayout.LayoutParams cancelLayout=new LinearLayout.LayoutParams(-2,-2);cancelLayout.setMarginStart(dp(8));commands.addView(updateCancel,cancelLayout);formFooter.addView(commands);formPadding(scroll.getWidth());
+        LinearLayout historyCard=card();LinearLayout.LayoutParams historyLayout=new LinearLayout.LayoutParams(-1,-2);historyLayout.topMargin=dp(16);content.addView(historyCard,historyLayout);
+        historyToggle=button("历史更新记录",false,()->invoke("updates.history.toggle",RhActions.obj()));historyToggle.setTag("updates.history.toggle");historyCard.addView(historyToggle);
+        historyBody=column();historyCard.addView(historyBody);historyStatus=text("",13,muted,false);historyStatus.setPadding(0,dp(12),0,dp(8));historyBody.addView(historyStatus);historyRefresh=button("刷新历史记录",false,()->invoke("updates.history.refresh",RhActions.obj()));historyRefresh.setTag("updates.history.refresh");historyBody.addView(historyRefresh);historyItems=column();historyBody.addView(historyItems);historyKey="";
         refreshUpdateControls();label("安装时在系统界面手动确认；需要安装权限时会先打开对应设置。");
     }
 
@@ -985,7 +993,7 @@ public final class RhHome implements RhActions.Target {
         if(updateStatus==null)return;org.json.JSONObject s=updateWork.state();String phase=s.optString("phase"),provider=s.optString("provider");
         if(updateSource!=null){updateSource.setEnabled(!updateWork.busy());int index=s.optString("preferredSource").equals("github")?1:0;if(updateSource.getSelectedItemPosition()!=index)updateSource.setSelection(index,false);}
         updateVersion.setText(s.isNull("availableVersion")?"":"可用版本 "+s.optString("availableVersion"));updateVersion.setVisibility(s.isNull("availableVersion")?View.GONE:View.VISIBLE);
-        updateNotes.setText(s.optString("notes"));updateNotes.setVisibility(s.optString("notes").isEmpty()?View.GONE:View.VISIBLE);
+        releaseNotes.set(updateNotes,s.optString("notes"));updateNotes.setVisibility(s.optString("notes").isEmpty()?View.GONE:View.VISIBLE);refreshUpdateHistory(s);
         boolean failed=phase.equals("error");updateStatus.setText(failed?"更新失败，请重试。":s.optString("status"));updateStatus.setTextColor(failed?failureColor:ink);
         updateDetailsToggle.setVisibility(failed?View.VISIBLE:View.GONE);updateDetailsToggle.setText(updateDetails?"收起详情":"查看详情");updateFailureDetails.setText(s.optString("status"));updateFailureDetails.setVisibility(failed&&updateDetails?View.VISIBLE:View.GONE);
         updateProvider.setText(provider.isEmpty()?(s.optString("preferredSource").equals("github")?"GitHub 优先 · CNB 备用":"CNB 优先 · GitHub 备用"):"当前更新源："+provider);
@@ -996,6 +1004,14 @@ public final class RhHome implements RhActions.Target {
         boolean cancelling=s.optBoolean("cancelRequested");updateCancel.setVisibility(s.optBoolean("canCancel")||cancelling?View.VISIBLE:View.GONE);updateCancel.setEnabled(!cancelling);long operation=s.optLong("operationId");updateCancel.bind("updates.cancel",RhActions.obj("operationId",operation));
     }
     private void startUpdate(String id){startUpdate(id,false);}
+    private void refreshUpdateHistory(JSONObject updates){
+        if(historyToggle==null)return;JSONObject history=updates.optJSONObject("history");if(history==null)return;boolean expanded=history.optBoolean("expanded"),busy=history.optBoolean("busy");String error=history.optString("error");historyToggle.setText(expanded?"收起历史更新记录":"历史更新记录");historyBody.setVisibility(expanded?View.VISIBLE:View.GONE);if(!expanded)return;
+        historyStatus.setText(busy?"正在加载历史更新记录…":error);historyStatus.setTextColor(error.isEmpty()?muted:failureColor);historyStatus.setVisibility(busy||!error.isEmpty()?View.VISIBLE:View.GONE);historyRefresh.setText(error.isEmpty()?"刷新历史记录":"重试加载历史记录");historyRefresh.setEnabled(!busy);
+        JSONArray items=history.optJSONArray("items"),opened=history.optJSONArray("expandedVersions");String exclude=updates.optString("notes").isEmpty()?"":updates.isNull("availableVersion")?updates.optString("currentVersion"):updates.optString("availableVersion");String key=String.valueOf(items)+"|"+String.valueOf(opened)+"|"+exclude;if(key.equals(historyKey))return;historyKey=key;historyItems.removeAllViews();int shown=0;
+        if(items!=null)for(int i=0;i<items.length();i++){JSONObject release=items.optJSONObject(i);String version=release.optString("version");if(version.equals(exclude))continue;boolean open=false;if(opened!=null)for(int j=0;j<opened.length();j++)if(version.equals(opened.optString(j)))open=true;
+            LinearLayout entry=column();entry.setPadding(0,dp(18),0,dp(12));Button header=button((open?"▾ ":"▸ ")+"v"+version,false,()->invoke("updates.history.entry.toggle",RhActions.obj("version",version)));header.setTag("release-history-entry:"+version);entry.addView(header);TextView published=text(release.optString("publishedAt").replace("T"," ").replace("Z"," UTC"),12,muted,false);published.setPadding(0,dp(6),0,dp(8));entry.addView(published);if(open){TextView notes=text("",14,ink,false);notes.setContentDescription("历史更新日志 "+version);notes.setLineSpacing(dp(3),1f);releaseNotes.set(notes,release.optString("notes"));entry.addView(notes);}historyItems.addView(entry);shown++;
+        }if(shown==0)historyItems.addView(text("暂无历史更新记录",13,muted,false));
+    }
     private void startUpdate(String id,boolean automatic){
         if(id.equals("updates.install")){String blocked=updateInstallBlockReason();if(!blocked.isEmpty())throw new IllegalStateException(blocked);}
         updateDetails=false;if(pageId.equals("global-settings")&&settingsTab.equals("updates"))message("");updateWork.start(id,automatic,NETWORK);

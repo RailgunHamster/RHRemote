@@ -418,6 +418,10 @@
     "label": "展开或收起更新详情",
     "args": {}
   },
+  {"id":"updates.history.toggle","label":"展开或收起历史更新记录","args":{}},
+  {"id":"updates.history.refresh","label":"刷新历史更新记录","args":{}},
+  {"id":"updates.history.entry.toggle","label":"展开或收起指定版本记录","args":{"version":"stable version"}},
+  {"id":"updates.notes.open","label":"打开更新说明链接","args":{"url":"http / https URL"}},
   {
     "id": "updates.check",
     "label": "检查更新",

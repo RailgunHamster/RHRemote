@@ -18,6 +18,7 @@ final class RhUpdateWork {
     }
     private final Context context;
     final RhUpdates updates;
+    final RhReleaseHistory history;
     private final Handler main=new Handler(Looper.getMainLooper());
     private Listener listener;
     private boolean running,installReady,installIntent,resumeInstall;
@@ -25,12 +26,12 @@ final class RhUpdateWork {
     private String cancelledAction="";
     private long operation;
 
-    private RhUpdateWork(Context context){this.context=context;updates=new RhUpdates(context);}
+    private RhUpdateWork(Context context){this.context=context;updates=new RhUpdates(context);history=new RhReleaseHistory(context,this::changed);}
     synchronized boolean busy(){return running||installReady||resumeInstall;}
-    synchronized void setSource(String source){if(busy())throw new IllegalStateException("更新操作正在进行");updates.setSource(source);}
+    synchronized void setSource(String source){if(busy())throw new IllegalStateException("更新操作正在进行");updates.setSource(source);history.sourceChanged();}
     synchronized boolean awaitingInstall(){return !running&&(installReady||resumeInstall);}
     private String intent(JSONObject value){return new org.json.JSONArray().put(updates.primaryAction()).put(operation).put(value.opt("availableVersion")).put(value.optBoolean("pendingRestart")).put(value.opt("candidateId")).toString();}
-    synchronized JSONObject state(){JSONObject value=updates.state();try{value.put("operationId",operation);value.put("busy",busy());value.put("canCancel",busy()&&!cancelRequested);value.put("cancelRequested",running&&cancelRequested);value.put("awaitingForeground",!running&&(installReady||resumeInstall));if(running&&cancelRequested){value.put("phase","cancelling");value.put("status","正在取消更新…");}value.put("intent",intent(value));}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
+    synchronized JSONObject state(){JSONObject value=updates.state();try{value.put("history",history.state());value.put("operationId",operation);value.put("busy",busy());value.put("canCancel",busy()&&!cancelRequested);value.put("cancelRequested",running&&cancelRequested);value.put("awaitingForeground",!running&&(installReady||resumeInstall));if(running&&cancelRequested){value.put("phase","cancelling");value.put("status","正在取消更新…");}value.put("intent",intent(value));}catch(org.json.JSONException impossible){throw new IllegalStateException(impossible);}return value;}
     synchronized void validateIntent(JSONObject args){if(args.has("expectedIntent")&&!(args.opt("expectedIntent") instanceof String&&state().optString("intent").equals(args.opt("expectedIntent"))))throw new IllegalStateException("更新状态已变化，请重新点击当前操作");}
     synchronized void attach(Listener value){listener=value;}
     synchronized boolean detach(Listener value){if(listener!=value)return false;listener=null;return true;}

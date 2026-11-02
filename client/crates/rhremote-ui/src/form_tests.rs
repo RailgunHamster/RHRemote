@@ -274,6 +274,21 @@ fn floating_keyboard_keeps_opaque_glyphs_and_clear_gaps_over_light_dark_and_busy
 }
 
 #[test]
+fn update_notes_render_as_blocks_and_history_controls_are_collapsed_until_requested(){
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(i_slint_backend_testing::TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("updates".into());ui.set_updates_managed(true);ui.set_app_version("0.2.18".into());ui.set_update_primary_text("检查更新".into());
+    let source="# RHRemote 0.2.18\n\n## 更新说明\n\n- **Markdown** 正文\n- 历史记录默认折叠\n\n```txt\n代码示例\n```";
+    ui.set_update_notes(source.into());ui.set_update_note_blocks(crate::release_notes::model(source));
+    let items=serde_json::json!([{"version":"0.2.17","publishedAt":"2026-11-02T10:19:23Z","notes":"## 修复\n\n- 悬浮键盘"}]);ui.set_update_history(crate::release_notes::history(&items,&serde_json::json!([]),""));
+    let calls=Rc::new(RefCell::new(vec![]));let received=calls.clone();ui.global::<Commands>().on_trigger(move|id,args|received.borrow_mut().push((id.to_string(),args.to_string())));ui.window().set_size(LogicalSize::new(1180.,1100.));ui.show().unwrap();
+    for expanded in [false,true]{ui.set_update_history_expanded(expanded);ui.window().take_snapshot().unwrap();assert_eq!(ElementHandle::find_by_accessible_label(&ui,"▸ v0.2.17").next().is_some(),expanded);
+        if let Some(directory)=std::env::var_os("RHREMOTE_MARKDOWN_EVIDENCE"){std::fs::create_dir_all(&directory).unwrap();let frame=ui.window().take_snapshot().unwrap();image::save_buffer(std::path::PathBuf::from(directory).join(if expanded{"windows-history-open.png"}else{"windows-history-closed.png"}),frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();}
+    }
+    click(&ui,"▸ v0.2.17");assert_eq!(calls.borrow().last().unwrap(),&("updates.history.entry.toggle".into(),"0.2.17".into()));
+    ui.set_update_history(crate::release_notes::history(&items,&serde_json::json!(["0.2.17"]),""));ui.set_update_history_busy(true);ui.set_update_history_error("历史记录读取失败".into());ui.window().take_snapshot().unwrap();assert!(ElementHandle::find_by_accessible_label(&ui,"收起历史更新记录").next().is_some());ui.hide().unwrap();
+}
+
+#[test]
 fn the_single_update_action_remains_visible_when_failure_details_are_long(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("global-settings".into());ui.set_settings_tab("updates".into());ui.set_updates_managed(true);ui.set_update_phase("error".into());ui.set_update_status("CNB / GitHub：请求超时。".repeat(100).into());ui.set_update_primary_text("重新检查".into());
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
