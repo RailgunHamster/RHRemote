@@ -97,7 +97,9 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "settings.step"=>{let(key,direction)=arg.split_once('|').unwrap_or(("",""));json!({"key":key,"direction":direction})},
         "settings.network.edit"=>{let(key,value)=arg.split_once('=').unwrap_or(("",""));json!({"key":key,"value":value})},
         "statistics.configure" => json!({"enabled":arg=="true"}),
-        "stream.keyboard.floating.set" => json!({"enabled":arg=="true"}),
+        "stream.keyboard.floating.set" | "stream.keyboard.button.set" => json!({"enabled":arg=="true"}),
+        "stream.keyboard.press" => if let Some(key)=arg.strip_suffix("|tap"){json!({"key":key,"tap":true})}else{json!({"key":arg})},
+        "stream.keyboard.layout.set" => json!({"layout":arg}),
         "app.settings.tab" | "settings.tab" | "stream.controls.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
         "stream.shortcut" => json!({"shortcut":arg}),
@@ -276,14 +278,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     toolbar
         .window()
-        .on_close_requested(|| slint::CloseRequestResponse::KeepWindowShown);
+        .on_close_requested(|| slint::CloseRequestResponse::HideWindow);
     let keyboard_sender=sender.clone();let keyboard_actions=controller.clone();let keyboard_timing=native.clone();
     keyboard.global::<Commands>().on_trigger(move|id,arg|{
+        if id=="stream.keyboard.press"&&keyboard_actions.state()["floatingKeyboard"]!=true{return;}
         keyboard_timing.ui_test.observe_action(id.as_str());
         if keyboard_sender.try_send((id.to_string(),arg.to_string(),keyboard_timing.statistics.lock().unwrap().now(),std::time::Instant::now(),None)).is_err(){keyboard_actions.message("操作队列已满".into());}
-        if id=="stream.shortcut"{overlay::focus_stream(&keyboard_actions.state());}
+        if id=="stream.shortcut"||id=="stream.keyboard.press"{overlay::focus_stream(&keyboard_actions.state());}
     });
-    let keyboard_close=controller.clone();keyboard.window().on_close_requested(move||{keyboard_close.dispatch("stream.keyboard.floating.set",json!({"enabled":false}));slint::CloseRequestResponse::KeepWindowShown});
+    let keyboard_close=controller.clone();keyboard.window().on_close_requested(move||{if keyboard_close.state()["streaming"]==true{keyboard_close.dispatch("stream.keyboard.floating.set",json!({"enabled":false}));}slint::CloseRequestResponse::HideWindow});
     let picker_sender = sender.clone();
     let picker_actions = controller.clone();
     let picker_timing = native.clone();
@@ -305,7 +308,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let dismiss = controller.clone();
     picker.window().on_close_requested(move || {
         dismiss.dispatch("stream.menu.close", json!({}));
-        slint::CloseRequestResponse::KeepWindowShown
+        slint::CloseRequestResponse::HideWindow
     });
     {
         use slint::winit_030::{EventResult, WinitWindowAccessor, winit::event::WindowEvent};
@@ -385,6 +388,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(toolbar)=toolbar_weak.upgrade(){
             toolbar.set_expanded(state["controls"]==true);
             toolbar.set_floating_keyboard(state["floatingKeyboard"]==true);
+            toolbar.set_keyboard_button_visible(state["saved"]["hideKeyboardButton"]!=true);toolbar.set_simple_keyboard(state["saved"]["simpleKeyboard"]==true);
             toolbar.set_floating_keyboard_error(state["floatingKeyboardError"].as_str().unwrap_or("").into());
             let pending=state["connecting"]==true;
             let canceling=matches!(state["connection"]["phase"].as_str(),Some("cancelling"|"cleaning"));

@@ -203,7 +203,7 @@ int AppModel::rowCount
 '@)
 }
 Edit-Source 'app/qml.qrc' {param($s)return $s.Replace('        <file>gui/main.qml</file>',"        <file>gui/main.qml</file>`n        <file>gui/RhButton.qml</file>`n        <file>gui/RhStreamAdapter.qml</file>")}
-Edit-Source 'app/resources.qrc' {param($s)return $s.Replace('</qresource>',"    <file>res/rhremote.svg</file>`n    <file>res/rhremote-shortcuts.json</file>`n    </qresource>")}
+Edit-Source 'app/resources.qrc' {param($s)return $s.Replace('</qresource>',"    <file>res/rhremote.svg</file>`n    <file>res/rhremote-shortcuts.json</file>`n    <file>res/rhremote-keyboard.json</file>`n    </qresource>")}
 Edit-Source 'app/gui/CliPair.qml' {param($s)
     $s="import RhProfiles 1.0`n"+$s
     $s=Replace-Once $s '    function onFailed(message) {' @'
@@ -557,6 +557,7 @@ win32 {
 '@}
 $overlay=Join-Path $repo 'client/windows/overlay'
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/res/rhremote-shortcuts.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'client/shared/keyboard.json') -Destination (Join-Path $SourceDir 'app/res/rhremote-keyboard.json') -Force
 Get-ChildItem -LiteralPath $overlay -Recurse -File|ForEach-Object {
     $relative=$_.FullName.Substring($overlay.Length+1);$target=Join-Path $SourceDir $relative
     if(Test-Path -LiteralPath $target){$original=Join-Path $backup $relative;if(-not(Test-Path -LiteralPath $original)){New-Item -ItemType Directory -Force -Path (Split-Path $original -Parent)|Out-Null;Copy-Item -LiteralPath $target -Destination $original}}

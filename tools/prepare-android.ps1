@@ -583,6 +583,7 @@ $overlay=Join-Path $repo 'client/android/overlay'
 New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/main/assets')|Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'client/crates/rhremote-core/src/actions.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-actions.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/shortcuts.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-shortcuts.json') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'client/shared/keyboard.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-keyboard.json') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/auto-bitrate-setting.json') -Destination (Join-Path $SourceDir 'app/src/main/assets/rhremote-auto-bitrate.json') -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $SourceDir 'app/src/test/resources')|Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'client/shared/bitrate-cases.json') -Destination (Join-Path $SourceDir 'app/src/test/resources/rhremote-bitrate-cases.json') -Force

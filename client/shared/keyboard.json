@@ -1,0 +1,1090 @@
+[
+  {
+    "id": "escape",
+    "label": "Esc",
+    "description": "escape",
+    "code": 27,
+    "row": 0,
+    "x": 0,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f1",
+    "label": "F1",
+    "description": "f1",
+    "code": 112,
+    "row": 0,
+    "x": 2,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f2",
+    "label": "F2",
+    "description": "f2",
+    "code": 113,
+    "row": 0,
+    "x": 3,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f3",
+    "label": "F3",
+    "description": "f3",
+    "code": 114,
+    "row": 0,
+    "x": 4,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f4",
+    "label": "F4",
+    "description": "f4",
+    "code": 115,
+    "row": 0,
+    "x": 5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f5",
+    "label": "F5",
+    "description": "f5",
+    "code": 116,
+    "row": 0,
+    "x": 6.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f6",
+    "label": "F6",
+    "description": "f6",
+    "code": 117,
+    "row": 0,
+    "x": 7.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f7",
+    "label": "F7",
+    "description": "f7",
+    "code": 118,
+    "row": 0,
+    "x": 8.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f8",
+    "label": "F8",
+    "description": "f8",
+    "code": 119,
+    "row": 0,
+    "x": 9.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f9",
+    "label": "F9",
+    "description": "f9",
+    "code": 120,
+    "row": 0,
+    "x": 11,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f10",
+    "label": "F10",
+    "description": "f10",
+    "code": 121,
+    "row": 0,
+    "x": 12,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f11",
+    "label": "F11",
+    "description": "f11",
+    "code": 122,
+    "row": 0,
+    "x": 13,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f12",
+    "label": "F12",
+    "description": "f12",
+    "code": 123,
+    "row": 0,
+    "x": 14,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "print-screen",
+    "label": "PrtSc",
+    "description": "print-screen",
+    "code": 44,
+    "row": 0,
+    "x": 15.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "scroll-lock",
+    "label": "ScrLk",
+    "description": "scroll-lock",
+    "code": 145,
+    "row": 0,
+    "x": 16.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "pause",
+    "label": "Pause",
+    "description": "pause",
+    "code": 19,
+    "row": 0,
+    "x": 17.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "media-mute",
+    "label": "Mute",
+    "description": "media-mute",
+    "code": 173,
+    "row": 0,
+    "x": 19,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "media-volume-down",
+    "label": "Vol−",
+    "description": "media-volume-down",
+    "code": 174,
+    "row": 0,
+    "x": 20,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "media-volume-up",
+    "label": "Vol+",
+    "description": "media-volume-up",
+    "code": 175,
+    "row": 0,
+    "x": 21,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "media-play-pause",
+    "label": "Play",
+    "description": "media-play-pause",
+    "code": 179,
+    "row": 0,
+    "x": 22,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "backtick",
+    "label": "`",
+    "description": "backtick",
+    "code": 192,
+    "row": 1,
+    "x": 0,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-1",
+    "label": "1",
+    "description": "digit-1",
+    "code": 49,
+    "row": 1,
+    "x": 1,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-2",
+    "label": "2",
+    "description": "digit-2",
+    "code": 50,
+    "row": 1,
+    "x": 2,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-3",
+    "label": "3",
+    "description": "digit-3",
+    "code": 51,
+    "row": 1,
+    "x": 3,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-4",
+    "label": "4",
+    "description": "digit-4",
+    "code": 52,
+    "row": 1,
+    "x": 4,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-5",
+    "label": "5",
+    "description": "digit-5",
+    "code": 53,
+    "row": 1,
+    "x": 5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-6",
+    "label": "6",
+    "description": "digit-6",
+    "code": 54,
+    "row": 1,
+    "x": 6,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-7",
+    "label": "7",
+    "description": "digit-7",
+    "code": 55,
+    "row": 1,
+    "x": 7,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-8",
+    "label": "8",
+    "description": "digit-8",
+    "code": 56,
+    "row": 1,
+    "x": 8,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-9",
+    "label": "9",
+    "description": "digit-9",
+    "code": 57,
+    "row": 1,
+    "x": 9,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "digit-0",
+    "label": "0",
+    "description": "digit-0",
+    "code": 48,
+    "row": 1,
+    "x": 10,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "minus",
+    "label": "−",
+    "description": "minus",
+    "code": 189,
+    "row": 1,
+    "x": 11,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "equals",
+    "label": "=",
+    "description": "equals",
+    "code": 187,
+    "row": 1,
+    "x": 12,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "backspace",
+    "label": "⌫",
+    "description": "backspace",
+    "code": 8,
+    "row": 1,
+    "x": 13,
+    "width": 2,
+    "height": 1
+  },
+  {
+    "id": "tab",
+    "label": "Tab",
+    "description": "tab",
+    "code": 9,
+    "row": 2,
+    "x": 0,
+    "width": 1.5,
+    "height": 1
+  },
+  {
+    "id": "q",
+    "label": "Q",
+    "description": "q",
+    "code": 81,
+    "row": 2,
+    "x": 1.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "w",
+    "label": "W",
+    "description": "w",
+    "code": 87,
+    "row": 2,
+    "x": 2.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "e",
+    "label": "E",
+    "description": "e",
+    "code": 69,
+    "row": 2,
+    "x": 3.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "r",
+    "label": "R",
+    "description": "r",
+    "code": 82,
+    "row": 2,
+    "x": 4.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "t",
+    "label": "T",
+    "description": "t",
+    "code": 84,
+    "row": 2,
+    "x": 5.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "y",
+    "label": "Y",
+    "description": "y",
+    "code": 89,
+    "row": 2,
+    "x": 6.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "u",
+    "label": "U",
+    "description": "u",
+    "code": 85,
+    "row": 2,
+    "x": 7.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "i",
+    "label": "I",
+    "description": "i",
+    "code": 73,
+    "row": 2,
+    "x": 8.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "o",
+    "label": "O",
+    "description": "o",
+    "code": 79,
+    "row": 2,
+    "x": 9.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "p",
+    "label": "P",
+    "description": "p",
+    "code": 80,
+    "row": 2,
+    "x": 10.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "bracket-left",
+    "label": "[",
+    "description": "bracket-left",
+    "code": 219,
+    "row": 2,
+    "x": 11.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "bracket-right",
+    "label": "]",
+    "description": "bracket-right",
+    "code": 221,
+    "row": 2,
+    "x": 12.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "backslash",
+    "label": "\\",
+    "description": "backslash",
+    "code": 220,
+    "row": 2,
+    "x": 13.5,
+    "width": 1.5,
+    "height": 1
+  },
+  {
+    "id": "caps-lock",
+    "label": "Caps",
+    "description": "caps-lock",
+    "code": 20,
+    "row": 3,
+    "x": 0,
+    "width": 1.75,
+    "height": 1
+  },
+  {
+    "id": "a",
+    "label": "A",
+    "description": "a",
+    "code": 65,
+    "row": 3,
+    "x": 1.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "s",
+    "label": "S",
+    "description": "s",
+    "code": 83,
+    "row": 3,
+    "x": 2.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "d",
+    "label": "D",
+    "description": "d",
+    "code": 68,
+    "row": 3,
+    "x": 3.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "f",
+    "label": "F",
+    "description": "f",
+    "code": 70,
+    "row": 3,
+    "x": 4.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "g",
+    "label": "G",
+    "description": "g",
+    "code": 71,
+    "row": 3,
+    "x": 5.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "h",
+    "label": "H",
+    "description": "h",
+    "code": 72,
+    "row": 3,
+    "x": 6.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "j",
+    "label": "J",
+    "description": "j",
+    "code": 74,
+    "row": 3,
+    "x": 7.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "k",
+    "label": "K",
+    "description": "k",
+    "code": 75,
+    "row": 3,
+    "x": 8.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "l",
+    "label": "L",
+    "description": "l",
+    "code": 76,
+    "row": 3,
+    "x": 9.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "semicolon",
+    "label": ";",
+    "description": "semicolon",
+    "code": 186,
+    "row": 3,
+    "x": 10.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "quote",
+    "label": "'",
+    "description": "quote",
+    "code": 222,
+    "row": 3,
+    "x": 11.75,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "enter",
+    "label": "Enter",
+    "description": "enter",
+    "code": 13,
+    "row": 3,
+    "x": 12.75,
+    "width": 2.25,
+    "height": 1
+  },
+  {
+    "id": "shift-left",
+    "label": "Shift",
+    "description": "shift-left",
+    "code": 160,
+    "row": 4,
+    "x": 0,
+    "width": 2.25,
+    "height": 1,
+    "modifier": "shift"
+  },
+  {
+    "id": "z",
+    "label": "Z",
+    "description": "z",
+    "code": 90,
+    "row": 4,
+    "x": 2.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "x",
+    "label": "X",
+    "description": "x",
+    "code": 88,
+    "row": 4,
+    "x": 3.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "c",
+    "label": "C",
+    "description": "c",
+    "code": 67,
+    "row": 4,
+    "x": 4.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "v",
+    "label": "V",
+    "description": "v",
+    "code": 86,
+    "row": 4,
+    "x": 5.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "b",
+    "label": "B",
+    "description": "b",
+    "code": 66,
+    "row": 4,
+    "x": 6.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "n",
+    "label": "N",
+    "description": "n",
+    "code": 78,
+    "row": 4,
+    "x": 7.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "m",
+    "label": "M",
+    "description": "m",
+    "code": 77,
+    "row": 4,
+    "x": 8.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "comma",
+    "label": ",",
+    "description": "comma",
+    "code": 188,
+    "row": 4,
+    "x": 9.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "period",
+    "label": ".",
+    "description": "period",
+    "code": 190,
+    "row": 4,
+    "x": 10.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "slash",
+    "label": "/",
+    "description": "slash",
+    "code": 191,
+    "row": 4,
+    "x": 11.25,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "shift-right",
+    "label": "Shift",
+    "description": "shift-right",
+    "code": 161,
+    "row": 4,
+    "x": 12.25,
+    "width": 2.75,
+    "height": 1,
+    "modifier": "shift"
+  },
+  {
+    "id": "ctrl-left",
+    "label": "Ctrl",
+    "description": "ctrl-left",
+    "code": 162,
+    "row": 5,
+    "x": 0,
+    "width": 1.25,
+    "height": 1,
+    "modifier": "ctrl"
+  },
+  {
+    "id": "meta-left",
+    "label": "Win",
+    "description": "meta-left",
+    "code": 91,
+    "row": 5,
+    "x": 1.25,
+    "width": 1.25,
+    "height": 1,
+    "modifier": "meta"
+  },
+  {
+    "id": "alt-left",
+    "label": "Alt",
+    "description": "alt-left",
+    "code": 164,
+    "row": 5,
+    "x": 2.5,
+    "width": 1.25,
+    "height": 1,
+    "modifier": "alt"
+  },
+  {
+    "id": "space",
+    "label": "Space",
+    "description": "space",
+    "code": 32,
+    "row": 5,
+    "x": 3.75,
+    "width": 6.25,
+    "height": 1
+  },
+  {
+    "id": "alt-right",
+    "label": "Alt",
+    "description": "alt-right",
+    "code": 165,
+    "row": 5,
+    "x": 10,
+    "width": 1.25,
+    "height": 1,
+    "modifier": "alt"
+  },
+  {
+    "id": "meta-right",
+    "label": "Win",
+    "description": "meta-right",
+    "code": 92,
+    "row": 5,
+    "x": 11.25,
+    "width": 1.25,
+    "height": 1,
+    "modifier": "meta"
+  },
+  {
+    "id": "context-menu",
+    "label": "Menu",
+    "description": "context-menu",
+    "code": 93,
+    "row": 5,
+    "x": 12.5,
+    "width": 1.25,
+    "height": 1
+  },
+  {
+    "id": "ctrl-right",
+    "label": "Ctrl",
+    "description": "ctrl-right",
+    "code": 163,
+    "row": 5,
+    "x": 13.75,
+    "width": 1.25,
+    "height": 1,
+    "modifier": "ctrl"
+  },
+  {
+    "id": "insert",
+    "label": "Ins",
+    "description": "insert",
+    "code": 45,
+    "row": 1,
+    "x": 15.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "home",
+    "label": "Home",
+    "description": "home",
+    "code": 36,
+    "row": 1,
+    "x": 16.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "page-up",
+    "label": "PgUp",
+    "description": "page-up",
+    "code": 33,
+    "row": 1,
+    "x": 17.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "delete",
+    "label": "Del",
+    "description": "delete",
+    "code": 46,
+    "row": 2,
+    "x": 15.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "end",
+    "label": "End",
+    "description": "end",
+    "code": 35,
+    "row": 2,
+    "x": 16.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "page-down",
+    "label": "PgDn",
+    "description": "page-down",
+    "code": 34,
+    "row": 2,
+    "x": 17.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "arrow-up",
+    "label": "↑",
+    "description": "arrow-up",
+    "code": 38,
+    "row": 4,
+    "x": 16.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "arrow-left",
+    "label": "←",
+    "description": "arrow-left",
+    "code": 37,
+    "row": 5,
+    "x": 15.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "arrow-down",
+    "label": "↓",
+    "description": "arrow-down",
+    "code": 40,
+    "row": 5,
+    "x": 16.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "arrow-right",
+    "label": "→",
+    "description": "arrow-right",
+    "code": 39,
+    "row": 5,
+    "x": 17.5,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-lock",
+    "label": "Num",
+    "description": "num-lock",
+    "code": 144,
+    "row": 1,
+    "x": 19,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-divide",
+    "label": "/",
+    "description": "num-divide",
+    "code": 111,
+    "row": 1,
+    "x": 20,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-multiply",
+    "label": "×",
+    "description": "num-multiply",
+    "code": 106,
+    "row": 1,
+    "x": 21,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-subtract",
+    "label": "−",
+    "description": "num-subtract",
+    "code": 109,
+    "row": 1,
+    "x": 22,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-7",
+    "label": "7",
+    "description": "num-7",
+    "code": 103,
+    "row": 2,
+    "x": 19,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-8",
+    "label": "8",
+    "description": "num-8",
+    "code": 104,
+    "row": 2,
+    "x": 20,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-9",
+    "label": "9",
+    "description": "num-9",
+    "code": 105,
+    "row": 2,
+    "x": 21,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-4",
+    "label": "4",
+    "description": "num-4",
+    "code": 100,
+    "row": 3,
+    "x": 19,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-5",
+    "label": "5",
+    "description": "num-5",
+    "code": 101,
+    "row": 3,
+    "x": 20,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-6",
+    "label": "6",
+    "description": "num-6",
+    "code": 102,
+    "row": 3,
+    "x": 21,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-1",
+    "label": "1",
+    "description": "num-1",
+    "code": 97,
+    "row": 4,
+    "x": 19,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-2",
+    "label": "2",
+    "description": "num-2",
+    "code": 98,
+    "row": 4,
+    "x": 20,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-3",
+    "label": "3",
+    "description": "num-3",
+    "code": 99,
+    "row": 4,
+    "x": 21,
+    "width": 1,
+    "height": 1
+  },
+  {
+    "id": "num-add",
+    "label": "+",
+    "description": "num-add",
+    "code": 107,
+    "row": 2,
+    "x": 22,
+    "width": 1,
+    "height": 2
+  },
+  {
+    "id": "num-enter",
+    "label": "Enter",
+    "description": "num-enter",
+    "code": 13,
+    "row": 4,
+    "x": 22,
+    "width": 1,
+    "height": 2
+  },
+  {
+    "id": "num-0",
+    "label": "0",
+    "description": "num-0",
+    "code": 96,
+    "row": 5,
+    "x": 19,
+    "width": 2,
+    "height": 1
+  },
+  {
+    "id": "num-decimal",
+    "label": ".",
+    "description": "num-decimal",
+    "code": 110,
+    "row": 5,
+    "x": 21,
+    "width": 1,
+    "height": 1
+  }
+]

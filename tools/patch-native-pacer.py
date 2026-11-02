@@ -25,8 +25,12 @@ def prepare(root):
             target.parent.mkdir(parents=True,exist_ok=True)
             original=subprocess.check_output(['git','-C',str(root),'show',REVISION+':'+name])
             target.write_bytes(original)
-        subprocess.run(['git','apply','--check',str(repo/'client/patches/moonlight-qt-pacer.patch')],cwd=stage,check=True)
-        subprocess.run(['git','apply',str(repo/'client/patches/moonlight-qt-pacer.patch')],cwd=stage,check=True)
+        # Windows checkouts may give the diff CRLF while `git show` emits the
+        # original LF blobs. Normalize the temporary diff, not upstream files.
+        patch=stage/'pacer.patch'
+        patch.write_bytes((repo/'client/patches/moonlight-qt-pacer.patch').read_bytes().replace(b'\r\n',b'\n'))
+        subprocess.run(['git','apply','--check',str(patch)],cwd=stage,check=True)
+        subprocess.run(['git','apply',str(patch)],cwd=stage,check=True)
         for name in FILES:
             current=root/name
             backup=root/'.rhremote-pacer-originals'/name

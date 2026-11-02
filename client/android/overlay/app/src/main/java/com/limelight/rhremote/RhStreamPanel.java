@@ -40,7 +40,9 @@ public final class RhStreamPanel {
     private SeekBar volume;
     private LinearLayout monitorList;
     private Button mode, pan, audio, refresh;
-    private Switch scrollModeSwitch,floatingKeyboardSwitch,clickScrollModeSwitch;
+    private Switch scrollModeSwitch,floatingKeyboardSwitch,clickScrollModeSwitch,keyboardButtonSwitch,keyboardLayoutSwitch;
+    private boolean bindingKeyboardLayout;
+    private boolean bindingKeyboardButton;
     private boolean windowCapture;
     private boolean bindingScrollMode,bindingFloatingKeyboard;
     private GridLayout inputGrid, screenGrid, viewGrid;
@@ -143,6 +145,10 @@ public final class RhStreamPanel {
         styleSwitch(floatingKeyboardSwitch);
         floatingKeyboardSwitch.setOnCheckedChangeListener((view,checked)->{if(!bindingFloatingKeyboard&&ownsVisible(view))send("stream.keyboard.floating.set",RhActions.obj("enabled",checked));});LinearLayout.LayoutParams floatingParams=new LinearLayout.LayoutParams(-2,dp(48));floatingParams.leftMargin=dp(8);floatingParams.rightMargin=dp(8);headerActions.addView(floatingKeyboardSwitch,0,floatingParams);
         icon(gridButton(inputGrid,"Ctrl+Alt+Delete","stream.shortcut",RhActions.obj("shortcut","ctrl-alt-delete")),R.drawable.rh_lock);
+        keyboardLayoutSwitch=new Switch(context);keyboardLayoutSwitch.setText("简化键盘");keyboardLayoutSwitch.setTextColor(Color.parseColor(inkColor));keyboardLayoutSwitch.setTextSize(14);keyboardLayoutSwitch.setContentDescription("简化键盘");keyboardLayoutSwitch.setPadding(dp(4),0,dp(4),0);keyboardLayoutSwitch.setMinimumHeight(dp(48));keyboardLayoutSwitch.setTag("stream.keyboard.layout.set");styleSwitch(keyboardLayoutSwitch);
+        keyboardLayoutSwitch.setOnCheckedChangeListener((view,checked)->{if(!bindingKeyboardLayout&&ownsVisible(view))send("stream.keyboard.layout.set",RhActions.obj("layout",checked?"simple":"full"));});input.addView(keyboardLayoutSwitch,new LinearLayout.LayoutParams(-1,dp(48)));
+        keyboardButtonSwitch=new Switch(context);keyboardButtonSwitch.setText("显示键盘浮钮");keyboardButtonSwitch.setTextColor(Color.parseColor(inkColor));keyboardButtonSwitch.setTextSize(14);keyboardButtonSwitch.setContentDescription("显示键盘浮钮");keyboardButtonSwitch.setPadding(dp(4),0,dp(4),0);keyboardButtonSwitch.setMinimumHeight(dp(48));keyboardButtonSwitch.setTag("stream.keyboard.button.set");styleSwitch(keyboardButtonSwitch);
+        keyboardButtonSwitch.setOnCheckedChangeListener((view,checked)->{if(!bindingKeyboardButton&&ownsVisible(view))send("stream.keyboard.button.set",RhActions.obj("enabled",checked));});input.addView(keyboardButtonSwitch,new LinearLayout.LayoutParams(-1,dp(48)));
         scrollModeSwitch=new Switch(context);scrollModeSwitch.setText("滚动模式");scrollModeSwitch.setTextColor(Color.parseColor(inkColor));scrollModeSwitch.setTextSize(14);scrollModeSwitch.setContentDescription("滚动模式");scrollModeSwitch.setShowText(false);scrollModeSwitch.setSwitchMinWidth(dp(44));scrollModeSwitch.setMinHeight(dp(48));scrollModeSwitch.setPadding(dp(4),0,dp(4),0);scrollModeSwitch.setDefaultFocusHighlightEnabled(false);scrollModeSwitch.setTag("stream.scroll.set");
         android.graphics.drawable.StateListDrawable scrollFocus=new android.graphics.drawable.StateListDrawable();scrollFocus.addState(new int[]{-android.R.attr.state_enabled},surface(surfaceColor,null,10));scrollFocus.addState(new int[]{android.R.attr.state_pressed},surface(selectedColor,"#5274e8",10));scrollFocus.addState(new int[]{android.R.attr.state_focused},surface(selectedColor,"#5274e8",10));scrollFocus.addState(new int[]{},surface(surfaceColor,null,10));scrollModeSwitch.setBackground(scrollFocus);
         styleSwitch(scrollModeSwitch);
@@ -372,6 +378,8 @@ public final class RhStreamPanel {
         enabled(scrollModeSwitch,connected&&!busy);
         enabled(clickScrollModeSwitch,connected&&!busy);
         enabled(floatingKeyboardSwitch,connected&&!busy);
+        enabled(keyboardButtonSwitch,connected&&!busy);
+        enabled(keyboardLayoutSwitch,connected&&!busy);
         updateBounds();
         retainLocalFocus(local);
     }
@@ -395,6 +403,8 @@ public final class RhStreamPanel {
     public void updateScrollMode(boolean enabled){if(disposed)return;scrollMode=enabled;if(panel==null)return;bindingScrollMode=true;try{scrollModeSwitch.setChecked(enabled);}finally{bindingScrollMode=false;}}
     public void updateClickScrollMode(boolean enabled){if(disposed)return;clickScrollMode=enabled;if(panel==null)return;bindingClickScrollMode=true;try{clickScrollModeSwitch.setChecked(enabled);mode.setText(enabled?"点击与滚动":shownTrackpad?"触控板":"直接点击");}finally{bindingClickScrollMode=false;}}
     public void updateFloatingKeyboard(boolean enabled){if(disposed)return;floatingKeyboard=enabled;if(panel==null)return;bindingFloatingKeyboard=true;try{floatingKeyboardSwitch.setChecked(enabled);}finally{bindingFloatingKeyboard=false;}}
+    public void updateKeyboardButton(boolean enabled){if(disposed||panel==null)return;bindingKeyboardButton=true;try{keyboardButtonSwitch.setChecked(enabled);}finally{bindingKeyboardButton=false;}}
+    public void updateKeyboardLayout(boolean simple){if(disposed||panel==null)return;bindingKeyboardLayout=true;try{keyboardLayoutSwitch.setChecked(simple);}finally{bindingKeyboardLayout=false;}}
     public void updateZoom(float scale){zoomPercent=Math.round(scale*100);renderZoom();}
     private void renderZoom(){if(isExpanded()&&tab.equals("displays")&&zoomPercent!=shownZoomPercent){shownZoomPercent=zoomPercent;zoomLabel.setText("缩放 "+zoomPercent+"%");}}
     private String monitorName(JSONObject monitor){String name=monitor.optString("name");return monitor.optBoolean("virtual")?"虚拟屏":name.isEmpty()?"物理屏幕":name;}

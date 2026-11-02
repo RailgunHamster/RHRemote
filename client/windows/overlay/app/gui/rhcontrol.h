@@ -1,4 +1,5 @@
 #pragma once
+#include "rhkeyboard.h"
 #include <QObject>
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -196,10 +197,12 @@ class RhControl : public QObject {
             r.volume=volume;r.audioEnabled=enabled;
             return {{"ok",true},{"enabled",r.audioEnabled.load()},{"volume",r.volume.load()}};
         }
-        if(path=="/v1/shortcut"){
+        if(path=="/v1/shortcut"||path=="/v1/keyboard"){
             if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}
-            QFile file(":/res/rhremote-shortcuts.json");file.open(QIODevice::ReadOnly);const auto shortcuts=QJsonDocument::fromJson(file.readAll()).array();QJsonObject shortcut;
-            for(const auto& entry:shortcuts)if(entry.toObject()["id"]==body["shortcut"]&&body["shortcut"].isString()){shortcut=entry.toObject();break;}
+            QJsonObject shortcut;
+            if(path=="/v1/keyboard"){shortcut=RhKeyboard::command(body);if(!shortcut["ok"].toBool()){status=400;return shortcut;}}
+            else{QFile file(":/res/rhremote-shortcuts.json");file.open(QIODevice::ReadOnly);const auto shortcuts=QJsonDocument::fromJson(file.readAll()).array();
+            for(const auto& entry:shortcuts)if(entry.toObject()["id"]==body["shortcut"]&&body["shortcut"].isString()){shortcut=entry.toObject();break;}}
             if(shortcut.isEmpty()){status=400;return {{"ok",false},{"error","unknown remote shortcut"}};}
             if(shortcut["secureAttention"].toBool()){
                 QString address;QSslCertificate cert;{QMutexLocker lock(&r.mutex);address=r.hostAddress;cert=r.hostCert;}

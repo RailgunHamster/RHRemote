@@ -492,17 +492,17 @@ fn floating_keys_use_actual_widget_callbacks_and_reject_hidden_or_busy_input() {
     f.driver.attach_keyboard(&keyboard);keyboard.show().unwrap();
     f.controller.toolbar_state(json!({"floatingKeyboard":{"visible":true}}));
     for key in crate::floating_keyboard::layout(840.,560.) {
-        let result=f.activate(json!({"window":"keyboard","actionId":"stream.shortcut","argument":key.id}));
+        let result=f.activate(json!({"window":"keyboard","actionId":"stream.keyboard.press","argument":key.id}));
         assert_eq!(result["status"],"complete","{result}");
-        assert_eq!(result["result"]["commandIds"],json!(["stream.shortcut"]));
+        assert_eq!(result["result"]["commandIds"],json!(["stream.keyboard.press"]));
         assert_eq!(result["result"]["systemInputInjected"],false);
-        assert_eq!(f.calls.borrow().last().unwrap(),&("stream.shortcut".into(),key.id.into()));
+        assert_eq!(f.calls.borrow().last().unwrap(),&("stream.keyboard.press".into(),key.id.into()));
     }
-    assert_eq!(f.calls.borrow().len(),10);
+    assert_eq!(f.calls.borrow().len(),108);
     keyboard.set_busy(true);
-    assert_eq!(f.activate(json!({"window":"keyboard","actionId":"stream.shortcut","argument":"tab"}))["status"],"failed");
+    assert_eq!(f.activate(json!({"window":"keyboard","actionId":"stream.keyboard.press","argument":"tab"}))["status"],"failed");
     keyboard.set_busy(false);keyboard.hide().unwrap();
     f.controller.toolbar_state(json!({"floatingKeyboard":{"visible":false}}));
-    assert_eq!(f.activate(json!({"window":"keyboard","actionId":"stream.shortcut","argument":"tab"}))["status"],"failed");
-    assert_eq!(f.calls.borrow().len(),10);
+    assert_eq!(f.activate(json!({"window":"keyboard","actionId":"stream.keyboard.press","argument":"tab"}))["status"],"failed");
+    assert_eq!(f.calls.borrow().len(),108);
 }

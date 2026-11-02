@@ -170,7 +170,8 @@ mod region {
         if unsafe{SetWindowRgn(hwnd,Some(shape.0),true)}==0{return Err("Cannot apply keyboard region".into());}std::mem::forget(shape);
         let actual=OwnedRegion::empty()?;if unsafe{GetWindowRgn(hwnd,actual.0)}==RGN_ERROR{return Err("Cannot read keyboard region".into());}
         let centers=rects.iter().all(|&(l,t,r,b)|actual.contains(x+(l+r)/2,y+(t+b)/2));let center_excluded=!actual.contains(x+client.right/2,y+client.bottom/2);let corners_excluded=!actual.contains(x,y)&&!actual.contains(x+client.right-1,y+client.bottom-1);
-        if !centers||!center_excluded||!corners_excluded{return Err("Keyboard click regions do not match visible keys".into());}
+        let center_should_be_blank=rects.iter().all(|&(l,t,r,b)|client.right/2<l||client.right/2>=r||client.bottom/2<t||client.bottom/2>=b);
+        if !centers||center_should_be_blank&&!center_excluded||!corners_excluded{return Err("Keyboard click regions do not match visible keys".into());}
         Ok(json!({"applied":true,"mode":"key_regions","key":fingerprint,"keyCentersIncluded":centers,"centerExcluded":center_excluded,"cornersExcluded":corners_excluded}))
     }
 
@@ -184,11 +185,11 @@ mod region {
             struct Hidden(HWND);impl Drop for Hidden{fn drop(&mut self){unsafe{let _=DestroyWindow(self.0);}}}
             let _owned=Hidden(hwnd);
             assert!(!unsafe{IsWindowVisible(hwnd)}.as_bool());
-            for(w,h,scale)in[(840,560,1.),(360,800,1.),(960,720,2.),(320,240,1.)]{
+            for(w,h,scale)in[(840,560,1.),(640,360,1.),(1920,1440,2.),(1280,800,1.25)]{
                 unsafe{SetWindowPos(hwnd,None,0,0,w,h,SWP_NOACTIVATE|SWP_NOZORDER)}.unwrap();
                 let keys=crate::floating_keyboard::layout(w as f32/scale,h as f32/scale);
                 let value=keyboard(hwnd,scale,&keys,&Value::Null).unwrap();
-                assert_eq!(value["applied"],true);assert_eq!(value["keyCentersIncluded"],true);assert_eq!(value["centerExcluded"],true);assert_eq!(value["cornersExcluded"],true);
+                assert_eq!(value["applied"],true);assert_eq!(value["keyCentersIncluded"],true);assert_eq!(value["cornersExcluded"],true);
                 assert_eq!(keyboard(hwnd,scale,&keys,&value).unwrap(),value);
                 assert!(!unsafe{IsWindowVisible(hwnd)}.as_bool());
             }

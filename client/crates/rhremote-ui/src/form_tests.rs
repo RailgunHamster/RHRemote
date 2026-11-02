@@ -201,17 +201,35 @@ fn device_identity_has_its_own_editor_and_fixed_completion_controls(){
 }
 
 #[test]
-fn connection_footer_stays_reachable_and_only_exposes_actions_for_the_current_stage(){
-    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("connection".into());ui.set_connection_name("winserver".into());
+fn connection_actions_stay_reachable_and_back_uses_the_top_left_header(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("connection".into());ui.set_connection_name("winserver".into());ui.set_connection_operation("connect".into());
     let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,_|calls.borrow_mut().push(id.to_string()));ui.show().unwrap();
     for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
         ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_connection_busy(true);ui.set_connection_phase("starting".into());
         received.borrow_mut().clear();click(&ui,"取消连接");assert_eq!(&*received.borrow(),&["stream.disconnect"]);
         ui.set_connection_phase("cancelling".into());received.borrow_mut().clear();click(&ui,"正在清理…");assert!(received.borrow().is_empty());
         ui.set_connection_phase("failed".into());ui.set_connection_busy(false);ui.set_connection_error("连接失败的详细信息。".repeat(40).into());
-        let retry=ElementHandle::find_by_accessible_label(&ui,"重试连接").next().unwrap();let p=retry.absolute_position();let size=retry.size();assert!(p.y>=height-100.&&p.y+size.height<=height&&p.x+size.width<=width);
+        let retry=ElementHandle::find_by_accessible_label(&ui,"重试连接").next().unwrap();let p=retry.absolute_position();let size=retry.size();assert!(p.y<height/2.&&p.y+size.height<=height&&p.x+size.width<=width);let back=ElementHandle::find_by_accessible_label(&ui,"返回设备").next().unwrap();let at=back.absolute_position();assert!(at.y<150.&&at.x<width/2.);
         received.borrow_mut().clear();click(&ui,"重试连接");click(&ui,"返回设备");assert_eq!(&*received.borrow(),&["connection.retry","connection.dismiss"]);
     }ui.hide().unwrap();
+}
+
+#[test]
+fn ended_session_offers_reconnect_beside_its_status_and_back_at_the_top(){
+    slint::platform::set_platform(Box::new(i_slint_backend_testing::TestingBackend::new(i_slint_backend_testing::TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();
+    let ui=MainWindow::new().unwrap();ui.set_page("connection".into());ui.set_connection_name("Claw".into());ui.set_connection_operation("connect".into());ui.set_connection_phase("ended".into());ui.set_connection_title("已断开".into());ui.set_connection_busy(false);
+    let calls=Rc::new(RefCell::new(Vec::new()));let output=calls.clone();ui.global::<Commands>().on_trigger(move|id,_|output.borrow_mut().push(id.to_string()));ui.show().unwrap();
+    for(w,h,compact)in[(1180.,780.,false),(720.,560.,true)]{
+        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(w,h));
+        let retry=ElementHandle::find_by_accessible_label(&ui,"再次连接").next().unwrap();let p=retry.absolute_position();assert!(p.y<h/2.);assert!(p.x+retry.size().width<=w);
+        let back=ElementHandle::find_by_accessible_label(&ui,"返回设备").next().unwrap();let b=back.absolute_position();assert!(b.y<150.&&b.x<w/2.);
+        calls.borrow_mut().clear();click(&ui,"再次连接");click(&ui,"返回设备");assert_eq!(&*calls.borrow(),&["connection.retry","connection.dismiss"]);
+        if let Ok(directory)=std::env::var("RHREMOTE_KEYBOARD_EVIDENCE") {std::fs::create_dir_all(&directory).unwrap();let frame=ui.window().take_snapshot().unwrap();image::save_buffer(std::path::PathBuf::from(&directory).join(format!("disconnected-{w}x{h}.png")),frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();}
+    }
+    ui.hide().unwrap();
+    let keyboard=crate::FloatingKeyboardWindow::new().unwrap();keyboard.set_keys(crate::floating_keyboard::model(&crate::floating_keyboard::layout(1180.,780.)));keyboard.window().set_size(LogicalSize::new(1180.,780.));keyboard.show().unwrap();
+    if let Ok(directory)=std::env::var("RHREMOTE_KEYBOARD_EVIDENCE"){let frame=keyboard.window().take_snapshot().unwrap();image::save_buffer(std::path::PathBuf::from(directory).join("keyboard-windows.png"),frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();}
+    keyboard.hide().unwrap();
 }
 
 #[test]

@@ -1,6 +1,38 @@
 use serde_json::{Value, json};
 use slint::{ComponentHandle, Model};
 
+/// Hide the real owned surface as well as Slint's logical window. A terminal
+/// session must not leave an unresponsive shell/taskbar entry behind.
+pub(crate) fn hide_auxiliary(window:&slint::Window)->Value {
+    let _=window.hide();
+    #[cfg(windows)]
+    {
+        use slint::winit_030::WinitWindowAccessor;
+        use raw_window_handle::{HasWindowHandle,RawWindowHandle};
+        use windows::Win32::{Foundation::HWND,UI::WindowsAndMessaging::*};
+        let mut result=json!({"visible":false,"nativeAllocated":false});
+        window.with_winit_window(|native|{if let Ok(handle)=native.window_handle(){if let RawWindowHandle::Win32(handle)=handle.as_raw(){
+            result=hide_auxiliary_hwnd(HWND(handle.hwnd.get()as*mut _));
+        }}});result
+    }
+    #[cfg(not(windows))]
+    json!({"visible":false})
+}
+
+#[cfg(windows)]
+fn hide_auxiliary_hwnd(hwnd:windows::Win32::Foundation::HWND)->Value{
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    unsafe{
+        let mut pid=0;GetWindowThreadProcessId(hwnd,Some(&mut pid));
+        if pid!=std::process::id(){return json!({"visible":false,"nativeAllocated":false,"reason":"not-owned"});}
+        let _=ShowWindow(hwnd,SW_HIDE);SetWindowLongPtrW(hwnd,GWLP_HWNDPARENT,0);
+        let style=GetWindowLongPtrW(hwnd,GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd,GWL_EXSTYLE,(style&!(WS_EX_APPWINDOW.0 as isize))|(WS_EX_TOOLWINDOW.0|WS_EX_NOACTIVATE.0)as isize);
+        let _=SetWindowPos(hwnd,None,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+        json!({"visible":false,"nativeAllocated":true,"nativeVisible":IsWindowVisible(hwnd).as_bool(),"detached":GetWindowLongPtrW(hwnd,GWLP_HWNDPARENT)==0,"toolWindow":GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_TOOLWINDOW.0 as isize!=0,"appWindow":GetWindowLongPtrW(hwnd,GWL_EXSTYLE)&WS_EX_APPWINDOW.0 as isize!=0})
+    }
+}
+
 pub fn focus_stream(state: &Value) {
     #[cfg(target_os = "linux")]
     crate::x11_surface::focus(state);
@@ -82,7 +114,6 @@ impl Session {
                         | "reconnecting"
                         | "cancelling"
                         | "cleaning"
-                        | "failed"
                 )
             )
         {
@@ -135,8 +166,7 @@ impl Follower {
 
     pub fn follow(&mut self, toolbar: &crate::StreamToolbar, state: &Value) -> Value {
         let Some(session) = self.reconcile(state) else {
-            let _ = toolbar.hide();
-            return json!({"visible":false});
+            return hide_auxiliary(toolbar.window());
         };
         #[cfg(windows)]
         unsafe {
@@ -334,8 +364,7 @@ pub fn follow_picker(picker: &crate::StreamPicker, state: &Value, toolbar: &Valu
         || toolbar["visible"] != true
         || state["controls"] != true
     {
-        let _ = picker.hide();
-        return json!({"visible":false});
+        return hide_auxiliary(picker.window());
     }
     #[cfg(windows)]
     unsafe {
@@ -452,6 +481,13 @@ mod tests {
             detached: false,
         }
     }
+    #[cfg(windows)]
+    #[test]fn terminated_auxiliary_surface_is_hidden_detached_and_not_an_app_window(){
+        use windows::{core::w,Win32::UI::WindowsAndMessaging::*};
+        let hwnd=unsafe{CreateWindowExW(WS_EX_APPWINDOW,w!("STATIC"),w!("RHRemote owned cleanup test"),WS_POPUP,0,0,64,64,None,None,None,None)}.unwrap();
+        let result=hide_auxiliary_hwnd(hwnd);assert_eq!(result["nativeAllocated"],true);assert_eq!(result["nativeVisible"],false);assert_eq!(result["detached"],true);assert_eq!(result["toolWindow"],true);assert_eq!(result["appWindow"],false);
+        assert_eq!(hide_auxiliary_hwnd(hwnd),result);unsafe{DestroyWindow(hwnd)}.unwrap();
+    }
     #[test]
     fn native_child_replacement_keeps_only_the_same_logical_session_anchor() {
         let mut follower = follower();
@@ -460,7 +496,6 @@ mod tests {
             "reconnecting",
             "cancelling",
             "cleaning",
-            "failed",
         ] {
             let mut s = state("host", 3, phase);
             s["statistics"] = json!({"streamWindow":"0","streamProcessId":99});
@@ -474,25 +509,13 @@ mod tests {
         );
     }
     #[test]
-    fn explicit_retry_can_reuse_a_failed_anchor_but_other_requests_cannot() {
-        let mut f = follower();
-        f.reconcile(&state("host", 3, "failed"));
-        f.reconcile(&state("host", 4, "starting"));
-        assert_eq!(f.anchor.as_ref().unwrap().session.attempt, 4);
-        for (uuid, attempt, previous) in [
-            ("host", 5, "failed"),
-            ("other", 4, "failed"),
-            ("host", 4, "connected"),
-        ] {
-            let mut f = follower();
-            f.reconcile(&state("host", 3, previous));
-            f.reconcile(&state(uuid, attempt, "starting"));
-            assert!(f.anchor.is_none(), "unrelated request inherited anchor");
-        }
+    fn failed_session_drops_the_anchor_and_retry_waits_for_its_new_owner(){
+        let mut f=follower();assert!(f.reconcile(&state("host",3,"failed")).is_none());assert!(f.anchor.is_none());
+        f.reconcile(&state("host",4,"starting"));assert!(f.anchor.is_none(),"A new session must get geometry from its own native window");
     }
     #[test]
     fn dismissal_end_and_pairing_drop_the_saved_location() {
-        for phase in ["ended", "cancelled", ""] {
+        for phase in ["failed", "ended", "cancelled", ""] {
             let mut f = follower();
             f.reconcile(&state("host", 3, phase));
             assert!(f.anchor.is_none());

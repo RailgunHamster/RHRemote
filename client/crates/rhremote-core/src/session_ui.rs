@@ -71,6 +71,28 @@ mod tests {
         assert_eq!(c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}))["ok"],true);assert_eq!(c.state()["floatingKeyboard"],true);assert_eq!(c.state()["controls"],false);assert_eq!(c.state()["saved"],saved);
         c.dispatch("stream.keyboard.floating.set",json!({"enabled":false}));c.stream_state(false,json!({"phase":"idle"}));assert_eq!(c.dispatch("stream.keyboard.floating.set",json!({"enabled":true}))["ok"],false);assert_eq!(c.state()["floatingKeyboard"],false);
     }
+    #[derive(Default)]struct KeyboardHost{calls:Mutex<Vec<Value>>,reject:std::sync::atomic::AtomicBool}
+    impl Platform for KeyboardHost{fn execute(&self,id:&str,args:&Value)->Result<Value,String>{if id=="stream.keyboard.press"{self.calls.lock().unwrap().push(args.clone());if self.reject.load(std::sync::atomic::Ordering::SeqCst){return Err("input rejected".into());}}Ok(json!({}))}}
+    #[test]fn complete_keyboard_dispatches_one_shot_chords_through_the_real_session_gate(){
+        let p=Arc::new(KeyboardHost::default());let storage=std::env::temp_dir().join(format!("rhremote-keyboard-{}.json",crate::random_token().unwrap()));
+        let c=Controller::new("windows",storage.clone(),p.clone()).unwrap();c.replace_devices(serde_json::from_value(json!([{"uuid":"host","name":"host","address":"127.0.0.1","online":true,"paired":true}])).unwrap());connect(&c);
+        for key in ["ctrl-left","c"]{assert_eq!(c.dispatch("stream.keyboard.press",json!({"key":key}))["ok"],true);}
+        assert_eq!(p.calls.lock().unwrap()[0]["keys"],json!([17,67]));assert_eq!(c.state()["keyboardModifiers"],json!([]));
+        for key in ["ctrl-left","alt-left","delete"]{assert_eq!(c.dispatch("stream.keyboard.press",json!({"key":key}))["ok"],true);}
+        assert_eq!(p.calls.lock().unwrap()[1]["secureAttention"],true);
+        assert_eq!(c.dispatch("stream.keyboard.press",json!({"key":"meta-left","tap":true}))["ok"],true);assert_eq!(p.calls.lock().unwrap()[2]["keys"],json!([91]));
+        assert_eq!(c.dispatch("stream.keyboard.press",json!({"key":"bogus"}))["ok"],false);assert_eq!(p.calls.lock().unwrap().len(),3);
+        p.reject.store(true,std::sync::atomic::Ordering::SeqCst);c.dispatch("stream.keyboard.press",json!({"key":"shift-left"}));assert_eq!(c.dispatch("stream.keyboard.press",json!({"key":"a"}))["ok"],false);assert_eq!(c.state()["keyboardModifiers"],json!([]));assert_eq!(c.state()["controlAction"]["error"],"input rejected");
+        c.stream_state(false,json!({"phase":"idle"}));assert_eq!(c.dispatch("stream.keyboard.press",json!({"key":"a"}))["ok"],false);
+        let _=std::fs::remove_file(storage);
+    }
+    #[test]fn keyboard_button_preference_survives_restart_and_stays_out_of_shared_sync(){
+        let p=Arc::new(Host{pending:None,fail:std::sync::atomic::AtomicBool::new(false)});let c=fixture(p.clone());
+        let shared=serde_json::to_value(c.export_shared()).unwrap();assert_eq!(c.dispatch("stream.keyboard.button.set",json!({"enabled":false}))["ok"],true);assert_eq!(c.state()["saved"]["hideKeyboardButton"],true);
+        assert_eq!(serde_json::to_value(c.export_shared()).unwrap(),shared);
+        assert_eq!(c.dispatch("stream.keyboard.layout.set",json!({"layout":"simple"}))["ok"],true);assert_eq!(serde_json::to_value(c.export_shared()).unwrap(),shared);
+        let second=Controller::new("windows",c.storage.clone(),p).unwrap();assert_eq!(second.state()["saved"]["hideKeyboardButton"],true);assert_eq!(second.state()["saved"]["simpleKeyboard"],true);let _=std::fs::remove_file(&c.storage);
+    }
     fn keyboard_report(c:&Controller,request:u64,code:&str,visible:bool)->Value{
         json!({"floatingKeyboard":{"session":c.stream_epoch(),"request":request,"feedbackCode":code,"visible":visible}})
     }
@@ -313,6 +335,7 @@ pub fn is_control_action(id: &str) -> bool {
         "stream.displays.refresh"
             | "stream.display.select"
             | "stream.shortcut"
+            | "stream.keyboard.press"
             | "stream.window.move"
             | "stream.stats.toggle"
             | "stream.audio.toggle"
@@ -320,6 +343,7 @@ pub fn is_control_action(id: &str) -> bool {
     )
 }
 pub(crate) fn clear(s: &mut State) {
+    s.keyboard_modifiers.clear();
     s.floating_keyboard_error.clear();
     s.control_action = ControlAction {
         sequence: s.control_action.sequence + 1,
@@ -359,6 +383,7 @@ fn waiting(id: &str) -> &'static str {
         "stream.displays.refresh" => "正在读取屏幕…",
         "stream.display.select" => "正在切换屏幕…",
         "stream.shortcut" | "stream.window.move" => "正在发送快捷键…",
+        "stream.keyboard.press" => "正在发送按键…",
         "stream.stats.toggle" => "正在设置统计…",
         _ => "正在设置声音…",
     }
@@ -369,12 +394,13 @@ fn failed(id: &str) -> &'static str {
         "stream.display.select" => "屏幕切换失败",
         "stream.window.move" => "窗口移动失败",
         "stream.shortcut" => "快捷键发送失败",
+        "stream.keyboard.press" => "按键发送失败",
         "stream.stats.toggle" => "统计设置失败",
         _ => "声音设置失败",
     }
 }
 impl Controller {
-    pub(crate) fn dispatch_session_control(&self, id: &str, args: Value) -> Result<Value, String> {
+    pub(crate) fn dispatch_session_control(&self, id: &str, mut args: Value) -> Result<Value, String> {
         let (epoch, sequence) = {
             let mut s = self.state.lock().unwrap();
             if !s.streaming || s.connection.stopping {
@@ -383,6 +409,17 @@ impl Controller {
             if s.control_action.busy {
                 return Err("上一项会话操作尚未完成".into());
             }
+            if id=="stream.keyboard.press" {
+                let key=crate::keyboard::key(args["key"].as_str().ok_or("key required")?)?;
+                let tap=if let Some(value)=args.get("tap"){value.as_bool().ok_or("tap must be boolean")?}else{false};
+                if !key.modifier.is_empty()&&!tap{
+                    if s.keyboard_modifiers.contains(&key.modifier){s.keyboard_modifiers.retain(|m|m!=&key.modifier);}else{s.keyboard_modifiers.push(key.modifier.clone());}
+                    s.revision+=1;return Ok(serde_json::json!({"selected":s.keyboard_modifiers}));
+                }
+                args=crate::keyboard::command(&key.id,if tap{&[]}else{&s.keyboard_modifiers})?;
+                s.keyboard_modifiers.clear();
+            }
+            if id=="stream.shortcut"{s.keyboard_modifiers.clear();}
             let sequence = s.control_action.sequence + 1;
             s.control_action = ControlAction {
                 sequence,
@@ -447,6 +484,7 @@ impl Controller {
                     "stream.displays.refresh" => "屏幕列表已刷新".into(),
                     "stream.display.select" => "已发送屏幕切换".into(),
                     "stream.shortcut" | "stream.window.move" => "已发送快捷键".into(),
+                    "stream.keyboard.press" => "已发送按键".into(),
                     "stream.stats.toggle" => {
                         s.show_stats = !s.show_stats;
                         if s.show_stats {

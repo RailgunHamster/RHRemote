@@ -22,9 +22,10 @@ public class RhSessionMenuTest {
     @org.robolectric.annotation.Implements(value=com.limelight.nvstream.jni.MoonBridge.class,isInAndroidSdk=false)
     public static class Keyboard {
         static final java.util.List<Integer> events=new java.util.ArrayList<>();
+        static final java.util.List<String> packets=new java.util.ArrayList<>();
         static int rejectKey;
         @org.robolectric.annotation.Implementation protected static void __staticInitializer__(){}
-        @org.robolectric.annotation.Implementation protected static int rhSendKeyboardInputChecked(short key,byte direction,byte modifiers,byte flags){events.add((int)direction);return direction==3&&(key&255)==rejectKey?-2:0;}
+        @org.robolectric.annotation.Implementation protected static int rhSendKeyboardInputChecked(short key,byte direction,byte modifiers,byte flags){events.add((int)direction);packets.add((key&255)+":"+direction);return direction==3&&(key&255)==rejectKey?-2:0;}
     }
     public static class KeyProbeGame extends Game {
         final java.util.List<String> remoteKeys=new java.util.ArrayList<>();
@@ -37,6 +38,7 @@ public class RhSessionMenuTest {
     }
     void create(boolean dark,boolean withWarning){
         Keyboard.rejectKey=0;
+        Keyboard.packets.clear();
         game=Robolectric.buildActivity(KeyProbeGame.class).get();game.setIntent(new Intent().putExtra(Game.EXTRA_PC_NAME,"Fixture workstation").putExtra(Game.EXTRA_PC_UUID,"fixture"));
         RhShared.theme(game,dark);FrameLayout root=new FrameLayout(game);TextView stats=new TextView(game);stats.setId(R.id.performanceOverlay);root.addView(stats);View surface=new View(game);surface.setId(R.id.surfaceView);surface.setFocusableInTouchMode(true);root.addView(surface);if(withWarning){RhSessionWarning warning=new RhSessionWarning(game);warning.setId(R.id.notificationOverlay);warning.setVisibility(View.GONE);root.addView(warning,new FrameLayout.LayoutParams(-2,-2));}game.setContentView(root);assertTrue(surface.requestFocusFromTouch());
         RhProfile profile=RhProfile.load(game,"fixture");RhTouchController touch=new RhTouchController(new RhTouchController.TouchSink(){public void button(byte b,boolean down){throw new AssertionError("No remote input expected");}public void position(short x,short y,short w,short h){throw new AssertionError();}public void relative(short x,short y){throw new AssertionError();}public void scroll(short value){throw new AssertionError();}public void horizontalScroll(short value){throw new AssertionError();}},surface,profile);
@@ -187,7 +189,7 @@ public class RhSessionMenuTest {
         create(false);toggle();assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("统计：关").hasFocus());
         button("统计：关").setEnabled(false);assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("点击与滚动").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
         button("点击与滚动").setEnabled(false);press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("滚动模式").hasFocus());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
-        button("滚动模式").setEnabled(false);press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("Ctrl+Alt+Delete").hasFocus());assertFalse(game.findViewById(android.R.id.content).findViewWithTag("stream.zoom.reset").isShown());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
+        button("滚动模式").setEnabled(false);press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("显示键盘浮钮").hasFocus());button("显示键盘浮钮").setEnabled(false);assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("简化键盘").hasFocus());button("简化键盘").setEnabled(false);assertTrue(button("收起").requestFocusFromTouch());press(KeyEvent.KEYCODE_TAB,KeyEvent.META_SHIFT_ON);assertTrue(button("Ctrl+Alt+Delete").hasFocus());assertFalse(game.findViewById(android.R.id.content).findViewWithTag("stream.zoom.reset").isShown());press(KeyEvent.KEYCODE_TAB,0);assertTrue(button("收起").hasFocus());
         button("悬浮键盘").setEnabled(false);press(KeyEvent.KEYCODE_TAB,0);assertTrue("Disabled header switch is skipped",button("断开").hasFocus());assertTrue(((KeyProbeGame)game).remoteKeys.isEmpty());
     }
     @Test public void escapeCollapsesControlsWithoutOpeningExitOrSendingARemoteEscape()throws Exception{
@@ -266,4 +268,29 @@ public class RhSessionMenuTest {
         busy.setBoolean(controls,false);Field connected=RhStreamControls.class.getDeclaredField("connected");connected.setAccessible(true);connected.setBoolean(controls,false);
         assertFalse(RhActions.dispatch("stream.click-scroll.set",RhActions.obj("enabled",true)).getBoolean("ok"));assertFalse(controls.state().getBoolean("clickScrollMode"));
     }
+    @Test public void completeKeyboardUsesTheSameActionDispatcherAndOneShotModifiers()throws Exception{
+        create(false);assertTrue(RhActions.dispatch("stream.keyboard.press",RhActions.obj("key","ctrl-left")).getBoolean("ok"));assertTrue(Keyboard.packets.isEmpty());
+        assertEquals("ctrl",controls.state().getJSONArray("keyboardModifiers").getString(0));
+        assertTrue(RhActions.dispatch("stream.keyboard.press",RhActions.obj("key","c")).getBoolean("ok"));
+        assertEquals(java.util.Arrays.asList("17:3","67:3","67:4","17:4"),Keyboard.packets);assertEquals(0,controls.state().getJSONArray("keyboardModifiers").length());
+        org.json.JSONArray catalog=RhKeyboard.catalog(game);assertEquals(108,catalog.length());
+        for(int i=0;i<catalog.length();i++){org.json.JSONObject key=catalog.getJSONObject(i);String id=key.getString("id");Keyboard.packets.clear();assertTrue(id,RhActions.dispatch("stream.keyboard.press",RhActions.obj("key",id)).getBoolean("ok"));if(!key.optString("modifier").isEmpty()){assertTrue(Keyboard.packets.isEmpty());RhActions.dispatch("stream.keyboard.press",RhActions.obj("key",id));}else{int code=key.getInt("code");assertEquals(id,java.util.Arrays.asList(code+":3",code+":4"),Keyboard.packets);}}
+        assertFalse(RhActions.dispatch("stream.keyboard.press",RhActions.obj("key","not-a-key")).getBoolean("ok"));
+        org.json.JSONObject sas=RhKeyboard.command(RhKeyboard.find(game,"delete"),java.util.Arrays.asList("ctrl","alt"));assertTrue(sas.getBoolean("secureAttention"));
+    }
+    @Test public void rejectedKeyboardChordStillReleasesEveryAttemptedKeyAndClearsSelection()throws Exception{
+        create(false);RhActions.dispatch("stream.keyboard.press",RhActions.obj("key","ctrl-left"));Keyboard.rejectKey=67;
+        assertFalse(RhActions.dispatch("stream.keyboard.press",RhActions.obj("key","c")).getBoolean("ok"));assertEquals(java.util.Arrays.asList("17:3","67:3","67:4","17:4"),Keyboard.packets);assertEquals(0,controls.state().getJSONArray("keyboardModifiers").length());assertFalse(controls.state().getJSONObject("controlAction").optString("error").isEmpty());
+    }
+    @Test public void keyboardFloatingButtonOptionUsesItsControlAndSurvivesSessionRecreation()throws Exception{
+        create(false);toggle();android.widget.Switch choice=game.findViewById(android.R.id.content).findViewWithTag("stream.keyboard.button.set");assertNotNull(choice);assertTrue(choice.isChecked());choice.performClick();assertFalse(controls.state().getBoolean("keyboardButtonVisible"));assertFalse(choice.isChecked());controls.dispose();controls=null;create(false);assertFalse(controls.state().getBoolean("keyboardButtonVisible"));
+        assertTrue(RhActions.dispatch("stream.keyboard.button.set",RhActions.obj("enabled",true)).getBoolean("ok"));assertTrue(controls.state().getBoolean("keyboardButtonVisible"));
+    }
+
+    @Test public void simplifiedLayoutAndStandaloneWinUseTheSameSessionActions()throws Exception{
+        create(false);assertTrue(RhActions.dispatch("stream.keyboard.layout.set",RhActions.obj("layout","simple")).getBoolean("ok"));assertEquals("simple",controls.state().getString("keyboardLayout"));
+        assertTrue(RhActions.dispatch("stream.keyboard.press",RhActions.obj("key","meta-left","tap",true)).getBoolean("ok"));assertEquals(java.util.Arrays.asList("91:3","91:4"),Keyboard.packets);assertEquals(0,controls.state().getJSONArray("keyboardModifiers").length());
+        assertFalse(RhActions.dispatch("stream.keyboard.layout.set",RhActions.obj("layout","invalid")).getBoolean("ok"));assertEquals("simple",controls.state().getString("keyboardLayout"));controls.dispose();controls=null;create(false);assertEquals("simple",controls.state().getString("keyboardLayout"));RhActions.dispatch("stream.keyboard.layout.set",RhActions.obj("layout","full"));
+    }
+
 }

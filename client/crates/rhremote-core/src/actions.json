@@ -800,5 +800,58 @@
       "windows",
       "android"
     ]
+  },
+  {
+    "id": "stream.keyboard.press",
+    "label": "悬浮键盘按键",
+    "args": {
+      "key": "keyboard catalog key id",
+      "tap": "optional boolean: send a modifier by itself"
+    },
+    "platforms": [
+      "windows",
+      "android"
+    ]
+  },
+  {
+    "id": "stream.keyboard.button.set",
+    "label": "显示键盘浮钮",
+    "args": {
+      "enabled": "boolean"
+    },
+    "platforms": [
+      "windows",
+      "android"
+    ]
+  },
+  {
+    "id": "stream.keyboard.catalog",
+    "label": "完整键盘布局",
+    "args": {},
+    "platforms": [
+      "windows",
+      "android"
+    ]
+  },
+  {
+    "id": "stream.keyboard.reveal",
+    "label": "显示指定悬浮按键",
+    "args": {
+      "key": "keyboard catalog key id"
+    },
+    "platforms": [
+      "android"
+    ]
+  },
+  {
+    "id": "stream.keyboard.layout.set",
+    "label": "切换完整或简化键盘",
+    "args": {
+      "layout": "full or simple"
+    },
+    "platforms": [
+      "windows",
+      "android"
+    ]
   }
 ]

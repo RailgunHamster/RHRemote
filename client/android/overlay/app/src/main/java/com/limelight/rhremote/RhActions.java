@@ -112,6 +112,7 @@ public final class RhActions {
         return obj("ok",false,"action",id,"error","UI dispatcher timeout");
     }
     private static JSONObject execute(String id,JSONObject args){
+        if(id.equals("stream.keyboard.catalog")){try{return obj("ok",true,"action",id,"result",RhKeyboard.catalog(appContext));}catch(Exception e){return obj("ok",false,"error","keyboard catalog unavailable");}}
         if(id.equals("stream.shortcuts.list")){try{return obj("ok",true,"action",id,"result",RhShortcuts.catalog(appContext));}catch(Exception e){return obj("ok",false,"error","shortcut catalog unavailable");}}
         try{boolean known=false;for(int i=0;i<catalog.length();i++)if(id.equals(catalog.getJSONObject(i).getString("id"))){known=true;break;}if(!known)throw new IllegalArgumentException("unknown action");
             if(hasStream()&&(id.equals("device.connect")||id.equals("device.pair")||id.equals("updates.install")||id.equals("device.network.diagnose")))throw new IllegalStateException(connectionBlockReason());

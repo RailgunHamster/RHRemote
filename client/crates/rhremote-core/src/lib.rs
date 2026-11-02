@@ -36,6 +36,7 @@ pub mod network;
 pub mod bitrate;
 mod desktop_catalog;
 pub mod proxy;
+pub mod keyboard;
 
 pub const ACTIONS: &str = include_str!("actions.json");
 pub fn settings_catalog() -> Value {
@@ -185,6 +186,9 @@ pub struct DeviceObservation {pub device:Device,pub pairing_verified:bool,pub ch
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Saved {
+    /// Local appearance preference, deliberately outside the WebDAV document.
+    pub hide_keyboard_button: bool,
+    pub simple_keyboard: bool,
     pub device_order_initialized: bool,
     /// Local membership established by an applied shared document. Kept outside
     /// SharedConfig so a legacy identity cache is imported only where appropriate.
@@ -257,6 +261,7 @@ pub struct State {
     pub diagnostics: DiagnosticState,
     pub controls: bool,
     pub floating_keyboard: bool,
+    pub keyboard_modifiers: Vec<String>,
     pub floating_keyboard_request: u64,
     pub floating_keyboard_error: String,
     pub controls_tab: String,
@@ -420,6 +425,7 @@ impl Controller {
                 diagnostics: DiagnosticState::default(),
                 controls: false,
                 floating_keyboard: false,
+                keyboard_modifiers: Vec::new(),
                 floating_keyboard_request: 0,
                 floating_keyboard_error: String::new(),
                 controls_tab: "input".into(),
@@ -601,6 +607,7 @@ impl Controller {
             s.window_action = "window.close".into();
         }
         connection::observe(&mut s, streaming, &statistics);
+        if !streaming&&!s.connecting&&!s.connection.busy(){s.controls=false;s.floating_keyboard=false;s.keyboard_modifiers.clear();}
         s.statistics = statistics;
         s.revision += 1;
     }
@@ -950,6 +957,7 @@ impl Controller {
             }
             "stream.controls.toggle" => {
                 s.controls = !s.controls;
+                if s.controls{s.keyboard_modifiers.clear();}
                 s.stream_menu.clear();
             }
             "stream.keyboard.floating.set" => {
@@ -960,9 +968,22 @@ impl Controller {
                     s.floating_keyboard_request=s.floating_keyboard_request.checked_add(1).ok_or("keyboard request exhausted")?;
                 }
                 s.floating_keyboard=enabled;
+                s.keyboard_modifiers.clear();
                 s.floating_keyboard_error.clear();
                 s.controls=false;s.stream_menu.clear();
             }
+            "stream.keyboard.button.set" => {
+                if s.control_action.busy{return Err("上一项会话操作尚未完成".into());}
+                let enabled=args["enabled"].as_bool().ok_or("enabled boolean required")?;
+                let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;
+                next.hide_keyboard_button=!enabled;self.persist(&next)?;s.saved=next;
+            }
+            "stream.keyboard.layout.set" => {
+                if s.control_action.busy{return Err("上一项会话操作尚未完成".into());}
+                let simple=match args["layout"].as_str(){Some("simple")=>true,Some("full")=>false,_=>return Err("layout must be full or simple".into())};
+                let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;next.simple_keyboard=simple;self.persist(&next)?;s.saved=next;s.keyboard_modifiers.clear();s.floating_keyboard_error.clear();
+            }
+            "stream.keyboard.catalog" => return Ok(serde_json::from_str(keyboard::JSON).unwrap()),
             "stream.controls.tab" => {
                 if !s.streaming || !s.controls {return Err("请先展开活动串流的控制栏".into());}
                 let tab=args["tab"].as_str().unwrap_or("");if !["input","displays","audio"].contains(&tab){return Err("unknown stream control tab".into());}

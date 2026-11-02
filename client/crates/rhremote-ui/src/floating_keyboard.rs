@@ -3,25 +3,48 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Key {
-    pub id: &'static str, pub label: &'static str, pub description: &'static str,
+    pub id: &'static str,pub label: &'static str,pub description: &'static str,
+    pub action:&'static str,pub argument:&'static str,pub selected:bool,
     pub x:f32,pub y:f32,pub width:f32,pub height:f32,
 }
 pub(crate) fn layout(width:f32,height:f32)->Vec<Key>{
-    if !width.is_finite()||!height.is_finite()||width<320.||height<240.{return vec![];}
-    let(left,right,top,bottom,k,gap,wide)=(16.,width-16.,16.,height-16.,48.,8.,88.);
-    let h=bottom-top;let tab=(top+(h*0.26).max(64.)).min(bottom-2.*k-gap);let pad=right-3.*k-2.*gap;
-    let mut result=vec![];
-    let mut add=|id,label,description,x,y,w|result.push(Key{id,label,description,x,y,width:w,height:k});
-    add("escape","Esc","Esc",left,top,k);add("tab","Tab","Tab",left,tab,wide);add("shift-tab","Shift+Tab","Shift+Tab",left,tab+k+gap,wide);
-    if h>=288.{add("backspace","Backspace","Backspace",right-wide,top,wide);add("delete","Del","Delete",right-wide,top+k+gap,wide);add("enter","Enter","Enter",right-wide,top+(h-k)/2.,wide);}
-    add("arrow-up","↑","向上",pad+k+gap,bottom-2.*k-gap,k);add("arrow-left","←","向左",pad,bottom-k,k);add("arrow-down","↓","向下",pad+k+gap,bottom-k,k);add("arrow-right","→","向右",pad+2.*(k+gap),bottom-k,k);
-    result
+    if !width.is_finite()||!height.is_finite()||width<640.||height<240.{return vec![];}
+    let unit=((width-32.)/23.).min(56.);let row=((height-96.)/6.).min(44.);
+    let left=(width-23.*unit)/2.;let top=height-16.-6.*row;
+    rhremote_core::keyboard::KEYS.iter().map(|key|Key{id:&key.id,label:&key.label,description:&key.description,action:"stream.keyboard.press",argument:&key.id,selected:false,x:left+key.x*unit+2.,y:top+key.row*row+2.,width:key.width*unit-4.,height:key.height*row-4.}).collect()
 }
-pub(crate) fn model(keys:&[Key])->ModelRc<crate::KeyboardKey>{ModelRc::new(VecModel::from(keys.iter().map(|key|crate::KeyboardKey{id:key.id.into(),label:key.label.into(),description:key.description.into(),x:key.x,y:key.y,width:key.width,height:key.height}).collect::<Vec<_>>()))}
+pub(crate) fn simple_layout(width:f32,height:f32)->Vec<Key>{
+    if !width.is_finite()||!height.is_finite()||width<320.||height<240.{return vec![];}
+    let(left,right,top,bottom,gap)=(16.,width-16.,16.,height-16.,6.);let k=48f32.min((right-left-4.*gap)/6.);let wide=2.*k+gap;let roomy=bottom-top>=320.;
+    let tab=if roomy{(top+128f32.max((bottom-top)*0.26)).min(bottom-3.*k-3.*gap)}else{top+k+8.};
+    let mut result=vec![];
+    let mut add=|id:&'static str,x,y,w|{let key=rhremote_core::keyboard::key(id).unwrap();result.push(Key{id:&key.id,label:&key.label,description:&key.description,action:"stream.keyboard.press",argument:if id=="meta-left"{"meta-left|tap"}else{&key.id},selected:false,x,y,width:w,height:k});};
+    add("escape",left,top,k);add("meta-left",left+k+gap,top,k);add("tab",left,tab,wide);
+    if roomy{add("backspace",right-wide,top+64.,wide);add("delete",right-wide,top+64.+k+gap,wide);add("enter",right-wide,top+64.+2.*(k+gap),wide);for(i,id)in["ctrl-left","alt-left","shift-left"].into_iter().enumerate(){add(id,left+i as f32*(k+gap),bottom-k,k);}}
+    let pad=right-3.*k-2.*gap;add("arrow-up",pad+k+gap,bottom-2.*k-gap,k);add("arrow-left",pad,bottom-k,k);add("arrow-down",pad+k+gap,bottom-k,k);add("arrow-right",pad+2.*(k+gap),bottom-k,k);
+    result.push(Key{id:"shift-tab",label:"⇧ Tab",description:"Shift+Tab",action:"stream.shortcut",argument:"shift-tab",selected:false,x:left,y:tab+k+gap,width:wide,height:k});result
+}
+fn selected_layout(width:f32,height:f32,state:&Value)->Vec<Key>{if state["saved"]["simpleKeyboard"]==true{simple_layout(width,height)}else{layout(width,height)}}
+
+fn scene(width:f32,height:f32,state:&Value)->Vec<Key>{
+    let mut keys=if state["floatingKeyboard"]==true{selected_layout(width,height,state)}else{vec![]};
+    for key in &mut keys {if let Ok(source)=rhremote_core::keyboard::key(key.id){let modifier=&source.modifier;key.selected=key.argument!="meta-left|tap"&&!modifier.is_empty()&&state["keyboardModifiers"].as_array().is_some_and(|values|values.iter().any(|value|value==modifier));}}
+    if state["floatingKeyboard"]==true&&!keys.is_empty(){
+        let simple=state["saved"]["simpleKeyboard"]==true;let compact=simple&&height-32.<320.;
+        let y=if simple{if compact{height-16.-44.}else{80.}}else{keys.iter().map(|key|key.y).fold(f32::MAX,f32::min)-46.};
+        keys.push(Key{id:"keyboard-layout",label:if simple{"完整键盘"}else{"简化键盘"},description:"切换键盘布局",action:"stream.keyboard.layout.set",argument:if simple{"full"}else{"simple"},selected:false,x:16.,y,width:104.,height:44.});
+    }
+    if state["saved"]["hideKeyboardButton"]!=true && width>=120. && height>=80.{
+        let enabled=state["floatingKeyboard"]==true;
+        keys.push(Key{id:"keyboard-toggle",label:if enabled{"收起"}else{"键盘"},description:if enabled{"收起悬浮键盘"}else{"展开悬浮键盘"},action:"stream.keyboard.floating.set",argument:if enabled{"false"}else{"true"},selected:enabled,x:width-88.,y:16.,width:72.,height:48.});
+    }
+    keys
+}
+pub(crate) fn model(keys:&[Key])->ModelRc<crate::KeyboardKey>{ModelRc::new(VecModel::from(keys.iter().map(|key|crate::KeyboardKey{id:key.id.into(),label:key.label.into(),description:key.description.into(),action:key.action.into(),argument:key.argument.into(),chosen:key.selected,x:key.x,y:key.y,width:key.width,height:key.height}).collect::<Vec<_>>()))}
 
 pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous:&Value)->Value{
-    let hidden=if state["floatingKeyboard"]!=true{"disabled"}else if state["streaming"]!=true{"not-streaming"}else if state["connection"]["stopping"]==true{"stopping"}else if state["controls"]==true{"controls-open"}else if !state["streamMenu"].as_str().unwrap_or("").is_empty(){"menu-open"}else{""};
-    if !hidden.is_empty(){let _=window.hide();return json!({"visible":false,"reason":hidden});}
+    let hidden=if state["floatingKeyboard"]!=true&&state["saved"]["hideKeyboardButton"]==true{"disabled"}else if state["streaming"]!=true{"not-streaming"}else if state["connection"]["stopping"]==true{"stopping"}else if state["controls"]==true{"controls-open"}else if !state["streamMenu"].as_str().unwrap_or("").is_empty(){"menu-open"}else{""};
+    if !hidden.is_empty(){let mut report=crate::overlay::hide_auxiliary(window.window());report["reason"]=json!(hidden);return report;}
     #[cfg(windows)]
     unsafe{
         use raw_window_handle::{HasWindowHandle,RawWindowHandle};
@@ -34,15 +57,15 @@ pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous
         if GetClientRect(owner,&mut client).is_err()||!ClientToScreen(owner,&mut origin).as_bool(){let _=window.hide();return json!({"visible":false,"error":"无法读取远程窗口区域","errorCode":"geometry"});}
         let(width,height)=(client.right-client.left,client.bottom-client.top);
         if width<1||height<1{let _=window.hide();return json!({"visible":false,"reason":"native-empty"});}
-        let source=json!({"owner":format!("{}",owner.0 as usize),"request":state["floatingKeyboardRequest"],"session":state["floatingKeyboardSession"],"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":window.window().scale_factor()});
+        let source=json!({"owner":format!("{}",owner.0 as usize),"request":state["floatingKeyboardRequest"],"session":state["floatingKeyboardSession"],"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":window.window().scale_factor(),"opened":state["floatingKeyboard"],"buttonHidden":state["saved"]["hideKeyboardButton"],"modifiers":state["keyboardModifiers"],"simple":state["saved"]["simpleKeyboard"]});
         if previous["error"].is_string()&&previous["source"]==source{return previous.clone();}
         // The first native allocation is one pixel at the owned stream, never an opaque full-screen flash.
         if !window.window().is_visible(){window.window().set_position(slint::PhysicalPosition::new(origin.x,origin.y));window.window().set_size(slint::PhysicalSize::new(1,1));if window.show().is_err(){return json!({"visible":false,"error":"无法打开悬浮键盘","errorCode":"open"});}}
-        let scale=window.window().scale_factor();let keys=layout(width as f32/scale,height as f32/scale);
-        if keys.is_empty(){let _=window.hide();return json!({"visible":false,"error":"远程窗口过小，无法显示悬浮键盘","errorCode":"small","source":source});}
-        let fingerprint=json!({"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":scale});
+        let scale=window.window().scale_factor();let keys=scene(width as f32/scale,height as f32/scale,state);
+        if keys.is_empty() || state["floatingKeyboard"]==true&&selected_layout(width as f32/scale,height as f32/scale,state).is_empty(){let _=window.hide();return json!({"visible":false,"error":"远程窗口过小，无法显示悬浮键盘","errorCode":"small","source":source});}
+        let fingerprint=json!({"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":scale,"opened":state["floatingKeyboard"],"buttonHidden":state["saved"]["hideKeyboardButton"],"modifiers":state["keyboardModifiers"],"simple":state["saved"]["simpleKeyboard"]});
         if previous["geometry"]!=fingerprint||previous["visible"]!=true{window.set_keys(model(&keys));}
-        window.set_busy(state["controlAction"]["busy"]==true);
+        window.set_busy(state["controlAction"]["busy"]==true||state["connecting"]==true||state["statistics"]["firstFrame"]!=true);
         window.global::<crate::Palette>().set_dark(state["saved"]["dark"]==true);
         let mut handle=None;window.window().with_winit_window(|native|{if let Ok(value)=native.window_handle(){if let RawWindowHandle::Win32(value)=value.as_raw(){handle=Some(HWND(value.hwnd.get() as *mut _));}}});
         let Some(hwnd)=handle else{let _=window.hide();return json!({"visible":false,"error":"悬浮窗口不可用","errorCode":"handle"});};
@@ -65,9 +88,9 @@ pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous
     {
         let owner=match crate::x11_surface::owned(state){Ok(value)=>value,Err(reason)=>{let _=window.hide();return json!({"visible":false,"reason":reason});}};
         let scale=window.window().scale_factor();
-        let keys=layout(owner.width as f32/scale,owner.height as f32/scale);
-        if keys.is_empty(){let _=window.hide();return json!({"visible":false,"error":"远程窗口太小，无法放置悬浮按键","errorCode":"small"});}
-        window.set_keys(model(&keys));window.set_busy(state["controlAction"]["busy"]==true);
+        let keys=scene(owner.width as f32/scale,owner.height as f32/scale,state);
+        if keys.is_empty()||state["floatingKeyboard"]==true&&selected_layout(owner.width as f32/scale,owner.height as f32/scale,state).is_empty(){let _=window.hide();return json!({"visible":false,"error":"远程窗口太小，无法放置悬浮按键","errorCode":"small"});}
+        window.set_keys(model(&keys));window.set_busy(state["controlAction"]["busy"]==true||state["connecting"]==true||state["statistics"]["firstFrame"]!=true);
         let regions=keys.iter().map(|key|((key.x*scale).round()as i16,(key.y*scale).round()as i16,(key.width*scale).round()as u16,(key.height*scale).round()as u16)).collect::<Vec<_>>();
         let shape=match crate::x11_surface::place(window.window(),owner,(owner.x,owner.y,owner.width as i32,owner.height as i32),&regions,166){Ok(value)=>value,Err(error)=>{let _=window.hide();return json!({"visible":false,"error":error,"errorCode":"region"});}};
         let _=previous;
@@ -135,6 +158,24 @@ impl Feedback {
         let mut feedback=Feedback::default();let state=state();let report=feedback.report(&state,&json!({"visible":false,"errorCode":"region","error":"secret must not be logged","reason":"arbitrary secret"}),std::time::Instant::now());
         assert_eq!(report["feedbackCode"],"region");let trace=feedback.transition(&state,&report).unwrap();assert!(!trace.to_string().contains("secret"));assert_eq!(trace["reason"],"");assert!(feedback.transition(&state,&report).is_none());
     }
-    #[test]fn keyboard_habits_and_non_overlapping_regions_survive_resize(){for(w,h)in[(840.,560.),(360.,800.),(640.,360.),(320.,240.)]{let keys=layout(w,h);for(a,k)in keys.iter().enumerate(){assert!(k.x>=0.&&k.y>=0.&&k.x+k.width<=w&&k.y+k.height<=h);for other in keys.iter().skip(a+1){assert!(!(k.x<other.x+other.width&&k.x+k.width>other.x&&k.y<other.y+other.height&&k.y+k.height>other.y));}}let get=|id|keys.iter().find(|k|k.id==id).unwrap();assert!(get("tab").x<w/3.);assert!(get("arrow-down").x>w/2.);assert_eq!(get("arrow-up").x,get("arrow-down").x);assert_eq!(get("arrow-left").y,get("arrow-right").y);}}
-    #[test]fn invalid_or_too_small_geometry_has_no_input_region(){for(w,h)in[(0.,600.),(300.,600.),(900.,120.),(f32::NAN,600.)]{assert!(layout(w,h).is_empty());}}
+    #[test]fn full_keyboard_has_108_keys_and_standard_groups_without_overlap(){
+        for(w,h)in[(840.,560.),(640.,360.),(1280.,720.),(1920.,1080.)]{let keys=layout(w,h);assert_eq!(keys.len(),108);
+            for(a,k)in keys.iter().enumerate(){assert!(k.x>=0.&&k.y>=0.&&k.x+k.width<=w&&k.y+k.height<=h);for other in keys.iter().skip(a+1){assert!(!(k.x<other.x+other.width&&k.x+k.width>other.x&&k.y<other.y+other.height&&k.y+k.height>other.y));}}
+            let get=|id|keys.iter().find(|k|k.id==id).unwrap();assert!(get("tab").x<get("a").x);assert_eq!(get("arrow-up").x,get("arrow-down").x);assert_eq!(get("arrow-left").y,get("arrow-right").y);assert!(get("num-0").x>get("arrow-right").x);
+        }
+    }
+    #[test]fn toggle_stays_at_the_same_location_and_can_be_hidden_independently(){
+        let mut state=state();let open=scene(840.,560.,&state);state["floatingKeyboard"]=json!(false);let closed=scene(840.,560.,&state);assert_eq!(closed.len(),1);
+        let a=open.last().unwrap();let b=closed.last().unwrap();assert_eq!((a.x,a.y,a.width,a.height),(b.x,b.y,b.width,b.height));assert_eq!(a.argument,"false");assert_eq!(b.argument,"true");
+        state["saved"]=json!({"hideKeyboardButton":true});assert!(scene(840.,560.,&state).is_empty());state["floatingKeyboard"]=json!(true);assert_eq!(scene(840.,560.,&state).len(),109);
+        state["keyboardModifiers"]=json!(["ctrl"]);assert_eq!(scene(840.,560.,&state).iter().filter(|k|k.selected).count(),2);
+    }
+    #[test]fn simplified_keyboard_has_navigation_and_a_standalone_win_key(){
+        for(w,h)in[(840.,560.),(360.,800.),(640.,360.),(320.,240.)]{let mut state=state();state["saved"]=json!({"simpleKeyboard":true});let keys=scene(w,h,&state);
+            for(a,key)in keys.iter().enumerate(){assert!(key.x>=0.&&key.y>=0.&&key.x+key.width<=w&&key.y+key.height<=h,"{}",key.id);for other in keys.iter().skip(a+1){assert!(!(key.x<other.x+other.width&&key.x+key.width>other.x&&key.y<other.y+other.height&&key.y+key.height>other.y),"{} overlaps {} at {w}x{h}",key.id,other.id);}}
+            let get=|id|keys.iter().find(|k|k.id==id).unwrap();assert_eq!(get("meta-left").argument,"meta-left|tap");assert_eq!(get("shift-tab").action,"stream.shortcut");assert_eq!(get("keyboard-layout").argument,"full");assert!(get("tab").x<w/3.);assert!(get("arrow-down").x>w/2.);
+        }
+    }
+    #[test]fn invalid_or_too_small_geometry_has_no_full_keyboard(){for(w,h)in[(0.,600.),(360.,800.),(900.,120.),(f32::NAN,600.)]{assert!(layout(w,h).is_empty());}}
+
 }

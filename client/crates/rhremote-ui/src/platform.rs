@@ -1455,7 +1455,7 @@ impl NativePlatform {
         let response = ureq::post(&format!("http://127.0.0.1:{}/v1/{path}", self.port))
             .set("Authorization", &format!("Bearer {}", self.token))
             .timeout(Duration::from_secs(
-                if ["shortcut", "display", "displays"].contains(&path) {
+                if ["shortcut", "display", "displays"].contains(&path) || path=="keyboard"&&args["secureAttention"]==true {
                     22
                 } else {
                     3
@@ -1759,6 +1759,7 @@ impl Platform for NativePlatform {
             "stream.displays.refresh" => self.control("displays", &json!({})),
             "stream.display.select" => self.control("display", args),
             "stream.shortcut" => self.control("shortcut", args),
+            "stream.keyboard.press" => self.control("keyboard", args),
             "stream.window.move" => self.control("shortcut", &json!({"shortcut": if args["direction"] == "left" {"win-shift-left"} else {"win-shift-right"}})),
             "stream.stats.toggle" => self.control("stats-toggle", &json!({})),
             "stream.audio.toggle" => {

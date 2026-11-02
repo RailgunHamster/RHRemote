@@ -34,6 +34,8 @@ if($LASTEXITCODE -ne 0){throw 'Native control accept regressions failed.'}
 if($LASTEXITCODE-ne0){throw 'Native probe status regressions failed.'}
 & (Join-Path $PSScriptRoot 'test-windows-window-source.ps1') -QtDirectory $QtDir
 if($LASTEXITCODE-ne0){throw 'Native window source regressions failed.'}
+& (Join-Path $PSScriptRoot 'test-windows-keyboard.ps1') -QtDirectory $QtDir
+if($LASTEXITCODE-ne0){throw 'Native keyboard regressions failed.'}
 $out=Join-Path $repo 'dist/windows';New-Item -ItemType Directory -Force -Path $out|Out-Null
 $runtime='D:\RHRemoteTools\Moonlight-RHRemote-6.1.0'
 & robocopy $runtime $out /E /NFL /NDL /NJH /NJS /XF *.exe *.ini *.pem *.key *.log portable.dat /XD 'Moonlight Game Streaming Project' 'cache' 'boxart' 'logs'|Out-Null

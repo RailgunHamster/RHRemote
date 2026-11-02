@@ -1,60 +1,69 @@
 package com.limelight.rhremote;
 
 import android.app.Activity;
-import android.graphics.Rect;
+import android.graphics.*;
 import android.view.*;
 import android.widget.*;
 import com.limelight.R;
 import java.util.*;
-import org.junit.Test;
+import org.json.*;
+import org.junit.*;
 import org.junit.runner.RunWith;
-import org.robolectric.Robolectric;
+import org.robolectric.*;
 import org.robolectric.annotation.Config;
 import static org.junit.Assert.*;
 
-@RunWith(org.robolectric.RobolectricTestRunner.class)
-@Config(sdk=28,qualifiers="mdpi")
+@RunWith(RobolectricTestRunner.class) @Config(sdk=35,qualifiers="mdpi")
 public final class RhFloatingKeyboardTest {
-    @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
-    public void renderedKeysAreTranslucentAndLeaveTheRemotePictureUncovered()throws Exception{
-        java.io.File directory=new java.io.File("build/reports/rhremote-floating-keyboard");assertTrue(directory.isDirectory()||directory.mkdirs());
-        for(int[] size:new int[][]{{840,560},{360,800}}){
-            setup(size[0],size[1]);
-            try{
-                android.graphics.Bitmap bitmap=android.graphics.Bitmap.createBitmap(size[0],size[1],android.graphics.Bitmap.Config.ARGB_8888);
-                root.draw(new android.graphics.Canvas(bitmap));
-                assertEquals("The picture between keys must remain transparent",0,android.graphics.Color.alpha(bitmap.getPixel(size[0]/2,size[1]/2)));
-                Rect arrow=bounds("arrow-up");int alpha=android.graphics.Color.alpha(bitmap.getPixel(arrow.left+8,arrow.top+8));assertTrue("Key surface must be translucent: "+alpha,alpha>64&&alpha<240);
-                try(java.io.FileOutputStream output=new java.io.FileOutputStream(new java.io.File(directory,"keyboard-"+size[0]+"x"+size[1]+".png"))){assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,output));}
-                bitmap.recycle();
-            }finally{keyboard.dispose();}
+    Activity activity;FrameLayout root;RhFloatingKeyboard keyboard;final List<JSONObject> actions=new ArrayList<>();int width,height;
+    void setup(int w,int h){RuntimeEnvironment.setQualifiers("w"+w+"dp-h"+h+"dp-mdpi");width=w;height=h;activity=Robolectric.buildActivity(Activity.class).setup().get();activity.setTheme(R.style.RhTheme);activity.getSharedPreferences("rhremote.global",0).edit().remove("hideKeyboardButton").remove("keyboardLayout").commit();root=new FrameLayout(activity);activity.setContentView(root);create();}
+    void create(){keyboard=new RhFloatingKeyboard(activity,root,(id,args)->actions.add(RhActions.obj("action",id,"args",args)));keyboard.setEnabled(true);keyboard.update(true,false);layout();}
+    void layout(){for(int pass=0;pass<4;pass++){root.forceLayout();root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
+    Button key(String id){Button key=root.findViewWithTag("floating-key:"+id);assertNotNull(id,key);return key;}
+    Rect bounds(View key){Rect r=new Rect();key.getDrawingRect(r);root.offsetDescendantRectToMyCoords(key,r);return r;}
+    @After public void cleanup(){if(keyboard!=null)keyboard.dispose();}
+    @Test public void all108KeysExistAndCanBeReachedOnWideAndNarrowScreens()throws Exception{
+        for(int[] size:new int[][]{{1080,720},{360,800},{640,360},{320,240}}){setup(size[0],size[1]);JSONArray catalog=RhKeyboard.catalog(activity);assertEquals(108,catalog.length());Set<String> ids=new HashSet<>();
+            for(int i=0;i<catalog.length();i++){String id=catalog.getJSONObject(i).getString("id");assertTrue(ids.add(id));Button key=key(id);keyboard.reveal(id);layout();Rect r=new Rect();assertTrue(id+" cannot be reached "+Arrays.toString(size),key.getLocalVisibleRect(r));assertEquals("A key is clipped vertically "+id,key.getHeight(),r.height());assertEquals("A key is clipped horizontally "+id,key.getWidth(),r.width());assertTrue(key.getWidth()>=32);assertTrue(key.getHeight()>=36);actions.clear();key.performClick();assertEquals(id,1,actions.size());assertEquals("stream.keyboard.press",actions.get(0).getString("action"));assertEquals(id,actions.get(0).getJSONObject("args").getString("key"));}
+            keyboard.dispose();
         }
     }
-    private FrameLayout root;private RhFloatingKeyboard keyboard;private final List<String> actions=new ArrayList<>();
-    private void setup(int width,int height){Activity activity=Robolectric.buildActivity(Activity.class).setup().get();activity.setTheme(R.style.RhTheme);root=new FrameLayout(activity);activity.setContentView(root);keyboard=new RhFloatingKeyboard(activity,root,(id,args)->{assertEquals("stream.shortcut",id);actions.add(args.optString("shortcut"));});keyboard.setEnabled(true);keyboard.update(true,false);for(int pass=0;pass<3;pass++){root.forceLayout();root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
-    private Button key(String id){return root.findViewWithTag("floating-key:"+id);}
-    private Rect bounds(String id){Rect r=new Rect();key(id).getHitRect(r);return r;}
-    @Test public void keysRespectKeyboardPositionsAndStaySeparatedInLandscapeAndPortrait(){
-        for(int[] size:new int[][]{{840,560},{360,800},{640,360},{320,240}}){setup(size[0],size[1]);List<Rect> occupied=new ArrayList<>();for(String id:new String[]{"escape","tab","shift-tab","backspace","delete","enter","arrow-up","arrow-left","arrow-down","arrow-right"}){if(key(id).getVisibility()!=View.VISIBLE)continue;Rect r=bounds(id);assertTrue(id,r.left>=0&&r.top>=0&&r.right<=size[0]&&r.bottom<=size[1]);assertTrue(r.height()>=48);for(Rect other:occupied)assertFalse(id+" overlaps a key",Rect.intersects(other,r));occupied.add(r);}assertTrue(bounds("tab").centerX()<size[0]/3);assertTrue(bounds("tab").centerY()<size[1]/2);assertEquals(bounds("arrow-up").centerX(),bounds("arrow-down").centerX());assertEquals(bounds("arrow-left").centerY(),bounds("arrow-right").centerY());assertTrue(bounds("arrow-down").centerX()>size[0]/2);assertTrue(bounds("arrow-up").bottom<bounds("arrow-down").top);keyboard.dispose();}
+    @Test public void standardKeyboardGroupsHaveNoOverlappingKeys()throws Exception{
+        setup(1080,720);JSONArray catalog=RhKeyboard.catalog(activity);List<Rect> occupied=new ArrayList<>();for(int i=0;i<catalog.length();i++){Rect r=new Rect();key(catalog.getJSONObject(i).getString("id")).getHitRect(r);for(Rect prior:occupied)assertFalse(Rect.intersects(r,prior));occupied.add(r);}
+        assertTrue(key("tab").getLeft()<key("q").getLeft());assertTrue(key("num-0").getLeft()>key("arrow-right").getLeft());assertEquals(key("arrow-up").getLeft(),key("arrow-down").getLeft());assertEquals(key("arrow-left").getTop(),key("arrow-right").getTop());assertTrue(key("num-enter").getHeight()>key("num-1").getHeight());
     }
-    @Test public void blankAreasPassTouchesAndOnlyReadyVisibleKeysDispatch(){setup(840,560);View layer=root.findViewWithTag("floating-keyboard");MotionEvent down=MotionEvent.obtain(1,1,MotionEvent.ACTION_DOWN,420,280,0);try{assertFalse("Blank overlay must not consume remote touches",layer.dispatchTouchEvent(down));}finally{down.recycle();}for(String id:new String[]{"tab","shift-tab","arrow-up","arrow-left","arrow-down","arrow-right","enter","backspace","delete","escape"})key(id).performClick();assertEquals(10,actions.size());Button old=key("tab");keyboard.update(false,false);old.performClick();assertEquals(10,actions.size());keyboard.update(true,true);old.performClick();assertEquals(10,actions.size());keyboard.dispose();old.performClick();assertEquals(10,actions.size());}
-    @Test public void switchOffRemovesTheOverlayWithoutChangingRemoteInputState(){setup(840,560);keyboard.setEnabled(false);assertEquals(View.GONE,root.findViewWithTag("floating-keyboard").getVisibility());assertFalse(keyboard.enabled());keyboard.setEnabled(true);assertEquals(View.VISIBLE,root.findViewWithTag("floating-keyboard").getVisibility());keyboard.dispose();assertNull(root.findViewWithTag("floating-keyboard"));}
-    @Test public void keysHiddenByResizeOrDetachedFromTheirOwnerCannotDispatchQueuedClicks(){
-        setup(840,560);Button backspace=key("backspace"),tab=key("tab");
-        backspace.performClick();assertEquals(java.util.Collections.singletonList("backspace"),actions);actions.clear();
-        for(int pass=0;pass<3;pass++){root.forceLayout();root.measure(View.MeasureSpec.makeMeasureSpec(320,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(240,View.MeasureSpec.EXACTLY));root.layout(0,0,320,240);}
-        assertEquals(View.GONE,backspace.getVisibility());backspace.performClick();assertTrue("Resized hidden key sent a shortcut",actions.isEmpty());
-        View layer=root.findViewWithTag("floating-keyboard");root.removeView(layer);tab.performClick();assertTrue("Detached key sent a shortcut",actions.isEmpty());
-        root.addView(layer,new FrameLayout.LayoutParams(-1,-1));tab.performClick();assertEquals(java.util.Collections.singletonList("tab"),actions);
+    @Test public void narrowScreenBankButtonsUseTheRevealActionAndReachTheNumberPad()throws Exception{
+        setup(360,800);View right=root.findViewWithTag("floating-keyboard-bank:num-5");assertEquals(View.VISIBLE,right.getVisibility());right.performClick();assertEquals("stream.keyboard.reveal",actions.get(0).getString("action"));keyboard.reveal(actions.get(0).getJSONObject("args").getString("key"));layout();assertTrue(key("num-5").getLocalVisibleRect(new Rect()));
+        root.findViewWithTag("floating-keyboard-bank:escape").performClick();keyboard.reveal(actions.get(1).getJSONObject("args").getString("key"));layout();assertTrue(key("escape").getLocalVisibleRect(new Rect()));
     }
-    @Test @Config(sdk=35,qualifiers="mdpi") public void insetDispatchMovesKeysWithoutAParentResizeAndPreservesTheRootListener(){
-        setup(840,560);int[] rootCalls={0};androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{rootCalls[0]++;return insets;});
-        androidx.core.view.WindowInsetsCompat shown=new androidx.core.view.WindowInsetsCompat.Builder().setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(),androidx.core.graphics.Insets.of(20,24,30,32)).build();
-        androidx.core.view.WindowInsetsCompat returned=androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,shown);
-        assertEquals(1,rootCalls[0]);assertEquals(24,returned.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars()).top);assertEquals(840,root.getWidth());assertEquals(560,root.getHeight());
-        FrameLayout.LayoutParams escape=(FrameLayout.LayoutParams)key("escape").getLayoutParams(),down=(FrameLayout.LayoutParams)key("arrow-down").getLayoutParams();assertEquals(36,escape.leftMargin);assertEquals(40,escape.topMargin);assertEquals(560-32-16-48,down.topMargin);
-        androidx.core.view.WindowInsetsCompat hidden=new androidx.core.view.WindowInsetsCompat.Builder().setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(),androidx.core.graphics.Insets.NONE).build();
-        androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,hidden);assertEquals(2,rootCalls[0]);assertEquals(16,((FrameLayout.LayoutParams)key("escape").getLayoutParams()).topMargin);assertTrue(actions.isEmpty());keyboard.dispose();
-        androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,shown);assertEquals("Disposing the layer must leave the root listener installed",3,rootCalls[0]);
+    @Test public void toggleKeepsItsPositionWhenKeyboardOpensAndClosesAndThePreferencePersists(){
+        setup(840,560);View toggle=root.findViewWithTag("floating-keyboard-toggle");Rect open=bounds(toggle);keyboard.setEnabled(false);layout();assertEquals(open,bounds(toggle));assertEquals(View.VISIBLE,toggle.getVisibility());assertEquals(View.GONE,root.findViewWithTag("floating-keyboard-viewport").getVisibility());toggle.performClick();assertEquals(1,actions.size());assertTrue(actions.get(0).optJSONObject("args").optBoolean("enabled"));
+        keyboard.setButtonVisible(false);assertEquals(View.GONE,toggle.getVisibility());assertFalse(keyboard.enabled());keyboard.setEnabled(true);assertEquals(View.VISIBLE,root.findViewWithTag("floating-keyboard-viewport").getVisibility());assertEquals(View.GONE,toggle.getVisibility());keyboard.dispose();create();assertFalse(keyboard.buttonVisible());
+    }
+    @Test public void hiddenOffscreenDetachedAndBusyKeysNeverSendInput(){
+        setup(360,800);Button offscreen=key("num-enter");offscreen.performClick();assertTrue(actions.isEmpty());keyboard.reveal("num-enter");layout();offscreen.performClick();assertEquals(1,actions.size());keyboard.update(false,false);offscreen.performClick();assertEquals(1,actions.size());keyboard.update(true,true);offscreen.performClick();assertEquals(1,actions.size());keyboard.update(true,false);View layer=root.findViewWithTag("floating-keyboard");root.removeView(layer);offscreen.performClick();assertEquals(1,actions.size());
+    }
+    @Test public void modifierSelectionHighlightsBothPhysicalKeysWithoutSendingRemoteInput(){
+        setup(840,560);keyboard.modifiers(Arrays.asList("ctrl","shift"));assertTrue(key("ctrl-left").isSelected());assertTrue(key("ctrl-right").isSelected());assertTrue(key("shift-left").isSelected());assertFalse(key("alt-left").isSelected());keyboard.modifiers(Collections.emptyList());assertFalse(key("ctrl-left").isSelected());assertTrue(actions.isEmpty());
+    }
+    @Test public void simplifiedKeyboardRetainsNavigationPositionsAndCanSwitchBackToAll108Keys()throws Exception{
+        for(int[] size:new int[][]{{840,560},{360,800},{640,360},{320,240}}){setup(size[0],size[1]);Rect quick=bounds(root.findViewWithTag("floating-keyboard-toggle"));keyboard.setLayout("simple");layout();assertEquals(quick,bounds(root.findViewWithTag("floating-keyboard-toggle")));assertEquals(View.GONE,root.findViewWithTag("floating-keyboard-viewport").getVisibility());assertTrue(key("tab").getLeft()<width/3);assertEquals(key("arrow-up").getLeft(),key("arrow-down").getLeft());assertTrue(key("arrow-down").getLeft()>width/2);
+            List<Rect> occupied=new ArrayList<>();for(String id:new String[]{"escape","tab","shift-tab","backspace","delete","enter","meta-left","ctrl-left","alt-left","shift-left","arrow-up","arrow-left","arrow-down","arrow-right"}){View key=key(id);if(key.getVisibility()!=View.VISIBLE)continue;Rect r=bounds(key);assertTrue(id+" outside "+r,r.left>=0&&r.top>=0&&r.right<=width&&r.bottom<=height);for(Rect previous:occupied)assertFalse(id+" overlaps "+r,Rect.intersects(r,previous));occupied.add(r);}
+            actions.clear();key("meta-left").performClick();assertTrue(actions.get(0).getJSONObject("args").getBoolean("tap"));root.findViewWithTag("floating-keyboard-layout:full").performClick();assertEquals("stream.keyboard.layout.set",actions.get(1).getString("action"));assertEquals("full",actions.get(1).getJSONObject("args").getString("layout"));keyboard.setLayout("full");layout();keyboard.reveal("num-5");layout();assertTrue(key("num-5").getLocalVisibleRect(new Rect()));keyboard.dispose();
+        }
+    }
+    @Test public void simplifiedLayoutChoiceIsLocalAndSurvivesSessionRecreation(){setup(840,560);keyboard.setLayout("simple");keyboard.dispose();create();assertEquals("simple",keyboard.layoutName());}
+    @Test public void imeInsetsKeepTheToggleAvailableAndDoNotReplaceTheParentListener(){
+        setup(640,360);keyboard.setEnabled(false);int[] calls={0};androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{calls[0]++;return insets;});
+        androidx.core.view.WindowInsetsCompat insets=new androidx.core.view.WindowInsetsCompat.Builder().setInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars(),androidx.core.graphics.Insets.of(12,20,14,24)).setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(),androidx.core.graphics.Insets.of(0,0,0,210)).build();androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,insets);layout();
+        Rect r=bounds(root.findViewWithTag("floating-keyboard-toggle"));assertTrue("top "+r,r.top>=20);assertTrue("bottom "+r,r.bottom<=150);assertTrue("right "+r,r.right<=626);assertEquals(1,calls[0]);keyboard.update(true,false,true);assertEquals(View.VISIBLE,root.findViewWithTag("floating-keyboard-toggle").getVisibility());assertEquals(View.GONE,root.findViewWithTag("floating-keyboard-viewport").getVisibility());keyboard.dispose();androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,insets);assertEquals(2,calls[0]);
+    }
+    @Test public void spaceOutsideTheKeyboardAndTogglePassesToTheRemoteSurface(){
+        setup(840,560);keyboard.setEnabled(false);View layer=root.findViewWithTag("floating-keyboard");MotionEvent event=MotionEvent.obtain(1,1,MotionEvent.ACTION_DOWN,420,150,0);try{assertFalse(layer.dispatchTouchEvent(event));}finally{event.recycle();}
+    }
+    @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void completeKeyboardRendersWithTranslucentSurfacesInBothOrientations()throws Exception{
+        java.io.File directory=new java.io.File("build/reports/rhremote-full-keyboard");assertTrue(directory.isDirectory()||directory.mkdirs());
+        for(int[] size:new int[][]{{1080,720},{360,800}}){setup(size[0],size[1]);Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);root.draw(new Canvas(bitmap));assertEquals(0,Color.alpha(bitmap.getPixel(20,100)));Rect tab=bounds(key("tab"));int alpha=Color.alpha(bitmap.getPixel(tab.left+8,tab.top+8));assertTrue("Key must be translucent: "+alpha,alpha>64&&alpha<255);try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(directory,"keyboard-"+width+"x"+height+".png"))){assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG,100,out));}bitmap.recycle();keyboard.dispose();}
     }
 }
