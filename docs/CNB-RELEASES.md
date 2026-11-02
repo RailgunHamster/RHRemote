@@ -2,6 +2,16 @@
 
 客户端默认从公开的 [CNB 仓库](https://cnb.cool/railgunhamster/RHRemote/-/releases)读取更新；请求失败自动尝试 GitHub。Windows、Android 从 0.2.13 起可在“设置 → 更新 → 首选更新源”中选择 GitHub，失败时尝试 CNB。选择保存在本机，不参与 WebDAV 同步；更新过程中禁止切换。产品中不提供家庭服务器或 Gitee 更新源。
 
+## 发布渠道与共享目录
+
+用户决定（2026-11-02）：后续版本只维护 CNB 和 GitHub，默认 CNB、GitHub 备用。不再向共享目录复制每个正式版或预览版，也不恢复家庭服务器、Gitee 更新源。
+
+`\\server-home\public\Software\RHRemote` 仅作为首次安装入口，保留一套支持上述在线更新的 Windows 安装包和 Android APK，以及使用说明、校验文件。当前保留正式版 0.2.16；它不需要随每次发布更新。安装后通过客户端“设置 → 更新”升级。只有该安装入口失效、签名或更新协议兼容性确实需要迁移，或用户另行要求时，才替换这一套安装包；不保留共享目录中的历史版本和预览目录。Ubuntu 安装包从 CNB / GitHub 发布页获取。
+
+共享目录不是客户端更新源，后续发布无需访问该目录。清理其冗余副本不删除 CNB / GitHub 附件、本地正式发布件、源码或标签。
+
+## 更新接口与发布操作
+
 同一操作也可通过动作接口调用：`updates.source.set`，参数 `{"source":"github"}` 或 `{"source":"cnb"}`；`updates.state` 返回 `preferredSource`。切换后点击“检查更新”；已经校验的安装包继续保留。
 
 - 最新信息：`https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/releases.win.json`、`releases.android.json`。
