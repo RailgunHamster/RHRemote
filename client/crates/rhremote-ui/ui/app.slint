@@ -639,11 +639,13 @@ export component StreamToolbar inherits Window {
     }
     if root.expanded && !root.connection-failed: Rectangle {
         y:28px;height:parent.height - 28px;
-        background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;
+        background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;clip:true;
+        Rectangle {x:0px;y:0px;width:parent.width;height:3px;background:@linear-gradient(90deg, Palette.blue 0%, Palette.purple 100%);}
         VerticalLayout {
             padding:12px;spacing:8px;
             HorizontalLayout {spacing:8px;
-                Text{text:root.device-name;color:Palette.ink;font-size:13px;vertical-alignment:center;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
+                Rectangle {width:7px;height:7px;border-radius:3.5px;background:root.failed ? Palette.failure : Palette.success;y:(parent.height - self.height)/2;}
+                Text{text:root.device-name;color:Palette.ink;font-size:13px;font-weight:600;vertical-alignment:center;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
                 ActionButton{text:root.floating-keyboard-error!="" ? "关闭悬浮键盘" : root.floating-keyboard ? "悬浮键盘：开" : "悬浮键盘：关";action-id:"stream.keyboard.floating.set";argument:root.floating-keyboard ? "false" : "true";chosen:root.floating-keyboard && root.floating-keyboard-error=="";disabled:root.busy || root.pending;}
                 ActionButton{text:root.pending ? root.pending-cancel-label : "断开";action-id:"stream.disconnect";disabled:root.canceling;}
             }
@@ -668,9 +670,16 @@ export component StreamToolbar inherits Window {
                             ActionButton{text:"Ctrl+Alt+Delete";subtle:true;has-icon:true;icon:@image-url("icons/lock.svg");action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
                             ActionButton{text:"快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
                         }
-                        HorizontalLayout{Rectangle{horizontal-stretch:1;}ActionButton{text:root.stats-enabled ? "统计：开" : "统计：关";action-id:"stream.stats.toggle";chosen:root.stats-enabled;disabled:root.busy;has-icon:true;icon:@image-url("icons/chart.svg");}}
-                        ActionButton{text:root.simple-keyboard ? "键盘布局：简化" : "键盘布局：完整";action-id:"stream.keyboard.layout.set";argument:root.simple-keyboard ? "full" : "simple";disabled:root.busy;}
-                        ActionButton{text:root.keyboard-button-visible ? "显示键盘浮钮：开" : "显示键盘浮钮：关";action-id:"stream.keyboard.button.set";argument:root.keyboard-button-visible ? "false" : "true";chosen:root.keyboard-button-visible;}
+                        if !root.narrow:HorizontalLayout{spacing:8px;
+                            ActionButton{text:root.simple-keyboard ? "键盘布局：简化" : "键盘布局：完整";action-id:"stream.keyboard.layout.set";argument:root.simple-keyboard ? "full" : "simple";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:root.keyboard-button-visible ? "显示键盘浮钮：开" : "显示键盘浮钮：关";action-id:"stream.keyboard.button.set";argument:root.keyboard-button-visible ? "false" : "true";chosen:root.keyboard-button-visible;horizontal-stretch:1;}
+                            ActionButton{text:root.stats-enabled ? "统计：开" : "统计：关";action-id:"stream.stats.toggle";chosen:root.stats-enabled;disabled:root.busy;has-icon:true;icon:@image-url("icons/chart.svg");}
+                        }
+                        if root.narrow:VerticalLayout{spacing:8px;
+                            HorizontalLayout{Rectangle{horizontal-stretch:1;}ActionButton{text:root.stats-enabled ? "统计：开" : "统计：关";action-id:"stream.stats.toggle";chosen:root.stats-enabled;disabled:root.busy;has-icon:true;icon:@image-url("icons/chart.svg");}}
+                            ActionButton{text:root.simple-keyboard ? "键盘布局：简化" : "键盘布局：完整";action-id:"stream.keyboard.layout.set";argument:root.simple-keyboard ? "full" : "simple";disabled:root.busy;}
+                            ActionButton{text:root.keyboard-button-visible ? "显示键盘浮钮：开" : "显示键盘浮钮：关";action-id:"stream.keyboard.button.set";argument:root.keyboard-button-visible ? "false" : "true";chosen:root.keyboard-button-visible;}
+                        }
                     }
                     if root.controls-tab=="displays":VerticalLayout{spacing:8px;
                         if !root.narrow:HorizontalLayout{spacing:8px;
@@ -1001,11 +1010,12 @@ export component MainWindow inherits Window {
                             in property <string> device-uuid:root.selected-uuid;
                             changed device-uuid=>{self.content-y=0px;}
                             VerticalLayout {padding:root.compact ? 20px : 28px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:20px;alignment:start;
-                                Rectangle {accessible-role:groupbox;accessible-label:"桌面连接区域";min-height:root.selected-device.check-hint!="" ? 164px : root.compact ? 132px : 148px;preferred-height:device-hero.preferred-height;vertical-stretch:0;border-radius:10px;border-width:1px;border-color:Palette.line;
+                                Rectangle {accessible-role:groupbox;accessible-label:"桌面连接区域";min-height:root.selected-device.check-hint!="" ? 164px : root.compact ? 132px : 148px;preferred-height:device-hero.preferred-height;vertical-stretch:0;border-radius:12px;border-width:1px;border-color:Palette.line;background:Palette.surface;clip:true;
+                                    Rectangle {x:0px;y:0px;width:parent.width;height:3px;background:@linear-gradient(90deg, Palette.blue 0%, Palette.purple 100%);}
                                     device-hero:=HorizontalLayout {padding:20px;spacing:24px;
-                                        if !root.compact: Rectangle {width:144px;border-radius:8px;background:Palette.page;
+                                        if !root.compact: Rectangle {width:144px;border-radius:10px;background:@linear-gradient(135deg, Palette.soft 0%, Palette.page 100%);border-width:1px;border-color:Palette.line;
                                             Image {source:@image-url("icons/monitor.svg");width:54px;height:54px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2 - 6px;}
-                                            Text {text:"远程桌面";color:Palette.muted;font-size:11px;height:20px;y:parent.height - 30px;horizontal-alignment:center;}
+                                            Text {text:"Moonlight 串流";color:Palette.blue;font-size:11px;font-weight:600;height:20px;y:parent.height - 30px;horizontal-alignment:center;}
                                         }
                                         VerticalLayout {spacing:10px;alignment:center;
                                             Text {text:"桌面连接";font-size:16px;font-weight:600;color:Palette.ink;}
@@ -1019,14 +1029,15 @@ export component MainWindow inherits Window {
                                         }
                                     }
                                 }
-                                HorizontalLayout {spacing:16px;
-                                    DetailField {label:"分辨率";value:root.profile-width+" × "+root.profile-height;}
-                                    Rectangle {width:1px;background:Palette.line;}
-                                    DetailField {label:"帧率";value:root.fps+" FPS";}
-                                    Rectangle {width:1px;background:Palette.line;}
-                                    DetailField {label:"码率";value:root.bitrate-auto ? "自动（连接时）" : root.bitrate+" Mbps";}
+                                Rectangle {background:Palette.surface;border-radius:10px;border-width:1px;border-color:Palette.line;preferred-height:spec-strip.preferred-height;
+                                    spec-strip:=HorizontalLayout {padding:14px;spacing:16px;
+                                        DetailField {label:"分辨率";value:root.profile-width+" × "+root.profile-height;}
+                                        Rectangle {width:1px;background:Palette.line;}
+                                        DetailField {label:"帧率";value:root.fps+" FPS";}
+                                        Rectangle {width:1px;background:Palette.line;}
+                                        DetailField {label:"码率";value:root.bitrate-auto ? "自动（连接时）" : root.bitrate+" Mbps";}
+                                    }
                                 }
-                                Rectangle {height:1px;background:Palette.line;}
                                 HorizontalLayout {Text {text:"设备信息";font-size:14px;font-weight:600;color:Palette.ink;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}ActionButton{text:"编辑资料";action-id:"device.info.open";argument:root.selected-uuid;}}
                                 HorizontalLayout {spacing:20px;
                                     DetailField {label:"首选地址";value:root.network-address;}
@@ -1035,10 +1046,12 @@ export component MainWindow inherits Window {
                                 Text {text:root.network-summary;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                                 Text {text:root.network-current;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                                 Text {text:"当前客户端配置";font-size:14px;font-weight:600;color:Palette.ink;}
-                                HorizontalLayout {spacing:20px;
-                                    DetailField {label:"视频编码";value:root.codec;}
-                                    DetailField {label:"声音";value:root.profile-audio-enabled ? "开启" : "关闭";}
-                                    DetailField {label:"屏幕";value:root.profile-display=="virtual" ? "虚拟屏" : "自动";}
+                                Rectangle {background:Palette.surface;border-radius:10px;border-width:1px;border-color:Palette.line;preferred-height:client-spec-strip.preferred-height;
+                                    client-spec-strip:=HorizontalLayout {padding:14px;spacing:20px;
+                                        DetailField {label:"视频编码";value:root.codec;}
+                                        DetailField {label:"声音";value:root.profile-audio-enabled ? "开启" : "关闭";}
+                                        DetailField {label:"屏幕";value:root.profile-display=="virtual" ? "虚拟屏" : "自动";}
+                                    }
                                 }
                                 Rectangle {height:1px;background:Palette.line;}
                                 Text {text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
@@ -1403,10 +1416,29 @@ export component MainWindow inherits Window {
                             ActionButton{text:root.connection-phase=="failed" ? "重试连接" : "再次连接";action-id:"connection.retry";primary:true;disabled:root.control-requests-pending;}
                         }
                         if root.connection-busy && root.connection-phase!="connected":ProgressIndicator{indeterminate:true;}
-                        if root.connection-operation!="pair" && root.connection-busy && root.connection-phase!="connected":VerticalLayout{spacing:22px;
-                            Text{text:"1  检查地址与配对";color:root.connection-phase=="resolving" ? Palette.blue : Palette.muted;font-size:14px;}
-                            Text{text:"2  建立串流";color:root.connection-phase=="starting" ? Palette.blue : Palette.muted;font-size:14px;}
-                            Text{text:"3  显示远程画面";color:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? Palette.blue : Palette.muted;font-size:14px;}
+                        if root.connection-operation!="pair" && root.connection-busy && root.connection-phase!="connected":Rectangle{
+                            background:Palette.surface;border-radius:12px;border-width:1px;border-color:Palette.line;preferred-height:conn-stepper.preferred-height;clip:true;
+                            Rectangle{x:0px;y:0px;width:parent.width;height:3px;background:@linear-gradient(90deg, Palette.blue 0%, Palette.purple 100%);}
+                            conn-stepper:=VerticalLayout{padding:18px;spacing:10px;
+                                Rectangle{height:38px;border-radius:8px;background:root.connection-phase=="resolving" ? Palette.soft : transparent;border-width:root.connection-phase=="resolving" ? 1px : 0px;border-color:Palette.blue;
+                                    HorizontalLayout{padding-left:12px;padding-right:12px;spacing:10px;
+                                        Text{text:"1  检查地址与配对";color:root.connection-phase=="resolving" ? Palette.blue : Palette.muted;font-size:14px;font-weight:root.connection-phase=="resolving" ? 600 : 400;vertical-alignment:center;}
+                                        Rectangle{horizontal-stretch:1;}
+                                    }
+                                }
+                                Rectangle{height:38px;border-radius:8px;background:root.connection-phase=="starting" ? Palette.soft : transparent;border-width:root.connection-phase=="starting" ? 1px : 0px;border-color:Palette.blue;
+                                    HorizontalLayout{padding-left:12px;padding-right:12px;spacing:10px;
+                                        Text{text:"2  建立串流";color:root.connection-phase=="starting" ? Palette.blue : Palette.muted;font-size:14px;font-weight:root.connection-phase=="starting" ? 600 : 400;vertical-alignment:center;}
+                                        Rectangle{horizontal-stretch:1;}
+                                    }
+                                }
+                                Rectangle{height:38px;border-radius:8px;background:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? Palette.soft : transparent;border-width:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? 1px : 0px;border-color:Palette.blue;
+                                    HorizontalLayout{padding-left:12px;padding-right:12px;spacing:10px;
+                                        Text{text:"3  显示远程画面";color:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? Palette.blue : Palette.muted;font-size:14px;font-weight:root.connection-phase=="first-frame" || root.connection-phase=="connected" ? 600 : 400;vertical-alignment:center;}
+                                        Rectangle{horizontal-stretch:1;}
+                                    }
+                                }
+                            }
                         }
                         if root.connection-error!="":Text{text:root.connection-error;color:Palette.failure;font-size:14px;wrap:word-wrap;}
                         if root.control-requests-pending:Text{text:"正在结束上一项会话操作…";color:Palette.muted;font-size:13px;wrap:word-wrap;}
@@ -1416,7 +1448,16 @@ export component MainWindow inherits Window {
                         Text{text:root.connection-title;color:Palette.ink;font-size:22px;wrap:word-wrap;}
                         if root.connection-busy && root.pair-pin=="":pair-progress:=ProgressIndicator{indeterminate:true;}
                         Text{text:root.pair-pin=="" ? (root.connection-phase=="preparing" ? "正在选择可用线路，完成后显示配对码。" : "正在启动主机配对，完成后显示配对码。") : "请在这台电脑的 RHRemote-Sunshine 管理界面输入配对码：";color:Palette.muted;wrap:word-wrap;}
-                        if root.pair-pin!="":Text{text:root.pair-pin;color:Palette.blue;font-size:44px;}
+                        if root.pair-pin!="":Rectangle{
+                            background:Palette.surface;border-radius:14px;border-width:1.5px;border-color:Palette.blue;preferred-height:pin-box.preferred-height;max-width:340px;clip:true;
+                            Rectangle{x:0px;y:0px;width:parent.width;height:3px;background:@linear-gradient(90deg, Palette.blue 0%, Palette.purple 100%);}
+                            pin-box:=VerticalLayout{padding:22px;spacing:8px;alignment:center;
+                                Text{text:"SUNSHINE 安全配对码";color:Palette.muted;font-size:11px;font-weight:600;horizontal-alignment:center;}
+                                Rectangle{background:Palette.soft;border-radius:10px;padding:12px;preferred-height:68px;
+                                    Text{text:root.pair-pin;color:Palette.blue;font-size:44px;font-weight:700;horizontal-alignment:center;vertical-alignment:center;}
+                                }
+                            }
+                        }
                     }
                     if root.page!="settings" && root.page!="global-settings" && root.page!="add" && root.page!="device-info" && root.page!="connection" && root.page!="pair" && root.page!="profile-copy" && root.status!="": Text{text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                     Rectangle {min-height:12px;vertical-stretch:1;}

@@ -243,6 +243,16 @@ fn main_scene(
             ui.set_navigation_message("WebDAV 地址无效。输入已保留，请继续编辑。".into());
             ("继续编辑", "navigation.resolve", "stay")
         }
+        "pair-ready" => {
+            ui.set_page("pair".into());
+            ui.set_connection_operation("pair".into());
+            ui.set_connection_phase("pairing".into());
+            ui.set_connection_name("工作电脑 · RTX 4090".into());
+            ui.set_connection_title("主机配对验证".into());
+            ui.set_connection_busy(true);
+            ui.set_pair_pin("4 8 2 9".into());
+            ("取消配对", "pair.cancel", "")
+        }
         _ => panic!("Unknown scene {kind}"),
     };
     (ui, action.0, action.1, action.2)
@@ -270,6 +280,7 @@ fn page_errors_connection_stages_and_session_popups_render_and_keep_their_action
                 "connection-preparing",
                 "connection-recovering",
                 "connection-failed",
+                "pair-ready",
                 "sync-clear-failed",
                 "navigation-save-failed",
             ] {
