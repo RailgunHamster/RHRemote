@@ -173,3 +173,7 @@ try{
  $result=[ordered]@{provider=$Provider;repository=$repository.html_url;private=[bool]$repository.private;tag=$tag;release_id=$release.id;assets=$plan.artifacts.Count;commit=$Commit;published=$true}
  if($Provider -eq 'gitee'){'B64:'+ [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($result|ConvertTo-Json -Compress)))}else{$result|ConvertTo-Json -Compress}
 }finally{if($pointer -ne [IntPtr]::Zero){[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)};$token=$null;$headers=$null;$credentialOutput=$null;$secret=$null}
+if($Provider -eq 'github'){
+ try{& (Join-Path $PSScriptRoot 'clean-release-history.ps1') -Provider github -ReportDirectory (Join-Path $candidate ('retention-'+[guid]::NewGuid().ToString('N'))) -Apply}
+ catch{Write-Warning 'Publication succeeded; release retention needs attention. Existing cleanup reports identify any completed deletions.'}
+}

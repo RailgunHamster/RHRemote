@@ -47,7 +47,7 @@ public class RhDeviceIntentTest {
         paired(first);update(first.uuid);Button held=find(browser,"连接");gesture(held,()->{first.name="Renamed PC";update(first.uuid);});expect("device.connect",first.uuid);
     }
     @Test public void heldSettingsInfoAndOrderingControlsCannotSwitchTheirTarget()throws Exception{
-        for(String label:new String[]{"连接设置","编辑资料","下移"}){
+        for(String label:new String[]{"连接设置","编辑资料"}){
             sent.clear();update(first.uuid);Button held=find(browser,label);assertNotNull(label,held);gesture(held,()->update(second.uuid));assertTrue(label+" redirected: "+sent,sent.isEmpty());
         }
     }
@@ -73,7 +73,7 @@ public class RhDeviceIntentTest {
     }
     @Test public void aDeviceRowCannotChangeFromSelectToSettingsDuringItsGesture()throws Exception{
         View row=browser.findViewWithTag("missing");java.lang.reflect.Field rows=RhDeviceBrowser.class.getDeclaredField("rows");rows.setAccessible(true);row=((Map<String,? extends View>)rows.get(browser)).get(first.uuid);assertNotNull(row);
-        gesture(row,()->browser.setListOnly(true));assertTrue(sent.isEmpty());row.performClick();expect("device.settings.open",first.uuid);
+        gesture(row,()->{browser.setSelectionAction("device.settings.open");browser.setListOnly(true);});assertTrue(sent.isEmpty());row.performClick();expect("device.settings.open",first.uuid);
     }
     @Test public void sourceAndReceiverJsonCannotChangeAnAlreadyBoundAction()throws Exception{
         RhBoundAction.Button button=new RhBoundAction.Button(activity,(view,id,args)->{sent.add(RhActions.obj("action",id,"args",RhActions.obj("uuid",args.optString("uuid"))));try{args.put("uuid","receiver mutation");}catch(Exception failure){throw new AssertionError(failure);}});

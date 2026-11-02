@@ -30,7 +30,7 @@ public final class RhSettingsViewportTest {
     @After public void finish(){if(home!=null)home.dispose();if(activity!=null)activity.finish();android.content.res.Resources r=RuntimeEnvironment.getApplication().getResources();Configuration c=new Configuration(r.getConfiguration());c.fontScale=1;r.updateConfiguration(c,r.getDisplayMetrics());}
 
     @Test public void mediumWidthUsesOneRailWhileCompactWidthKeepsBottomNavigation()throws Exception{
-        setup(1);for(int width:new int[]{599,600,839,840,1180,360}){layout(width,640);boolean rail=width>=600;assertEquals("Rail at "+width,rail?View.VISIBLE:View.GONE,((View)field(home,"sidebar")).getVisibility());assertEquals(rail?View.GONE:View.VISIBLE,((View)field(home,"compactHeader")).getVisibility());assertEquals(rail?View.GONE:View.VISIBLE,((View)field(home,"bar")).getVisibility());}
+        setup(1);for(int width:new int[]{599,600,839,840,1180,360}){layout(width,640);boolean rail=width>=700;assertEquals("The obsolete rail must remain hidden at "+width,View.GONE,((View)field(home,"sidebar")).getVisibility());assertEquals(rail?View.GONE:View.VISIBLE,((View)field(home,"compactHeader")).getVisibility());assertEquals(rail?View.GONE:View.VISIBLE,((View)field(home,"bar")).getVisibility());}
     }
     @Test public void shortLandscapeLeavesRoomForFieldsAndFixedSaveControls()throws Exception{
         setup(2);home.perform("device.settings.open",RhActions.obj("uuid","settings-space"));
@@ -40,6 +40,6 @@ public final class RhSettingsViewportTest {
     @Test @Config(sdk=35) public void resizingAndImeInsetsPreserveTheSameDraftAndInputOwner()throws Exception{
         setup(1);home.perform("device.settings.open",RhActions.obj("uuid","settings-space"));home.perform("settings.tab",RhActions.obj("tab","audio"));home.perform("settings.input",RhActions.obj("key","volume","value","51"));String draft=home.state().getJSONObject("draft").toString();
         for(int width:new int[]{640,360,800,599,600,1008}){layout(width,640);assertEquals("settings",home.state().getString("page"));assertEquals("audio",home.state().getString("profileTab"));assertEquals(draft,home.state().getJSONObject("draft").toString());assertEquals("51",home.state().getJSONObject("settingsInputs").getString("volume"));}
-        View rail=(View)field(home,"sidebar");ViewCompat.dispatchApplyWindowInsets(root,new WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.systemBars(),Insets.of(0,24,0,24)).setInsets(WindowInsetsCompat.Type.ime(),Insets.of(0,0,0,240)).setVisible(WindowInsetsCompat.Type.ime(),true).build());layout(1008,640);assertSame(rail,field(home,"sidebar"));assertEquals(View.VISIBLE,rail.getVisibility());assertEquals(draft,home.state().getJSONObject("draft").toString());
+        View rail=(View)field(home,"sidebar");ViewCompat.dispatchApplyWindowInsets(root,new WindowInsetsCompat.Builder().setInsets(WindowInsetsCompat.Type.systemBars(),Insets.of(0,24,0,24)).setInsets(WindowInsetsCompat.Type.ime(),Insets.of(0,0,0,240)).setVisible(WindowInsetsCompat.Type.ime(),true).build());layout(1008,640);assertSame(rail,field(home,"sidebar"));assertEquals(View.GONE,rail.getVisibility());assertEquals("settings-split",home.state().getJSONObject("homeLayout").getJSONObject("browser").getString("mode"));assertEquals(draft,home.state().getJSONObject("draft").toString());
     }
 }

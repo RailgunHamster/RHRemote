@@ -24,7 +24,9 @@
     "label": "调整数字设置",
     "args": {
       "key": "numeric setting key",
-      "direction": "up / down"
+      "direction": "up / down; omit when using a drag target",
+      "targetUuid": "optional saved device UUID to insert beside",
+      "placement": "before / after; required with targetUuid"
     }
   },
   {
@@ -175,7 +177,9 @@
     "label": "调整连接路径顺序",
     "args": {
       "route": "route id",
-      "direction": "up / down"
+      "direction": "up / down; omit when using a drag target",
+      "targetRoute": "optional enabled route id to insert beside",
+      "placement": "before / after; required with targetRoute"
     }
   },
   {

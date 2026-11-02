@@ -259,6 +259,14 @@ public final class RhShared {
         for(int i=0;i<list.length();i++){String id=list.getJSONObject(i).getString("uuid");if(id.equals(uuid))a=i;if(id.equals(rows.get(target).uuid))b=i;}
         if(a<0||b<0)throw new IOException("host address unavailable");Object before=list.get(a);list.put(a,list.get(b));list.put(b,before);validate(shared);write(file(c),shared);
     }
+    public static synchronized void reorder(Context c,Collection<ComputerDetails> computers,String uuid,String targetUuid,String placement)throws Exception {
+        if(!Arrays.asList("before","after").contains(placement))throw new IllegalArgumentException("placement must be before or after");
+        List<ComputerDetails> rows=ordered(c,computers);if(rows.stream().noneMatch(d->d.uuid.equals(uuid))||rows.stream().noneMatch(d->d.uuid.equals(targetUuid)))throw new IllegalArgumentException("unknown device");
+        JSONObject shared=capture(c,rows);JSONArray saved=shared.getJSONArray("devices");List<JSONObject> list=new ArrayList<>();JSONObject moving=null;
+        for(int i=0;i<saved.length();i++){JSONObject item=saved.getJSONObject(i);if(uuid.equals(item.getString("uuid")))moving=item;else list.add(item);}
+        if(uuid.equals(targetUuid))return;if(moving==null)throw new IOException("host address unavailable");int target=-1;for(int i=0;i<list.size();i++)if(targetUuid.equals(list.get(i).getString("uuid")))target=i;
+        if(target<0)throw new IOException("target host address unavailable");list.add(target+(placement.equals("after")?1:0),moving);shared.put("devices",new JSONArray(list));validate(shared);write(file(c),shared);
+    }
     public static synchronized void apply(Context c,JSONObject shared)throws Exception {
         shared=normalize(shared);File backups=new File(c.getFilesDir(),"sync-backups");if(!backups.exists()&&!backups.mkdirs())throw new IOException("backup directory unavailable");
         JSONObject before=read(c);write(new File(backups,"local-"+System.currentTimeMillis()+".json"),before);File[] files=backups.listFiles((d,n)->n.startsWith("local-"));

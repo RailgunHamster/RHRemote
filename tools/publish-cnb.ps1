@@ -87,3 +87,5 @@ try {
  $result|ConvertTo-Json|Set-Content -LiteralPath (Join-Path $candidate 'cnb-publication.json') -Encoding utf8
  $result|ConvertTo-Json -Compress
 }catch{Write-Output ('Failure type: '+$_.Exception.GetType().Name);Write-Output $_.ScriptStackTrace;throw "CNB publication stopped at $stage; credential-bearing diagnostics suppressed. Existing artifacts were not overwritten."}finally{if($client){$client.Dispose()};if($secret){$secret.Dispose()};$token=$null;if($lock){$lock.Dispose()}}
+try{& (Join-Path $PSScriptRoot 'clean-release-history.ps1') -Provider cnb -TokenFile $TokenFile -ReportDirectory (Join-Path $candidate ('retention-'+[guid]::NewGuid().ToString('N'))) -Apply}
+catch{Write-Warning 'Publication succeeded; release retention needs attention. Existing cleanup reports identify any completed deletions.'}

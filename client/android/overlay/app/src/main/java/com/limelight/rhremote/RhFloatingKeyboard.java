@@ -19,6 +19,7 @@ final class RhFloatingKeyboard {
     private static final Set<String> SIMPLE=new HashSet<>(Arrays.asList("escape","tab","backspace","delete","enter","arrow-up","arrow-left","arrow-down","arrow-right","meta-left","ctrl-left","alt-left","shift-left"));
     private final Map<String,Button> keys=new LinkedHashMap<>();private final JSONArray catalog;
     private final View.OnLayoutChangeListener layoutListener;
+    private String presentation="physical";
     private boolean enabled,ready,obscured,ime,disposed,buttonVisible,receivedInsets,simple;private Insets lastInsets=Insets.NONE;
     RhFloatingKeyboard(Context context,ViewGroup parent,Actions actions){
         this.parent=parent;buttonVisible=!context.getSharedPreferences("rhremote.global",0).getBoolean("hideKeyboardButton",false);
@@ -87,11 +88,14 @@ final class RhFloatingKeyboard {
         int left=safe.left+dp(12),right=parent.getWidth()-safe.right-dp(12),top=safe.top+dp(12),bottom=parent.getHeight()-safe.bottom-dp(12),width=Math.max(1,right-left);
         place(toggle,Math.max(left,right-dp(72)),Math.max(safe.top,Math.min(top,bottom-dp(48))),Math.min(width,dp(72)),dp(48));
         int available=Math.max(1,bottom-(top+dp(64)));float font=layer.getResources().getConfiguration().fontScale;
-        int unit=Math.max(dp(font>1.2f?48:36),Math.min(dp(48),(width-dp(16))/23));
-        boolean banks=unit*23+dp(16)>width;int bankHeight=dp(44);
-        bankBar.setVisibility(!simple&&enabled&&!ime?View.VISIBLE:View.GONE);for(View bank:bankTargets)bank.setVisibility(banks?View.VISIBLE:View.GONE);
-        int row=Math.max(dp(font>1.2f?48:40),Math.min(dp(48),(available-bankHeight-dp(16))/6));int tableWidth=unit*23+dp(16),tableHeight=row*6+dp(16);
-        for(int i=0;i<catalog.length();i++){JSONObject key=catalog.optJSONObject(i);place(keys.get(key.optString("id")),dp(8)+Math.round((float)key.optDouble("x")*unit),dp(8)+Math.round((float)key.optDouble("row")*row),Math.round((float)key.optDouble("width")*unit)-dp(4),Math.round((float)key.optDouble("height")*row)-dp(4));}
+        int minUnit=dp(font>1.2f?48:36),padding=dp(16);boolean banks=23*minUnit+padding>width;
+        int unit=Math.max(minUnit,Math.min(dp(48),(width-padding)/(banks?15:23)));
+        RhKeyboardGeometry geometry=RhKeyboardGeometry.fit(catalog,Math.max(1,(width-padding)/(float)unit));presentation=geometry.presentation;
+        int bankHeight=dp(44);bankBar.setVisibility(!simple&&enabled&&!ime?View.VISIBLE:View.GONE);for(View bank:bankTargets)bank.setVisibility(banks?View.VISIBLE:View.GONE);
+        int row=Math.max(dp(font>1.2f?48:40),Math.min(dp(48),(int)((available-bankHeight-padding)/geometry.rows)));
+        int tableWidth=Math.min(width,(int)Math.ceil(geometry.columns*unit)+padding),tableHeight=(int)Math.ceil(geometry.rows*row)+padding;
+        for(int i=0;i<catalog.length();i++){JSONObject key=catalog.optJSONObject(i);RhKeyboardGeometry.Cell cell=geometry.keys.get(key.optString("id"));place(keys.get(key.optString("id")),dp(8)+Math.round(cell.x*unit),dp(8)+Math.round(cell.y*row),Math.round(cell.width*unit)-dp(4),Math.round(cell.height*row)-dp(4));}
+        horizontal.scrollTo(0,0);
         ViewGroup.LayoutParams tp=table.getLayoutParams();if(tp.width!=tableWidth||tp.height!=tableHeight){tp.width=tableWidth;tp.height=tableHeight;table.setLayoutParams(tp);}
         int height=Math.max(1,Math.min(available-bankHeight,tableHeight));place(vertical,left,bottom-height,width,height);place(bankBar,left,bottom-height-bankHeight,width,bankHeight);if(simple)layoutSimple(left,right,top,bottom);
     }
@@ -109,7 +113,7 @@ final class RhFloatingKeyboard {
     private Rect bounds(View view){Rect r=new Rect();view.getDrawingRect(r);layer.offsetDescendantRectToMyCoords(view,r);return r;}
     JSONObject state(){JSONArray positions=new JSONArray();boolean visible=layer.getVisibility()==View.VISIBLE&&(simple?simpleLayer:vertical).getVisibility()==View.VISIBLE;
         for(Map.Entry<String,Button> entry:keys.entrySet()){Button key=entry.getValue();Rect r=bounds(key),clip=bounds(vertical);boolean showing=visible&&key.getVisibility()==View.VISIBLE&&(simple?SIMPLE.contains(entry.getKey()):Rect.intersects(r,clip));positions.put(RhActions.obj("id",entry.getKey(),"visible",showing,"selected",key.isSelected(),"x",r.left,"y",r.top,"width",r.width(),"height",r.height()));}
-        Rect r=bounds(toggle);return RhActions.obj("enabled",enabled,"layout",layoutName(),"visible",visible,"ready",ready,"buttonVisible",buttonVisible,"backgroundAlpha",80,"contrast","dual-outline","backgroundSampling",false,"scrollable",table.getWidth()>horizontal.getWidth()||table.getHeight()>vertical.getHeight(),"toggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&toggle.getVisibility()==View.VISIBLE,"x",r.left,"y",r.top,"width",r.width(),"height",r.height()),"keys",positions);
+        Rect r=bounds(toggle);return RhActions.obj("enabled",enabled,"layout",layoutName(),"visible",visible,"ready",ready,"buttonVisible",buttonVisible,"backgroundAlpha",80,"contrast","dual-outline","backgroundSampling",false,"presentation",presentation,"horizontalScrollable",table.getWidth()>horizontal.getWidth(),"scrollable",table.getHeight()>vertical.getHeight(),"toggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&toggle.getVisibility()==View.VISIBLE,"x",r.left,"y",r.top,"width",r.width(),"height",r.height()),"keys",positions);
     }
     void dispose(){if(disposed)return;disposed=true;ViewCompat.setOnApplyWindowInsetsListener(layer,null);ViewCompat.setWindowInsetsAnimationCallback(layer,null);parent.removeOnLayoutChangeListener(layoutListener);parent.removeView(layer);}
 }

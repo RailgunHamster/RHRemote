@@ -726,7 +726,7 @@ impl Controller {
         if matches!(id,"settings.input"|"settings.set"|"settings.step"|"settings.network.edit"|"settings.route.move"|"settings.route.toggle"){s.profile_copy_notice.clear();}
         match id {
             "device.select" => {
-                if s.page != "devices" || s.streaming || s.connecting {
+                if s.streaming || s.connecting {
                     return Err("请先返回空闲设备列表".into());
                 }
                 let uuid = args["uuid"].as_str().ok_or("uuid required")?;
@@ -734,6 +734,7 @@ impl Controller {
                     return Err("unknown device".into());
                 }
                 s.selected = uuid.into();
+                s.page="devices".into();
             }
             "devices.filter" => {
                 let query = args["query"].as_str().ok_or("query required")?;
@@ -749,8 +750,8 @@ impl Controller {
                 s.device_query.clear();
             }
             "device.move" => {
-                if s.page != "devices" {
-                    return Err("请先返回设备列表".into());
+                if s.streaming || s.connecting {
+                    return Err("请先结束远程连接".into());
                 }
                 let uuid = args["uuid"].as_str().ok_or("uuid required")?;
                 let index = s
@@ -758,11 +759,15 @@ impl Controller {
                     .iter()
                     .position(|d| d.uuid == uuid)
                     .ok_or("unknown device")?;
-                let target = match args["direction"].as_str() {
+                let target = if args.get("targetUuid").is_some() {
+                    let target=args["targetUuid"].as_str().ok_or("targetUuid must be a string")?;
+                    s.devices.iter().position(|d|d.uuid==target).ok_or("unknown target device")?
+                } else { match args["direction"].as_str() {
                     Some("up") => index.saturating_sub(1),
                     Some("down") => (index + 1).min(s.devices.len() - 1),
                     _ => return Err("direction must be up or down".into()),
-                };
+                }};
+                let placement=if args.get("targetUuid").is_some(){match args["placement"].as_str(){Some("before")=>Some(false),Some("after")=>Some(true),_=>return Err("placement must be before or after".into())}}else{None};
                 let mut next = s.saved.clone();
                 next.devices = sync_model::from_state(&s).devices;
                 let a = next
@@ -775,10 +780,14 @@ impl Controller {
                     .iter()
                     .position(|d| d.uuid == s.devices[target].uuid)
                     .unwrap();
-                next.devices.swap(a, b);
+                if let Some(after)=placement {
+                    if a!=b {let device=next.devices.remove(a);let destination=b-usize::from(a<b)+usize::from(after);next.devices.insert(destination,device);}
+                }else{next.devices.swap(a, b);}
                 self.persist(&next)?;
                 s.saved = next;
-                s.devices.swap(index, target);
+                if let Some(after)=placement {
+                    if index!=target {let device=s.devices.remove(index);let destination=target-usize::from(index<target)+usize::from(after);s.devices.insert(destination,device);}
+                }else{s.devices.swap(index, target);}
                 s.status = "设备顺序已保存".into();
             }
             "device.network.configure" => {
@@ -841,8 +850,15 @@ impl Controller {
                     if next.route_order.iter().any(|r|r==route){next.route_order.retain(|r|r!=route);}else{next.route_order.push(route.into());}
                 }else{
                     let index=next.route_order.iter().position(|r|r==route).ok_or("route is disabled")?;
-                    let target=match args["direction"].as_str(){Some("up")=>index.saturating_sub(1),Some("down")=>(index+1).min(next.route_order.len()-1),_=>return Err("direction must be up or down".into())};
-                    next.route_order.swap(index,target);
+                    if args.get("targetRoute").is_some(){
+                        let target=args["targetRoute"].as_str().ok_or("targetRoute must be a string")?;
+                        let target=next.route_order.iter().position(|r|r==target).ok_or("target route is disabled")?;
+                        let after=match args["placement"].as_str(){Some("before")=>false,Some("after")=>true,_=>return Err("placement must be before or after".into())};
+                        if index!=target{let route=next.route_order.remove(index);next.route_order.insert(target-usize::from(index<target)+usize::from(after),route);}
+                    }else{
+                        let target=match args["direction"].as_str(){Some("up")=>index.saturating_sub(1),Some("down")=>(index+1).min(next.route_order.len()-1),_=>return Err("direction must be up or down".into())};
+                        next.route_order.swap(index,target);
+                    }
                 }
                 next.validate()?;s.draft=Some(next);
             }
@@ -1898,3 +1914,6 @@ mod tests {
 mod update_install_tests;
 #[cfg(test)]
 mod update_cancel_tests;
+
+#[cfg(test)]
+mod reorder_tests;

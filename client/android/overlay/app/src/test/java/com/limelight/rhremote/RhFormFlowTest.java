@@ -32,6 +32,7 @@ public class RhFormFlowTest {
     boolean inScroll(View v){for(android.view.ViewParent p=v.getParent();p instanceof View;p=p.getParent())if(p instanceof ScrollView)return true;return false;}
     void profile()throws Exception{home.perform("device.settings.open",RhActions.obj("uuid","host"));layout(360,800);}
     String settingLabel(String key)throws Exception{org.json.JSONArray fields=RhSettings.catalog(activity);for(int i=0;i<fields.length();i++)if(fields.getJSONObject(i).getString("key").equals(key))return fields.getJSONObject(i).getString("label");throw new AssertionError("Missing setting "+key);}
+    private View content(){try{java.lang.reflect.Field f=RhHome.class.getDeclaredField("content");f.setAccessible(true);return (View)f.get(home);}catch(Exception e){throw new AssertionError(e);}}
     @Test public void automaticBitrateKeepsManualDraftAndDisablesTheActualEditor()throws Exception{
         profile();String label=settingLabel("bitrateMbps"),autoLabel=settingLabel("bitrateAuto");EditText manual=edit(label);manual.setText("41");
         CheckBox auto=null;for(View v:views(root))if(v instanceof CheckBox&&autoLabel.contentEquals(((CheckBox)v).getText()))auto=(CheckBox)v;assertNotNull(auto);auto.performClick();
@@ -133,10 +134,10 @@ public class RhFormFlowTest {
     @Test public void routeCheckboxesKeepOnePathAndReorderingHasVisibleBoundaries()throws Exception{
         profile();String before=RhShared.canonical(RhShared.read(activity));
         home.perform("settings.set",RhActions.obj("key","routeOrder","value",new org.json.JSONArray().put("lan").put("relay")));home.perform("settings.tab",RhActions.obj("tab","network"));layout(360,800);
-        assertFalse(described("上移局域网").isEnabled());assertTrue(described("下移局域网").isEnabled());assertFalse(described("下移自建中继").isEnabled());
-        described("下移局域网").performClick();assertEquals("relay",home.state().getJSONObject("draft").getJSONArray("routeOrder").getString(0));assertFalse(described("上移自建中继").isEnabled());assertFalse(described("下移局域网").isEnabled());
+        assertTrue(described("拖动连接路径 局域网 排序").isEnabled());assertTrue(described("拖动连接路径 自建中继 排序").isEnabled());
+        home.perform("settings.route.move",RhActions.obj("route","lan","targetRoute","relay","placement","after"));assertEquals("relay",home.state().getJSONObject("draft").getJSONArray("routeOrder").getString(0));
         CheckBox lan=(CheckBox)described("连接路径：局域网");assertTrue(lan.isChecked());lan.performClick();assertEquals(1,home.state().getJSONObject("draft").getJSONArray("routeOrder").length());
-        CheckBox relay=(CheckBox)described("连接路径：自建中继");assertTrue(relay.isChecked());assertFalse(relay.isEnabled());assertFalse(described("上移自建中继").isEnabled());assertFalse(described("下移自建中继").isEnabled());
+        CheckBox relay=(CheckBox)described("连接路径：自建中继");assertTrue(relay.isChecked());assertFalse(relay.isEnabled());assertTrue(described("拖动连接路径 自建中继 排序").isEnabled());
         ((CheckBox)described("连接路径：公网直连")).performClick();assertEquals(2,home.state().getJSONObject("draft").getJSONArray("routeOrder").length());assertTrue(described("连接路径：自建中继").isEnabled());
         button("取消").performClick();assertEquals(before,RhShared.canonical(RhShared.read(activity)));
     }
@@ -157,7 +158,7 @@ public class RhFormFlowTest {
         int[] location=new int[2];save.getLocationInWindow(location);assertTrue("Save stays on the right",location[0]>672);
         edit("WebDAV 目录地址（HTTP / HTTPS）").setText("http://example.test/dav/");assertTrue(button("保存").isEnabled());assertEquals(android.graphics.Color.WHITE,button("保存").getCurrentTextColor());
         java.lang.reflect.Field busy=RhHome.class.getDeclaredField("syncBusy");busy.setAccessible(true);busy.setBoolean(home,true);home.rebind();
-        for(View v:views(root))if(v instanceof EditText||v instanceof Spinner||v instanceof CheckBox)assertFalse("Sync form must be read-only while running",v.isEnabled());
+        for(View v:views(content()))if(v instanceof EditText||v instanceof Spinner||v instanceof CheckBox)assertFalse("Sync form must be read-only while running",v.isEnabled());
         assertFalse(button("保存").isEnabled());assertEquals("http://example.test/dav/",home.state().getJSONObject("syncDraft").getString("url"));
         try{home.perform("sync.edit",RhActions.obj("key","username","value","ignored"));fail("Busy edit accepted");}catch(IllegalStateException expected){}
         busy.setBoolean(home,false);

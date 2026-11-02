@@ -27,14 +27,17 @@ public final class RhDeviceBrowser extends LinearLayout {
     private final ScrollView detail;
     private final EditText search;
     private final TextView count,title,subtitle,availability,endpoints,lastRoute,checkNotice,listEmptyText,detailEmptyText;
-    private final Button back;
-    private final RhBoundAction.Button settings,connect,windows,pair,info,up,down,inspect,listEmptyAction,detailEmptyAction;
+    private final Button back,globalSettings;
+    private final ImageButton addDevice,refreshDevices;
+    private boolean navigationBlocked;
+    private final RhBoundAction.Button settings,connect,windows,pair,info,inspect,listEmptyAction,detailEmptyAction;
     private final Map<String,RhBoundAction.Row> rows=new LinkedHashMap<>();
     private final TextView[] values=new TextView[8];
     private final Map<LinearLayout,Float> metricWeights=new LinkedHashMap<>();
     private final List<LinearLayout> metricGroups=new ArrayList<>();
     private List<ComputerDetails> devices=Collections.emptyList();
-    private String selected="",query="";
+    private String selected="",query="",selectionAction="device.select";
+    private final LinearLayout brand;
     private boolean wide,detailOpen,updatingSearch,listOnly,connectionBlocked,windowEligible;
     private int widthBucket=-1;
     private int detailHeaderMode=-1;
@@ -52,9 +55,11 @@ public final class RhDeviceBrowser extends LinearLayout {
         setOrientation(HORIZONTAL);setBackgroundColor(surface);
 
         listPane=column();listPane.setPadding(dp(16),dp(16),dp(16),dp(16));
+        brand=row();brand.setPadding(0,0,0,dp(12));ImageView logo=new ImageView(activity);logo.setImageResource(R.drawable.rh_icon);brand.addView(logo,new LayoutParams(dp(30),dp(30)));TextView brandName=text("RHRemote",18,ink,true);LayoutParams brandParams=new LayoutParams(0,dp(48),1);brandParams.setMarginStart(dp(10));brand.addView(brandName,brandParams);listPane.addView(brand);
         LinearLayout listHeading=row();TextView heading=text("远程设备",20,ink,true);
         heading.setMinHeight(dp(48));listHeading.addView(heading,new LayoutParams(0,-2,1));
-        listHeading.addView(button("刷新",false,()->send("devices.refresh")));
+        refreshDevices=iconButton("刷新设备",R.drawable.rh_refresh,()->send("devices.refresh"));listHeading.addView(refreshDevices);
+        addDevice=iconButton("添加电脑",R.drawable.rh_plus,()->send("device.add.open"));listHeading.addView(addDevice);
         listPane.addView(listHeading);space(listPane,12);
         search=new EditText(activity);RhTextInput.filter(search);search.setTextSize(14);search.setTextColor(ink);search.setHintTextColor(muted);
         search.setHint("搜索名称或地址");search.setContentDescription("搜索名称或地址");search.setPadding(dp(12),0,dp(12),0);
@@ -72,7 +77,8 @@ public final class RhDeviceBrowser extends LinearLayout {
                 listScroll.smoothScrollTo(listScroll.getScrollX(),listScroll.getScrollY());
             }
         });
-        divider(listPane);count=text("",12,muted,false);count.setPadding(0,dp(14),0,0);listPane.addView(count);
+        divider(listPane);count=text("",12,muted,false);count.setPadding(0,dp(14),0,dp(12));listPane.addView(count);
+        globalSettings=button("设置",false,()->send("app.settings.open"));globalSettings.setTag("nav:app.settings.open");listPane.addView(globalSettings,new LayoutParams(-1,-2));
         addView(listPane,new LayoutParams(dp(272),-1));
         View separator=new View(activity);separator.setBackgroundColor(line);addView(separator,new LayoutParams(dp(1),-1));separator.setTag("browser-divider");
 
@@ -111,8 +117,6 @@ public final class RhDeviceBrowser extends LinearLayout {
         space(detailBody,16);divider(detailBody);space(detailBody,16);LinearLayout infoHeading=row();TextView infoTitle=text("设备信息",14,ink,true);infoTitle.setMinHeight(dp(48));infoHeading.addView(infoTitle,new LayoutParams(0,-2,1));info=boundButton("编辑资料",false);infoHeading.addView(info);detailBody.addView(infoHeading);space(detailBody,14);
         LinearLayout host=row();metric(host,"首选地址",3,1.5f);metric(host,"配对状态",4,1);detailBody.addView(host);space(detailBody,12);endpoints=text("",13,muted,false);detailBody.addView(endpoints);space(detailBody,8);lastRoute=text("",13,muted,false);detailBody.addView(lastRoute);inspect=boundButton("检查连接",false);inspect.setTag("device.check");LayoutParams inspectLayout=new LayoutParams(-2,-2);inspectLayout.topMargin=dp(12);detailBody.addView(inspect,inspectLayout);
         section("当前客户端配置");LinearLayout profile=row();metric(profile,"视频编码",5,1);metric(profile,"声音",6,1);metric(profile,"屏幕",7,1);detailBody.addView(profile);
-        space(detailBody,16);divider(detailBody);space(detailBody,16);detailBody.addView(text("设备顺序",12,muted,false));space(detailBody,12);
-        RhActionRow ordering=new RhActionRow(activity);up=boundButton("上移",false);down=boundButton("下移",false);ordering.addView(up);ordering.addView(down);detailBody.addView(ordering);
         detailEmpty=column();detailEmpty.setGravity(Gravity.CENTER);detailEmpty.setPadding(dp(24),dp(32),dp(24),dp(32));detailEmptyText=text("尚未添加设备",18,muted,false);detailEmptyText.setGravity(Gravity.CENTER);detailEmpty.addView(detailEmptyText,new LayoutParams(-1,-2));space(detailEmpty,20);detailEmptyAction=boundButton("添加电脑",true);detailEmptyAction.bind("device.add.open",RhActions.obj());detailEmpty.addView(detailEmptyAction,new LayoutParams(-2,-2));detailContent.addView(detailEmpty,new LayoutParams(-1,0,1));
         detailPane.addView(detail,new LayoutParams(-1,0,1));
         addView(detailPane,new LayoutParams(0,-1,1));
@@ -129,6 +133,7 @@ public final class RhDeviceBrowser extends LinearLayout {
     private TextView text(String value,int size,int color,boolean bold){TextView v=new TextView(activity);v.setText(value);v.setTextSize(size);v.setTextColor(color);v.setGravity(Gravity.CENTER_VERTICAL);if(bold)v.setTypeface(Typeface.create("sans-serif-medium",0));return v;}
     private GradientDrawable background(int fill,int border,int radius){GradientDrawable d=new GradientDrawable();d.setColor(fill);d.setCornerRadius(dp(radius));if(border!=0)d.setStroke(dp(1),border);return d;}
     private void styleButton(Button b,String label,boolean primary){b.setText(label);b.setTextSize(14);b.setAllCaps(false);b.setStateListAnimator(null);b.setElevation(0);b.setMinWidth(0);b.setMinimumWidth(0);b.setMinHeight(dp(48));b.setMinimumHeight(dp(48));b.setPadding(dp(16),dp(8),dp(16),dp(8));RhUiStyle.button(b,primary?Color.WHITE:ink,muted,background(primary?accent:surface,primary?0:line,8),background(page,line,8),background(primary?accent:surface,primary?ink:accent,8));b.setLayoutParams(new LayoutParams(-2,-2));}
+    private ImageButton iconButton(String label,int icon,Runnable action){ImageButton b=new ImageButton(activity);b.setImageResource(icon);b.setColorFilter(ink);b.setContentDescription(label);RhUiStyle.focusBackground(b,background(surface,0,8),background(soft,0,8),background(surface,accent,8));b.setPadding(dp(12),dp(12),dp(12),dp(12));b.setOnClickListener(v->fromView(v,action));b.setLayoutParams(new LayoutParams(dp(48),dp(48)));return b;}
     private Button button(String label,boolean primary,Runnable action){Button b=new Button(activity);styleButton(b,label,primary);b.setOnClickListener(v->fromView(v,action));return b;}
     private RhBoundAction.Button boundButton(String label,boolean primary){RhBoundAction.Button b=new RhBoundAction.Button(activity,(source,id,args)->fromView(source,()->actions.send(id,args)));styleButton(b,label,primary);return b;}
     private void send(String id,Object... args){actions.send(id,RhActions.obj(args));}
@@ -153,14 +158,17 @@ public final class RhDeviceBrowser extends LinearLayout {
     private ComputerDetails chosen(){for(ComputerDetails d:devices)if(d.uuid.equals(selected))return d;return null;}
 
     public void showDetail(boolean value){detailOpen=value;applyMode();}
-    public void setListOnly(boolean value){if(listOnly==value)return;listOnly=value;for(Map.Entry<String,RhBoundAction.Row> item:rows.entrySet())item.getValue().bind(listOnly?"device.settings.open":"device.select",RhActions.obj("uuid",item.getKey()));widthBucket=-1;applyMode();}
+    public void setSelectionAction(String action){if(selectionAction.equals(action))return;selectionAction=action;for(Map.Entry<String,RhBoundAction.Row> item:rows.entrySet())item.getValue().bind(action,RhActions.obj("uuid",item.getKey()));}
+    public void setListOnly(boolean value){if(listOnly==value)return;listOnly=value;for(Map.Entry<String,RhBoundAction.Row> item:rows.entrySet())item.getValue().bind(selectionAction,RhActions.obj("uuid",item.getKey()));widthBucket=-1;applyMode();}
     public boolean isDetailOpen(){return !listOnly&&!wide&&detailOpen;}
+    public void setNavigationBlocked(boolean blocked){navigationBlocked=blocked;for(View v:new View[]{globalSettings,addDevice,refreshDevices}){v.setEnabled(!blocked);v.setFocusable(!blocked);v.setAlpha(blocked?.45f:1f);}for(RhBoundAction.Row row:rows.values()){row.setEnabled(!blocked);row.setFocusable(!blocked);row.getChildAt(0).setEnabled(!blocked);}}
     public void setConnectionBlocked(boolean blocked){if(connectionBlocked==blocked)return;connectionBlocked=blocked;connectionEnabled();}
     private void connectionEnabled(){ComputerDetails d=chosen();connect.setEnabled(d!=null&&!connectionBlocked);windows.setEnabled(d!=null&&!connectionBlocked&&windowEligible);pair.setEnabled(d!=null&&!connectionBlocked);inspect.setEnabled(d!=null&&!connectionBlocked);}
     private void applyMode(){listEmptyAction.setVisibility(devices.isEmpty()&&wide&&!listOnly?GONE:VISIBLE);if(listOnly){listPane.setVisibility(VISIBLE);detailPane.setVisibility(GONE);back.setVisibility(GONE);findViewWithTag("browser-divider").setVisibility(VISIBLE);LayoutParams params=(LayoutParams)listPane.getLayoutParams();params.width=0;params.weight=1;listPane.setLayoutParams(params);return;}listPane.setVisibility(wide||!detailOpen?VISIBLE:GONE);detailPane.setVisibility(wide||detailOpen?VISIBLE:GONE);findViewWithTag("browser-divider").setVisibility(wide?VISIBLE:GONE);back.setVisibility(wide?GONE:VISIBLE);LayoutParams params=(LayoutParams)listPane.getLayoutParams();params.width=wide?dp(272):0;params.weight=wide?0:1;listPane.setLayoutParams(params);}
     @Override protected void onMeasure(int widthSpec,int heightSpec){int width=MeasureSpec.getSize(widthSpec),bucket=width>=dp(700)?1:0;if(bucket!=widthBucket){widthBucket=bucket;wide=bucket==1;applyMode();}
         // Short landscape windows keep the title and actions, with room left to read the body.
         boolean compact=MeasureSpec.getMode(heightSpec)!=MeasureSpec.UNSPECIFIED&&MeasureSpec.getSize(heightSpec)<dp(400);
+        listPane.setPadding(dp(16),dp(compact?8:16),dp(16),dp(compact?8:16));count.setVisibility(compact?GONE:VISIBLE);if(compact)brand.setVisibility(GONE);else brand.setVisibility(wide||listOnly?VISIBLE:GONE);
         int paneWidth=width-(wide?dp(273):0),headerMode=compact?(paneWidth>=dp(600)?2:1):0;
         if(headerMode!=detailHeaderMode){detailHeaderMode=headerMode;boolean beside=headerMode==2;detailNavigation.setOrientation(beside?HORIZONTAL:VERTICAL);
             detailHeader.setLayoutParams(new LayoutParams(beside?0:-1,-2,beside?1:0));tabs.setLayoutParams(new LayoutParams(beside?-2:-1,-2));
@@ -180,16 +188,15 @@ public final class RhDeviceBrowser extends LinearLayout {
         JSONObject target=RhActions.obj("uuid",available?d.uuid:"");JSONObject check=available?RhDeviceCheck.snapshot(activity,shared,d):new JSONObject();windowEligible=available&&RhDeviceCheck.canConnect(d,check);windows.setEnabled(windowEligible&&!connectionBlocked);String primary=available?RhDeviceCheck.primaryAction(d,check):"";JSONObject checkArgs=RhActions.obj("uuid",available?d.uuid:"");
         if(available)try{checkArgs.put("expectedIntent",RhDeviceCheck.intent(activity,shared,d));}catch(Exception invalid){/* The dispatcher validates malformed saved settings. */}
         windows.bind(available?"device.windows.open":"",target);settings.bind(available?"device.settings.open":"",target);info.bind(available?"device.info.open":"",target);connect.bind(primary,primary.equals("device.check")?checkArgs:target);pair.bind(available?"device.pair":"",target);inspect.bind(available?"device.check":"",checkArgs);inspect.setVisibility(available&&!primary.equals("device.check")?VISIBLE:GONE);
-        up.bind(available?"device.move":"",RhActions.obj("uuid",available?d.uuid:"","direction","up"));down.bind(available?"device.move":"",RhActions.obj("uuid",available?d.uuid:"","direction","down"));
         detailBody.setVisibility(available?VISIBLE:GONE);detailChrome.setVisibility(available?VISIBLE:GONE);detailEmpty.setVisibility(available?GONE:VISIBLE);detailEmptyText.setText(devices.isEmpty()?"尚未添加设备":"选择设备");detailEmptyAction.setVisibility(devices.isEmpty()?VISIBLE:GONE);settings.setVisibility(available?VISIBLE:GONE);pair.setVisibility(available&&!RhDeviceCheck.blocks(check)&&primary.equals("device.check")&&d.serverCert==null?VISIBLE:GONE);
-        if(d==null){detailOpen=false;applyMode();title.setText("远程设备");subtitle.setText("尚未添加设备");availability.setVisibility(GONE);up.setEnabled(false);down.setEnabled(false);for(TextView value:values){value.setText("—");value.setTextColor(ink);}return;}
+        if(d==null){detailOpen=false;applyMode();title.setText("远程设备");subtitle.setText("尚未添加设备");availability.setVisibility(GONE);for(TextView value:values){value.setText("—");value.setTextColor(ink);}return;}
         availability.setVisibility(VISIBLE);boolean online=RhDeviceCheck.online(d,check);
         String name=RhShared.displayName(shared,d.uuid,d.name);title.setText(name);subtitle.setText(name.equals(d.name)?address(shared,d):d.name);
         availability.setText(online?"在线":RhDeviceCheck.reachability(d,check).equals("unknown")?"待检查":"离线");availability.setTextColor(online?green:muted);
         endpoints.setText(RhNetwork.savedSummary(shared,d));lastRoute.setText(RhNetwork.lastRoute(d.uuid));
         connect.setText(RhDeviceCheck.primaryLabel(d,check));checkNotice.setText(RhDeviceCheck.hint(d,check));checkNotice.setTextColor(RhDeviceCheck.failed(check)?failure:muted);checkNotice.setVisibility(checkNotice.length()==0?GONE:VISIBLE);RhProfile p=RhProfile.load(activity,shared,d.uuid);
         String[] data={p.width+" × "+p.height,p.fps+" FPS",p.bitrateAuto?"自动（连接时）":p.bitrateMbps+" Mbps",address(shared,d),RhDeviceCheck.label(d,check),p.codec,p.audioEnabled?"开启":"关闭",p.displayMode.equals("virtual")?"虚拟屏":"自动"};
-        for(int i=0;i<values.length;i++)values[i].setText(data[i]);values[4].setTextColor(pairingColor(d,check));int index=devices.indexOf(d);up.setEnabled(index>0);down.setEnabled(index>=0&&index<devices.size()-1);
+        for(int i=0;i<values.length;i++)values[i].setText(data[i]);values[4].setTextColor(pairingColor(d,check));
         if(selectionChanged){
             // ScrollView may reveal the previous focused child during its next layout.
             // Complete this selection reset there, once, rather than on later refreshes.
@@ -203,9 +210,9 @@ public final class RhDeviceBrowser extends LinearLayout {
         for(ComputerDetails d:devices){JSONObject check=RhDeviceCheck.snapshot(activity,shared,d);boolean reachable=RhDeviceCheck.online(d,check);if(reachable)online++;String name=RhShared.displayName(shared,d.uuid,d.name),address=address(shared,d);
             if(!needle.isEmpty()&&!(name+"\n"+d.name+"\n"+address+"\n"+RhNetwork.savedSummary(shared,d)).toLowerCase(Locale.ROOT).contains(needle))continue;
             visible.add(d.uuid);RhBoundAction.Row cell=rows.get(d.uuid);
-            if(cell==null){cell=new RhBoundAction.Row(activity,(source,id,args)->fromView(source,()->actions.send(id,args)));cell.setGravity(Gravity.CENTER_VERTICAL);cell.setPadding(dp(12),dp(12),dp(12),dp(12));cell.setMinimumHeight(dp(92));ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_monitor);icon.setColorFilter(accent);icon.setPadding(dp(7),dp(7),dp(7),dp(7));icon.setBackground(background(page,0,8));LayoutParams iconParams=new LayoutParams(dp(36),dp(36));iconParams.setMarginEnd(dp(12));cell.addView(icon,iconParams);LinearLayout names=column();for(int i=0;i<3;i++){TextView text=text("",i==0?14:12,i==0?ink:muted,i==0);text.setSingleLine(true);text.setEllipsize(TextUtils.TruncateAt.END);text.setPadding(0,dp(2),0,dp(2));names.addView(text);}cell.addView(names,new LayoutParams(0,-2,1));rows.put(d.uuid,cell);}
-            cell.bind(listOnly?"device.settings.open":"device.select",RhActions.obj("uuid",d.uuid));
-            boolean chosen=d.uuid.equals(selected),selectionChanged=cell.isSelected()!=chosen;cell.setSelected(chosen);cell.setFocusable(true);if(cell.getBackground()==null||selectionChanged)RhUiStyle.focusBackground(cell,background(chosen?soft:surface,0,8),background(chosen?soft:surface,0,8),background(chosen?soft:surface,accent,8));cell.setContentDescription("选择设备 "+name);LinearLayout names=(LinearLayout)cell.getChildAt(1);
+            if(cell==null){cell=new RhBoundAction.Row(activity,(source,id,args)->fromView(source,()->actions.send(id,args)));cell.setGravity(Gravity.CENTER_VERTICAL);cell.setPadding(dp(12),dp(12),dp(12),dp(12));cell.setMinimumHeight(dp(92));ImageView grip=new ImageView(activity);grip.setImageResource(R.drawable.rh_grip);grip.setColorFilter(muted);grip.setContentDescription("拖动设备 "+name+" 排序");grip.setPadding(dp(8),dp(12),dp(8),dp(12));cell.addView(grip,new LayoutParams(dp(36),dp(48)));final View handle=grip;RhReorder.bind(grip,d.uuid,()->{List<RhReorder.Item> items=new ArrayList<>();for(int i=0;i<list.getChildCount();i++){View row=list.getChildAt(i);for(Map.Entry<String,RhBoundAction.Row> known:rows.entrySet())if(known.getValue()==row)items.add(new RhReorder.Item(known.getKey(),row));}return items;},accent,(target,after)->fromView(listPane,()->send("device.move","uuid",d.uuid,"targetUuid",target,"placement",after?"after":"before")),direction->fromView(handle,()->send("device.move","uuid",d.uuid,"direction",direction)));ImageView icon=new ImageView(activity);icon.setImageResource(R.drawable.rh_monitor);icon.setColorFilter(accent);icon.setPadding(dp(7),dp(7),dp(7),dp(7));icon.setBackground(background(page,0,8));LayoutParams iconParams=new LayoutParams(dp(36),dp(36));iconParams.setMarginEnd(dp(12));cell.addView(icon,iconParams);LinearLayout names=column();names.setTag("device-labels");for(int i=0;i<3;i++){TextView text=text("",i==0?14:12,i==0?ink:muted,i==0);text.setSingleLine(true);text.setEllipsize(TextUtils.TruncateAt.END);text.setPadding(0,dp(2),0,dp(2));names.addView(text);}cell.addView(names,new LayoutParams(0,-2,1));rows.put(d.uuid,cell);}
+            cell.bind(selectionAction,RhActions.obj("uuid",d.uuid));
+            boolean chosen=d.uuid.equals(selected),selectionChanged=cell.isSelected()!=chosen;cell.setSelected(chosen);cell.setFocusable(!navigationBlocked);cell.setEnabled(!navigationBlocked);cell.getChildAt(0).setEnabled(!navigationBlocked);if(cell.getBackground()==null||selectionChanged)RhUiStyle.focusBackground(cell,background(chosen?soft:surface,0,8),background(chosen?soft:surface,0,8),background(chosen?soft:surface,accent,8));cell.setContentDescription("选择设备 "+name);LinearLayout names=(LinearLayout)cell.getChildAt(2);cell.getChildAt(0).setContentDescription("拖动设备 "+name+" 排序");
             ((TextView)names.getChildAt(0)).setText(name);((TextView)names.getChildAt(1)).setText(address);TextView status=(TextView)names.getChildAt(2);
             status.setText(check.has("outcome")||check.optBoolean("stale")?RhDeviceCheck.label(d,check):d.state==ComputerDetails.State.UNKNOWN?"待检查":!reachable?"离线":RhNetwork.pairingStatus(d).equals("unknown")?"● 配对未确认":"● "+RhNetwork.pairingLabel(d));status.setTextColor(pairingColor(d,check));
         }

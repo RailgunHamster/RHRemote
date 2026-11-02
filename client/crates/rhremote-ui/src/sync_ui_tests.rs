@@ -14,7 +14,7 @@ fn proxy_tab_keeps_protocol_host_port_and_scopes_aligned_and_scrollable(){
         let sent=Rc::new(RefCell::new(Vec::new()));let calls=sent.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));
         render(&ui,&format!("proxy-{width}-{dark}-top"));
         for label in ["代理协议","代理地址","代理端口"]{visible_in_form(&ui,label);}
-        let host=button(&ui,"代理地址");let port=button(&ui,"代理端口");assert!((host.absolute_position().y-port.absolute_position().y).abs()<1.);assert!(host.absolute_position().x+host.size().width<=port.absolute_position().x);
+        let host=button(&ui,"代理地址");let port=button(&ui,"代理端口");if width>=980.{assert!((host.absolute_position().y-port.absolute_position().y).abs()<1.);assert!(host.absolute_position().x+host.size().width<=port.absolute_position().x);}else{assert!(host.absolute_position().y+host.size().height<=port.absolute_position().y);}
         click(&ui,"启用代理");assert_eq!(*sent.borrow(),vec![("proxy.edit".to_string(),"enabled=true".to_string())]);sent.borrow_mut().clear();
         let form=ElementHandle::find_by_element_id(&ui,"MainWindow::form-scroll").next().unwrap();form.scroll(0.,-100000.);render(&ui,&format!("proxy-{width}-{dark}-bottom"));
         visible_in_form(&ui,"保存");click(&ui,"保存");assert_eq!(*sent.borrow(),vec![("proxy.save".to_string(),String::new())]);

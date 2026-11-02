@@ -18,7 +18,7 @@ public final class RhFloatingKeyboardTest {
     Activity activity;FrameLayout root;RhFloatingKeyboard keyboard;final List<JSONObject> actions=new ArrayList<>();int width,height;
     void setup(int w,int h){RuntimeEnvironment.setQualifiers("w"+w+"dp-h"+h+"dp-mdpi");width=w;height=h;activity=Robolectric.buildActivity(Activity.class).setup().get();activity.setTheme(R.style.RhTheme);activity.getSharedPreferences("rhremote.global",0).edit().remove("hideKeyboardButton").remove("keyboardLayout").commit();root=new FrameLayout(activity);activity.setContentView(root);create();}
     void create(){keyboard=new RhFloatingKeyboard(activity,root,(id,args)->actions.add(RhActions.obj("action",id,"args",args)));keyboard.setEnabled(true);keyboard.update(true,false);layout();}
-    void layout(){for(int pass=0;pass<4;pass++){root.forceLayout();root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
+    void layout(){org.robolectric.shadows.ShadowDisplayManager.changeDisplay(0,"w"+width+"dp-h"+height+"dp-mdpi");activity.getWindow().setLayout(width,height);for(int pass=0;pass<4;pass++){root.forceLayout();root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
     Button key(String id){Button key=root.findViewWithTag("floating-key:"+id);assertNotNull(id,key);return key;}
     Rect bounds(View key){Rect r=new Rect();key.getDrawingRect(r);root.offsetDescendantRectToMyCoords(key,r);return r;}
     @After public void cleanup(){if(keyboard!=null)keyboard.dispose();}
@@ -27,6 +27,16 @@ public final class RhFloatingKeyboardTest {
             for(int i=0;i<catalog.length();i++){String id=catalog.getJSONObject(i).getString("id");assertTrue(ids.add(id));Button key=key(id);keyboard.reveal(id);layout();Rect r=new Rect();assertTrue(id+" cannot be reached "+Arrays.toString(size),key.getLocalVisibleRect(r));assertEquals("A key is clipped vertically "+id,key.getHeight(),r.height());assertEquals("A key is clipped horizontally "+id,key.getWidth(),r.width());assertTrue(key.getWidth()>=32);assertTrue(key.getHeight()>=36);actions.clear();key.performClick();assertEquals(id,1,actions.size());assertEquals("stream.keyboard.press",actions.get(0).getString("action"));assertEquals(id,actions.get(0).getJSONObject("args").getString("key"));}
             keyboard.dispose();
         }
+    }
+    @Test public void portraitTabletsStackAll108KeysInsideTheVisibleWidthAndKeepThemTouchable()throws Exception{
+        for(int[] size:new int[][]{{600,1000},{672,1050},{800,1200}}){setup(size[0],size[1]);JSONObject state=keyboard.state();assertEquals("stacked",state.getString("presentation"));assertFalse(state.getBoolean("horizontalScrollable"));View viewport=root.findViewWithTag("floating-keyboard-viewport");Rect area=bounds(viewport);List<Rect> occupied=new ArrayList<>();JSONArray catalog=RhKeyboard.catalog(activity);
+            for(int i=0;i<catalog.length();i++){Button key=key(catalog.getJSONObject(i).getString("id"));Rect r=bounds(key);assertTrue("Portrait key outside viewport: "+key.getTag()+" "+r+"/"+area,area.contains(r));assertTrue(key.getWidth()>=32&&key.getHeight()>=36);for(Rect old:occupied)assertFalse("Portrait keys overlap",Rect.intersects(r,old));occupied.add(r);}
+            assertTrue(key("num-5").getTop()>key("space").getTop());keyboard.dispose();
+        }
+    }
+    @Test public void rotatingAndApplyingImeInsetsNeverLeavesAHorizontalKeyboardOverflow()throws Exception{
+        setup(1080,720);for(int[] size:new int[][]{{672,1050},{360,800},{1080,720}}){width=size[0];height=size[1];layout();assertFalse(keyboard.state().getBoolean("horizontalScrollable"));for(String id:new String[]{"escape","backspace","arrow-right","num-enter"}){keyboard.reveal(id);layout();Rect keyBounds=new Rect();assertTrue("Rotated key outside viewport "+id+" at "+width+"x"+height,key(id).getLocalVisibleRect(keyBounds));assertEquals(key(id).getWidth(),keyBounds.width());assertEquals(key(id).getHeight(),keyBounds.height());}}
+        keyboard.setLayout("simple");width=360;height=800;androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,new androidx.core.view.WindowInsetsCompat.Builder().setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(),androidx.core.graphics.Insets.of(0,0,0,320)).build());layout();for(String id:new String[]{"escape","tab","arrow-left","arrow-right"})assertTrue(bounds(key(id)).bottom<=480);
     }
     @Test public void standardKeyboardGroupsHaveNoOverlappingKeys()throws Exception{
         setup(1080,720);JSONArray catalog=RhKeyboard.catalog(activity);List<Rect> occupied=new ArrayList<>();for(int i=0;i<catalog.length();i++){Rect r=new Rect();key(catalog.getJSONObject(i).getString("id")).getHitRect(r);for(Rect prior:occupied)assertFalse(Rect.intersects(r,prior));occupied.add(r);}
@@ -76,6 +86,6 @@ public final class RhFloatingKeyboardTest {
     @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     public void completeKeyboardRendersWithTranslucentSurfacesInBothOrientations()throws Exception{
         java.io.File directory=new java.io.File("build/reports/rhremote-full-keyboard");assertTrue(directory.isDirectory()||directory.mkdirs());
-        for(int[] size:new int[][]{{1080,720},{360,800}}){setup(size[0],size[1]);Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);root.draw(new Canvas(bitmap));assertEquals(0,Color.alpha(bitmap.getPixel(20,100)));Rect tab=bounds(key("tab"));int alpha=Color.alpha(bitmap.getPixel(tab.left+8,tab.top+8));assertTrue("Key must be translucent: "+alpha,alpha>64&&alpha<255);try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(directory,"keyboard-"+width+"x"+height+".png"))){assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG,100,out));}bitmap.recycle();keyboard.dispose();}
+        for(int[] size:new int[][]{{1080,720},{672,1050},{360,800}}){setup(size[0],size[1]);Bitmap bitmap=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);root.draw(new Canvas(bitmap));assertEquals(0,Color.alpha(bitmap.getPixel(width/2,20)));Rect tab=bounds(key("tab"));int alpha=Color.alpha(bitmap.getPixel(tab.left+8,tab.top+8));assertTrue("Key must be translucent: "+alpha,alpha>64&&alpha<255);try(java.io.FileOutputStream out=new java.io.FileOutputStream(new java.io.File(directory,"keyboard-"+width+"x"+height+".png"))){assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG,100,out));}bitmap.recycle();keyboard.dispose();}
     }
 }

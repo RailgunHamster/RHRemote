@@ -1,0 +1,7 @@
+{
+  "stableVersions": 3,
+  "previewVersions": 1,
+  "protectedTags": ["v0.2.15"],
+  "protectedReason": "Ubuntu client/server latest published packages remain at v0.2.15. Remove this exception after publishing their replacement.",
+  "preserveGitTags": true
+}

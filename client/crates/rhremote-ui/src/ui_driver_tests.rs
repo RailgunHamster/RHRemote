@@ -117,7 +117,7 @@ fn activation_key_repeats_do_not_replay_buttons_navigation_device_rows_or_picker
         }
         let inspection=f.request("view.ui.inspect",json!({"window":window}));assert_eq!(inspection["status"],"complete");
         let control=inspection["result"]["controls"].as_array().unwrap().iter().find(|row|{
-            let id=row["id"].as_str().unwrap_or("");match kind{"button"=>id.starts_with("action|device.add.submit|"),"navigation"=>id=="nav|devices.open","device"=>id=="device|host",_=>id=="picker|shortcuts|tab"}
+            let id=row["id"].as_str().unwrap_or("");match kind{"button"=>id.starts_with("action|device.add.submit|"),"navigation"=>id=="nav|app.settings.open","device"=>id=="device|host",_=>id=="picker|shortcuts|tab"}
         }).expect("Actual activation control")["id"].clone();
         assert_eq!(f.request("view.ui.focus",json!({"window":window,"control":control}))["status"],"complete");
         for key in ["Enter","Space"] {
@@ -339,15 +339,10 @@ fn exact_selection_activates_each_duplicate_cancel_button_once_and_rejects_stale
 }
 
 #[test]
-fn exact_selection_preserves_compound_sort_arguments_and_does_not_run_disabled_or_modal_actions() {
-    let mut f=Fixture::new();f.ui.set_page("devices".into());f.ui.set_selected_uuid("host".into());f.ui.set_selected_index(1);f.ui.set_device_total(3);
-    f.ui.set_selected_device(crate::DeviceRow{uuid:"host".into(),name:"Server".into(),..Default::default()});
-    f.ui.set_devices(slint::ModelRc::new(slint::VecModel::from(vec![crate::DeviceRow{uuid:"a".into(),..Default::default()},crate::DeviceRow{uuid:"host".into(),..Default::default()},crate::DeviceRow{uuid:"b".into(),..Default::default()}])));
-    let args=json!({"actionId":"device.move","control":"action|device.move|host|up|上移"});
-    assert_eq!(f.activate(args.clone())["status"],"complete");assert_eq!(&*f.calls.borrow(),&[("device.move".into(),"host|up".into())]);
-    f.ui.set_selected_index(0);assert_eq!(f.activate(args.clone())["status"],"failed");
-    f.ui.set_selected_index(1);f.ui.set_navigation_prompt(true);assert_eq!(f.activate(args.clone())["status"],"failed");
-    f.ui.set_navigation_prompt(false);assert_eq!(f.activate(args)["status"],"complete");assert_eq!(f.calls.borrow().len(),2);
+fn drag_sort_api_preserves_compound_targets_and_grip_focus_respects_modal_guards(){
+    let mut f=Fixture::new();f.ui.set_page("devices".into());f.ui.set_devices(slint::ModelRc::new(slint::VecModel::from(vec![crate::DeviceRow{uuid:"host".into(),name:"Server".into(),..Default::default()}])));
+    assert_eq!(crate::args_for("device.move","host|other|after",&json!({})),json!({"uuid":"host","targetUuid":"other","placement":"after"}));assert_eq!(crate::args_for("settings.route.move","lan|relay|before",&json!({})),json!({"route":"lan","targetRoute":"relay","placement":"before"}));
+    let args=json!({"control":"reorder|devices|host"});assert_eq!(f.request("view.ui.focus",args.clone())["status"],"complete");f.ui.set_navigation_prompt(true);assert_eq!(f.request("view.ui.focus",args)["status"],"failed");assert!(f.calls.borrow().is_empty());
 }
 
 #[test]

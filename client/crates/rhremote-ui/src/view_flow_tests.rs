@@ -71,7 +71,7 @@ fn device_overview_selection_resets_scroll_and_refresh_preserves_it(){
         let rows=result.borrow();assert_eq!(rows.len(),1,"Exactly one active detail viewport");rows[0].clone()
     }
     let mut records=Vec::new();
-    for (width,height) in [(720.,560.),(1180.,780.)]{for dark in [false,true]{for actual_row in [false,true]{
+    for (width,height) in [(720.,560.),(1180.,560.)]{for dark in [false,true]{for actual_row in [false,true]{
         let mut f=Flow::new(width,height);if dark{f.input("appearance.toggle","");}f.input("device.select","host");
         let profiles=[f.controller.profile("host"),f.controller.profile("claw")];
         let before=scroll_probe(&mut f,Some(-100000.));assert!(before["maximum"].as_f64().unwrap()>0.,"Fixture must scroll: {before}");assert!(before["y"].as_f64().unwrap()< -20.,"Fixture never left the top: {before}");
@@ -852,13 +852,7 @@ fn page_back_buttons_stay_on_the_left_and_restore_device_context() {
             ] {
                 f.input(open, if list { "host" } else { "" });
                 let button = f.button(back, back_id, "");
-                let navigation_width = if width < 980. { 64. } else { 184. };
-                let list_width = if list {
-                    if width < 980. { 224. } else { 276. }
-                } else {
-                    0.
-                };
-                let expected_x = navigation_width + list_width + f.ui.get_form_inset();
+                let expected_x = if width<980. {224.} else {276.}+f.ui.get_form_inset();
                 assert!(
                     (button.absolute_position().x - expected_x).abs() < 1.,
                     "{open}: Back must be the first control in the page header"

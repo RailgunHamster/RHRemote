@@ -51,7 +51,7 @@ fn device_header_and_profile_tabs_have_balanced_gutters_at_each_scale() {
                     ui.set_page(page.into());
                     ui.set_selected_uuid("alignment-host".into());
                     ui.set_selected_name("winserver".into());
-                    let navigation = if width < 980. { 64. + 224. } else { 184. + 276. };
+                    let navigation = if width < 980. { 224. } else { 276. };
                     ui.set_form_inset(((width - navigation - 800.) / 2.0_f32).max(24.));
                     ui.window().dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
                     ui.window().set_size(LogicalSize::new(width, height));
@@ -149,7 +149,7 @@ fn blocked_navigation_cannot_dispatch_from_pointer_or_keyboard_and_recovers_afte
         ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));ui.set_navigation_locked(false);click(&ui,"设置");received.borrow_mut().clear();
         ui.set_navigation_locked(true);ui.set_navigation_hint("连接期间无法切换页面".into());
         ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
-        for label in ["远程设备","添加电脑","设置","深色模式"]{click(&ui,label);}assert!(received.borrow().is_empty(),"disabled navigation dispatched: {:?}",received.borrow());
+        for label in ["添加电脑","设置"]{click(&ui,label);}assert!(received.borrow().is_empty(),"disabled navigation dispatched: {:?}",received.borrow());
         click(&ui,"取消连接");assert_eq!(&*received.borrow(),&["stream.disconnect"]);
         received.borrow_mut().clear();ui.set_connection_phase("cancelling".into());
         ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});assert!(received.borrow().is_empty(),"disabled cancellation dispatched: {:?}",received.borrow());ui.set_connection_phase("starting".into());
@@ -281,10 +281,10 @@ fn update_notes_render_as_blocks_and_history_controls_are_collapsed_until_reques
     ui.set_update_notes(source.into());ui.set_update_note_blocks(crate::release_notes::model(source));
     let items=serde_json::json!([{"version":"0.2.17","publishedAt":"2026-11-02T10:19:23Z","notes":"## 修复\n\n- 悬浮键盘"}]);ui.set_update_history(crate::release_notes::history(&items,&serde_json::json!([]),""));
     let calls=Rc::new(RefCell::new(vec![]));let received=calls.clone();ui.global::<Commands>().on_trigger(move|id,args|received.borrow_mut().push((id.to_string(),args.to_string())));ui.window().set_size(LogicalSize::new(1180.,1100.));ui.show().unwrap();
-    for expanded in [false,true]{ui.set_update_history_expanded(expanded);ui.window().take_snapshot().unwrap();assert_eq!(ElementHandle::find_by_accessible_label(&ui,"▸ v0.2.17").next().is_some(),expanded);
+    for expanded in [false,true]{ui.set_update_history_expanded(expanded);ui.window().take_snapshot().unwrap();assert_eq!(ElementHandle::find_by_accessible_label(&ui,"v0.2.17").next().is_some(),expanded);
         if let Some(directory)=std::env::var_os("RHREMOTE_MARKDOWN_EVIDENCE"){std::fs::create_dir_all(&directory).unwrap();let frame=ui.window().take_snapshot().unwrap();image::save_buffer(std::path::PathBuf::from(directory).join(if expanded{"windows-history-open.png"}else{"windows-history-closed.png"}),frame.as_bytes(),frame.width(),frame.height(),image::ColorType::Rgba8).unwrap();}
     }
-    click(&ui,"▸ v0.2.17");assert_eq!(calls.borrow().last().unwrap(),&("updates.history.entry.toggle".into(),"0.2.17".into()));
+    click(&ui,"v0.2.17");assert_eq!(calls.borrow().last().unwrap(),&("updates.history.entry.toggle".into(),"0.2.17".into()));
     ui.set_update_history(crate::release_notes::history(&items,&serde_json::json!(["0.2.17"]),""));ui.set_update_history_busy(true);ui.set_update_history_error("历史记录读取失败".into());ui.window().take_snapshot().unwrap();assert!(ElementHandle::find_by_accessible_label(&ui,"收起历史更新记录").next().is_some());ui.hide().unwrap();
 }
 
@@ -451,25 +451,16 @@ fn focused_session_menu_rows_do_not_dispatch_after_becoming_busy_or_unavailable(
     }ui.hide().unwrap();
 }
 
+fn drag_route(ui:&MainWindow,from:&str,to:&str,refresh:impl FnOnce()){
+    click_in_form(ui,from);let a=ElementHandle::find_by_accessible_label(ui,from).next().unwrap();let b=ElementHandle::find_by_accessible_label(ui,to).next().unwrap();let ap=a.absolute_position();let bp=b.absolute_position();let start=LogicalPosition::new(ap.x+a.size().width/2.,ap.y+a.size().height/2.);let end=LogicalPosition::new(bp.x+b.size().width/2.,bp.y+b.size().height*0.8);
+    ui.window().dispatch_event(WindowEvent::PointerPressed{position:start,button:PointerEventButton::Left});refresh();ui.window().dispatch_event(WindowEvent::PointerMoved{position:end});i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));ui.window().dispatch_event(WindowEvent::PointerReleased{position:end,button:PointerEventButton::Left});
+}
 #[test]
-fn route_controls_have_named_actions_and_disable_boundaries_and_the_last_path(){
+fn route_grips_have_named_actions_and_the_last_path_cannot_be_disabled(){
     i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
-    let routes=Rc::new(VecModel::from(vec![
-        crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,can_move_down:true,can_disable:true,..Default::default()},
-        crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,can_move_up:true,can_disable:true,..Default::default()},
-        crate::RouteRow{key:"public_direct".into(),label:"公网直连".into(),..Default::default()},
-    ]));ui.set_network_routes(routes.clone().into());
-    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
-    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
-        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));received.borrow_mut().clear();
-        click_in_form(&ui,"上移局域网");click_in_form(&ui,"下移自建中继");assert!(received.borrow().is_empty());
-        click_in_form(&ui,"下移局域网");click_in_form(&ui,"上移自建中继");assert_eq!(&*received.borrow(),&[("settings.route.move".into(),"lan|down".into()),("settings.route.move".into(),"relay|up".into())]);
-        received.borrow_mut().clear();click_in_form(&ui,"连接路径：公网直连");assert_eq!(&*received.borrow(),&[("settings.route.toggle".into(),"public_direct".into())]);
-    }
-    routes.set_vec(vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,toggle_blocked:true,..Default::default()}]);received.borrow_mut().clear();
-    click_in_form(&ui,"连接路径：局域网");click_in_form(&ui,"上移局域网");click_in_form(&ui,"下移局域网");assert!(received.borrow().is_empty());
-    for label in ["首选 IP 或主机名","备用地址","中继服务器"]{click_in_form(&ui,label);}
-    ui.hide().unwrap();
+    let routes=Rc::new(VecModel::from(vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,can_disable:true,..Default::default()},crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,can_disable:true,..Default::default()},crate::RouteRow{key:"public_direct".into(),label:"公网直连".into(),..Default::default()}]));ui.set_network_routes(routes.clone().into());let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));received.borrow_mut().clear();drag_route(&ui,"拖动连接路径 局域网 排序","拖动连接路径 自建中继 排序",||{});assert_eq!(&*received.borrow(),&[("settings.route.move".into(),"lan|relay|after".into())]);received.borrow_mut().clear();click_in_form(&ui,"连接路径：公网直连");assert_eq!(&*received.borrow(),&[("settings.route.toggle".into(),"public_direct".into())]);}
+    routes.set_vec(vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,toggle_blocked:true,..Default::default()}]);received.borrow_mut().clear();click_in_form(&ui,"连接路径：局域网");assert!(received.borrow().is_empty());ui.hide().unwrap();
 }
 
 #[test]
@@ -487,36 +478,13 @@ fn boolean_settings_identify_the_field_in_their_action_and_keyboard_activation()
 }
 
 #[test]
-fn a_route_action_survives_background_refresh_between_pointer_press_and_release(){
-    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
-    let rows=vec![
-        crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,can_move_down:true,can_disable:true,..Default::default()},
-        crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,can_move_up:true,can_disable:true,..Default::default()},
-    ];crate::form_models::update_routes(&ui,rows.clone());
-    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
-    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{
-        ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));click_in_form(&ui,"下移局域网");received.borrow_mut().clear();
-        for _ in 0..10 {
-            let button=ElementHandle::find_by_accessible_label(&ui,"下移局域网").next().unwrap();let p=button.absolute_position();let size=button.size();let position=LogicalPosition::new(p.x+size.width/2.,p.y+size.height/2.);
-            ui.window().dispatch_event(WindowEvent::PointerPressed{position,button:PointerEventButton::Left});
-            i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));crate::form_models::update_routes(&ui,rows.clone());
-            ui.window().dispatch_event(WindowEvent::PointerReleased{position,button:PointerEventButton::Left});
-        }
-        assert_eq!(&*received.borrow(),&vec![("settings.route.move".into(),"lan|down".into());10],"background refresh discarded a route action at {width}x{height}");
-    }ui.hide().unwrap();
+fn a_route_drag_survives_background_refresh_between_pointer_press_and_release(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());let rows=vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,..Default::default()},crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,..Default::default()}];crate::form_models::update_routes(&ui,rows.clone());let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
+    for(width,height,compact)in[(1180.,780.,false),(720.,560.,true)]{ui.set_compact(compact);ui.window().set_size(LogicalSize::new(width,height));received.borrow_mut().clear();for _ in 0..3{drag_route(&ui,"拖动连接路径 局域网 排序","拖动连接路径 自建中继 排序",||crate::form_models::update_routes(&ui,rows.clone()));}assert_eq!(&*received.borrow(),&vec![("settings.route.move".into(),"lan|relay|after".into());3]);}ui.hide().unwrap();
 }
-
 #[test]
-fn updating_another_route_does_not_take_the_current_buttons_keyboard_focus(){
-    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());
-    let mut rows=vec![
-        crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,can_move_down:true,can_disable:true,..Default::default()},
-        crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,can_move_up:true,can_disable:true,..Default::default()},
-    ];crate::form_models::update_routes(&ui,rows.clone());
-    let received=Rc::new(RefCell::new(Vec::new()));let calls=received.clone();ui.global::<Commands>().on_trigger(move|id,arg|calls.borrow_mut().push((id.to_string(),arg.to_string())));ui.show().unwrap();
-    click_in_form(&ui,"下移局域网");received.borrow_mut().clear();rows[1].label="中继路径".into();crate::form_models::update_routes(&ui,rows);
-    ui.window().dispatch_event(WindowEvent::KeyPressed{text:Key::Return.into()});ui.window().dispatch_event(WindowEvent::KeyReleased{text:Key::Return.into()});
-    assert_eq!(&*received.borrow(),&[("settings.route.move".into(),"lan|down".into())]);ui.hide().unwrap();
+fn updating_another_route_does_not_take_the_current_grips_keyboard_focus(){
+    i_slint_backend_testing::init_no_event_loop();let ui=MainWindow::new().unwrap();ui.set_page("settings".into());ui.set_profile_tab("network".into());let mut rows=vec![crate::RouteRow{key:"lan".into(),label:"局域网".into(),enabled:true,..Default::default()},crate::RouteRow{key:"relay".into(),label:"自建中继".into(),enabled:true,..Default::default()}];crate::form_models::update_routes(&ui,rows.clone());ui.show().unwrap();click_in_form(&ui,"拖动连接路径 局域网 排序");rows[1].label="中继路径".into();crate::form_models::update_routes(&ui,rows);let result=Rc::new(RefCell::new(Vec::new()));let out=result.clone();let probe=ui.global::<crate::UiTest>();probe.set_enabled(true);probe.on_report(move|id,_,_,_,focused,_,_,_,_,_,_|{if focused{out.borrow_mut().push(id.to_string());}});probe.set_operation("inspect".into());probe.set_generation(probe.get_generation()+1);i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(20));assert_eq!(&*result.borrow(),&["reorder|routes|lan"]);ui.hide().unwrap();
 }
 
 #[test]
@@ -578,7 +546,7 @@ fn closing_an_unsaved_decision_restores_the_existing_editors_focus_without_test_
 #[test]
 fn navigation_controls_do_not_replace_the_form_editors_return_focus(){
     i_slint_backend_testing::init_no_event_loop();
-    for label in ["远程设备","设置","添加电脑","概览","选择设备 claw","返回"]{
+    for label in ["设置","添加电脑","概览","选择设备 claw","返回"]{
         let ui=MainWindow::new().unwrap();let sync=label=="返回";ui.set_page(if sync{"global-settings"}else{"settings"}.into());ui.set_settings_tab("sync".into());
         ui.set_devices(ModelRc::new(VecModel::from(vec![crate::DeviceRow{uuid:"claw".into(),name:"claw".into(),..Default::default()}])));
         ui.set_profile_fields(ModelRc::new(VecModel::from(vec![SettingRow{key:"width".into(),label:"画面宽度".into(),kind:"number".into(),input_text:"".into(),..Default::default()}])));

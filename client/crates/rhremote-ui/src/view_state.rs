@@ -95,9 +95,9 @@ impl MainView {
         let compact = logical_width < 980.0;
         let device_context = matches!(
             state["page"].as_str(),
-            Some("devices" | "settings" | "profile-copy" | "device-info")
+            Some(_)
         ) && state["streaming"] != true && state["connecting"] != true;
-        let navigation_width = if compact { 64.0 } else { 184.0 };
+        let navigation_width = 0.0;
         let list_width = if device_context {
             if compact { 224.0 } else { 276.0 }
         } else { 0.0 };

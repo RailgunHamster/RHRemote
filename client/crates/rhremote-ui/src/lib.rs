@@ -83,6 +83,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
     match id {
         "devices.refresh" if !arg.is_empty()=>json!({"uuid":arg}),
         "device.move" => {
+            let fields:Vec<_>=arg.split('|').collect();if fields.len()==3{return json!({"uuid":fields[0],"targetUuid":fields[1],"placement":fields[2]});}
             let (uuid, direction) = arg.split_once('|').unwrap_or(("", ""));
             json!({"uuid":uuid,"direction":direction})
         }
@@ -131,7 +132,7 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "devices.filter.clear" => json!({"expectedQuery":arg}),
         "device.info.input"=>json!({"displayName":arg}),
         "device.add.submit" | "device.add.input" => json!({"address":arg}),
-        "settings.route.move" => {let (route,direction)=arg.split_once('|').unwrap_or(("",""));json!({"route":route,"direction":direction})},
+        "settings.route.move" => {let fields:Vec<_>=arg.split('|').collect();if fields.len()==3{json!({"route":fields[0],"targetRoute":fields[1],"placement":fields[2]})}else{let (route,direction)=arg.split_once('|').unwrap_or(("",""));json!({"route":route,"direction":direction})}},
         "settings.route.toggle" => json!({"route":arg}),
         "settings.set" => {
             let (key, value) = arg.split_once('=').unwrap_or(("", ""));
@@ -621,3 +622,6 @@ mod tests {
         assert!(ui.contains("device.connect") && ui.contains("device.pair"));
     }
 }
+
+#[cfg(test)]
+mod layout_reorder_tests;

@@ -359,6 +359,62 @@ component NavigationItem inherits Rectangle {
     accessible-action-default=>{root.invoke-navigation();}
     UiProbe{control-id:"nav|"+root.action-id;kind:"navigation";label:root.text;control-enabled:root.available;focused:nav-focus.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;focus-requested=>{nav-focus.focus();}activate-requested=>{root.invoke-navigation();}}
 }
+export global ReorderDrag {
+    in-out property <bool> active;
+    in-out property <string> scope;
+    in-out property <string> source;
+    in-out property <string> target;
+    in-out property <bool> after;
+    in-out property <length> pointer-y;
+    in-out property <length> pointer-x;
+}
+component ReorderDrop inherits Rectangle {
+    in property <string> order-scope;
+    in property <string> item-id;
+    in property <bool> accept-drop:true;
+    private property <length> watched-y:ReorderDrag.pointer-y;
+    changed watched-y=>{
+        if(ReorderDrag.active && ReorderDrag.scope==root.order-scope && root.accept-drop && ReorderDrag.pointer-x>=root.absolute-position.x && ReorderDrag.pointer-x<root.absolute-position.x+root.width && ReorderDrag.pointer-y>=root.absolute-position.y && ReorderDrag.pointer-y<root.absolute-position.y+root.height){
+            ReorderDrag.target=root.item-id;ReorderDrag.after=ReorderDrag.pointer-y>root.absolute-position.y+root.height/2;
+        }
+    }
+    @children
+    if ReorderDrag.active && ReorderDrag.scope==root.order-scope && ReorderDrag.target==root.item-id && ReorderDrag.source!=root.item-id:Rectangle{height:3px;y:ReorderDrag.after ? parent.height - 3px : 0px;background:Palette.blue;}
+}
+component DragHandle inherits Rectangle {
+    in property <string> item-id;
+    in property <string> label;
+    in property <string> order-scope;
+    in property <string> action-id;
+    in property <string> context;
+    in property <bool> disabled;
+    private property <string> pressed-context;
+    private property <length> start-y;
+    private property <bool> moved-far;
+    private property <bool> available:!root.disabled && !ModalContext.active;
+    changed context=>{ReorderDrag.active=false;}
+    changed item-id=>{ReorderDrag.active=false;}
+    changed available=>{if(!root.available){ReorderDrag.active=false;}}
+    background:handle-touch.has-hover ? Palette.soft : transparent;border-radius:5px;
+    border-width:handle-keys.has-focus ? 1px : 0px;border-color:Palette.blue;
+    Image{source:@image-url("icons/grip.svg");width:16px;height:20px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;colorize:root.available ? Palette.muted : Palette.line;}
+    handle-keys:=FocusScope{focus-on-click:root.available;focus-on-tab-navigation:root.available;key-pressed(event)=>{
+        if(root.available && event.modifiers.alt && (event.text==Key.UpArrow || event.text==Key.DownArrow)){if(!event.repeat){Commands.trigger(root.action-id,root.item-id+"|"+(event.text==Key.UpArrow?"up":"down"));}return accept;}
+        return reject;
+    }}
+    handle-touch:=TouchArea{enabled:root.available;mouse-cursor:move;
+        pointer-event(event)=>{
+            if(event.kind==PointerEventKind.down && event.button==PointerEventButton.left){handle-keys.focus();root.pressed-context=root.context;root.start-y=self.mouse-y;root.moved-far=false;ReorderDrag.scope=root.order-scope;ReorderDrag.source=root.item-id;ReorderDrag.target="";ReorderDrag.active=true;ReorderDrag.pointer-x=root.absolute-position.x+self.mouse-x;ReorderDrag.pointer-y=root.absolute-position.y+self.mouse-y;}
+            else if(event.kind==PointerEventKind.up && event.button==PointerEventButton.left){
+                if(ReorderDrag.active && root.moved-far && root.pressed-context==root.context && ReorderDrag.target!="" && ReorderDrag.target!=root.item-id){Commands.trigger(root.action-id,root.item-id+"|"+ReorderDrag.target+"|"+(ReorderDrag.after?"after":"before"));}
+                ReorderDrag.active=false;
+            }else if(event.kind==PointerEventKind.cancel){ReorderDrag.active=false;}
+        }
+        moved=>{if(self.pressed && ReorderDrag.active){root.moved-far=abs(self.mouse-y - root.start-y)>6px;ReorderDrag.target="";ReorderDrag.pointer-x=root.absolute-position.x+self.mouse-x;ReorderDrag.pointer-y=root.absolute-position.y+self.mouse-y;}}
+    }
+    accessible-role:groupbox;accessible-label:root.label;accessible-enabled:root.available;accessible-id:"reorder|"+root.order-scope+"|"+root.item-id;
+    UiProbe{control-id:"reorder|"+root.order-scope+"|"+root.item-id;kind:"drag-handle";label:root.label;control-enabled:root.available;remember-focus:false;focused:handle-keys.has-focus;control-width:root.width;control-height:root.height;focus-requested=>{handle-keys.focus();}}
+}
 component DeviceListPane inherits Rectangle {
     in property <bool> compact;
     in property <bool> refreshing;
@@ -369,27 +425,34 @@ component DeviceListPane inherits Rectangle {
     in property <int> device-total;
     in property <int> device-online;
     in property <string> selection-action:"device.select";
+    in property <bool> locked;
+    in property <bool> settings-open;
+    in property <string> app-version;
+    in property <bool> isolated-preview;
 width:root.compact ? 224px : 276px;background:Palette.surface;
                     Rectangle {x:parent.width - 1px;width:1px;background:Palette.line;}
                     VerticalLayout {padding:16px;spacing:16px;
+                        HorizontalLayout {height:44px;spacing:10px;Image{source:@image-url("../../../shared/icons/rhremote.svg");width:30px;height:30px;}Text{text:"RHRemote";color:Palette.ink;font-size:19px;font-weight:600;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}}
                         HorizontalLayout {spacing:8px;height:36px;
                             Text {text:"远程设备";font-size:19px;font-weight:600;color:Palette.ink;vertical-alignment:center;}
                             Rectangle {horizontal-stretch:1;}
-                            ActionButton {text:root.refreshing ? "刷新中…" : "刷新";action-id:"devices.refresh";disabled:root.refreshing;height:32px;}
+                            ActionButton {text:root.refreshing ? "…" : "刷新";accessible-label:root.refreshing ? "刷新中…" : "刷新";remember-focus:false;action-id:"devices.refresh";disabled:root.refreshing || root.locked;height:32px;}
+                            ActionButton{text:"+";accessible-label:"添加电脑";remember-focus:false;action-id:"device.add.open";disabled:root.locked;width:32px;height:32px;}
                         }
                         LineEdit {text <=> root.device-query;accessible-label:"搜索名称或地址";placeholder-text:"搜索名称或地址";height:36px;edited(value)=>{Commands.trigger("devices.filter",value);}}
                         if root.refresh-error!="":Text{text:root.refresh-error;accessible-label:root.refresh-error;color:Palette.failure;font-size:12px;wrap:word-wrap;max-height:48px;overflow:elide;}
                         ScrollView {test-id:"scroll|devices";horizontal-stretch:1;vertical-stretch:1;content-width:self.width;
                             VerticalLayout {spacing:6px;alignment:start;
-                                for device in root.devices: Rectangle {
-                                    property <bool> available:!ModalContext.active;
+                                for device in root.devices: ReorderDrop {
+                                    order-scope:"devices";item-id:device.uuid;
+                                    property <bool> available:!ModalContext.active && !root.locked;
                                     height:86px;border-radius:8px;
                                     forward-focus:device-focus;
                                     border-width:device-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
                                     background:device.uuid==root.selected-uuid ? Palette.soft : device-touch.has-hover ? Palette.page : transparent;
                                     if device.uuid==root.selected-uuid: Rectangle {x:0px;y:18px;width:3px;height:50px;border-radius:2px;background:Palette.blue;}
-                                    HorizontalLayout {padding:12px;spacing:10px;
-                                        Rectangle {width:34px;height:34px;border-radius:8px;background:Palette.page;vertical-stretch:0;
+                                    HorizontalLayout {padding:12px;padding-left:36px;spacing:8px;
+                                        Rectangle {width:30px;height:34px;border-radius:8px;background:Palette.page;vertical-stretch:0;
                                             Image {source:@image-url("icons/monitor.svg");width:21px;height:21px;x:6px;y:6px;}
                                         }
                                         VerticalLayout {spacing:5px;alignment:center;
@@ -404,6 +467,7 @@ width:root.compact ? 224px : 276px;background:Palette.surface;
                                     device-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){Commands.trigger(root.selection-action,device.uuid);}return accept;}return reject;}}
                                     UiProbe{control-id:"device|"+device.uuid;kind:"device";label:"选择设备 "+device.name;control-enabled:parent.available;remember-focus:false;focused:device-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{device-focus.focus();}}
                                     device-touch:=TouchArea {enabled:parent.available;mouse-cursor:pointer;clicked=>{device-focus.focus();Commands.trigger(root.selection-action,device.uuid);}}
+                                    DragHandle{x:5px;y:24px;width:26px;height:38px;item-id:device.uuid;label:"拖动设备 "+device.name+" 排序";order-scope:"devices";action-id:"device.move";context:root.selection-action+"|"+root.device-query;disabled:!parent.available;}
                                     accessible-role:button;accessible-label:"选择设备 "+device.name;
                                     accessible-enabled:self.available;
                                     accessible-id:"device|"+device.uuid;
@@ -417,6 +481,9 @@ width:root.compact ? 224px : 276px;background:Palette.surface;
                         }
                         Rectangle {height:1px;background:Palette.line;}
                         Text {text:root.device-total+" 台设备  ·  "+root.device-online+" 台在线";font-size:11px;color:Palette.muted;}
+                        NavigationItem{text:"设置";icon:@image-url("icons/settings.svg");action-id:"app.settings.open";chosen:root.settings-open;disabled:root.locked;}
+                        if root.isolated-preview:Text{text:"测试预览 · 独立配置";color:Palette.blue;font-size:11px;}
+                        Text{text:"v"+root.app-version+" · Moonlight · GPL v3";color:Palette.muted;font-size:10px;}
                     }
 
 }
@@ -722,7 +789,7 @@ export component MainWindow inherits Window {
     changed dark => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     icon:@image-url("../../../shared/icons/rhremote.svg");
     title:root.isolated-preview ? "RHRemote-Moonlight · 测试预览" : "RHRemote-Moonlight";preferred-width:1180px;preferred-height:780px;min-width:720px;min-height:560px;
-    private property <bool> device-context:!root.streaming && !root.connecting && (root.page=="devices" || root.page=="settings" || root.page=="profile-copy" || root.page=="device-info");
+    private property <bool> device-context:!root.streaming && !root.connecting;
     private property <bool> narrow-profile:content-pane.width<560px;
     in property <bool> isolated-preview;
     background:Palette.page;default-font-family:"Microsoft YaHei UI";default-font-size:14px;
@@ -914,34 +981,9 @@ export component MainWindow inherits Window {
     UiProbe{control-id:"page";kind:"scope";focused:main-keys.has-focus;remember-focus:false;control-width:root.width;control-height:root.height;focus-requested=>{main-keys.focus();}}
     HorizontalLayout {
         spacing:0px;
-        Rectangle {
-            width:root.compact ? 64px : 184px;background:Palette.surface;
-            Rectangle {x:parent.width - 1px;width:1px;background:Palette.line;}
-            VerticalLayout {padding:root.compact ? 10px : 14px;spacing:8px;
-                HorizontalLayout {height:76px;spacing:10px;
-                    Image {height:32px;width:32px;source:@image-url("../../../shared/icons/rhremote.svg");}
-                    if !root.compact: VerticalLayout {alignment:center;spacing:3px;
-                        Text {text:"RHRemote";font-size:19px;font-weight:600;color:Palette.ink;}
-                        Text {text:"Moonlight";font-size:11px;color:Palette.muted;}
-                    }
-                }
-                NavigationItem{text:"远程设备";icon:@image-url("icons/monitor.svg");action-id:"devices.open";chosen:root.page=="devices" || root.page=="settings" || root.page=="profile-copy" || root.page=="device-info" || root.page=="pair" || root.page=="connection";compact:root.compact;disabled:root.navigation-locked;}
-                NavigationItem{text:"添加电脑";icon:@image-url("icons/plus.svg");action-id:"device.add.open";chosen:root.page=="add";compact:root.compact;disabled:root.navigation-locked;}
-                Rectangle {vertical-stretch:1;}
-                NavigationItem{text:"设置";icon:@image-url("icons/settings.svg");action-id:"app.settings.open";chosen:root.page=="global-settings";compact:root.compact;disabled:root.navigation-locked;}
-                NavigationItem{text:root.dark ? "浅色模式" : "深色模式";icon:@image-url("icons/moon.svg");action-id:"appearance.toggle";compact:root.compact;disabled:root.navigation-locked;}
-                if root.isolated-preview:Text{text:root.compact ? "测试" : "测试预览 · 独立配置";color:Palette.blue;font-size:11px;horizontal-alignment:center;height:24px;}
-                if !root.compact: Rectangle {height:52px;
-                    VerticalLayout {padding-left:12px;alignment:center;spacing:5px;
-                        Text {text:"v"+root.app-version;color:Palette.muted;font-size:11px;}
-                        Text {text:"Moonlight · GPL v3";color:Palette.muted;font-size:10px;}
-                    }
-                }
-            }
-        }
         HorizontalLayout {spacing:0px;
             if root.device-context: DeviceListPane {
-                compact:root.compact;devices:root.devices;selected-uuid:root.selected-uuid;
+                compact:root.compact;devices:root.devices;selected-uuid:root.selected-uuid;locked:root.navigation-locked || root.sync-busy;settings-open:root.page=="global-settings";app-version:root.app-version;isolated-preview:root.isolated-preview;
                 refreshing:root.devices-refreshing;refresh-error:root.devices-refresh-error;
                 device-query <=> root.device-query;device-total:root.device-total;device-online:root.device-online;
                 selection-action:root.page=="settings" || root.page=="profile-copy" ? "device.settings.open" : root.page=="device-info" ? "device.info.open" : "device.select";
@@ -995,12 +1037,6 @@ export component MainWindow inherits Window {
                                     DetailField {label:"屏幕";value:root.profile-display=="virtual" ? "虚拟屏" : "自动";}
                                 }
                                 Rectangle {height:1px;background:Palette.line;}
-                                HorizontalLayout {spacing:8px;
-                                    Text {text:"设备顺序";color:Palette.muted;font-size:12px;vertical-alignment:center;}
-                                    Rectangle {horizontal-stretch:1;}
-                                    ActionButton {text:"上移";action-id:"device.move";argument:root.selected-uuid+"|up";disabled:root.selected-index<=0;}
-                                    ActionButton {text:"下移";action-id:"device.move";argument:root.selected-uuid+"|down";disabled:root.selected-index>=root.device-total - 1;}
-                                }
                                 Text {text:root.status;color:Palette.muted;wrap:word-wrap;font-size:12px;}
                             }
                         }
@@ -1050,6 +1086,8 @@ export component MainWindow inherits Window {
                             Rectangle{horizontal-stretch:1;}
                         }
             }
+            if root.page=="global-settings":Rectangle{height:1px;background:Palette.line;}
+            if root.page=="global-settings" || root.page=="settings":Rectangle{height:12px;background:Palette.page;}
             if root.page=="connection" || root.page=="pair":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:connection-header.preferred-height;
                 connection-header:=HorizontalLayout{padding:20px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:12px;
                     BackButton{text:"返回设备";action-id:"connection.dismiss";disabled:root.connection-busy;}
@@ -1159,11 +1197,12 @@ export component MainWindow inherits Window {
                             }
                             if root.diagnostic-details-visible && root.diagnostic-details-expanded:Text{text:root.network-report;color:Palette.muted;font-size:12px;wrap:word-wrap;}
                             Text{text:"连接顺序";color:Palette.ink;}
-                            for route in root.network-routes: HorizontalLayout{spacing:6px;
+                            for route in root.network-routes: ReorderDrop{height:52px;order-scope:"routes";item-id:route.key;accept-drop:route.enabled;
+                              HorizontalLayout{spacing:10px;padding-left:34px;
                                 CheckBox{text:route.label;checked <=> route.enabled;enabled:!route.toggle-blocked;accessible-label:"连接路径："+route.label;toggled=>{Commands.trigger("settings.route.toggle",route.key);}}
                                 Rectangle{horizontal-stretch:1;}
-                                if route.enabled: ActionButton{text:"↑";action-id:"settings.route.move";argument:route.key+"|up";disabled:!route.can-move-up;accessible-label:"上移"+route.label;}
-                                if route.enabled: ActionButton{text:"↓";action-id:"settings.route.move";argument:route.key+"|down";disabled:!route.can-move-down;accessible-label:"下移"+route.label;}
+                              }
+                              DragHandle{x:0px;y:7px;width:28px;height:38px;order-scope:"routes";item-id:route.key;label:"拖动连接路径 "+route.label+" 排序";action-id:"settings.route.move";context:root.profile-draft-id;disabled:!route.enabled || root.sync-busy;}
                             }
                             Text{text:"至少启用一条连接路径。";color:Palette.muted;font-size:12px;}
                             ActionButton{text:"恢复默认顺序";action-id:"settings.set";argument:"routeOrder=default";}
@@ -1256,10 +1295,15 @@ export component MainWindow inherits Window {
                         if root.settings-tab=="proxy": SettingsCard {
                             Text{text:"代理";color:Palette.ink;font-size:18px;font-weight:600;}
                             CheckBox{text:"启用代理";checked <=> root.proxy-enabled;enabled:!root.proxy-busy;toggled=>{Commands.trigger("proxy.edit","enabled="+(self.checked?"true":"false"));}}
-                            HorizontalLayout{spacing:12px;
+                            if !root.narrow-profile:HorizontalLayout{spacing:12px;
                                 proxy-protocol:=ComboBox{model:["HTTP","HTTPS"];current-index <=> root.proxy-protocol-index;enabled:!root.proxy-busy;preferred-width:110px;horizontal-stretch:0;accessible-label:"代理协议";selected(value)=>{Commands.trigger("proxy.edit","protocol="+(self.current-index==1?"https":"http"));}}
                                 proxy-host-input:=LineEdit{text <=> root.proxy-host;enabled:!root.proxy-busy;accessible-label:"代理地址";horizontal-stretch:1;edited=>{Commands.trigger("proxy.edit","host="+self.text);}}
                                 proxy-port-input:=LineEdit{text <=> root.proxy-port;enabled:!root.proxy-busy;accessible-label:"代理端口";preferred-width:90px;horizontal-stretch:0;edited=>{Commands.trigger("proxy.edit","port="+self.text);}}
+                            }
+                            if root.narrow-profile:VerticalLayout{spacing:12px;
+                                proxy-protocol-narrow:=ComboBox{model:["HTTP","HTTPS"];current-index <=> root.proxy-protocol-index;enabled:!root.proxy-busy;accessible-label:"代理协议";selected(value)=>{Commands.trigger("proxy.edit","protocol="+(self.current-index==1?"https":"http"));}}
+                                proxy-host-narrow:=LineEdit{text <=> root.proxy-host;enabled:!root.proxy-busy;accessible-label:"代理地址";edited=>{Commands.trigger("proxy.edit","host="+self.text);}}
+                                proxy-port-narrow:=LineEdit{text <=> root.proxy-port;enabled:!root.proxy-busy;accessible-label:"代理端口";edited=>{Commands.trigger("proxy.edit","port="+self.text);}}
                             }
                             Text{text:"应用范围";color:Palette.ink;}
                             CheckBox{text:"更新";checked <=> root.proxy-updates;enabled:!root.proxy-busy;toggled=>{Commands.trigger("proxy.edit","updates="+(self.checked?"true":"false"));}}
@@ -1298,7 +1342,10 @@ export component MainWindow inherits Window {
                                 if root.update-history-error!="":Text{text:root.update-history-error;color:Palette.failure;wrap:word-wrap;}
                                 HorizontalLayout{ActionButton{text:root.update-history-error!=""?"重试加载历史记录":"刷新历史记录";action-id:"updates.history.refresh";disabled:root.update-history-busy;}Rectangle{horizontal-stretch:1;}}
                                 for release in root.update-history:VerticalLayout{spacing:10px;
-                                    HorizontalLayout{ActionButton{text:(release.expanded?"▾ ":"▸ ")+"v"+release.version;action-id:"updates.history.entry.toggle";argument:release.version;chosen:release.expanded;}Text{text:release.published;color:Palette.muted;vertical-alignment:center;wrap:word-wrap;font-size:12px;}Rectangle{horizontal-stretch:1;}}
+                                    ActionButton{text:"";accessible-label:"v"+release.version;action-id:"updates.history.entry.toggle";argument:release.version;chosen:release.expanded;horizontal-stretch:1;min-width:0px;height:self.width<460px ? 76px : 58px;
+                                        if self.width>=460px:HorizontalLayout{padding:14px;spacing:24px;Text{text:"v"+release.version;color:Palette.ink;font-weight:600;vertical-alignment:center;}Rectangle{horizontal-stretch:1;}Text{text:release.published;color:Palette.muted;vertical-alignment:center;wrap:word-wrap;font-size:12px;max-width:240px;}Image{source:release.expanded?@image-url("icons/chevron-up.svg"):@image-url("icons/chevron-down.svg");width:16px;height:16px;}}
+                                        if self.width<460px:HorizontalLayout{padding:14px;spacing:16px;VerticalLayout{spacing:8px;Text{text:"v"+release.version;color:Palette.ink;font-weight:600;}Text{text:release.published;color:Palette.muted;wrap:word-wrap;font-size:12px;}}Image{source:release.expanded?@image-url("icons/chevron-up.svg"):@image-url("icons/chevron-down.svg");width:16px;height:16px;}}
+                                    }
                                     if release.expanded:ReleaseNotes{blocks:release.blocks;}
                                 }
                                 if root.update-history.length==0 && !root.update-history-busy:Text{text:"暂无历史更新记录";color:Palette.muted;}
