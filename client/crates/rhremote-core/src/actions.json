@@ -481,7 +481,7 @@
     "id": "stream.menu.open",
     "label": "打开悬浮选择列表",
     "args": {
-      "menu": "shortcuts / displays / feedback / warning (Android)"
+      "menu": "shortcuts / pinned-shortcuts / displays / feedback / warning (Android)"
     }
   },
   {
@@ -515,6 +515,28 @@
     "args": {
       "shortcut": "id from stream.shortcuts.list"
     }
+  },
+  {
+    "id": "stream.shortcut.pin.set",
+    "label": "设置外置快捷键",
+    "args": {
+      "shortcut": "id from stream.shortcuts.list",
+      "pinned": "optional boolean; omit to toggle"
+    }
+  },
+  {
+    "id": "stream.overlay.move",
+    "label": "移动外层悬浮按钮",
+    "args": {
+      "id": "button id",
+      "x": "normalized 0..1",
+      "y": "normalized 0..1"
+    }
+  },
+  {
+    "id": "stream.overlay.reset",
+    "label": "重置外层按钮位置",
+    "args": {}
   },
   {
     "id": "stream.window.move",

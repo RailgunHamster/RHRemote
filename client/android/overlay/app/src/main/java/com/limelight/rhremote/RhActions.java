@@ -26,14 +26,22 @@ public final class RhActions {
     private static Context appContext;
     private static String lastConnectionError="";
     public static JSONObject obj(Object... pairs){JSONObject value=new JSONObject();try{for(int i=0;i<pairs.length;i+=2)value.put((String)pairs[i],pairs[i+1]);}catch(JSONException e){throw new IllegalArgumentException(e);}return value;}
+    private static void ensureCatalogAction(String id,String label,JSONObject args)throws JSONException{
+        if(catalog==null)return;
+        for(int i=0;i<catalog.length();i++)if(id.equals(catalog.getJSONObject(i).optString("id")))return;
+        catalog.put(obj("id",id,"label",label,"args",args));
+    }
     public static synchronized void initialize(Context context,Target target){
         appContext=context.getApplicationContext();
         RhStatistics.initialize(context);
         if(target!=null)home=new WeakReference<>(target);if(started)return;
         try {
             try(InputStream in=context.getAssets().open("rhremote-actions.json")){catalog=new JSONArray(new String(read(in,32768),StandardCharsets.UTF_8));}
-            catalog.put(obj("id","stream.scroll.set","label","滚动模式","args",obj("enabled","boolean"),"platforms",new JSONArray().put("android")));
-            catalog.put(obj("id","stream.click-scroll.set","label","点击与滚动","args",obj("enabled","boolean"),"platforms",new JSONArray().put("android")));
+            ensureCatalogAction("stream.scroll.set","滚动模式",obj("enabled","boolean"));
+            ensureCatalogAction("stream.click-scroll.set","点击与滚动",obj("enabled","boolean"));
+            ensureCatalogAction("stream.shortcut.pin.set","设置外置快捷键",obj("shortcut","string","pinned","optional boolean"));
+            ensureCatalogAction("stream.overlay.move","移动外层悬浮按钮",obj("id","string","x","number","y","number"));
+            ensureCatalogAction("stream.overlay.reset","重置外层按钮位置",obj());
             File path=new File(context.getFilesDir(),"rhremote-control-token.txt");
             if(path.exists()){try(InputStream in=new FileInputStream(path)){token=new String(read(in,128),StandardCharsets.US_ASCII).trim();}}
             else{byte[] bytes=new byte[32];new SecureRandom().nextBytes(bytes);StringBuilder s=new StringBuilder();for(byte b:bytes)s.append(String.format(Locale.ROOT,"%02x",b&255));token=s.toString();try(OutputStream out=context.openFileOutput(path.getName(),Context.MODE_PRIVATE)){out.write(token.getBytes(StandardCharsets.US_ASCII));}}

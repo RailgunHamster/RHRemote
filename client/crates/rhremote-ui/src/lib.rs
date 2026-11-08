@@ -115,7 +115,14 @@ fn args_for(id: &str, arg: &str, state: &Value) -> Value {
         "stream.keyboard.layout.set" => json!({"layout":arg}),
         "app.settings.tab" | "settings.tab" | "stream.controls.tab" => json!({"tab":arg}),
         "stream.audio.volume" => json!({"volume":arg.parse::<u32>().unwrap_or(101)}),
-        "stream.shortcut" => json!({"shortcut":arg}),
+        "stream.shortcut" | "stream.shortcut.pin.set" => json!({"shortcut":arg}),
+        "stream.overlay.move" => {
+            let mut fields=arg.splitn(3,'|');
+            let id=fields.next().unwrap_or("");
+            let x=fields.next().and_then(|v|v.parse::<f64>().ok()).unwrap_or(-1.0);
+            let y=fields.next().and_then(|v|v.parse::<f64>().ok()).unwrap_or(-1.0);
+            json!({"id":id,"x":x,"y":y})
+        }
         "stream.menu.open" => json!({"menu":arg}),
         "stream.window.move" => json!({"direction":arg}),
         "stream.display.select" => json!({"displayId":arg}),
@@ -327,7 +334,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         if id=="stream.keyboard.press"&&keyboard_actions.state()["floatingKeyboard"]!=true{return;}
         keyboard_timing.ui_test.observe_action(id.as_str());
         if keyboard_sender.try_send((id.to_string(),arg.to_string(),keyboard_timing.statistics.lock().unwrap().now(),std::time::Instant::now(),None)).is_err(){keyboard_actions.message("操作队列已满".into());}
-        if id=="stream.shortcut"||id=="stream.keyboard.press"{overlay::focus_stream(&keyboard_actions.state());}
+        if id=="stream.shortcut"||id=="stream.keyboard.press"||id=="stream.overlay.move"{overlay::focus_stream(&keyboard_actions.state());}
     });
     let keyboard_close=controller.clone();keyboard.window().on_close_requested(move||{if keyboard_close.state()["streaming"]==true{keyboard_close.dispatch("stream.keyboard.floating.set",json!({"enabled":false}));}slint::CloseRequestResponse::HideWindow});
     let picker_sender = sender.clone();
@@ -461,10 +468,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(picker)=picker_weak.upgrade(){
                 let kind=state["streamMenu"].as_str().unwrap_or("");
-                let fingerprint=if kind=="displays"{format!("{kind}:{toolbar_display_fingerprint}")}else{kind.into()};
+                let pinned_fingerprint=state["saved"]["pinnedShortcuts"].to_string();
+                let fingerprint=if kind=="displays"{format!("{kind}:{toolbar_display_fingerprint}")}else if kind=="pinned-shortcuts"{format!("{kind}:{pinned_fingerprint}")}else{kind.into()};
                 if fingerprint!=picker_fingerprint {
                     picker_fingerprint=fingerprint;picker.set_kind(kind.into());
                     if kind=="shortcuts" {picker.set_labels(toolbar.get_shortcut_labels());picker.set_values(toolbar.get_shortcut_ids());picker.set_enabled_items(ModelRc::new(VecModel::from(vec![true;toolbar.get_shortcut_ids().row_count()])));picker.set_chosen_items(Default::default());}
+                    else if kind=="pinned-shortcuts" {
+                        let pinned=state["saved"]["pinnedShortcuts"].as_array();
+                        let chosen:Vec<bool>=toolbar.get_shortcut_ids().iter().map(|id|pinned.is_some_and(|list|list.iter().any(|v|v.as_str()==Some(id.as_str())))).collect();
+                        picker.set_labels(toolbar.get_shortcut_labels());picker.set_values(toolbar.get_shortcut_ids());picker.set_enabled_items(ModelRc::new(VecModel::from(vec![true;toolbar.get_shortcut_ids().row_count()])));picker.set_chosen_items(ModelRc::new(VecModel::from(chosen)));
+                    }
                     else if kind=="displays" {
                         picker.set_labels(toolbar.get_display_labels());picker.set_values(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.id).collect::<Vec<_>>())));
                         picker.set_enabled_items(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.available).collect::<Vec<_>>())));picker.set_chosen_items(ModelRc::new(VecModel::from(toolbar.get_displays().iter().map(|d|d.chosen).collect::<Vec<_>>())));
@@ -480,6 +493,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(windows)]
         if keyboard_timing.sessions.get().is_some_and(|sessions|sessions.take_return()) {view.dispatch("window.activate",json!({}));}
+        if keyboard_timing.session_only()
+            && matches!(state["connection"]["phase"].as_str(), Some("ended" | "cancelled"))
+            && state["connection"]["busy"] != true
+            && state["connecting"] != true
+            && state["streaming"] != true
+            && state["windowAction"] != "window.close"
+        {
+            view.dispatch("window.close", json!({}));
+        }
         match view.take_window_action().as_str(){
             "window.activate"=>activate_window(&ui,&state,keyboard_timing.session_only()),
             "window.minimize"=>ui.window().set_minimized(true),"window.maximize"=>ui.window().set_maximized(!ui.window().is_maximized()),"window.close"=>{let _=slint::quit_event_loop();},
@@ -497,7 +519,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             view.preview_complete(&request,result);
         }
     });
-    ui.show()?;
+    if !native.session_only() {
+        ui.show()?;
+    } else {
+        overlay::hide_auxiliary(ui.window());
+    }
     native.statistics.lock().unwrap().mark("ui_shown");
     let poll = controller.clone();
     let transport = native.clone();
@@ -560,13 +586,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    ui.run()?;
+    if native.session_only() {
+        slint::run_event_loop_until_quit()?;
+    } else {
+        ui.run()?;
+    }
     native.statistics.lock().unwrap().mark("ui_event_loop_returned");
     Ok(())
 }
 fn activate_window(ui:&MainWindow,state:&Value,session:bool){
     #[cfg(windows)]
-    if session&&unsafe{overlay::owned_window(state)}.is_some(){overlay::focus_stream(state);return;}
+    if session{if unsafe{overlay::owned_window(state)}.is_some(){overlay::focus_stream(state);}return;}
     let _=(state,session);
     ui.window().set_minimized(false);let _=ui.show();
     use slint::winit_030::WinitWindowAccessor;

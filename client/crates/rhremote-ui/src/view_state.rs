@@ -124,8 +124,26 @@ impl MainView {
         let sessions=state["desktopSessions"]["items"].as_array();
         let sessions_fingerprint=state["desktopSessions"].to_string();
         let selected_session=sessions.into_iter().flatten().find(|s|s["uuid"]==state["selected"] && s["alive"]==true);
+        let selected_uuid_str=state["selected"].as_str().unwrap_or("");
+        let session_phase=selected_session.and_then(|s|s["phase"].as_str()).unwrap_or("");
+        let session_error=selected_session
+            .and_then(|s|s["error"].as_str().filter(|e|!e.is_empty()).or_else(||s["controlError"].as_str().filter(|e|!e.is_empty())))
+            .or_else(||state["desktopSessions"]["errors"].get(selected_uuid_str).and_then(Value::as_str).filter(|e|!e.is_empty()));
+        let session_hint=match session_phase {
+            "resolving"=>"1/3 正在检查地址与配对…".to_owned(),
+            "starting"=>"2/3 正在建立串流…".to_owned(),
+            "first-frame"=>"3/3 正在打开远程画面窗口…".to_owned(),
+            "connected"=>"已连接 · 远程画面窗口运行中".to_owned(),
+            "reconnecting"=>"连接中断，正在自动恢复…".to_owned(),
+            "cancelling"|"cleaning"=>"正在断开连接…".to_owned(),
+            "failed"=>session_error.unwrap_or("连接失败").to_owned(),
+            _=>session_error.unwrap_or("").to_owned(),
+        };
         ui.set_selected_has_session(selected_session.is_some());
         ui.set_selected_session_id(selected_session.and_then(|s|s["id"].as_str()).unwrap_or("").into());
+        ui.set_selected_session_phase(session_phase.into());
+        ui.set_selected_session_hint(session_hint.into());
+        ui.set_selected_session_failed(session_phase=="failed" || (selected_session.is_none() && session_error.is_some()));
         if next != self.revision || self.sessions_fingerprint!=sessions_fingerprint {
             self.sessions_fingerprint=sessions_fingerprint;
             apply_diagnostics(ui,state);

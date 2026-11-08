@@ -241,6 +241,7 @@ public final class RhShared {
         for(int i=0;i<devices.length();i++)if(d.uuid.equals(devices.getJSONObject(i).getString("uuid"))){JSONObject device=devices.getJSONObject(i);device.put("swapButtons",p.swapButtons).put("displayName",displayName);if(normalized!=null){JSONArray addresses=new JSONArray();for(String value:normalized)if(!value.equalsIgnoreCase(primary))addresses.put(value);device.put("address",primary).put("addresses",addresses);}found=true;}
         if(!found)throw new IOException("host address unavailable");
         shared.getJSONObject("profiles").getJSONObject(clientId(c)).put(d.uuid,p.clientJson());validate(shared);write(file(c),shared);
+        c.getSharedPreferences("rhremote.global",0).edit().putBoolean("session.trackpad",p.trackpad).putBoolean("session.showStats",p.statistics).putBoolean("session.audioEnabled",p.audioEnabled).putInt("session.volume",p.volume).apply();
     }
     public static List<ComputerDetails> ordered(Context c,Collection<ComputerDetails> computers) {
         return ordered(read(c),computers);
@@ -276,6 +277,7 @@ public final class RhShared {
         recordMembership(c,before,shared);
         // No foreign group is applied to this client's active preferences.
         write(file(c),shared);theme(c,shared.getBoolean("dark"));
+        c.getSharedPreferences("rhremote.global",0).edit().remove("session.trackpad").remove("session.scrollMode").remove("session.clickScrollMode").remove("session.showStats").remove("session.audioEnabled").remove("session.volume").apply();
     }
     public static String canonical(Object value)throws JSONException {
         if(value instanceof JSONObject){JSONObject o=(JSONObject)value;TreeMap<String,String> keys=new TreeMap<>();for(Iterator<String> it=o.keys();it.hasNext();){String k=it.next();keys.put(k,canonical(o.get(k)));}StringBuilder out=new StringBuilder("{");for(Map.Entry<String,String> e:keys.entrySet())out.append(JSONObject.quote(e.getKey())).append(':').append(e.getValue()).append(',');return out.append('}').toString();}

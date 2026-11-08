@@ -71,10 +71,38 @@ impl Controller {
             .execute("session.preferences.validate", args)?;
         let changes = args["changes"].as_object().ok_or("changes required")?;
         if changes.is_empty()
-            || changes.len() > 2
-            || changes.iter().any(|(key, value)| {
-                !matches!(key.as_str(), "hideKeyboardButton" | "simpleKeyboard")
-                    || !value.is_boolean()
+            || changes.len() > 4
+            || changes.iter().any(|(key, value)| match key.as_str() {
+                "hideKeyboardButton" | "simpleKeyboard" => !value.is_boolean(),
+                "pinnedShortcuts" => value.as_array().is_none_or(|items| {
+                    items.len() > 64
+                        || items.iter().any(|item| {
+                            item.as_str().is_none_or(|id| {
+                                !crate::shortcuts()
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .any(|s| s["id"].as_str() == Some(id))
+                            })
+                        })
+                }),
+                "buttonPositions" => serde_json::from_value::<
+                    std::collections::BTreeMap<String, crate::ButtonPosition>,
+                >(value.clone())
+                .is_err_and(|_| true)
+                    || value.as_object().is_none_or(|map| {
+                        map.len() > 128
+                            || map.iter().any(|(id, pos)| {
+                                id.is_empty()
+                                    || id.len() > 64
+                                    || !id.bytes().all(|b| {
+                                        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':')
+                                    })
+                                    || serde_json::from_value::<crate::ButtonPosition>(pos.clone())
+                                        .is_ok_and(|p| !p.valid())
+                            })
+                    }),
+                _ => true,
             })
         {
             return Err("无效的会话偏好设置".into());
@@ -86,6 +114,12 @@ impl Controller {
         }
         if let Some(value) = changes.get("simpleKeyboard") {
             next.simple_keyboard = value.as_bool().unwrap();
+        }
+        if let Some(value) = changes.get("pinnedShortcuts") {
+            next.pinned_shortcuts = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+        }
+        if let Some(value) = changes.get("buttonPositions") {
+            next.button_positions = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
         }
         self.persist(&next)?;
         s.saved = next;

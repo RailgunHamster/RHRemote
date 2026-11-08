@@ -16,7 +16,7 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class) @Config(sdk=35,qualifiers="mdpi")
 public final class RhFloatingKeyboardTest {
     Activity activity;FrameLayout root;RhFloatingKeyboard keyboard;final List<JSONObject> actions=new ArrayList<>();int width,height;
-    void setup(int w,int h){RuntimeEnvironment.setQualifiers("w"+w+"dp-h"+h+"dp-mdpi");width=w;height=h;activity=Robolectric.buildActivity(Activity.class).setup().get();activity.setTheme(R.style.RhTheme);activity.getSharedPreferences("rhremote.global",0).edit().remove("hideKeyboardButton").remove("keyboardLayout").commit();root=new FrameLayout(activity);activity.setContentView(root);create();}
+    void setup(int w,int h){RuntimeEnvironment.setQualifiers("w"+w+"dp-h"+h+"dp-mdpi");width=w;height=h;activity=Robolectric.buildActivity(Activity.class).setup().get();activity.setTheme(R.style.RhTheme);activity.getSharedPreferences("rhremote.global",0).edit().remove("hideKeyboardButton").remove("keyboardLayout").remove("pinnedShortcuts").remove("overlayButtonPositions").commit();root=new FrameLayout(activity);activity.setContentView(root);create();}
     void create(){keyboard=new RhFloatingKeyboard(activity,root,(id,args)->actions.add(RhActions.obj("action",id,"args",args)));keyboard.setEnabled(true);keyboard.update(true,false);layout();}
     void layout(){org.robolectric.shadows.ShadowDisplayManager.changeDisplay(0,"w"+width+"dp-h"+height+"dp-mdpi");activity.getWindow().setLayout(width,height);for(int pass=0;pass<4;pass++){root.forceLayout();root.measure(View.MeasureSpec.makeMeasureSpec(width,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(height,View.MeasureSpec.EXACTLY));root.layout(0,0,width,height);}}
     Button key(String id){Button key=root.findViewWithTag("floating-key:"+id);assertNotNull(id,key);return key;}
@@ -70,6 +70,81 @@ public final class RhFloatingKeyboardTest {
     }
     @Test public void spaceOutsideTheKeyboardAndTogglePassesToTheRemoteSurface(){
         setup(840,560);keyboard.setEnabled(false);View layer=root.findViewWithTag("floating-keyboard");MotionEvent event=MotionEvent.obtain(1,1,MotionEvent.ACTION_DOWN,420,150,0);try{assertFalse(layer.dispatchTouchEvent(event));}finally{event.recycle();}
+    }
+    private void dragView(View layer,float fromX,float fromY,float toX,float toY){
+        long t=android.os.SystemClock.uptimeMillis();
+        MotionEvent down=MotionEvent.obtain(t,t,MotionEvent.ACTION_DOWN,fromX,fromY,0);
+        MotionEvent move=MotionEvent.obtain(t,t+16,MotionEvent.ACTION_MOVE,toX,toY,0);
+        MotionEvent up=MotionEvent.obtain(t,t+32,MotionEvent.ACTION_UP,toX,toY,0);
+        try{
+            assertTrue(layer.dispatchTouchEvent(down));
+            assertTrue(layer.dispatchTouchEvent(move));
+            assertTrue(layer.dispatchTouchEvent(up));
+            layout();
+        }finally{down.recycle();move.recycle();up.recycle();}
+    }
+    private void tapLayer(View layer,float x,float y){
+        long t=android.os.SystemClock.uptimeMillis();
+        MotionEvent down=MotionEvent.obtain(t,t,MotionEvent.ACTION_DOWN,x,y,0);
+        MotionEvent up=MotionEvent.obtain(t,t+16,MotionEvent.ACTION_UP,x,y,0);
+        try{
+            assertTrue(layer.dispatchTouchEvent(down));
+            assertTrue(layer.dispatchTouchEvent(up));
+        }finally{down.recycle();up.recycle();}
+    }
+    @Test public void outerMobileKeyboardPinnedShortcutsAndDraggableOverlapOrderPersistAndReset()throws Exception{
+        setup(840,560);keyboard.setEnabled(false);layout();
+        View layer=root.findViewWithTag("floating-keyboard");
+        View imeBtn=root.findViewWithTag("floating-ime-toggle");
+        View floatBtn=root.findViewWithTag("floating-keyboard-toggle");
+        assertNotNull(imeBtn);assertNotNull(floatBtn);
+        assertEquals(View.VISIBLE,imeBtn.getVisibility());
+        actions.clear();imeBtn.performClick();
+        assertEquals(1,actions.size());assertEquals("stream.keyboard.toggle",actions.get(0).getString("action"));
+
+        assertTrue(keyboard.setShortcutPinned("ctrl-c",true));
+        assertTrue(keyboard.setShortcutPinned("ctrl-v",true));
+        layout();
+        View copyBtn=root.findViewWithTag("floating-shortcut:ctrl-c");
+        View pasteBtn=root.findViewWithTag("floating-shortcut:ctrl-v");
+        assertNotNull(copyBtn);assertNotNull(pasteBtn);
+        Rect defaultCopy=bounds(copyBtn);
+
+        // Drag copyBtn to (300, 200), then drag pasteBtn to the exact same (300, 200) so they overlap.
+        actions.clear();
+        dragView(layer,defaultCopy.centerX(),defaultCopy.centerY(),300,200);
+        assertTrue("Dragging must not trigger shortcut click",actions.isEmpty());
+        Rect movedCopy=bounds(copyBtn);
+        assertTrue(Math.abs(movedCopy.left - (300 - (defaultCopy.centerX() - defaultCopy.left))) <= 2);
+
+        Rect defaultPaste=bounds(pasteBtn);
+        dragView(layer,defaultPaste.centerX(),defaultPaste.centerY(),300,200);
+        assertTrue(actions.isEmpty());
+
+        // Tapping the overlap point must trigger pasteBtn first (since pasteBtn was dragged second).
+        Rect overlap=bounds(pasteBtn);
+        tapLayer(layer,overlap.centerX(),overlap.centerY());
+        assertEquals(1,actions.size());
+        assertEquals("stream.shortcut",actions.get(0).getString("action"));
+        assertEquals("ctrl-v",actions.get(0).getJSONObject("args").getString("shortcut"));
+
+        // Drag copyBtn from its exposed left edge onto pasteBtn so copyBtn is now on top, then tap overlap.
+        actions.clear();
+        dragView(layer,overlap.centerX(),overlap.centerY(),overlap.centerX()+20,overlap.centerY());
+        dragView(layer,movedCopy.left+4,movedCopy.centerY(),overlap.centerX()+20,overlap.centerY());
+        Rect newOverlap=bounds(copyBtn);
+        tapLayer(layer,newOverlap.centerX(),newOverlap.centerY());
+        assertEquals(1,actions.size());
+        assertEquals("ctrl-c",actions.get(0).getString("action").equals("stream.shortcut")?actions.get(0).getJSONObject("args").getString("shortcut"):"");
+
+        // Recreate keyboard and verify both pinned shortcuts and dragged positions persisted.
+        keyboard.dispose();create();keyboard.setEnabled(false);layout();
+        assertEquals(Arrays.asList("ctrl-c","ctrl-v"),keyboard.pinnedShortcuts());
+        assertEquals(newOverlap,bounds(root.findViewWithTag("floating-shortcut:ctrl-c")));
+
+        // Reset positions and verify copyBtn returns to its default position.
+        keyboard.resetPositions();layout();
+        assertEquals(defaultCopy,bounds(root.findViewWithTag("floating-shortcut:ctrl-c")));
     }
     @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
     public void opaqueOutlinedLetteringAndTranslucentKeysStayLegibleWithoutABackingSheet()throws Exception{

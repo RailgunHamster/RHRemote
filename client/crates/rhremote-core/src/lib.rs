@@ -182,6 +182,19 @@ pub struct Device {
     #[serde(default)]
     pub is_self: bool,
 }
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ButtonPosition {
+    pub x: f32,
+    pub y: f32,
+    #[serde(default)]
+    pub order: u64,
+}
+impl ButtonPosition {
+    pub fn valid(&self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && (0.0..=1.0).contains(&self.x) && (0.0..=1.0).contains(&self.y)
+    }
+}
 /// A reachability observation may leave authenticated pairing state unknown.
 #[derive(Clone,Debug)]
 pub struct DeviceObservation {pub device:Device,pub pairing_verified:bool,pub check:Option<DeviceCheck>}
@@ -191,6 +204,10 @@ pub struct Saved {
     /// Local appearance preference, deliberately outside the WebDAV document.
     pub hide_keyboard_button: bool,
     pub simple_keyboard: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pinned_shortcuts: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub button_positions: BTreeMap<String, ButtonPosition>,
     pub device_order_initialized: bool,
     /// Local membership established by an applied shared document. Kept outside
     /// SharedConfig so a legacy identity cache is imported only where appropriate.
@@ -1034,6 +1051,48 @@ impl Controller {
                 let simple=match args["layout"].as_str(){Some("simple")=>true,Some("full")=>false,_=>return Err("layout must be full or simple".into())};
                 let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;next.simple_keyboard=simple;self.persist(&next)?;s.saved=next;s.keyboard_modifiers.clear();s.floating_keyboard_error.clear();
             }
+            "stream.shortcut.pin.set" => {
+                if s.control_action.busy{return Err("上一项会话操作尚未完成".into());}
+                let id=args["shortcut"].as_str().ok_or("shortcut required")?;
+                if !shortcuts().as_array().unwrap().iter().any(|item|item["id"].as_str()==Some(id)){
+                    return Err("unknown remote shortcut".into());
+                }
+                let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;
+                let currently_pinned=next.pinned_shortcuts.iter().any(|v|v==id);
+                let target=match args.get("pinned"){
+                    Some(v)=>v.as_bool().ok_or("pinned must be boolean")?,
+                    None=>!currently_pinned,
+                };
+                if target && !currently_pinned {
+                    next.pinned_shortcuts.push(id.into());
+                } else if !target && currently_pinned {
+                    next.pinned_shortcuts.retain(|v|v!=id);
+                }
+                self.persist(&next)?;s.saved=next;
+            }
+            "stream.overlay.move" => {
+                let id=args["id"].as_str().filter(|v|!v.is_empty()&&v.len()<=64&&v.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'-'|b'_'|b':'))).ok_or("invalid overlay button id")?;
+                let x=args["x"].as_f64().ok_or("x required")? as f32;
+                let y=args["y"].as_f64().ok_or("y required")? as f32;
+                let pos=ButtonPosition{x,y,order:0};
+                if !pos.valid(){return Err("overlay coordinates must be within 0..1".into());}
+                let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;
+                if next.button_positions.len()>=128 && !next.button_positions.contains_key(id){
+                    return Err("too many saved button positions".into());
+                }
+                let order=next.button_positions.values().map(|p|p.order).max().unwrap_or(0).saturating_add(1);
+                next.button_positions.insert(id.into(),ButtonPosition{x,y,order});
+                self.persist(&next)?;s.saved=next;
+            }
+            "stream.overlay.reset" => {
+                if s.control_action.busy{return Err("上一项会话操作尚未完成".into());}
+                let mut next=s.saved.clone();next.devices=sync_model::from_state(&s).devices;
+                next.button_positions.clear();
+                self.persist(&next)?;s.saved=next;
+                s.control_action.group="input".into();
+                s.control_action.message="已重置按钮位置".into();
+                s.control_action.error.clear();
+            }
             "stream.keyboard.catalog" => return Ok(serde_json::from_str(keyboard::JSON).unwrap()),
             "stream.controls.tab" => {
                 if !s.streaming || !s.controls {return Err("请先展开活动串流的控制栏".into());}
@@ -1045,7 +1104,7 @@ impl Controller {
                     return Err("请先展开活动串流的控制栏".into());
                 }
                 let menu = args["menu"].as_str().unwrap_or("");
-                if !["shortcuts", "displays", "feedback"].contains(&menu) {
+                if !["shortcuts", "pinned-shortcuts", "displays", "feedback"].contains(&menu) {
                     return Err("unknown stream menu".into());
                 }
                 if menu=="feedback" && s.control_action.error.is_empty(){return Err("没有会话操作错误".into());}

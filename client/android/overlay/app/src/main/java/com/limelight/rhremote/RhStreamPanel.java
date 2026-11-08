@@ -141,6 +141,8 @@ public final class RhStreamPanel {
         mode=gridButton(inputGrid,"直接点击","stream.mode.toggle",RhActions.obj());icon(mode,R.drawable.rh_mouse);
         icon(gridButton(inputGrid,"键盘","stream.keyboard.toggle",RhActions.obj()),R.drawable.rh_keyboard);
         icon(gridButton(inputGrid,"快捷键","stream.shortcuts.open",RhActions.obj()),R.drawable.rh_shortcuts);
+        Button pinnedShortcuts=gridButton(inputGrid,"外置快捷键","stream.menu.open",RhActions.obj("menu","pinned-shortcuts"));pinnedShortcuts.setTag("stream.menu.open:pinned-shortcuts");icon(pinnedShortcuts,R.drawable.rh_shortcuts);
+        icon(gridButton(inputGrid,"重置位置","stream.overlay.reset",RhActions.obj()),R.drawable.rh_zoom_reset);
         floatingKeyboardSwitch=new Switch(context);floatingKeyboardSwitch.setText("悬浮键盘");floatingKeyboardSwitch.setContentDescription("悬浮键盘");floatingKeyboardSwitch.setTextSize(14);floatingKeyboardSwitch.setTextColor(Color.parseColor(inkColor));floatingKeyboardSwitch.setPadding(dp(4),0,dp(4),0);floatingKeyboardSwitch.setShowText(false);floatingKeyboardSwitch.setMinimumHeight(dp(48));floatingKeyboardSwitch.setTag("stream.keyboard.floating.set");
         styleSwitch(floatingKeyboardSwitch);
         floatingKeyboardSwitch.setOnCheckedChangeListener((view,checked)->{if(!bindingFloatingKeyboard&&ownsVisible(view))send("stream.keyboard.floating.set",RhActions.obj("enabled",checked));});LinearLayout.LayoutParams floatingParams=new LinearLayout.LayoutParams(-2,dp(48));floatingParams.leftMargin=dp(8);floatingParams.rightMargin=dp(8);headerActions.addView(floatingKeyboardSwitch,0,floatingParams);

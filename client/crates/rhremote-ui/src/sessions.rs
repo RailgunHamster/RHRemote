@@ -32,7 +32,12 @@ pub(crate) struct Launch {
 pub(crate) struct ChildContext {
     pub launch: Launch,
     parent_token: String,
-    baseline: Mutex<(bool, bool)>,
+    baseline: Mutex<(
+        bool,
+        bool,
+        Vec<String>,
+        std::collections::BTreeMap<String, rhremote_core::ButtonPosition>,
+    )>,
 }
 fn canonical_id(value: &str) -> bool {
     value.len() == 64
@@ -101,7 +106,12 @@ impl ChildContext {
         Ok(Some(Arc::new(Self {
             launch,
             parent_token,
-            baseline: Mutex::new((saved.hide_keyboard_button, saved.simple_keyboard)),
+            baseline: Mutex::new((
+                saved.hide_keyboard_button,
+                saved.simple_keyboard,
+                saved.pinned_shortcuts,
+                saved.button_positions,
+            )),
         })))
     }
     pub fn identity(&self) -> Value {
@@ -116,6 +126,12 @@ impl ChildContext {
         if previous.1 != saved.simple_keyboard {
             changes["simpleKeyboard"] = json!(saved.simple_keyboard);
         }
+        if previous.2 != saved.pinned_shortcuts {
+            changes["pinnedShortcuts"] = json!(saved.pinned_shortcuts);
+        }
+        if previous.3 != saved.button_positions {
+            changes["buttonPositions"] = json!(saved.button_positions);
+        }
         if !changes.as_object().unwrap().is_empty() {
             let value = post(
                 self.launch.parent_port,
@@ -128,7 +144,12 @@ impl ChildContext {
                 return Err(value["error"].as_str().unwrap_or("会话偏好未保存").into());
             }
         }
-        *previous = (saved.hide_keyboard_button, saved.simple_keyboard);
+        *previous = (
+            saved.hide_keyboard_button,
+            saved.simple_keyboard,
+            saved.pinned_shortcuts.clone(),
+            saved.button_positions.clone(),
+        );
         Ok(())
     }
     pub fn return_to_devices(&self) -> Result<Value, String> {
@@ -283,7 +304,18 @@ impl Manager {
             .filter(|e| e.alive.load(Ordering::Acquire))
             .map(|e| e.summary())
             .collect();
-        json!({"busy":!items.is_empty(),"closing":self.closing.load(Ordering::Acquire),"items":items})
+        let mut errors = serde_json::Map::new();
+        for e in entries.iter().filter(|e| !e.alive.load(Ordering::Acquire)) {
+            let summary = e.summary();
+            let err = summary["error"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .or_else(|| summary["controlError"].as_str().filter(|s| !s.is_empty()));
+            if summary["phase"] == "failed" || err.is_some() {
+                errors.insert(e.uuid.clone(), json!(err.unwrap_or("连接失败")));
+            }
+        }
+        json!({"busy":!items.is_empty(),"closing":self.closing.load(Ordering::Acquire),"items":items,"errors":errors})
     }
     pub fn busy(&self) -> bool {
         self.entries
@@ -322,7 +354,11 @@ impl Manager {
             entry.activate.store(true, Ordering::Release);
             return Ok(json!({"accepted":true,"sessionId":entry.id,"reused":true}));
         }
-        entries.retain(|entry| entry.alive.load(Ordering::Acquire));
+        entries.retain(|entry| {
+            entry.alive.load(Ordering::Acquire)
+                || (!entry.uuid.eq_ignore_ascii_case(&device.uuid)
+                    && entry.summary()["phase"] == "failed")
+        });
         let id = rhremote_core::random_token()?;
         let token = rhremote_core::random_token()?;
         let runtime = self.app_data.join("sessions").join(&id);
@@ -497,9 +533,20 @@ fn monitor(entry: Arc<Entry>, return_requested: Arc<AtomicBool>) {
         if let Some(port) = port {
             match entry.owned_state(port) {
                 Ok(state) => {
+                    let terminal_without_toolbar = state["connection"]["busy"] != true
+                        && state["connecting"] != true
+                        && state["streaming"] != true
+                        && (matches!(
+                            state["connection"]["phase"].as_str(),
+                            Some("ended" | "cancelled")
+                        ) || (state["connection"]["phase"] == "failed"
+                            && state["toolbar"]["visible"] != true));
                     *entry.state.lock().unwrap() = state;
                     entry.port.store(port, Ordering::Release);
                     entry.status_error.lock().unwrap().clear();
+                    if terminal_without_toolbar {
+                        entry.close.store(true, Ordering::Release);
+                    }
                     if entry.close.load(Ordering::Acquire) && !close_sent {
                         close_sent = entry.command("window.close", json!({})).is_ok();
                     } else if entry.activate.swap(false, Ordering::AcqRel) {
@@ -939,9 +986,19 @@ mod tests {
                 .status,
             "正在恢复连接"
         );
+        assert_eq!(ui.get_selected_session_hint(), "连接中断，正在自动恢复…");
+        assert!(
+            ElementHandle::find_by_accessible_label(&ui, "断开连接")
+                .next()
+                .is_some()
+        );
+        b.state.lock().unwrap()["connection"]["phase"] = json!("failed");
+        b.state.lock().unwrap()["connection"]["error"] = json!("无法连接目标主机");
         b.alive.store(false, Ordering::Release);
         view.refresh(&ui, &controller.state(), |uuid| controller.profile(uuid));
         assert!(!ui.get_selected_has_session());
+        assert!(ui.get_selected_session_failed());
+        assert_eq!(ui.get_selected_session_hint(), "无法连接目标主机");
         assert!(
             ElementHandle::find_by_accessible_label(&ui, "连接")
                 .next()

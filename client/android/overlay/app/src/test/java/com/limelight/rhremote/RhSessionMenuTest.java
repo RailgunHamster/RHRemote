@@ -160,8 +160,33 @@ public class RhSessionMenuTest {
             press(KeyEvent.KEYCODE_ENTER,0);assertTrue(scroll.isChecked());assertTrue(controls.state().getBoolean("scrollMode"));
             press(KeyEvent.KEYCODE_ENTER,0);assertFalse(scroll.isChecked());assertFalse(controls.state().getBoolean("scrollMode"));
             controls.perform("stream.scroll.set",RhActions.obj("enabled",true));assertTrue(scroll.isChecked());assertTrue(scroll.hasFocus());
+            controls.perform("stream.scroll.set",RhActions.obj("enabled",false));
             assertTrue("Local switch keys reached the remote",((KeyProbeGame)game).remoteKeys.isEmpty());controls.dispose();controls=null;
         }
+    }
+    @Test public void localSessionOptionsAndPinnedShortcutsAndPositionsSurviveRecreationAndReset()throws Exception{
+        create(false);
+        assertTrue(RhActions.dispatch("stream.click-scroll.set",RhActions.obj("enabled",true)).getBoolean("ok"));
+        assertTrue(RhActions.dispatch("stream.stats.toggle",RhActions.obj()).getBoolean("ok"));
+        assertTrue(RhActions.dispatch("stream.audio.toggle",RhActions.obj()).getBoolean("ok"));
+        assertTrue(RhActions.dispatch("stream.audio.volume",RhActions.obj("volume",45)).getBoolean("ok"));
+        assertTrue(RhActions.dispatch("stream.shortcut.pin.set",RhActions.obj("shortcut","ctrl-c")).getBoolean("ok"));
+        assertTrue(RhActions.dispatch("stream.overlay.move",RhActions.obj("id","shortcut:ctrl-c","x",0.25,"y",0.35)).getBoolean("ok"));
+        controls.dispose();controls=null;
+
+        create(false);
+        org.json.JSONObject restored=controls.state();
+        assertTrue("clickScrollMode must persist across sessions",restored.getBoolean("clickScrollMode"));
+        assertTrue("showStats must persist across sessions",restored.getBoolean("showStats"));
+        assertTrue("audioEnabled must persist across sessions",restored.getBoolean("audioEnabled"));
+        assertEquals("volume must persist across sessions",45,restored.getInt("volume"));
+        assertEquals("ctrl-c",restored.getJSONArray("pinnedShortcuts").getString(0));
+        assertTrue(restored.getJSONObject("buttonPositions").has("shortcut:ctrl-c"));
+
+        assertTrue(RhActions.dispatch("stream.overlay.reset",RhActions.obj()).getBoolean("ok"));
+        assertEquals(0,controls.state().getJSONObject("buttonPositions").length());
+        assertTrue(RhActions.dispatch("stream.shortcut.pin.set",RhActions.obj("shortcut","ctrl-c")).getBoolean("ok"));
+        assertEquals(0,controls.state().getJSONArray("pinnedShortcuts").length());
     }
     @Test public void tabAndDirectionNavigationStayInsideLocalControlsAndEnterUsesTheirAction()throws Exception{
         create(false);toggle();assertTrue(button("操作").requestFocusFromTouch());

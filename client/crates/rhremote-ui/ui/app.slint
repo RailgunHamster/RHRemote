@@ -224,7 +224,7 @@ export struct CopyField { label:string, value:string }
 export struct SyncConflictField { key:string, label:string, local:string, remote:string }
 export struct SyncConflictRow { key:string, label:string, local:string, remote:string, fields:[SyncConflictField] }
 export struct RemoteDisplay { id:string,label:string,chosen:bool,available:bool }
-export struct KeyboardKey { id:string,label:string,description:string,action:string,argument:string,chosen:bool,x:float,y:float,width:float,height:float }
+export struct KeyboardKey { id:string,label:string,description:string,action:string,argument:string,chosen:bool,x:float,y:float,width:float,height:float,draggable:bool }
 export struct SettingRow { key:string,label:string,kind:string,help:string,flag:bool,disabled:bool,number:int,input-text:string,invalid:bool,minimum:int,maximum:int,step:int,selected-index:int,option-labels:[string],option-values:[string] }
 export struct RouteRow { key:string,label:string,enabled:bool,can-move-up:bool,can-move-down:bool,can-disable:bool,toggle-blocked:bool }
 export global Palette {
@@ -264,6 +264,15 @@ component ActionButton inherits Rectangle {
     in property <bool> remember-focus:true;
     // Keyboard transparency belongs to the key surface, never to its lettering.
     in property <bool> keyboard-key:false;
+    in property <bool> draggable:false;
+    in property <string> drag-id;
+    in property <float> base-x:0;
+    in property <float> base-y:0;
+    in property <float> viewport-width:0;
+    in property <float> viewport-height:0;
+    out property <bool> dragging:false;
+    out property <float> drag-dx:0;
+    out property <float> drag-dy:0;
     in property <image> icon;
     out property <bool> focused:key-focus.has-focus;
     callback focused-in();
@@ -295,10 +304,35 @@ component ActionButton inherits Rectangle {
     touch := TouchArea {
         enabled:root.available;mouse-cursor:pointer;
         pointer-event(event)=>{
-            if(event.kind==PointerEventKind.down && event.button==PointerEventButton.left){root.pressed-action=root.action-id;root.pressed-argument=root.argument;root.pressed-text=root.text;root.press-valid=true;}
-            else if(event.kind==PointerEventKind.cancel){root.press-valid=false;}
+            if(event.kind==PointerEventKind.down && event.button==PointerEventButton.left){root.pressed-action=root.action-id;root.pressed-argument=root.argument;root.pressed-text=root.text;root.press-valid=true;root.dragging=false;root.drag-dx=0;root.drag-dy=0;}
+            else if(event.kind==PointerEventKind.move && root.draggable && self.pressed){
+                let total-dx=root.drag-dx + (self.mouse-x - self.pressed-x)/1px;
+                let total-dy=root.drag-dy + (self.mouse-y - self.pressed-y)/1px;
+                if(!root.dragging && (abs(total-dx)>5 || abs(total-dy)>5)){
+                    root.dragging=true;root.press-valid=false;
+                }
+                if(root.dragging){
+                    let max-x=max(4.0,root.viewport-width - (root.width/1px) - 4.0);
+                    let max-y=max(4.0,root.viewport-height - (root.height/1px) - 4.0);
+                    let nx=max(4.0,min(max-x,root.base-x + total-dx));
+                    let ny=max(4.0,min(max-y,root.base-y + total-dy));
+                    root.drag-dx=nx - root.base-x;
+                    root.drag-dy=ny - root.base-y;
+                }
+            }
+            else if(event.kind==PointerEventKind.up && root.dragging){
+                let final-x=root.base-x + root.drag-dx;
+                let final-y=root.base-y + root.drag-dy;
+                let span-x=max(1.0,root.viewport-width - (root.width/1px) - 8.0);
+                let span-y=max(1.0,root.viewport-height - (root.height/1px) - 8.0);
+                let rx=max(0.0,min(1.0,(final-x - 4.0)/span-x));
+                let ry=max(0.0,min(1.0,(final-y - 4.0)/span-y));
+                root.dragging=false;root.drag-dx=0;root.drag-dy=0;root.press-valid=false;
+                Commands.trigger("stream.overlay.move",root.drag-id+"|"+rx+"|"+ry);
+            }
+            else if(event.kind==PointerEventKind.cancel){root.dragging=false;root.drag-dx=0;root.drag-dy=0;root.press-valid=false;}
         }
-        clicked=>{key-focus.focus();if(root.press-valid && root.pressed-action==root.action-id && root.pressed-argument==root.argument && root.pressed-text==root.text){root.invoke-action();}root.press-valid=false;}
+        clicked=>{key-focus.focus();if(root.press-valid && !root.dragging && root.pressed-action==root.action-id && root.pressed-argument==root.argument && root.pressed-text==root.text){root.invoke-action();}root.press-valid=false;}
     }
     accessible-role: button;
     accessible-enabled:root.available;
@@ -537,8 +571,9 @@ export component FloatingKeyboardWindow inherits Window {
     in property <[KeyboardKey]> keys;
     in property <bool> busy;
     for key in root.keys:ActionButton{
-        x:key.x*1px;y:key.y*1px;width:key.width*1px;height:key.height*1px;min-width:1px;
+        x:(key.x + self.drag-dx)*1px;y:(key.y + self.drag-dy)*1px;width:key.width*1px;height:key.height*1px;min-width:1px;
         text:key.id=="backspace" ? "Backspace" : key.label;accessible-label:key.description;action-id:key.action;argument:key.argument;chosen:key.chosen;
+        draggable:key.draggable;drag-id:key.id;base-x:key.x;base-y:key.y;viewport-width:root.width/1px;viewport-height:root.height/1px;
         disabled:root.busy;keyboard-key:true;border-radius:6px;remember-focus:false;font-size:key.width<32 ? 10px : 12px;
     }
 }
@@ -665,10 +700,14 @@ export component StreamToolbar inherits Window {
                         if !root.narrow:HorizontalLayout{spacing:8px;
                             ActionButton{text:"Ctrl+Alt+Delete";subtle:true;has-icon:true;icon:@image-url("icons/lock.svg");action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
                             ActionButton{text:"快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"外置快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"pinned-shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"重置位置";subtle:true;action-id:"stream.overlay.reset";disabled:root.busy;}
                         }
                         if root.narrow:VerticalLayout{spacing:8px;
                             ActionButton{text:"Ctrl+Alt+Delete";subtle:true;has-icon:true;icon:@image-url("icons/lock.svg");action-id:"stream.shortcut";argument:"ctrl-alt-delete";disabled:root.busy;horizontal-stretch:1;}
                             ActionButton{text:"快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"外置快捷键 ▾";subtle:true;has-icon:true;icon:@image-url("icons/shortcuts.svg");action-id:"stream.menu.open";argument:"pinned-shortcuts";disabled:root.busy;horizontal-stretch:1;}
+                            ActionButton{text:"重置位置";subtle:true;action-id:"stream.overlay.reset";disabled:root.busy;horizontal-stretch:1;}
                         }
                         if !root.narrow:HorizontalLayout{spacing:8px;
                             ActionButton{text:root.simple-keyboard ? "键盘布局：简化" : "键盘布局：完整";action-id:"stream.keyboard.layout.set";argument:root.simple-keyboard ? "full" : "simple";disabled:root.busy;horizontal-stretch:1;}
@@ -747,7 +786,7 @@ export component StreamPicker inherits Window {
         UiProbe{control-id:"scope|picker";kind:"scope";focused:focus.has-focus;remember-focus:false;focus-requested=>{focus.focus();}}
         VerticalLayout{padding:8px;spacing:6px;
             HorizontalLayout{
-                Text{text:root.kind=="shortcuts" ? "快捷键" : root.kind=="feedback" ? "操作失败" : "屏幕";color:Palette.ink;vertical-alignment:center;}
+                Text{text:root.kind=="shortcuts" ? "快捷键" : root.kind=="pinned-shortcuts" ? "外置快捷键（点击勾选）" : root.kind=="feedback" ? "操作失败" : "屏幕";color:Palette.ink;vertical-alignment:center;}
                 Rectangle{horizontal-stretch:1;}
                 if root.kind!="feedback" && root.error!="":ActionButton{text:"详情";action-id:"stream.menu.open";argument:"feedback";}
                 ActionButton{text:"关闭";action-id:"stream.menu.close";}
@@ -763,6 +802,7 @@ export component StreamPicker inherits Window {
                             property <bool> chosen:root.chosen-items.length>index && root.chosen-items[index];
                             property <string> menu:root.kind;
                             property <string> value:root.values[index];
+                            property <string> row-action:root.kind=="shortcuts" ? "stream.shortcut" : root.kind=="pinned-shortcuts" ? "stream.shortcut.pin.set" : "stream.display.select";
                             property <bool> press-valid:false;
                             property <string> pressed-menu;
                             property <string> pressed-value;
@@ -772,19 +812,19 @@ export component StreamPicker inherits Window {
                             height:40px;border-radius:8px;background:self.chosen || touch.has-hover ? Palette.soft : transparent;
                             forward-focus:row-focus;
                             border-width:row-focus.has-focus ? 1px : 0px;border-color:Palette.blue;
-                            Text{x:10px;width:parent.width - 20px;text:item-label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
-                            row-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}return accept;}return reject;}}
+                            Text{x:10px;width:parent.width - 20px;text:parent.chosen && root.kind=="pinned-shortcuts" ? item-label+"  ✓" : item-label;color:parent.available ? Palette.ink : Palette.muted;vertical-alignment:center;overflow:elide;}
+                            row-focus:=FocusScope{focus-on-click:parent.available;focus-on-tab-navigation:parent.available;key-pressed(event)=>{if(parent.available && (event.text==Key.Return || event.text==" ")){if(!event.repeat){Commands.trigger(parent.row-action,root.values[index]);}return accept;}return reject;}}
                             touch:=TouchArea{
                                 enabled:parent.available;mouse-cursor:pointer;
                                 pointer-event(event)=>{
                                     if(event.kind==PointerEventKind.down && event.button==PointerEventButton.left){parent.pressed-menu=parent.menu;parent.pressed-value=parent.value;parent.press-valid=true;}
                                     else if(event.kind==PointerEventKind.cancel){parent.press-valid=false;}
                                 }
-                                clicked=>{if(parent.press-valid && parent.available && parent.pressed-menu==parent.menu && parent.pressed-value==parent.value){row-focus.focus();Commands.trigger(parent.menu=="shortcuts" ? "stream.shortcut" : "stream.display.select",parent.value);}parent.press-valid=false;}
+                                clicked=>{if(parent.press-valid && parent.available && parent.pressed-menu==parent.menu && parent.pressed-value==parent.value){row-focus.focus();Commands.trigger(parent.row-action,parent.value);}parent.press-valid=false;}
                             }
                             accessible-role:button;accessible-enabled:self.available;accessible-label:item-label;
                             accessible-id:"picker|"+root.kind+"|"+root.values[index];
-                            accessible-action-default=>{if(self.available){Commands.trigger(root.kind=="shortcuts" ? "stream.shortcut" : "stream.display.select",root.values[index]);}}
+                            accessible-action-default=>{if(self.available){Commands.trigger(self.row-action,root.values[index]);}}
                             UiProbe{control-id:"picker|"+root.kind+"|"+root.values[index];kind:"menu-item";label:item-label;control-enabled:parent.available;focused:row-focus.has-focus;control-width:parent.width;control-height:parent.height;focus-requested=>{row-focus.focus();}}
                         }
                     }
@@ -798,6 +838,9 @@ export component MainWindow inherits Window {
     in property <bool> session-window;
     in property <bool> selected-has-session;
     in property <string> selected-session-id;
+    in property <string> selected-session-phase;
+    in property <string> selected-session-hint;
+    in property <bool> selected-session-failed;
     init => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     changed dark => { WidgetPalette.color-scheme = root.dark ? ColorScheme.dark : ColorScheme.light; }
     icon:@image-url("../../../shared/icons/rhremote.svg");
@@ -1019,11 +1062,12 @@ export component MainWindow inherits Window {
                                         }
                                         VerticalLayout {spacing:10px;alignment:center;
                                             Text {text:"桌面连接";font-size:16px;font-weight:600;color:Palette.ink;}
-                                            Text {text:root.selected-device.is-self ? "本机不支持连接自身" : root.selected-device.check-hint!="" ? root.selected-device.check-hint : root.selected-device.pending ? "配对状态尚未确认" : root.selected-device.paired ? "已配对" : "连接前需要配对";font-size:12px;color:root.selected-device.check-failed ? Palette.failure : Palette.muted;wrap:word-wrap;}
+                                            Text {text:root.selected-device.is-self ? "本机不支持连接自身" : root.selected-session-hint!="" ? root.selected-session-hint : root.selected-device.check-hint!="" ? root.selected-device.check-hint : root.selected-device.pending ? "配对状态尚未确认" : root.selected-device.paired ? "已配对" : "连接前需要配对";font-size:12px;color:(root.selected-session-failed || root.selected-device.check-failed) ? Palette.failure : root.selected-session-phase=="connected" ? Palette.success : (root.selected-has-session && root.selected-session-phase!="failed") ? Palette.blue : Palette.muted;wrap:word-wrap;}
                                             HorizontalLayout {spacing:8px;
                                                 ActionButton {text:root.selected-has-session ? "切换到窗口" : root.selected-device.is-self ? "本机" : root.selected-device.check-retry ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.repair-required ? "重新配对" : root.selected-device.pending && !root.selected-device.paired ? root.devices-refreshing ? "检查中…" : "检查连接" : root.selected-device.paired ? "连接" : "配对";action-id:root.selected-has-session ? "session.activate" : (root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) ? "devices.refresh" : root.selected-device.repair-required ? "device.pair" : root.selected-device.paired ? "device.connect" : "device.pair";argument:root.selected-has-session ? root.selected-session-id : root.selected-uuid;primary:true;disabled:!root.selected-has-session && (root.diagnostic-busy || root.selected-device.is-self || root.control-requests-pending || ((root.selected-device.check-retry || (root.selected-device.pending && !root.selected-device.paired && !root.selected-device.repair-required)) && root.devices-refreshing));min-width:112px;}
-                                                if root.selected-device.pending && root.selected-device.online && !root.selected-device.is-self && !root.selected-device.check-retry && !root.selected-device.repair-required: ActionButton{text:"配对";action-id:"device.pair";argument:root.selected-uuid;disabled:root.diagnostic-busy || root.control-requests-pending;}
-                                                ActionButton{text:"选择窗口";action-id:"device.windows.open";argument:root.selected-uuid;disabled:root.window-picker-busy || root.diagnostic-busy || root.selected-device.is-self || !root.selected-device.paired || root.selected-device.check-retry || root.selected-device.repair-required || root.control-requests-pending;}
+                                                if root.selected-has-session: ActionButton{text:root.selected-session-phase=="cancelling" || root.selected-session-phase=="cleaning" ? "正在断开…" : (root.selected-session-phase=="connected" || root.selected-session-phase=="reconnecting") ? "断开连接" : "取消连接";action-id:"session.close";argument:root.selected-session-id;disabled:root.selected-session-phase=="cancelling" || root.selected-session-phase=="cleaning";}
+                                                if !root.selected-has-session && root.selected-device.pending && root.selected-device.online && !root.selected-device.is-self && !root.selected-device.check-retry && !root.selected-device.repair-required: ActionButton{text:"配对";action-id:"device.pair";argument:root.selected-uuid;disabled:root.diagnostic-busy || root.control-requests-pending;}
+                                                ActionButton{text:"选择窗口";action-id:"device.windows.open";argument:root.selected-uuid;disabled:root.selected-has-session || root.window-picker-busy || root.diagnostic-busy || root.selected-device.is-self || !root.selected-device.paired || root.selected-device.check-retry || root.selected-device.repair-required || root.control-requests-pending;}
                                                 Rectangle{horizontal-stretch:1;}
                                             }
                                         }

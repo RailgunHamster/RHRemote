@@ -26,7 +26,43 @@ pub(crate) fn simple_layout(width:f32,height:f32)->Vec<Key>{
 }
 fn selected_layout(width:f32,height:f32,state:&Value)->Vec<Key>{if state["saved"]["simpleKeyboard"]==true{simple_layout(width,height)}else{layout(width,height)}}
 
+struct ShortcutMeta {
+    id: &'static str,
+    key_id: &'static str,
+    short_label: &'static str,
+    full_label: &'static str,
+}
+fn shortcut_catalog() -> &'static [ShortcutMeta] {
+    static CATALOG: std::sync::OnceLock<Vec<ShortcutMeta>> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(|| {
+        rhremote_core::shortcuts()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| {
+                let id: &'static str = Box::leak(item["id"].as_str()?.to_owned().into_boxed_str());
+                let full_label: &'static str =
+                    Box::leak(item["label"].as_str()?.to_owned().into_boxed_str());
+                let short = full_label
+                    .split_once(" · ")
+                    .map(|(prefix, _)| prefix)
+                    .unwrap_or(full_label);
+                let short_label: &'static str = Box::leak(short.to_owned().into_boxed_str());
+                let key_id: &'static str =
+                    Box::leak(format!("shortcut:{id}").into_boxed_str());
+                Some(ShortcutMeta {
+                    id,
+                    key_id,
+                    short_label,
+                    full_label,
+                })
+            })
+            .collect()
+    })
+}
+
 fn scene(width:f32,height:f32,state:&Value)->Vec<Key>{
+    let full_keyboard=state["floatingKeyboard"]==true && state["saved"]["simpleKeyboard"]!=true;
     let mut keys=if state["floatingKeyboard"]==true{selected_layout(width,height,state)}else{vec![]};
     for key in &mut keys {if let Ok(source)=rhremote_core::keyboard::key(key.id){let modifier=&source.modifier;key.selected=key.argument!="meta-left|tap"&&!modifier.is_empty()&&state["keyboardModifiers"].as_array().is_some_and(|values|values.iter().any(|value|value==modifier));}}
     if state["floatingKeyboard"]==true&&!keys.is_empty(){
@@ -37,10 +73,51 @@ fn scene(width:f32,height:f32,state:&Value)->Vec<Key>{
     if state["saved"]["hideKeyboardButton"]!=true && width>=120. && height>=80.{
         let enabled=state["floatingKeyboard"]==true;
         keys.push(Key{id:"keyboard-toggle",label:if enabled{"收起"}else{"键盘"},description:if enabled{"收起悬浮键盘"}else{"展开悬浮键盘"},action:"stream.keyboard.floating.set",argument:if enabled{"false"}else{"true"},selected:enabled,x:width-88.,y:16.,width:72.,height:48.});
+        if !full_keyboard {
+            if let Some(pinned)=state["saved"]["pinnedShortcuts"].as_array() {
+                let chip_w=84f32.min((width-24.).max(48.));
+                let chip_h=38f32;
+                let gap=6f32;
+                let mut col_right=width-16.;
+                let mut cur_y=16.+48.+gap;
+                for item in pinned {
+                    let Some(id)=item.as_str() else {continue};
+                    let Some(meta)=shortcut_catalog().iter().find(|m|m.id==id) else {continue};
+                    if cur_y+chip_h>height-16. && col_right-chip_w-gap>=chip_w+16. {
+                        col_right-=chip_w+gap;
+                        cur_y=16.;
+                    }
+                    let x=(col_right-chip_w).clamp(4.,(width-chip_w-4.).max(4.));
+                    let y=cur_y.clamp(4.,(height-chip_h-4.).max(4.));
+                    keys.push(Key{id:meta.key_id,label:meta.short_label,description:meta.full_label,action:"stream.shortcut",argument:meta.id,selected:false,x,y,width:chip_w,height:chip_h});
+                    cur_y+=chip_h+gap;
+                }
+            }
+        }
+    }
+    if !full_keyboard {
+        if let Some(positions)=state["saved"]["buttonPositions"].as_object() {
+            for key in &mut keys {
+                if let Some(pos)=positions.get(key.id) {
+                    if let (Some(rx),Some(ry))=(pos["x"].as_f64(),pos["y"].as_f64()) {
+                        let rx=(rx as f32).clamp(0.,1.);
+                        let ry=(ry as f32).clamp(0.,1.);
+                        let span_x=(width-key.width-8.).max(1.);
+                        let span_y=(height-key.height-8.).max(1.);
+                        key.x=(4.+rx*span_x).clamp(4.,(width-key.width-4.).max(4.));
+                        key.y=(4.+ry*span_y).clamp(4.,(height-key.height-4.).max(4.));
+                    }
+                }
+            }
+            keys.sort_by_key(|key|positions.get(key.id).and_then(|p|p["order"].as_u64()).unwrap_or(0));
+        }
     }
     keys
 }
-pub(crate) fn model(keys:&[Key])->ModelRc<crate::KeyboardKey>{ModelRc::new(VecModel::from(keys.iter().map(|key|crate::KeyboardKey{id:key.id.into(),label:key.label.into(),description:key.description.into(),action:key.action.into(),argument:key.argument.into(),chosen:key.selected,x:key.x,y:key.y,width:key.width,height:key.height}).collect::<Vec<_>>()))}
+pub(crate) fn model(keys:&[Key])->ModelRc<crate::KeyboardKey>{
+    let full_keyboard=keys.len()>60;
+    ModelRc::new(VecModel::from(keys.iter().map(|key|crate::KeyboardKey{id:key.id.into(),label:key.label.into(),description:key.description.into(),action:key.action.into(),argument:key.argument.into(),chosen:key.selected,x:key.x,y:key.y,width:key.width,height:key.height,draggable:!full_keyboard}).collect::<Vec<_>>()))
+}
 
 pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous:&Value)->Value{
     let hidden=if state["floatingKeyboard"]!=true&&state["saved"]["hideKeyboardButton"]==true{"disabled"}else if state["streaming"]!=true{"not-streaming"}else if state["connection"]["stopping"]==true{"stopping"}else if state["controls"]==true{"controls-open"}else if !state["streamMenu"].as_str().unwrap_or("").is_empty(){"menu-open"}else{""};
@@ -57,13 +134,13 @@ pub(crate) fn follow(window:&crate::FloatingKeyboardWindow,state:&Value,previous
         if GetClientRect(owner,&mut client).is_err()||!ClientToScreen(owner,&mut origin).as_bool(){let _=window.hide();return json!({"visible":false,"error":"无法读取远程窗口区域","errorCode":"geometry"});}
         let(width,height)=(client.right-client.left,client.bottom-client.top);
         if width<1||height<1{let _=window.hide();return json!({"visible":false,"reason":"native-empty"});}
-        let source=json!({"owner":format!("{}",owner.0 as usize),"request":state["floatingKeyboardRequest"],"session":state["floatingKeyboardSession"],"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":window.window().scale_factor(),"opened":state["floatingKeyboard"],"buttonHidden":state["saved"]["hideKeyboardButton"],"modifiers":state["keyboardModifiers"],"simple":state["saved"]["simpleKeyboard"]});
+        let source=json!({"owner":format!("{}",owner.0 as usize),"request":state["floatingKeyboardRequest"],"session":state["floatingKeyboardSession"],"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":window.window().scale_factor(),"opened":state["floatingKeyboard"],"buttonHidden":state["saved"]["hideKeyboardButton"],"modifiers":state["keyboardModifiers"],"simple":state["saved"]["simpleKeyboard"],"pinned":state["saved"]["pinnedShortcuts"],"positions":state["saved"]["buttonPositions"]});
         if previous["error"].is_string()&&previous["source"]==source{return previous.clone();}
         // The first native allocation is one pixel at the owned stream, never an opaque full-screen flash.
         if !window.window().is_visible(){window.window().set_position(slint::PhysicalPosition::new(origin.x,origin.y));window.window().set_size(slint::PhysicalSize::new(1,1));if window.show().is_err(){return json!({"visible":false,"error":"无法打开悬浮键盘","errorCode":"open"});}}
         let scale=window.window().scale_factor();let keys=scene(width as f32/scale,height as f32/scale,state);
         if keys.is_empty() || state["floatingKeyboard"]==true&&selected_layout(width as f32/scale,height as f32/scale,state).is_empty(){let _=window.hide();return json!({"visible":false,"error":"远程窗口过小，无法显示悬浮键盘","errorCode":"small","source":source});}
-        let fingerprint=json!({"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":scale,"opened":state["floatingKeyboard"],"buttonHidden":state["saved"]["hideKeyboardButton"],"modifiers":state["keyboardModifiers"],"simple":state["saved"]["simpleKeyboard"]});
+        let fingerprint=json!({"x":origin.x,"y":origin.y,"width":width,"height":height,"scale":scale,"opened":state["floatingKeyboard"],"buttonHidden":state["saved"]["hideKeyboardButton"],"modifiers":state["keyboardModifiers"],"simple":state["saved"]["simpleKeyboard"],"pinned":state["saved"]["pinnedShortcuts"],"positions":state["saved"]["buttonPositions"]});
         if previous["geometry"]!=fingerprint||previous["visible"]!=true{window.set_keys(model(&keys));}
         window.set_busy(state["controlAction"]["busy"]==true||state["connecting"]==true||state["statistics"]["firstFrame"]!=true);
         window.global::<crate::Palette>().set_dark(state["saved"]["dark"]==true);
@@ -179,5 +256,25 @@ impl Feedback {
         }
     }
     #[test]fn invalid_or_too_small_geometry_has_no_full_keyboard(){for(w,h)in[(0.,600.),(360.,800.),(900.,120.),(f32::NAN,600.)]{assert!(layout(w,h).is_empty());}}
+    #[test]fn pinned_shortcuts_and_custom_positions_apply_and_sort_by_drag_order(){
+        let mut state=state();
+        state["floatingKeyboard"]=json!(false);
+        state["saved"]=json!({
+            "pinnedShortcuts":["ctrl-c","ctrl-v"],
+            "buttonPositions":{
+                "shortcut:ctrl-c":{"x":0.5,"y":0.5,"order":1},
+                "shortcut:ctrl-v":{"x":0.5,"y":0.5,"order":2}
+            }
+        });
+        let keys=scene(840.,560.,&state);
+        assert_eq!(keys.len(),3);
+        let c=keys.iter().find(|k|k.id=="shortcut:ctrl-c").unwrap();
+        let v=keys.iter().find(|k|k.id=="shortcut:ctrl-v").unwrap();
+        assert_eq!(c.label,"复制");
+        assert_eq!(c.action,"stream.shortcut");
+        assert_eq!(c.argument,"ctrl-c");
+        assert_eq!((c.x,c.y),(v.x,v.y));
+        assert_eq!(keys.last().unwrap().id,"shortcut:ctrl-v");
+    }
 
 }
