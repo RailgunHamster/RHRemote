@@ -4,6 +4,6 @@ function New-RHRemoteReleaseNotes {
  if($Notes.Length -gt 131072 -or $PublishedAt.Year -lt 2020){throw 'Invalid release notes or publication time'}
  [pscustomobject]@{
   publishedAt=$PublishedAt.ToUniversalTime().ToString('o')
-  notes=('发布时间：'+$PublishedAt.ToOffset([TimeSpan]::FromHours(8)).ToString("yyyy-MM-dd HH:mm 'UTC+08:00'")+"`n`n"+$Notes.Trim()+"`n")
+  notes=('发布时间：'+$PublishedAt.ToOffset([TimeSpan]::FromHours(8)).ToString("yyyy-MM-dd HH:mm 'UTC+08:00'")+"`n`n"+$Notes.Replace("`r`n","`n").Replace("`r","`n").Trim()+"`n")
  }
 }
