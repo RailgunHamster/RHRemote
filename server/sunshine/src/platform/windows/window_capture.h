@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,7 +16,7 @@
 
 namespace platf::window_capture {
   /** @brief A capture item tied to one native window lifetime. */
-  struct target_t {
+  struct target_t: std::enable_shared_from_this<target_t> {
     HWND window {};  ///< Original window; never exported as a client selector.
     DWORD process {};  ///< Process that owned the original window.
     std::uintptr_t marker {};  ///< Window property erased automatically on native destruction.
@@ -25,6 +26,7 @@ namespace platf::window_capture {
     std::atomic<unsigned> captures {0};  ///< Active capture leases, excluded from idle expiry.
     std::atomic<int> width {0};  ///< Most recent nonempty content width.
     std::atomic<int> height {0};  ///< Most recent nonempty content height.
+    std::mutex item_mutex;  ///< Serialize lazy direct-user WGC item creation.
 
     /** @brief Remove only this target's private property and event subscription. */
     ~target_t();
@@ -34,6 +36,10 @@ namespace platf::window_capture {
     std::string state() const;
     /** @brief Query physical frame bounds. @return Current bounds, or an empty rectangle if unavailable. */
     RECT bounds() const;
+    /** @brief Name of the process-private native-lifetime property. @return Stable property name. */
+    const std::wstring &marker_property() const;
+    /** @brief Create WGC only for the selected window in a user process. @return The original capture item; SYSTEM callers must use the worker. */
+    winrt::Windows::Graphics::Capture::GraphicsCaptureItem capture_item();
     /** @brief Find the device used to initialize the capture D3D adapter. @return GDI monitor name, or an empty name on failure. */
     std::wstring monitor_name() const;
     /** @brief Focus only the selected window before injecting input. @return Whether the selected root currently owns foreground input. */
@@ -73,6 +79,8 @@ namespace platf::window_capture {
     std::string advertise(const std::string &certificate);
     /** @brief Expire one test selector without sleeping. @param source Opaque selector created by advertise. */
     void expire_now(std::string_view source);
+    /** @brief Build only metadata for an owned native test window. @param window Test-owned HWND. @return Lazy target without a WGC item. */
+    target_ptr metadata(HWND window);
   }  // namespace testing
 #endif
 }  // namespace platf::window_capture

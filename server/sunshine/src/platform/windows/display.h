@@ -19,6 +19,7 @@
 #include "src/utility.h"
 #include "src/video.h"
 #include "window_capture.h"
+#include "window_capture_worker.h"
 
 namespace platf::dxgi {
   extern const char *format_str[];
@@ -301,6 +302,7 @@ namespace platf::dxgi {
   class display_base_t: public display_t {
   public:
     std::shared_ptr<platf::window_capture::target_t> window_target;  ///< Exact window capture lease; absent for monitor sessions.
+    std::shared_ptr<platf::window_capture::broker_t> window_broker;  ///< User-owned WGC for a SYSTEM capture engine.
     /**
      * @brief Initialize D3D11 desktop duplication for the selected output.
      *
@@ -717,6 +719,7 @@ namespace platf::dxgi {
     /** @brief Acquire a native frame inside the exception boundary. @param timeout Maximum wait. @param out Retained texture. @param out_time QPC timestamp. @return Native capture status. */
     capture_e next_frame_impl(std::chrono::milliseconds timeout, ID3D11Texture2D **out, uint64_t &out_time);
     std::shared_ptr<platf::window_capture::target_t> window_target;  ///< Retained window identity for size and lifetime checks.
+    std::shared_ptr<platf::window_capture::broker_t> window_broker;  ///< Private GPU transport, absent for the original monitor backend.
     winrt::Windows::Graphics::SizeInt32 window_size {};  ///< Dimensions used to allocate this window frame pool.
     winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice uwp_device {nullptr};
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem item {nullptr};

@@ -32,7 +32,7 @@ typedef long NTSTATUS;
 /**
  * @brief Enumerates supported d3 DKMT GPU PREFERENCE QUERY STATE options.
  */
-typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
+typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE: DWORD {
   D3DKMT_GPU_PREFERENCE_STATE_UNINITIALIZED,  ///< The GPU preference isn't initialized.
   D3DKMT_GPU_PREFERENCE_STATE_HIGH_PERFORMANCE,  ///< The highest performing GPU is preferred.
   D3DKMT_GPU_PREFERENCE_STATE_MINIMUM_POWER,  ///< The minimum-powered GPU is preferred.
@@ -41,6 +41,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
   D3DKMT_GPU_PREFERENCE_STATE_USER_SPECIFIED_GPU  ///< A specific GPU is preferred.
 } D3DKMT_GPU_PREFERENCE_QUERY_STATE;  ///< Alias for D3 DKMT GPU PREFERENCE QUERY STATE.
 
+#include "capture_context.h"
 #include "display.h"
 #include "misc.h"
 #include "rhremote_encoder_environment.h"
@@ -602,7 +603,17 @@ namespace platf::dxgi {
     }
 
     if (window_target) {
-      const auto size = window_target->item.Size();
+      winrt::Windows::Graphics::SizeInt32 size {};
+      if (capture_context::is_system_process()) {
+        window_broker = platf::window_capture::broker_t::start(device.get(), window_target, config.dynamicRange ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM, config.framerate);
+        if (!window_broker) {
+          return -1;
+        }
+        const auto actual = window_broker->size();
+        size = {actual.first, actual.second};
+      } else {
+        size = window_target->capture_item().Size();
+      }
       if (size.Width <= 0 || size.Height <= 0 || size.Width > 16384 || size.Height > 16384) {
         return -1;
       }

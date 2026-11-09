@@ -32,6 +32,7 @@
 #include "video.h"
 #ifdef _WIN32
   #include "platform/windows/capture_context.h"
+  #include "platform/windows/window_capture_worker.h"
 #endif
 
 using namespace std::literals;
@@ -171,6 +172,9 @@ int main(int argc, char *argv[]) {
   // WGC binds to the user's CaptureService. Set process security before the
   // first COM activation; only capture scopes temporarily impersonate that user.
   platf::capture_context::process_security_t capture_security;
+  if (const auto worker = platf::window_capture::worker_arguments(argc, argv)) {
+    return *worker;
+  }
 #endif
 #ifdef __APPLE__
   // Bundle assets are referenced relative to the executable

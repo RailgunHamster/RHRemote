@@ -70,6 +70,20 @@ TEST(WindowCaptureSource, DoesNotMistakeDesktopNamesForWindows) {
 }
 
 #ifdef _WIN32
+TEST(WindowCaptureRegistry, MetadataDoesNotActivateCaptureOrLeaveAPropertyAfterRetirement) {
+  const auto window = CreateWindowExW(0, L"STATIC", L"RHRemote inert metadata fixture", WS_POPUP, 0, 0, 640, 360, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+  ASSERT_NE(window, nullptr);
+  auto target = platf::window_capture::testing::metadata(window);
+  ASSERT_TRUE(target);
+  EXPECT_TRUE(target->alive());
+  EXPECT_FALSE(target->item);
+  const auto name = target->marker_property();
+  EXPECT_NE(GetPropW(window, name.c_str()), nullptr);
+  target.reset();
+  EXPECT_EQ(GetPropW(window, name.c_str()), nullptr);
+  DestroyWindow(window);
+}
+
 TEST(WindowCaptureRegistry, SelectorsAreBoundToTheVerifiedPeer) {
   const auto source = platf::window_capture::testing::advertise("verified-peer-a");
   const auto target = platf::window_capture::resolve(source, "verified-peer-a");

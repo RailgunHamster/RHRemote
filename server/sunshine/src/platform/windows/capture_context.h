@@ -18,6 +18,27 @@
 #include <wtsapi32.h>
 
 namespace platf::capture_context {
+  /** @brief Inspect the primary token, independently of capture impersonation. @return Whether this process runs as SYSTEM. */
+  inline bool is_system_process() {
+    static const bool value = [] {
+      HANDLE token = nullptr;
+      if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        winrt::throw_hresult(HRESULT_FROM_WIN32(GetLastError()));
+      }
+      DWORD size = 0;
+      GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+      std::vector<unsigned char> storage(size);
+      const bool read = size && GetTokenInformation(token, TokenUser, storage.data(), size, &size);
+      const auto error = GetLastError();
+      CloseHandle(token);
+      if (!read) {
+        winrt::throw_hresult(HRESULT_FROM_WIN32(error));
+      }
+      return IsWellKnownSid(reinterpret_cast<TOKEN_USER *>(storage.data())->User.Sid, WinLocalSystemSid) != FALSE;
+    }();
+    return value;
+  }
+
   /** @brief Keep COM security alive without changing the main thread's apartment model. */
   class process_security_t {
     std::mutex mutex;  ///< Protects the shutdown wait.
@@ -83,23 +104,7 @@ namespace platf::capture_context {
 
     /** @brief Test the process token without depending on existing thread impersonation. @return True for SYSTEM hosts. */
     bool required() const {
-      if (scopes) {
-        return false;
-      }
-      static const bool system = [] {
-        token_t process;
-        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &process.value)) {
-          winrt::throw_hresult(HRESULT_FROM_WIN32(GetLastError()));
-        }
-        DWORD size = 0;
-        GetTokenInformation(process.value, TokenUser, nullptr, 0, &size);
-        std::vector<unsigned char> storage(size);
-        if (!size || !GetTokenInformation(process.value, TokenUser, storage.data(), size, &size)) {
-          winrt::throw_hresult(HRESULT_FROM_WIN32(GetLastError()));
-        }
-        return IsWellKnownSid(reinterpret_cast<TOKEN_USER *>(storage.data())->User.Sid, WinLocalSystemSid) != FALSE;
-      }();
-      return system;
+      return !scopes && is_system_process();
     }
 
     /** @brief Capture an existing thread identity for exact restoration. @return Owned token, or null when unimpersonated. */

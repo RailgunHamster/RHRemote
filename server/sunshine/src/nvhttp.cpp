@@ -1949,6 +1949,9 @@ namespace nvhttp {
     rhremote::launch_worker worker(2, [] {
       BOOST_LOG(error) << "Deferred launch preparation raised an exception"sv;
     });
+    rhremote::launch_worker window_worker(2, [] {
+      BOOST_LOG(error) << "Window enumeration raised an exception"sv;
+    });
 
     // Verify certificates after establishing connection
     https_server.verify = [](SSL *ssl) -> std::optional<rhremote::launch_peer> {
@@ -2037,7 +2040,7 @@ namespace nvhttp {
       write_launch_result(resp, peer ? pending_launch_cancel(req->parse_query_string(), *peer) : launch_error(401, "Authenticated TLS request identity is unavailable"));
     };
 
-    https_server.resource["^/rhremote/windows$"]["GET"] = [&https_server, &worker](auto resp, auto req) {
+    https_server.resource["^/rhremote/windows$"]["GET"] = [&https_server, &window_worker](auto resp, auto req) {
       const auto peer = https_server.verified_requests.peer(req);
       if (!peer) {
         write_launch_result(resp, launch_error(401, "Authenticated TLS request identity is unavailable"));
@@ -2051,34 +2054,42 @@ namespace nvhttp {
             return;
           }
         }
-        pt::ptree tree;
-        tree.put("root.<xmlattr>.status_code", 200);
+        try {
+          pt::ptree tree;
+          tree.put("root.<xmlattr>.status_code", 200);
 #ifdef _WIN32
-        tree.put("root.supported", platf::window_capture::supported() ? 1 : 0);
-        tree.put("root.secondaryWindows", 0);
-        for (const auto &entry : platf::window_capture::enumerate(peer->certificate)) {
-          pt::ptree row;
-          row.put("id", entry.id);
-          row.put("title", entry.title);
-          row.put("application", entry.application);
-          row.put("state", entry.state);
-          row.put("width", entry.width);
-          row.put("height", entry.height);
-          tree.add_child("root.Window", row);
-        }
-#else
-        tree.put("root.supported", 0);
-#endif
-        {
-          std::lock_guard guard(client_auth_mutex());
-          if (!launch_peer_authorized_locked(*peer)) {
-            write_launch_result(resp, launch_error(401, "Client authorization was revoked"));
-            return;
+          tree.put("root.supported", platf::window_capture::supported() ? 1 : 0);
+          tree.put("root.secondaryWindows", 0);
+          for (const auto &entry : platf::window_capture::enumerate(peer->certificate)) {
+            pt::ptree row;
+            row.put("id", entry.id);
+            row.put("title", entry.title);
+            row.put("application", entry.application);
+            row.put("state", entry.state);
+            row.put("width", entry.width);
+            row.put("height", entry.height);
+            tree.add_child("root.Window", row);
           }
+#else
+          tree.put("root.supported", 0);
+#endif
+          {
+            std::lock_guard guard(client_auth_mutex());
+            if (!launch_peer_authorized_locked(*peer)) {
+              write_launch_result(resp, launch_error(401, "Client authorization was revoked"));
+              return;
+            }
+          }
+          write_launch_result(resp, tree);
+        } catch (const std::exception &) {
+          BOOST_LOG(error) << "RHREMOTE_WINDOW_LIST enumeration failed";
+          write_launch_result(resp, launch_error(500, "Window enumeration failed"));
         }
-        write_launch_result(resp, tree);
       };
-      if (!worker.submit(task)) {
+      if (!window_worker.submit_observed(task, [](const auto timing) {
+            BOOST_LOG(info) << "RHREMOTE_WINDOW_LIST queue_us=" << std::chrono::duration_cast<std::chrono::microseconds>(timing.started - timing.queued).count()
+                            << " work_us=" << std::chrono::duration_cast<std::chrono::microseconds>(timing.finished - timing.started).count();
+          })) {
         write_launch_result(resp, launch_error(503, "Host state queue is full or closed"));
       }
     };

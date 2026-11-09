@@ -129,18 +129,9 @@ namespace platf::window_capture {
       if (!SetPropW(window, marker_name().c_str(), reinterpret_cast<HANDLE>(target->marker))) {
         return {};
       }
-      apartment();
-      auto factory = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-      winrt::check_hresult(factory->CreateForWindow(window, winrt::guid_of<winrt::Windows::Graphics::Capture::IGraphicsCaptureItem>(), winrt::put_abi(target->item)));
-      auto size = target->item.Size();
-      target->width = size.Width;
-      target->height = size.Height;
-      std::weak_ptr<target_t> weak = target;
-      target->closed_event = target->item.Closed([weak](auto &&, auto &&) {
-        if (auto live = weak.lock()) {
-          live->closed = true;
-        }
-      });
+      const auto bounds = target->bounds();
+      target->width = bounds.right - bounds.left;
+      target->height = bounds.bottom - bounds.top;
       if (!target->alive()) {
         return {};
       }
@@ -192,10 +183,41 @@ namespace platf::window_capture {
 
   RECT target_t::bounds() const {
     RECT value {};
-    if (alive() && FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &value, sizeof(value)))) {
+    if (alive() && (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS, &value, sizeof(value))) || value.right <= value.left || value.bottom <= value.top)) {
       GetWindowRect(window, &value);
     }
     return value;
+  }
+
+  const std::wstring &target_t::marker_property() const {
+    return marker_name();
+  }
+
+  winrt::Windows::Graphics::Capture::GraphicsCaptureItem target_t::capture_item() {
+    std::lock_guard lock(item_mutex);
+    if (capture_context::is_system_process() || !alive()) {
+      winrt::throw_hresult(E_ACCESSDENIED);
+    }
+    if (!item) {
+      apartment();
+      const auto factory = winrt::get_activation_factory<winrt::Windows::Graphics::Capture::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+      winrt::check_hresult(factory->CreateForWindow(window, winrt::guid_of<winrt::Windows::Graphics::Capture::IGraphicsCaptureItem>(), winrt::put_abi(item)));
+      // Native HWND destruction removes the lifetime property. Recheck after activation.
+      if (!alive()) {
+        item = nullptr;
+        winrt::throw_hresult(HRESULT_FROM_WIN32(ERROR_INVALID_WINDOW_HANDLE));
+      }
+      const auto size = item.Size();
+      width = size.Width;
+      height = size.Height;
+      const auto weak = weak_from_this();
+      closed_event = item.Closed([weak](auto &&, auto &&) {
+        if (const auto live = weak.lock()) {
+          live->closed = true;
+        }
+      });
+    }
+    return item;
   }
 
   std::string target_t::state() const {
@@ -240,6 +262,16 @@ namespace platf::window_capture {
 
   bool supported() {
     try {
+      if (capture_context::is_system_process()) {
+        // WGC activation in SYSTEM crashes CaptureService on current Windows.
+        // Enumeration is Win32-only; the selected user worker does the WGC probe.
+        OSVERSIONINFOW version {};
+        version.dwOSVersionInfoSize = sizeof(version);
+        // GetVersion/VerifyVersionInfo can report Windows 8 without a compatibility manifest.
+        using query_version_t = LONG(WINAPI *)(OSVERSIONINFOW *);
+        const auto query = reinterpret_cast<query_version_t>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
+        return query && query(&version) == 0 && (version.dwMajorVersion > 10 || (version.dwMajorVersion == 10 && version.dwBuildNumber >= 18362)) && capture_context::backend().user();
+      }
       capture_context::scope_t user;
       apartment();
       return winrt::Windows::Graphics::Capture::GraphicsCaptureSession::IsSupported();
@@ -296,10 +328,11 @@ namespace platf::window_capture {
           continue;
         }
         row.state = target->state();
-        row.title = winrt::to_string(target->item.DisplayName());
-        const auto size = target->item.Size();
-        row.width = size.Width;
-        row.height = size.Height;
+        row.width = target->width;
+        row.height = target->height;
+        if (row.state == "ready" && (row.width <= 0 || row.height <= 0 || row.width > 16384 || row.height > 16384)) {
+          row.state = "unavailable";
+        }
         HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, target->process);
         if (process) {
           wchar_t path[4096] {};
@@ -382,6 +415,10 @@ namespace platf::window_capture {
   }
 #ifdef SUNSHINE_TESTS
   namespace testing {
+    target_ptr metadata(HWND window) {
+      return make_target(window);
+    }
+
     std::string advertise(const std::string &certificate) {
       const auto token = nonce();
       auto &catalog = registry();

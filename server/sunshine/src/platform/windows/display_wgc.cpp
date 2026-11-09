@@ -107,6 +107,14 @@ namespace platf::dxgi {
    * @return 0 on success, -1 on failure.
    */
   int wgc_capture_t::init(display_base_t *display, const ::video::config_t &config) {
+    if (display->window_broker) {
+      window_broker = display->window_broker;
+      window_target = display->window_target;
+      const auto size = window_broker->size();
+      window_size = {size.first, size.second};
+      display->capture_format = config.dynamicRange ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
+      return 0;
+    }
     HRESULT status;
     dxgi::dxgi_t dxgi;
     winrt::com_ptr<::IInspectable> d3d_comhandle;
@@ -136,7 +144,7 @@ namespace platf::dxgi {
 
     window_target = display->window_target;
     if (window_target) {
-      item = window_target->item;
+      item = window_target->capture_item();
       window_size = item.Size();
     } else {
       auto monitor_factory = winrt::get_activation_factory<winrt::GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
@@ -224,6 +232,9 @@ namespace platf::dxgi {
    */
   capture_e wgc_capture_t::next_frame(std::chrono::milliseconds timeout, ID3D11Texture2D **out, uint64_t &out_time) {
     *out = nullptr;
+    if (window_broker) {
+      return window_broker->next(timeout, out, out_time);
+    }
     try {
       capture_context::scope_t user;
       return next_frame_impl(timeout, out, out_time);
@@ -286,6 +297,9 @@ namespace platf::dxgi {
   }
 
   capture_e wgc_capture_t::release_frame() {
+    if (window_broker) {
+      return window_broker->release();
+    }
     capture_context::scope_t user;
     if (consumed_frame != nullptr) {
       consumed_frame.Close();
@@ -295,6 +309,9 @@ namespace platf::dxgi {
   }
 
   int wgc_capture_t::set_cursor_visible(bool x) {
+    if (window_broker) {
+      return window_broker->cursor(x);
+    }
     try {
       capture_context::scope_t user;
       if (capture_session.IsCursorCaptureEnabled() != x) {
