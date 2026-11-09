@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$SunshineDirectory,[string]$HostDirectory='',[string]$OutputDirectory='',[string]$EngineCommit='')
+param([Parameter(Mandatory)][string]$SunshineDirectory,[string]$HostDirectory='',[string]$OutputDirectory='',[string]$EngineCommit='',[string]$Version='0.2.23')
 $ErrorActionPreference='Stop';$repo=Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'server-package.ps1')
 if(-not$HostDirectory){$HostDirectory=Join-Path $repo 'dist/host'}
@@ -17,7 +17,7 @@ foreach($name in @('install-server.ps1','server-package.ps1','configure-network.
 $shim="@echo off`r`npowershell.exe -NoProfile -ExecutionPolicy Bypass -File `"%~dp0..\install-server.ps1`" -SourceDirectory `"%~dp0..`"`r`nexit /b %ERRORLEVEL%`r`n"
 [IO.File]::WriteAllText((Join-Path $out 'scripts/install-service.bat'),$shim,[Text.Encoding]::ASCII)
 $commit=(& git -C $repo rev-parse HEAD).Trim()
-$metadata=New-RHRPackageManifest $out $commit $EngineCommit
+$metadata=New-RHRPackageManifest $out $commit $EngineCommit $Version
 $null=Test-RHRPackage $out
 [pscustomobject]@{directory=$out;product=$metadata.product;files=$metadata.files.Count;commit=$commit;manifestSha256=(Get-FileHash -LiteralPath (Join-Path $out 'server-package.json')).Hash}
 try{& (Join-Path $PSScriptRoot 'clean-build-artifacts.ps1') -Apply -Protect @($out,$SunshineDirectory,$HostDirectory) | Out-Null}catch{Write-Warning ('Artifact retention deferred: '+$_.Exception.Message)}

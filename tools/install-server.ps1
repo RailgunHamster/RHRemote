@@ -3,7 +3,8 @@ param(
     [string]$InstallDirectory=(Join-Path $env:ProgramFiles 'Sunshine'),
     [string]$SunshineConfig='',
     [string]$RestoreBackup='',
-    [int]$VerifyTimeoutSec=60
+    [int]$VerifyTimeoutSec=60,
+    [switch]$EnableAutoUpdate
 )
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'server-package.ps1')
@@ -115,7 +116,12 @@ try{
         Copy-Item -LiteralPath (Join-Path $source 'server-package.json') -Destination $install -Force
     }
     Protect-Directory (Join-Path $install 'host');Protect-Directory $data
-    $null=Test-RHRPackage $install -AllowRuntimeFiles
+    # The staged package was hashed before stopping. Do not inspect the installed helper.
+    if($EnableAutoUpdate){
+        if(-not$package.version){throw 'This package does not include server update version metadata'}
+        $updateDirectory=Join-Path $data 'updates';Protect-Directory $updateDirectory
+        [IO.File]::WriteAllText((Join-Path $updateDirectory 'settings.json'),(@{schemaVersion=1;enabled=$true;preferredSource='cnb';checkIntervalMinutes=15}|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+    }
     [IO.File]::WriteAllText((Join-Path $data 'host-settings.json'),(@{sunshineConfig=$SunshineConfig}|ConvertTo-Json -Compress),[Text.UTF8Encoding]::new($false))
     if(-not(Test-Path -LiteralPath (Join-Path $data 'owned-monitor.json'))){
         $legacyPaths=@((Join-Path $env:SystemDrive 'RHRemoteTools\tablet-display\owned-monitor.json'),(Join-Path ([IO.Path]::GetPathRoot($source)) 'RHRemoteTools\tablet-display\owned-monitor.json'))|Select-Object -Unique

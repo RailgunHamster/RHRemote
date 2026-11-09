@@ -14,6 +14,12 @@ if($plan.version -notmatch $versionPattern -or $plan.tag -ne ('v'+$plan.version)
 if(([bool]$plan.preview) -ne [bool]$Preview){throw 'Preview requires both an explicit switch and a matching plan'}
 if($Preview -and $plan.commit -ne $Commit){throw 'Preview plan source commit differs from the audited source'}
 if($plan.commit -and $plan.commit -ne $Commit){throw 'Release plan source commit differs from the audited source'}
+if(-not$Preview-and-not$SourceOnly-and[version]$plan.version-ge[version]'0.2.23'){
+ . (Join-Path $PSScriptRoot 'server-update-signing.ps1')
+ $serverFeed=Test-RHRServerUpdateManifest -Manifest (Join-Path $candidate 'releases.server.win.json') -Signature (Join-Path $candidate 'releases.server.win.json.sig')
+ $serverAsset=@($plan.artifacts|Where-Object fileName -ceq $serverFeed.fileName)
+ if($serverFeed.releaseTag-cne$plan.tag-or$serverAsset.Count-ne1-or$serverAsset[0].size-ne$serverFeed.size-or$serverAsset[0].sha256-ine$serverFeed.sha256){throw 'Server feed differs from immutable publication plan'}
+}
 if($Preview -and ($Provider -ne 'github' -or $SourceOnly)){throw 'Preview publication currently supports GitHub release assets only'}
 if($Preview -and (@($plan.artifacts).Count -eq 0 -or @($plan.artifacts|Where-Object {$_.fileName -match '^releases\.' -or $_.fileName -eq 'RELEASES'}).Count -gt 0)){throw 'Preview must contain assets and cannot contain stable update feeds'}
 $tag=[string]$plan.tag;$tagRef='refs/tags/'+$tag;$releaseTitle='RHRemote '+$tag

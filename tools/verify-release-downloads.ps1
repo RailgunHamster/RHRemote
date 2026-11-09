@@ -34,7 +34,7 @@ try{
    }
    $results+=@{file=('stable/'+$entry.Name);result='PASS'}
   }
- }else{$feeds=@('releases.win.json','releases.android.json');if(@($plan.artifacts|Where-Object fileName -ceq 'releases.history.json').Count){$feeds+='releases.history.json'};foreach($feed in $feeds){
+ }else{$feeds=@('releases.win.json','releases.android.json');if(@($plan.artifacts|Where-Object fileName -ceq 'releases.history.json').Count){$feeds+='releases.history.json'};if(@($plan.artifacts|Where-Object fileName -ceq 'releases.server.win.json').Count){$feeds+=@('releases.server.win.json','releases.server.win.json.sig')};foreach($feed in $feeds){
   $url=if($Provider -eq 'github'){'https://github.com/RailgunHamster/RHRemote/releases/latest/download/'+$feed}else{'https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/'+$feed}
   $bytes=$client.GetByteArrayAsync($url).GetAwaiter().GetResult();$hash=[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-','').ToLowerInvariant()
   if($hash -ne ($plan.artifacts|Where-Object fileName -eq $feed).sha256){throw 'Latest feed differs from immutable version'}

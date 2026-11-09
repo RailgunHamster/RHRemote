@@ -188,6 +188,27 @@ public class RhSessionMenuTest {
         assertTrue(RhActions.dispatch("stream.shortcut.pin.set",RhActions.obj("shortcut","ctrl-c")).getBoolean("ok"));
         assertEquals(0,controls.state().getJSONArray("pinnedShortcuts").length());
     }
+    @Test public void localPointerModesSurviveConfigurationSyncBetweenSessionOwners()throws Exception{
+        for(String mode:new String[]{"clickScrollMode","scrollMode","off"}){
+            create(false);
+            controls.perform("stream.click-scroll.set",RhActions.obj("enabled",false));
+            controls.perform("stream.scroll.set",RhActions.obj("enabled",false));
+            if(!mode.equals("off"))controls.perform(mode.equals("clickScrollMode")?"stream.click-scroll.set":"stream.scroll.set",RhActions.obj("enabled",true));
+            org.json.JSONObject synced=RhShared.read(game);
+            controls.dispose();controls=null;
+            // Startup/automatic synchronization applies this document before the next connection.
+            RhShared.apply(game,new org.json.JSONObject(synced.toString()));
+            create(false);
+            org.json.JSONObject restored=controls.state();
+            assertEquals("Click-scroll changed after sync: "+mode,mode.equals("clickScrollMode"),restored.getBoolean("clickScrollMode"));
+            assertEquals("Scroll mode changed after sync: "+mode,mode.equals("scrollMode"),restored.getBoolean("scrollMode"));
+            toggle();
+            View root=game.findViewById(android.R.id.content);
+            assertEquals(mode.equals("clickScrollMode"),((Switch)root.findViewWithTag("stream.click-scroll.set")).isChecked());
+            assertEquals(mode.equals("scrollMode"),((Switch)root.findViewWithTag("stream.scroll.set")).isChecked());
+            controls.dispose();controls=null;
+        }
+    }
     @Test public void tabAndDirectionNavigationStayInsideLocalControlsAndEnterUsesTheirAction()throws Exception{
         create(false);toggle();assertTrue(button("操作").requestFocusFromTouch());
         press(KeyEvent.KEYCODE_TAB,0);assertTrue("Tab should focus the next category",button("屏幕").hasFocus());

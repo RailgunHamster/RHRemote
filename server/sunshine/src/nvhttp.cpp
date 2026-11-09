@@ -36,6 +36,7 @@
 #include "process.h"
 #include "rhremote_frame_trace.h"
 #include "rhremote_initial_display.h"
+#include "rhremote_server_update.h"
 #include "rhremote_window_capture.h"
 #ifdef _WIN32
   #include "platform/windows/window_capture.h"
@@ -1335,6 +1336,13 @@ namespace nvhttp {
     tree.put("root.PairStatus", pair_status);
     tree.put("root.currentgame", current_appid);
     tree.put("root.state", current_appid > 0 ? "SUNSHINE_SERVER_BUSY" : "SUNSHINE_SERVER_FREE");
+    const auto update = rhremote::server_update::gate().snapshot(rhremote::server_update::held);
+    tree.put("root.RHUpdateCoordinated", 1);
+    tree.put("root.RHUpdateHeld", update.held ? 1 : 0);
+    tree.put("root.RHUpdatePreparing", update.preparing);
+    tree.put("root.RHUpdateQuietMs", update.quiet_ms);
+    tree.put("root.RHUpdateSessions", rtsp_stream::session_count());
+    tree.put("root.RHUpdateLaunchPending", rtsp_stream::launch_pending() ? 1 : 0);
 
     std::ostringstream data;
 
@@ -1847,6 +1855,11 @@ namespace nvhttp {
       return;
     }
     const bool global_cancel = request->path == "/cancel";
+    auto update_lease = global_cancel ? std::shared_ptr<rhremote::update_gate::lease_t> {} : rhremote::server_update::gate().begin(rhremote::server_update::held);
+    if (!global_cancel && !update_lease) {
+      write_launch_result(response, launch_error(503, "Host update is being installed; retry shortly"));
+      return;
+    }
     pt::ptree error;
     auto admission = global_cancel ? rhremote::launch_admission {rhremote::launch_result::accepted, {}} : admit_launch(request->parse_query_string(), *peer, error);
     if (admission.result != rhremote::launch_result::accepted) {
@@ -1854,7 +1867,7 @@ namespace nvhttp {
       return;
     }
     const auto ownership = admission.ticket;
-    if (!worker.submit([&host_audio, response, request, peer = std::move(*peer), ownership, global_cancel] {
+    if (!worker.submit([&host_audio, response, request, peer = std::move(*peer), ownership, global_cancel, update_lease = std::move(update_lease)] {
           bool authorized;
           {
             std::lock_guard lock {client_auth_mutex()};

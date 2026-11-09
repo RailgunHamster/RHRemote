@@ -5608,14 +5608,17 @@ dependencies = [
  "libc",
  "rcgen",
  "rhremote-transport",
+ "ring",
  "rustls",
  "rustls-pemfile",
+ "semver",
  "serde",
  "serde_json",
  "tokio",
  "ureq 2.12.1",
  "url",
  "windows",
+ "zip",
 ]
 
 [[package]]
@@ -5648,7 +5651,7 @@ dependencies = [
 
 [[package]]
 name = "rhremote-ui"
-version = "0.2.22"
+version = "0.2.23"
 dependencies = [
  "base64 0.22.1",
  "embed-resource",

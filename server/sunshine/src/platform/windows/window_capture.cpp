@@ -4,6 +4,8 @@
  */
 #include "window_capture.h"
 
+#include "capture_context.h"
+
 #include <chrono>
 #include <cstring>
 #include <dwmapi.h>
@@ -174,6 +176,7 @@ namespace platf::window_capture {
   target_t::~target_t() {
     if (item && closed_event.value) {
       try {
+        capture_context::scope_t user;
         item.Closed(closed_event);
       } catch (...) {}
     }
@@ -237,6 +240,7 @@ namespace platf::window_capture {
 
   bool supported() {
     try {
+      capture_context::scope_t user;
       apartment();
       return winrt::Windows::Graphics::Capture::GraphicsCaptureSession::IsSupported();
     } catch (...) {
@@ -246,6 +250,7 @@ namespace platf::window_capture {
 
   bool secondary_windows_supported() {
     try {
+      capture_context::scope_t user;
       apartment();
       return winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IncludeSecondaryWindows");
     } catch (...) {
@@ -258,6 +263,7 @@ namespace platf::window_capture {
     if (certificate.empty() || !supported()) {
       return rows;
     }
+    capture_context::scope_t user;
     expire();
     std::vector<HWND> handles;
     EnumWindows([](HWND window, LPARAM context) -> BOOL {

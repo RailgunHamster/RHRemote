@@ -7,6 +7,7 @@ on:
       - 'server/UPSTREAM.json'
       - 'server/ffmpeg/**'
       - 'server/crates/**'
+      - 'server/update-keys/**'
       - 'server/host/**'
       - '.gitmodules'
       - 'tools/build-server.ps1'

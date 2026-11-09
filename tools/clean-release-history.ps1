@@ -60,7 +60,9 @@ try{
  $latest=Request GET '/releases/latest';$plan=Get-RHRemoteReleaseRetentionPlan $releases $policy $latest.tag_name
  $releases|ConvertTo-Json -Depth 60|Set-Content -LiteralPath (Join-Path $reportRoot 'releases-before.json') -Encoding utf8
  $plan|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $reportRoot 'plan.json') -Encoding utf8
- $feeds=@{};foreach($name in @('releases.win.json','releases.android.json','releases.history.json')){$feeds[$name]=AnonymousHash "$public/releases/latest/download/$name"}
+ $feedNames=@('releases.win.json','releases.android.json','releases.history.json')
+ if([version]($latest.tag_name -replace '^v','')-ge[version]'0.2.23'){$feedNames+=@('releases.server.win.json','releases.server.win.json.sig')}
+ $feeds=@{};foreach($name in $feedNames){$feeds[$name]=AnonymousHash "$public/releases/latest/download/$name"}
  $linux=AnonymousHash "$public/releases/download/v0.2.15/packages.linux.json"
  if($Apply){foreach($entry in $plan.remove){
    $stage="delete $($entry.tag)"

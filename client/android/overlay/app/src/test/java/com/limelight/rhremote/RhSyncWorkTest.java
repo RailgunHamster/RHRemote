@@ -30,6 +30,23 @@ public class RhSyncWorkTest {
         Network.result=RhActions.obj("conflicts",new JSONArray().put("deviceOrder"));Network.captured=null;Network.failure=null;Network.runs=0;
     }
     void complete(){queued.remove(0).run();Shadows.shadowOf(Looper.getMainLooper()).idle();}
+    @Test public void automaticSyncKeepsLocalOnlyPointerModesAndDoesNotUploadThem()throws Exception{
+        android.content.SharedPreferences prefs=activity.getSharedPreferences("rhremote.global",0);
+        for(int mode:new int[]{0,1,2}){
+            boolean click=mode==1,scroll=mode==2;
+            assertTrue(prefs.edit().putBoolean("session.clickScrollMode",click).putBoolean("session.scrollMode",scroll).commit());
+            JSONObject shared=RhShared.read(activity);
+            Network.result=RhActions.obj("shared",new JSONObject(shared.toString()),"conflicts",new JSONArray());
+            work.start(shared,"review",true,queued::add);complete();
+            assertEquals("completed",work.phase());assertFalse(work.busy());
+            assertTrue("Sync deleted local click-scroll preference",prefs.contains("session.clickScrollMode"));
+            assertTrue("Sync deleted local scroll preference",prefs.contains("session.scrollMode"));
+            assertEquals(click,prefs.getBoolean("session.clickScrollMode",!click));
+            assertEquals(scroll,prefs.getBoolean("session.scrollMode",!scroll));
+            assertFalse(Network.captured.toString().contains("clickScrollMode"));
+            assertFalse(Network.captured.toString().contains("scrollMode"));
+        }
+    }
     @Test public void syncSummaryCannotPresentAnOldSuccessAsTheCurrentOutcome()throws Exception{
         JSONObject state=RhActions.obj("hasPassword",true,"lastSyncMs",42,"automaticBlocked",true,"conflicts",new JSONArray());
         assertEquals("上次同步结果待确认 · 自动同步已暂停",RhHome.syncSummary(state,false,"结果未确认"));

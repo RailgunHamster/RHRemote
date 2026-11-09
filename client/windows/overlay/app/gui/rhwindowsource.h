@@ -32,7 +32,7 @@ inline QJsonObject parse(const QString& input){
         }
     }
     if(xml.hasError()||!root)return failure("无效窗口列表");
-    if(!supported)return failure("请先更新 RHRemote-Sunshine，主机尚未支持窗口串流");
+    if(!supported)return failure("主机当前无法启用窗口捕获，请检查主机服务的运行方式");
     return {{"ok",true},{"result",QJsonObject{{"supported",true},{"secondaryWindows",false},{"windows",rows}}}};
 }
 }

@@ -3,6 +3,7 @@ mod auth;
 mod http_response;
 mod network;
 mod transport;
+mod updates;
 #[cfg(windows)]
 mod console;
 mod displays;
@@ -209,6 +210,14 @@ fn run_with_ready(on_ready: impl FnOnce()) -> Result<(), Box<dyn std::error::Err
     let active = Arc::new(AtomicUsize::new(0));
     listener.set_nonblocking(true)?;
     on_ready();
+    #[cfg(windows)]
+    let _updates = if service::unified() {
+        let install = options.sunshine.as_ref().and_then(|v| v.parent()).ok_or("Server installation unavailable")?;
+        match updates::windows::start_manager(install.to_owned(), config.clone()) {
+            Ok(manager) => Some(manager),
+            Err(error) => { supervisor::log("update_start_error", error); None }
+        }
+    } else { None };
     loop {
         #[cfg(target_os="linux")]
         {if engine.stopping(){break;}engine.check()?;}
@@ -274,6 +283,11 @@ fn main() {
     #[cfg(windows)]
     {
         let args: Vec<_> = std::env::args_os().collect();
+        if args.get(1).is_some_and(|v| v == "--apply-update") && args.len() == 3 {
+            let result = args[2].to_str().ok_or("Invalid update ID".to_string()).and_then(updates::windows::apply_update);
+            if let Err(error) = result { supervisor::log("update_worker_error", error); std::process::exit(1); }
+            return;
+        }
         if args.get(1).is_some_and(|v| v == "--terminate-sunshine") && args.len() == 3 {
             let result = args[2]
                 .to_str()

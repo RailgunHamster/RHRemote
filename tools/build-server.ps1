@@ -52,7 +52,7 @@ try {
     Copy-Item -LiteralPath server/UPSTREAM.json,server/sunshine/LICENSE -Destination $stage -Force
     & (Join-Path $PSScriptRoot 'build-host.ps1') -Release
     if($LASTEXITCODE-ne0){throw 'Unified Rust service build failed'}
-    & (Join-Path $PSScriptRoot 'assemble-server.ps1') -SunshineDirectory $stage -OutputDirectory $OutputDirectory -EngineCommit $env:COMMIT
+    & (Join-Path $PSScriptRoot 'assemble-server.ps1') -SunshineDirectory $stage -OutputDirectory $OutputDirectory -EngineCommit $env:COMMIT -Version $Version
     Get-FileHash -LiteralPath (Join-Path $OutputDirectory 'sunshine.exe') -Algorithm SHA256 | Select-Object Path,Hash
 } finally {
     foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}

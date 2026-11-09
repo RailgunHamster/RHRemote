@@ -13,6 +13,8 @@ int main(int argc,char** argv){
     auto parsed=RhWindowSource::parse(xml(row(source)+row("","permission_denied","0")));
     require(parsed["ok"].toBool());auto rows=parsed["result"].toObject()["windows"].toArray();require(rows.size()==2);require(rows[0].toObject()["title"].toString()=="A & B");require(rows[0].toObject()["available"].toBool());require(!rows[1].toObject()["available"].toBool());
     for(const auto& bad:QStringList{"",xml(row(source)+row(source)),xml(row(source,"ready","-1")),xml(row("0x123")),"<root status_code=\"401\"/>","<root status_code=\"200\"><supported>0</supported></root>",xml("<Window>")})require(!RhWindowSource::parse(bad)["ok"].toBool());
+    const auto unavailable=RhWindowSource::parse("<root status_code=\"200\"><supported>0</supported></root>")["error"].toString();
+    require(unavailable.contains("窗口捕获")&&!unavailable.contains("更新"));
     for(const auto& bad:QStringList{source.toUpper(),source+"0","rhrwindow:١١١١١١١١١١١١١١١١١١١١١١١١١١١١١١١١"})require(!RhWindowSource::valid(bad));
     require(RhDisplayLaunch::valid(source));require(RhDisplayLaunch::query(source).contains("rhrwindow%3A"));
     require(RhDisplayLaunch::acknowledge(source,source)==RhDisplayLaunch::Reply::Selected);

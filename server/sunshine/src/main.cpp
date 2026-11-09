@@ -30,6 +30,9 @@
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
+#ifdef _WIN32
+  #include "platform/windows/capture_context.h"
+#endif
 
 using namespace std::literals;
 
@@ -164,6 +167,11 @@ void mainThreadLoop(const std::shared_ptr<safe::event_t<bool>> &shutdown_event) 
  * @return Process or platform callback exit code.
  */
 int main(int argc, char *argv[]) {
+#ifdef _WIN32
+  // WGC binds to the user's CaptureService. Set process security before the
+  // first COM activation; only capture scopes temporarily impersonate that user.
+  platf::capture_context::process_security_t capture_security;
+#endif
 #ifdef __APPLE__
   // Bundle assets are referenced relative to the executable
   // (e.g. ../Resources/assets), so anchor cwd to Contents/MacOS.

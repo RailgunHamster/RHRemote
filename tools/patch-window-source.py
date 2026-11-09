@@ -19,7 +19,7 @@ def android(root):
                 if(managerBinder==null)throw new IOException("连接管理器尚未准备好");
                 NvHTTP http=new NvHTTP(ServerHelper.getCurrentAddressFromComputer(d),d.httpsPort,managerBinder.getUniqueId(),d.serverCert,PlatformBinding.getCryptoProvider(PcView.this),true);
                 try(com.limelight.rhremote.RhAdmission.Watch watch=operation.watch(http::cancelRhRequests)){
-                    return com.limelight.rhremote.RhWindows.parse(http.getRhWindowsRaw());
+                    return com.limelight.rhremote.RhWindows.read(http::getRhWindowsRaw);
                 }
             }
             public Runnable prepareWindowConnect(ComputerDetails d,com.limelight.rhremote.RhAdmission operation,org.json.JSONObject window)throws Exception {

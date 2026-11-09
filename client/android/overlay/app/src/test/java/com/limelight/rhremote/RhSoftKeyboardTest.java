@@ -18,10 +18,12 @@ import static org.junit.Assert.*;
 @LooperMode(LooperMode.Mode.PAUSED)
 public class RhSoftKeyboardTest {
     static final class Backend implements RhSoftKeyboard.Backend {
-        Boolean visible=false;boolean reject,settled=true;
+        Boolean visible=false;boolean reject,settled=true;Runnable changed;
         final List<Boolean> requests=new ArrayList<>();
         public Boolean visible(){return visible;}
         public boolean settled(){return settled;}
+        public void setChanged(Runnable changed){this.changed=changed;}
+        void observe(Boolean value){visible=value;if(changed!=null)changed.run();}
         public void request(boolean show){requests.add(show);if(reject)throw new IllegalStateException("internal framework detail");}
     }
     private RhSoftKeyboard keyboard(RhSoftKeyboard.Backend backend){return new RhSoftKeyboard(backend,new Handler(Looper.getMainLooper()));}
@@ -36,6 +38,42 @@ public class RhSoftKeyboardTest {
         Backend backend=new Backend();RhSoftKeyboard keyboard=keyboard(backend);List<String> completed=new ArrayList<>();
         keyboard.request(true,(visible,error)->completed.add("old"));keyboard.request(false,(visible,error)->completed.add("hide:"+visible));advance(3000);
         assertEquals(Arrays.asList(true,false),backend.requests);assertEquals(Collections.singletonList("hide:false"),completed);assertFalse(keyboard.pending());assertFalse(keyboard.visible());
+    }
+    @Test public void dismissingFromTheImeRefreshesControlsAndTheNextToggleCanShowAgain(){
+        Backend backend=new Backend();RhSoftKeyboard keyboard=keyboard(backend);List<Boolean> changes=new ArrayList<>(),completed=new ArrayList<>();
+        keyboard.setChanged(()->changes.add(keyboard.visible()));
+        keyboard.request(true,(visible,error)->completed.add(visible));backend.observe(true);advance(0);
+        assertEquals(Collections.singletonList(true),completed);assertFalse(keyboard.pending());
+        // The user hides the IME itself; no application action or state read occurs.
+        backend.observe(false);advance(0);
+        assertEquals(Collections.singletonList(false),changes);assertFalse(keyboard.target());assertFalse(keyboard.visible());
+        assertEquals("Observing dismissal must not send another hide request",Collections.singletonList(true),backend.requests);
+        backend.observe(false);backend.observe(null);advance(0);assertEquals(1,changes.size());
+        keyboard.request(!keyboard.visible(),(visible,error)->completed.add(visible));backend.observe(true);advance(0);
+        assertEquals(Arrays.asList(true,true),backend.requests);assertEquals(Arrays.asList(true,true),completed);assertTrue(keyboard.visible());keyboard.dispose();
+    }
+    @Test public void disposalUnsubscribesAndCancelsAnExternalVisibilityNotification(){
+        Backend backend=new Backend();RhSoftKeyboard keyboard=keyboard(backend);keyboard.setChanged(()->fail("Disposed UI must not refresh"));
+        Runnable stale=backend.changed;backend.observe(true);keyboard.dispose();stale.run();advance(0);
+        assertNull(backend.changed);assertFalse(keyboard.visible());assertTrue(backend.requests.isEmpty());
+    }
+    @Test @Config(sdk=35) public void systemInsetsKeepTheOuterMobileKeyboardButtonInSyncWithoutAnAppAction(){
+        android.app.Activity activity=Robolectric.buildActivity(android.app.Activity.class).setup().get();activity.setTheme(com.limelight.R.style.RhTheme);
+        android.widget.FrameLayout root=new android.widget.FrameLayout(activity);android.view.View surface=new android.view.View(activity);root.addView(surface);activity.setContentView(root);
+        activity.getSharedPreferences("rhremote.global",0).edit().remove("hideKeyboardButton").commit();
+        RhFloatingKeyboard floating=new RhFloatingKeyboard(activity,root,(id,args)->fail("No UI action needed for an external IME change"));
+        RhSoftKeyboard keyboard=keyboard(new RhSoftKeyboard.WindowBackend(activity.getWindow(),surface));keyboard.setChanged(()->floating.update(true,false,keyboard.visible()));floating.update(true,false,keyboard.visible());
+        advance(0);
+        android.widget.Button button=root.findViewWithTag("floating-ime-toggle");assertEquals("手机键盘",button.getText().toString());
+        int[] parentCalls={0};androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root,(view,insets)->{parentCalls[0]++;return insets;});
+        try{
+            for(boolean shown:new boolean[]{true,false,true,false}){
+                androidx.core.view.WindowInsetsCompat insets=new androidx.core.view.WindowInsetsCompat.Builder().setInsets(androidx.core.view.WindowInsetsCompat.Type.ime(),androidx.core.graphics.Insets.of(0,0,0,shown?320:0)).setVisible(androidx.core.view.WindowInsetsCompat.Type.ime(),shown).build();
+                androidx.core.view.ViewCompat.dispatchApplyWindowInsets(root,insets);assertEquals("Dispatched system visibility",shown,keyboard.visible());advance(0);
+                assertEquals(shown?"收起键盘":"手机键盘",button.getText().toString());assertEquals(shown?"关闭手机键盘":"打开手机键盘",button.getContentDescription().toString());assertEquals(shown,button.isSelected());assertEquals(shown,keyboard.target());assertFalse(keyboard.pending());
+            }
+            assertEquals("Keep the owner's inset listener",4,parentCalls[0]);
+        }finally{keyboard.dispose();floating.dispose();activity.finish();}
     }
     @Test public void failedShowReportsAVisibleErrorAndCanBeRetried(){
         Backend backend=new Backend();RhSoftKeyboard keyboard=keyboard(backend);List<String> completed=new ArrayList<>();

@@ -49,6 +49,7 @@
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "process.h"
+#include "rhremote_server_update.h"
 #include "rtsp.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -1969,6 +1970,94 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
+  /** @brief Atomically publish a small SYSTEM-owned updater document. @param name Fixed file name. @param value Validated document. */
+  void write_server_update(const std::string &name, const nlohmann::json &value) {
+#ifdef _WIN32
+    const auto directory = rhremote::server_update::root();
+    if (!fs::exists(directory / "ready.json")) {
+      throw std::runtime_error("Unified server updater is unavailable");
+    }
+    const auto target = directory / name;
+    const auto temporary = directory / (uuid_util::uuid_t::generate().string() + ".tmp");
+    {
+      std::ofstream output(temporary, std::ios::binary);
+      output.exceptions(std::ios::failbit | std::ios::badbit);
+      output << value.dump(2);
+      output.flush();
+    }
+    if (!MoveFileExW(temporary.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+      fs::remove(temporary);
+      throw std::runtime_error("Cannot save server update state");
+    }
+#else
+    throw std::runtime_error("Automatic server updates currently require Windows");
+#endif
+  }
+
+  /** @brief Read authenticated server update settings/state. @param response Response. @param request Admin request. */
+  void getServerUpdate(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+    try {
+      const auto directory = rhremote::server_update::root();
+      nlohmann::json output {{"supported", !directory.empty() && fs::exists(directory / "ready.json")}};
+      output["settings"] = {{"schemaVersion", 1}, {"enabled", false}, {"preferredSource", "cnb"}, {"checkIntervalMinutes", 15}};
+      if (output["supported"].get<bool>()) {
+        if (fs::exists(directory / "settings.json")) {
+          output["settings"] = rhremote::server_update::settings(rhremote::server_update::read(directory / "settings.json"));
+        }
+        if (fs::exists(directory / "status.json")) {
+          output["status"] = rhremote::server_update::read(directory / "status.json");
+        }
+        output["ready"] = rhremote::server_update::read(directory / "ready.json");
+      }
+      send_response(response, output);
+    } catch (const std::exception &e) {
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /** @brief Save bounded updater settings without changing streaming options. @param response Response. @param request Admin request. */
+  void saveServerUpdate(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json") || !authenticate(response, request) || !validate_csrf_token(response, request, get_client_id(request))) {
+      return;
+    }
+    try {
+      const auto text = request->content.string();
+      if (text.size() > 4096) {
+        throw std::runtime_error("Update settings exceed limit");
+      }
+      const auto value = rhremote::server_update::settings(nlohmann::json::parse(text));
+      write_server_update("settings.json", value);
+      send_response(response, {{"status", true}});
+    } catch (const std::exception &e) {
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /** @brief Queue one check or idle installation; no request can force a busy restart. @param response Response. @param request Admin request. */
+  void requestServerUpdate(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json") || !authenticate(response, request) || !validate_csrf_token(response, request, get_client_id(request))) {
+      return;
+    }
+    try {
+      const auto text = request->content.string();
+      if (text.size() > 128) {
+        throw std::runtime_error("Update request exceeds limit");
+      }
+      const auto value = nlohmann::json::parse(text);
+      const auto action = value.at("action").get<std::string>();
+      if (value.size() != 1 || (action != "check" && action != "install")) {
+        throw std::runtime_error("Unknown server update action");
+      }
+      write_server_update("request.json", value);
+      send_response(response, {{"status", true}, {"queued", true}});
+    } catch (const std::exception &e) {
+      bad_request(response, request, e.what());
+    }
+  }
+
   /**
    * @brief Get the current libvirtualhid machine license status.
    *
@@ -2289,6 +2378,9 @@ namespace confighttp {
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
+    server.resource["^/api/rhremote/updates$"]["GET"] = getServerUpdate;
+    server.resource["^/api/rhremote/updates$"]["POST"] = saveServerUpdate;
+    server.resource["^/api/rhremote/updates/action$"]["POST"] = requestServerUpdate;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
     server.resource["^/api/covers/([0-9]+)$"]["GET"] = getCover;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;

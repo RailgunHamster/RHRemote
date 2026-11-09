@@ -277,7 +277,9 @@ public final class RhShared {
         recordMembership(c,before,shared);
         // No foreign group is applied to this client's active preferences.
         write(file(c),shared);theme(c,shared.getBoolean("dark"));
-        c.getSharedPreferences("rhremote.global",0).edit().remove("session.trackpad").remove("session.scrollMode").remove("session.clickScrollMode").remove("session.showStats").remove("session.audioEnabled").remove("session.volume").apply();
+        // Wheel/touch gesture modes are local-only and have no synchronized profile fallback.
+        // Keep them when applying sync, including the automatic sync after app startup.
+        c.getSharedPreferences("rhremote.global",0).edit().remove("session.trackpad").remove("session.showStats").remove("session.audioEnabled").remove("session.volume").apply();
     }
     public static String canonical(Object value)throws JSONException {
         if(value instanceof JSONObject){JSONObject o=(JSONObject)value;TreeMap<String,String> keys=new TreeMap<>();for(Iterator<String> it=o.keys();it.hasNext();){String k=it.next();keys.put(k,canonical(o.get(k)));}StringBuilder out=new StringBuilder("{");for(Map.Entry<String,String> e:keys.entrySet())out.append(JSONObject.quote(e.getKey())).append(':').append(e.getValue()).append(',');return out.append('}').toString();}

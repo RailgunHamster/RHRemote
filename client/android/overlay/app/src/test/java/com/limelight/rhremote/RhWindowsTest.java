@@ -17,6 +17,20 @@ public class RhWindowsTest {
         assertEquals(2,rows.length());assertEquals("A & B",rows.getJSONObject(0).getString("title"));assertTrue(rows.getJSONObject(0).getBoolean("available"));assertFalse(rows.getJSONObject(1).getBoolean("available"));
     }
     @Test public void canonicalOpaqueSourcesOnly(){assertTrue(RhWindows.valid(SOURCE));for(String value:new String[]{"0x12345",SOURCE+"0",SOURCE.toUpperCase(),"\\\\.\\DISPLAY1","rhrwindow:١١١١١١١١١١١١١١١١١١١١١١١١١١١١١١١١"})assertFalse(value,RhWindows.valid(value));}
+    @Test public void legacyHttp404ExplainsThatTheHostEngineNeedsUpdating()throws Exception{
+        java.io.IOException failure=assertThrows(java.io.IOException.class,()->RhWindows.read(()->{throw new java.io.FileNotFoundException("private transport address");}));
+        assertTrue(failure.getMessage().contains("RHRemote-Sunshine"));assertTrue(failure.getMessage().contains("更新"));assertFalse(failure.getMessage().contains("private transport address"));
+        assertTrue(RhWindows.read(()->list(row(SOURCE,"ready","1200"))).getBoolean("supported"));
+    }
+    @Test public void missingEndpointHandlingDoesNotReplaceAuthenticationOrCancellationErrors(){
+        java.io.IOException auth=new java.io.IOException("paired certificate rejected"),cancel=new java.io.IOException("cancelled");
+        assertSame(auth,assertThrows(java.io.IOException.class,()->RhWindows.read(()->{throw auth;})));
+        assertSame(cancel,assertThrows(java.io.IOException.class,()->RhWindows.read(()->{throw cancel;})));
+    }
+    @Test public void anExistingEndpointWithUnavailableCaptureDoesNotPretendTheHostWasNotUpdated(){
+        java.io.IOException failure=assertThrows(java.io.IOException.class,()->RhWindows.parse("<root status_code=\"200\"><supported>0</supported></root>"));
+        assertTrue(failure.getMessage().contains("窗口捕获"));assertFalse(failure.getMessage().contains("更新"));
+    }
     @Test public void malformedResponsesDoNotBecomeDesktopSelection(){
         for(String xml:new String[]{"", "<root status_code=\"401\"/>","<root status_code=\"200\"><supported>0</supported></root>",list(row("0x123","ready","1200")),list(row(SOURCE,"ready","0")),list(row(SOURCE,"ready","20000")),list(row(SOURCE,"ready","1200")+row(SOURCE,"ready","1200")),list("<Window>")})assertThrows(Exception.class,()->RhWindows.parse(xml));
     }

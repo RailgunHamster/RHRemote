@@ -16,7 +16,7 @@ import com.limelight.R;
 
 /** One session's explicit IME request, confirmed by the window's observed insets. */
 final class RhSoftKeyboard {
-    interface Backend { Boolean visible(); void request(boolean show); default boolean settled(){return true;} default void dispose(){} }
+    interface Backend { Boolean visible(); void request(boolean show); default boolean settled(){return true;} default void setChanged(Runnable changed){} default void dispose(){} }
     interface Completion { void done(boolean visible,String error); }
     private final Backend backend;
     private final Handler handler;
@@ -26,6 +26,9 @@ final class RhSoftKeyboard {
     private boolean disposed,pending,target,lastVisible,ownsShow;
     private String error="";
     private Boolean lastObserved;
+    private Runnable changed;
+    private boolean reportedVisible;
+    private final Runnable observationChanged=this::observeChange;
 
     RhSoftKeyboard(Game game){this(new WindowBackend(game.getWindow(),game.findViewById(R.id.surfaceView)),new Handler(Looper.getMainLooper()));}
     /** Own the posted show: AndroidX 1.16 otherwise posts a second, uncancellable IME show. */
@@ -35,16 +38,20 @@ final class RhSoftKeyboard {
         private final int originalAdjustMode;
         private final int ownedAdjustMode=android.os.Build.VERSION.SDK_INT>=30?WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING:WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE;
         private Runnable showRequest;
+        private Runnable changed;
+        private Boolean insetVisible;
         private long requestGeneration;
         private final java.util.Set<WindowInsetsAnimationCompat> animations=new java.util.HashSet<>();
-        WindowBackend(Window window,View surface){this.window=window;this.surface=surface;originalAdjustMode=window.getAttributes().softInputMode&WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST;if(surface!=null)ViewCompat.setWindowInsetsAnimationCallback(surface,new WindowInsetsAnimationCompat.Callback(WindowInsetsAnimationCompat.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE){
+        WindowBackend(Window window,View surface){this.window=window;this.surface=surface;originalAdjustMode=window.getAttributes().softInputMode&WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST;if(surface!=null){ViewCompat.setOnApplyWindowInsetsListener(surface,(view,insets)->{observe(insets);return insets;});ViewCompat.setWindowInsetsAnimationCallback(surface,new WindowInsetsAnimationCompat.Callback(WindowInsetsAnimationCompat.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE){
             @Override public void onPrepare(WindowInsetsAnimationCompat animation){if((animation.getTypeMask()&WindowInsetsCompat.Type.ime())!=0)animations.add(animation);}
-            @Override public WindowInsetsCompat onProgress(WindowInsetsCompat insets,java.util.List<WindowInsetsAnimationCompat> running){return insets;}
-            @Override public void onEnd(WindowInsetsAnimationCompat animation){animations.remove(animation);}
-        });}
-        public Boolean visible(){WindowInsetsCompat insets=ViewCompat.getRootWindowInsets(window.getDecorView());return insets==null?null:insets.isVisible(WindowInsetsCompat.Type.ime());}
+            @Override public WindowInsetsCompat onProgress(WindowInsetsCompat insets,java.util.List<WindowInsetsAnimationCompat> running){observe(insets);return insets;}
+            @Override public void onEnd(WindowInsetsAnimationCompat animation){animations.remove(animation);if(changed!=null)changed.run();}
+        });}}
+        private void observe(WindowInsetsCompat insets){insetVisible=insets.isVisible(WindowInsetsCompat.Type.ime());if(changed!=null)changed.run();}
+        public void setChanged(Runnable changed){this.changed=changed;}
+        public Boolean visible(){if(insetVisible!=null)return insetVisible;WindowInsetsCompat insets=ViewCompat.getRootWindowInsets(window.getDecorView());return insets==null?null:insets.isVisible(WindowInsetsCompat.Type.ime());}
         public boolean settled(){return showRequest==null&&animations.isEmpty();}
-        public void dispose(){requestGeneration++;if(surface!=null){if(showRequest!=null){surface.removeCallbacks(showRequest);showRequest=null;}ViewCompat.setWindowInsetsAnimationCallback(surface,null);}animations.clear();int mode=window.getAttributes().softInputMode;if((mode&WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)==ownedAdjustMode)window.setSoftInputMode((mode&~WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)|originalAdjustMode);}
+        public void dispose(){requestGeneration++;changed=null;if(surface!=null){if(showRequest!=null){surface.removeCallbacks(showRequest);showRequest=null;}ViewCompat.setOnApplyWindowInsetsListener(surface,null);ViewCompat.setWindowInsetsAnimationCallback(surface,null);}animations.clear();int mode=window.getAttributes().softInputMode;if((mode&WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)==ownedAdjustMode)window.setSoftInputMode((mode&~WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)|originalAdjustMode);}
         public void request(boolean show){
             if(surface==null)throw new IllegalStateException("stream view unavailable");
             long ticket=++requestGeneration;
@@ -63,7 +70,16 @@ final class RhSoftKeyboard {
             surface.post(showRequest);
         }
     }
-    RhSoftKeyboard(Backend backend,Handler handler){this.backend=backend;this.handler=handler;}
+    RhSoftKeyboard(Backend backend,Handler handler){this.backend=backend;this.handler=handler;Boolean initial=observed();if(initial!=null){lastVisible=initial;target=initial;reportedVisible=initial;}backend.setChanged(()->{if(!disposed){handler.removeCallbacks(observationChanged);handler.post(observationChanged);}});}
+    void setChanged(Runnable changed){this.changed=changed;}
+    /** External IME dismissal must refresh the controls even when no request is pending. */
+    private void observeChange(){
+        if(disposed)return;
+        if(pending){if(check!=null){handler.removeCallbacks(check);handler.post(check);}return;}
+        Boolean value=observed();if(value==null)return;
+        lastVisible=value;target=value;if(!value)ownsShow=false;
+        if(reportedVisible!=value){reportedVisible=value;error="";if(changed!=null)changed.run();}
+    }
     private Boolean observed(){try{return backend.visible();}catch(RuntimeException unavailable){return null;}}
     boolean visible(){if(disposed)return false;Boolean value=observed();if(value!=null)lastVisible=value;return lastVisible;}
     boolean pending(){return pending;}
@@ -86,11 +102,11 @@ final class RhSoftKeyboard {
         if(deadline){cancelUnconfirmedShow();finish(lastVisible,target?"键盘未打开":"键盘未关闭");return;}
         handler.postDelayed(check,50);
     }
-    private void finish(boolean visible,String failure){RhStatistics.event("ime_request_end",-1,RhActions.obj("request",generation,"visible",visible,"error",failure,"elapsedMs",SystemClock.uptimeMillis()-started));pending=false;error=failure;cancelCheck();Completion done=completion;completion=null;if(done!=null)done.done(visible,failure);}
+    private void finish(boolean visible,String failure){RhStatistics.event("ime_request_end",-1,RhActions.obj("request",generation,"visible",visible,"error",failure,"elapsedMs",SystemClock.uptimeMillis()-started));pending=false;target=visible;reportedVisible=visible;error=failure;cancelCheck();Completion done=completion;completion=null;if(done!=null)done.done(visible,failure);}
     private void cancelCheck(){if(check!=null){handler.removeCallbacks(check);check=null;}}
     private void cancelUnconfirmedShow(){if(target)try{backend.request(false);}catch(RuntimeException unavailable){/* Best-effort cancellation belongs to the same window. */}}
     void dispose(){
-        if(disposed)return;boolean hide=ownsShow;disposed=true;pending=false;generation++;completion=null;cancelCheck();
+        if(disposed)return;boolean hide=ownsShow;disposed=true;pending=false;generation++;completion=null;changed=null;cancelCheck();handler.removeCallbacks(observationChanged);backend.setChanged(null);
         if(hide)try{backend.request(false);}catch(RuntimeException unavailable){/* The owner window may already be detached. */}
         backend.dispose();
     }

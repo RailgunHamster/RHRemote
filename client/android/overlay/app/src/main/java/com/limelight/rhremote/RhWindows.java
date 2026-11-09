@@ -2,6 +2,7 @@ package com.limelight.rhremote;
 
 import android.util.Xml;
 import java.io.IOException;
+import java.io.FileNotFoundException;
 import java.io.StringReader;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -11,6 +12,12 @@ import org.xmlpull.v1.XmlPullParser;
 public final class RhWindows {
     public static final String EXTRA="rhremote.window";
     private RhWindows(){}
+    public interface Request { String get()throws Exception; }
+    /** Older engines return HTTP 404 before XML parsing; keep that failure actionable. */
+    public static JSONObject read(Request request)throws Exception{
+        try{return parse(request.get());}
+        catch(FileNotFoundException missing){throw new IOException("主机尚未支持窗口串流，请先更新这台电脑的 RHRemote-Sunshine",missing);}
+    }
     public static boolean valid(String source){return source!=null&&source.matches("rhrwindow:[0-9a-f]{32}");}
     public static JSONObject parse(String xml)throws Exception{
         if(xml==null||xml.length()>1024*1024)throw new IOException("窗口列表过大");
@@ -32,7 +39,7 @@ public final class RhWindows {
             }
         }
         if(!root)throw new IOException("无效窗口列表");
-        if(!supported)throw new IOException("主机尚未支持窗口串流，请先更新 RHRemote-Sunshine");
+        if(!supported)throw new IOException("主机当前无法启用窗口捕获，请检查主机服务的运行方式");
         return RhActions.obj("windows",rows,"supported",true,"secondaryWindows",false);
     }
     /** Fit to the configured quality ceiling, preserve aspect ratio, and never enlarge a small window. */

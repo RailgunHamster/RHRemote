@@ -3,6 +3,7 @@ param(
  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='0.2.7',
  [ValidateRange(209,2100000000)][int]$AndroidVersionCode=209,
  [string]$ServerArchive='',
+ [string]$ServerAssetsDirectory='',
  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ServerVersion='0.2.11',
  [string]$LinuxDirectory='',
  [DateTimeOffset]$PublishedAt=[DateTimeOffset]::UtcNow,
@@ -13,6 +14,14 @@ $repo=Split-Path $PSScriptRoot -Parent
 & git -C $repo diff --quiet HEAD -- . ':!client/crates/rhremote-core/src/settings.json'
 if($LASTEXITCODE-ne0){throw 'Build and stage a release from clean committed product sources'}
 $commit=(& git -C $repo rev-parse HEAD).Trim()
+if([version]$Version-ge[version]'0.2.23'-and-not$ServerAssetsDirectory){throw 'Every stable release must carry a signed server feed, signature and package; prepare ServerAssetsDirectory first'}
+if($ServerAssetsDirectory){
+ . (Join-Path $PSScriptRoot 'server-update-signing.ps1')
+ $serverFeed=Test-RHRServerUpdateManifest -Manifest (Join-Path $ServerAssetsDirectory 'releases.server.win.json') -Signature (Join-Path $ServerAssetsDirectory 'releases.server.win.json.sig')
+ if($serverFeed.releaseTag-cne"v$Version"){throw 'Server feed must target this release tag, including when carrying forward an unchanged server version'}
+ $ServerVersion=$serverFeed.version;$ServerArchive=Join-Path $ServerAssetsDirectory $serverFeed.fileName
+ if((Get-Item -LiteralPath $ServerArchive).Length-ne$serverFeed.size-or(Get-FileHash -LiteralPath $ServerArchive -Algorithm SHA256).Hash-ine$serverFeed.sha256){throw 'Server package differs from the signed feed'}
+}
 if($commit-notmatch'^[a-f0-9]{40}$'){throw 'Source commit unavailable'}
 $uiCargo=Get-Content -LiteralPath (Join-Path $repo 'client/crates/rhremote-ui/Cargo.toml') -Raw
 if($uiCargo-notmatch('(?m)^version\s*=\s*"'+[regex]::Escape($Version)+'"\s*$')){throw 'Update the Windows UI version before preparing this release'}
@@ -56,6 +65,7 @@ if($ServerArchive){
  $serverFile=Get-Item -LiteralPath $ServerArchive
  if($serverFile.PSIsContainer-or$serverFile.Name-ne("RHRemote-Sunshine-$ServerVersion-win-x64.zip")){throw 'Unexpected server archive identity'}
  Copy-Item -LiteralPath $serverFile.FullName -Destination (Join-Path $out $serverFile.Name)
+ if($ServerAssetsDirectory){foreach($name in @('releases.server.win.json','releases.server.win.json.sig')){Copy-Item -LiteralPath (Join-Path $ServerAssetsDirectory $name) -Destination $out}}
 }
 if($LinuxDirectory){
  $linux=Get-Content -LiteralPath (Join-Path $LinuxDirectory 'packages.json') -Raw|ConvertFrom-Json

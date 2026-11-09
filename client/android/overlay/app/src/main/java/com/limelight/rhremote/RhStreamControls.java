@@ -35,6 +35,7 @@ public final class RhStreamControls implements RhActions.Target {
         View notification=game.findViewById(R.id.notificationOverlay);warning=notification instanceof RhSessionWarning?(RhSessionWarning)notification:null;
         if(warning!=null){warning.bind(panel.controlHandle());warning.setChanged(this::updatePanel);}
         touch.setTransformListener(this::transformed);
+        keyboard.setChanged(()->{if(disposed)return;if(feedbackAction.equals("stream.keyboard.toggle"))feedback("stream.keyboard.toggle",keyboardVisible()?"键盘已打开":"键盘已关闭",keyboard.error());updatePanel();});
         updatePanel();RhActions.initialize(game,null);if(!RhActions.attachStream(this,game))dispose();
     }
     private void restoreLocalPreferences(){

@@ -6,6 +6,7 @@
 #include <dxgi1_2.h>
 
 // local includes
+#include "capture_context.h"
 #include "display.h"
 #include "misc.h"
 #include "src/logging.h"
@@ -85,11 +86,16 @@ namespace platf::dxgi {
   }
 
   wgc_capture_t::~wgc_capture_t() {
-    if (capture_session) {
-      capture_session.Close();
-    }
-    if (frame_pool) {
-      frame_pool.Close();
+    try {
+      capture_context::scope_t user;
+      if (capture_session) {
+        capture_session.Close();
+      }
+      if (frame_pool) {
+        frame_pool.Close();
+      }
+    } catch (const winrt::hresult_error &error) {
+      BOOST_LOG(warning) << "Capture context closed during retirement [0x" << util::hex(error.code()).to_string_view() << ']';
     }
     item = nullptr;
     capture_session = nullptr;
@@ -105,6 +111,7 @@ namespace platf::dxgi {
     dxgi::dxgi_t dxgi;
     winrt::com_ptr<::IInspectable> d3d_comhandle;
     try {
+      capture_context::scope_t user;
       if (!winrt::GraphicsCaptureSession::IsSupported()) {
         BOOST_LOG(error) << "Screen capture is not supported on this device for this release of Windows!"sv;
         return -1;
@@ -122,6 +129,7 @@ namespace platf::dxgi {
       return -1;
     }
 
+    capture_context::scope_t user;
     DXGI_OUTPUT_DESC output_desc;
     uwp_device = d3d_comhandle.as<winrt::IDirect3DDevice>();
     display->output->GetDesc(&output_desc);
@@ -192,6 +200,7 @@ namespace platf::dxgi {
   void wgc_capture_t::on_frame_arrived(winrt::Direct3D11CaptureFramePool const &sender, winrt::IInspectable const &) {
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame frame {nullptr};
     try {
+      capture_context::scope_t user;
       frame = sender.TryGetNextFrame();
     } catch (winrt::hresult_error &e) {
       BOOST_LOG(warning) << "Failed to capture frame: "sv << e.code();
@@ -216,6 +225,7 @@ namespace platf::dxgi {
   capture_e wgc_capture_t::next_frame(std::chrono::milliseconds timeout, ID3D11Texture2D **out, uint64_t &out_time) {
     *out = nullptr;
     try {
+      capture_context::scope_t user;
       return next_frame_impl(timeout, out, out_time);
     } catch (const winrt::hresult_error &error) {
       if (*out) {
@@ -276,6 +286,7 @@ namespace platf::dxgi {
   }
 
   capture_e wgc_capture_t::release_frame() {
+    capture_context::scope_t user;
     if (consumed_frame != nullptr) {
       consumed_frame.Close();
       consumed_frame = nullptr;
@@ -285,6 +296,7 @@ namespace platf::dxgi {
 
   int wgc_capture_t::set_cursor_visible(bool x) {
     try {
+      capture_context::scope_t user;
       if (capture_session.IsCursorCaptureEnabled() != x) {
         capture_session.IsCursorCaptureEnabled(x);
       }

@@ -11,7 +11,8 @@ function Get-RHRChildPath([string]$Root,[string]$Relative){
     }
     $path
 }
-function New-RHRPackageManifest([string]$Root,[string]$Commit,[string]$EngineCommit){
+function New-RHRPackageManifest([string]$Root,[string]$Commit,[string]$EngineCommit,[string]$Version='0.2.11'){
+    if($Version-notmatch'^\d+\.\d+\.\d+(?:-preview\.[1-9]\d*)?$'){throw 'Expected a stable or internal preview server version'}
     $base=[IO.Path]::GetFullPath($Root).TrimEnd('\','/')
     $files=@(Get-ChildItem -LiteralPath $base -Recurse -File|Where-Object Name -ne 'server-package.json'|ForEach-Object {
         $relative=$_.FullName.Substring($base.Length+1).Replace('\','/')
@@ -19,7 +20,7 @@ function New-RHRPackageManifest([string]$Root,[string]$Commit,[string]$EngineCom
         if($relative-match'(?i)(^|/)(config|credentials)/|\.(pem|key|log)$'){throw 'Private state cannot be included in a server package'}
         @{path=$relative;size=$_.Length;sha256=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
     })
-    $metadata=@{schema='rhremote.server-package/v1';product='RHRemote-Sunshine';commit=$Commit;engineCommit=$EngineCommit;service='SunshineService';serviceMode='unified';files=$files}
+    $metadata=@{schema='rhremote.server-package/v1';product='RHRemote-Sunshine';version=$Version;commit=$Commit;engineCommit=$EngineCommit;service='SunshineService';serviceMode='unified';files=$files}
     [IO.File]::WriteAllText((Join-Path $base 'server-package.json'),($metadata|ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
     $metadata
 }

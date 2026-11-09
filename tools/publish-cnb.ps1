@@ -22,6 +22,12 @@ foreach($asset in $plan.artifacts){
  Assert-RHRemoteCnbFile (Get-Item -LiteralPath (Join-Path $candidate $asset.fileName)) $asset.size $asset.sha256
 }
 foreach($required in @('releases.win.json','releases.android.json','RELEASE-NOTES.md')){if(-not $names.ContainsKey($required)){throw 'Stable publication must include both platform feeds and notes'}}
+if([version]$plan.version-ge[version]'0.2.23'){
+ . (Join-Path $PSScriptRoot 'server-update-signing.ps1')
+ $serverFeed=Test-RHRServerUpdateManifest -Manifest (Join-Path $candidate 'releases.server.win.json') -Signature (Join-Path $candidate 'releases.server.win.json.sig')
+ $serverAsset=@($plan.artifacts|Where-Object fileName -ceq $serverFeed.fileName)
+ if($serverFeed.releaseTag-cne$plan.tag-or$serverAsset.Count-ne1-or$serverAsset[0].size-ne$serverFeed.size-or$serverAsset[0].sha256-ine$serverFeed.sha256){throw 'Server feed differs from immutable publication plan'}
+}
 $windows=[IO.File]::ReadAllText((Join-Path $candidate 'releases.win.json'))|ConvertFrom-Json
 $android=[IO.File]::ReadAllText((Join-Path $candidate 'releases.android.json'))|ConvertFrom-Json
 if(-not @($windows.Assets).Count -or $android.schemaVersion -ne 1 -or $android.android.packageName -cne 'com.rhremote.client' -or $android.android.version -cne $plan.version -or $android.android.tag -cne $plan.tag){throw 'Platform feeds differ from the audited release'}
@@ -77,6 +83,7 @@ try {
  if($latest -and $latest.tag_name -match '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -gt [version]$plan.version){throw 'A newer stable CNB release exists; refusing rollback'}
  $null=Invoke-RHRemoteCnbApi $client $token "/$repository/-/releases/$($release.id)" PATCH @{prerelease=$false;draft=$false;make_latest='true'}
  $feeds=@('releases.win.json','releases.android.json');if($names.ContainsKey('releases.history.json')){$feeds+='releases.history.json'}
+ if($names.ContainsKey('releases.server.win.json')){$feeds+=@('releases.server.win.json','releases.server.win.json.sig')}
  foreach($name in $feeds){
   $asset=$plan.artifacts|Where-Object fileName -ceq $name
   $destination=Join-Path $scratch ('latest-'+$name)
