@@ -234,6 +234,8 @@ struct Transaction {
     previous_version: String,
     uuid: String,
     created_at: u64,
+    #[serde(default)]
+    manual_install: bool,
 }
 struct Service(SC_HANDLE);
 impl Drop for Service {
@@ -468,6 +470,9 @@ pub fn apply_update(id: &str) -> Result<(), String> {
             &read(&txdir.join("manifest.sig"))?,
         )?;
         let current = installed(&transaction.install)?;
+        if !transaction.manual_install && !settings(&directory)?.enabled {
+            return Err("Automatic updates were disabled before installation".into());
+        }
         if current.version != transaction.previous_version
             || !verified.newer_than(&current.version)?
         {
@@ -557,7 +562,32 @@ pub fn apply_update(id: &str) -> Result<(), String> {
                 Some(&failure),
             )?;
         } else {
+            // Recovery may run long after a crash. A returning client must still win
+            // over rollback; an acknowledged maintenance hold alone is not an idle proof.
+            let prior_hold = json_file(&directory.join("hold.json")).ok();
+            let continuously_held = prior_hold.as_ref().is_some_and(|v| {
+                v["transactionId"].as_str() == Some(id)
+                    && v["expiresAt"].as_u64().is_some_and(|n| n > now())
+            });
             hold(&directory, id)?;
+            if service_status(&service)?.dwCurrentState != SERVICE_STOPPED {
+                let safe = match info(transaction.port) {
+                    Ok(value) => idle(&value, true).is_ok(),
+                    Err(_) => continuously_held,
+                };
+                if !safe {
+                    release_hold(&directory, id)?;
+                    status(
+                        &directory,
+                        "waitingForIdle",
+                        &transaction.previous_version,
+                        None,
+                        None,
+                        Some("Rollback is waiting for existing remote connections to end"),
+                    )?;
+                    return Err(failure);
+                }
+            }
             stop(&service)?;
             tx::rollback(&transaction.install, &txdir, &mut journal)?;
             start(&service)?;
@@ -788,6 +818,7 @@ pub fn start_manager(install: PathBuf, config: PathBuf) -> Result<Manager, Strin
                             previous_version: current.clone(),
                             uuid: snapshot.uuid,
                             created_at: now(),
+                            manual_install: install_requested,
                         },
                     )?;
                     tx::atomic(&txdir.join("manifest.json"), bytes)?;
