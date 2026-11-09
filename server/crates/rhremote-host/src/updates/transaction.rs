@@ -73,6 +73,9 @@ pub fn nonce() -> Result<String, String> {
     Ok(bytes.iter().map(|v| format!("{v:02x}")).collect())
 }
 pub fn replace(from: &Path, to: &Path) -> Result<(), String> {
+    replace_bounded(from, to, std::time::Duration::from_secs(5))
+}
+fn replace_bounded(from: &Path, to: &Path, budget: std::time::Duration) -> Result<(), String> {
     no_links(from)?;
     no_links(to)?;
     #[cfg(windows)]
@@ -86,17 +89,38 @@ pub fn replace(from: &Path, to: &Path) -> Result<(), String> {
         };
         let a: Vec<_> = from.as_os_str().encode_wide().chain(Some(0)).collect();
         let b: Vec<_> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-        unsafe {
-            MoveFileExW(
-                PCWSTR(a.as_ptr()),
-                PCWSTR(b.as_ptr()),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-            )
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            let result = unsafe {
+                MoveFileExW(
+                    PCWSTR(a.as_ptr()),
+                    PCWSTR(b.as_ptr()),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+            };
+            match result {
+                Ok(()) => return Ok(()),
+                Err(failure) => {
+                    // Scanners and readers can briefly deny rename/delete sharing even
+                    // after a fully flushed write. Never change ACLs or discard the old file.
+                    let transient = matches!(
+                        failure.code().0 as u32,
+                        0x80070005 | 0x80070020 | 0x80070021
+                    );
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    if !transient || left.is_zero() {
+                        return Err(format!("Atomic replace {}: {failure}", to.display()));
+                    }
+                    std::thread::sleep(left.min(std::time::Duration::from_millis(50)));
+                    no_links(from)?;
+                    no_links(to)?;
+                }
+            }
         }
-        .map_err(|e| e.to_string())
     }
     #[cfg(not(windows))]
     {
+        let _ = budget;
         fs::rename(from, to).map_err(|e| e.to_string())
     }
 }
@@ -177,6 +201,46 @@ pub fn rollback(install: &Path, directory: &Path, journal: &mut Journal) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn rename_waits_for_a_reader_and_timeout_preserves_both_files() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::time::{Duration, Instant};
+        let root = std::env::temp_dir().join(format!("rhremote-rename-{}", nonce().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("journal.json");
+        let source = root.join("journal.tmp");
+        fs::write(&target, b"old").unwrap();
+        fs::write(&source, b"new").unwrap();
+        let reader = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&target)
+            .unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(reader);
+        });
+        replace_bounded(&source, &target, Duration::from_secs(3)).unwrap();
+        release.join().unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert!(!source.exists());
+        fs::write(&source, b"later").unwrap();
+        let reader = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&target)
+            .unwrap();
+        let start = Instant::now();
+        let failure = replace_bounded(&source, &target, Duration::from_millis(100)).unwrap_err();
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(failure.contains("journal.json"));
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert_eq!(fs::read(&source).unwrap(), b"later");
+        drop(reader);
+        // Only this uniquely-created temporary fixture, never a repository artifact.
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn partial_file_replacement_rolls_back_and_leaves_pairings_untouched() {
         let root = std::env::temp_dir().join(format!("rhr-update-{}", nonce().unwrap()));

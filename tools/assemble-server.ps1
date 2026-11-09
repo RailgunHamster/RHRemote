@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$SunshineDirectory,[string]$HostDirectory='',[string]$OutputDirectory='',[string]$EngineCommit='',[string]$Version='0.2.24')
+param([Parameter(Mandatory)][string]$SunshineDirectory,[string]$HostDirectory='',[string]$OutputDirectory='',[string]$EngineCommit='',[string]$Version='0.2.25')
 $ErrorActionPreference='Stop';$repo=Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'server-package.ps1')
 if(-not$HostDirectory){$HostDirectory=Join-Path $repo 'dist/host'}
