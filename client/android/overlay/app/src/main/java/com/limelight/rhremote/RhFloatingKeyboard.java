@@ -31,6 +31,7 @@ final class RhFloatingKeyboard {
     private final JSONArray catalog,shortcutCatalog;
     private final View.OnLayoutChangeListener layoutListener;
     private final Actions actions;
+    private final RhDragFeedback dragFeedback;
     private String presentation="physical";
     private boolean enabled,ready,obscured,ime,disposed,buttonVisible,receivedInsets,simple;
     private Insets lastInsets=Insets.NONE;
@@ -43,12 +44,16 @@ final class RhFloatingKeyboard {
         SharedPreferences prefs=context.getSharedPreferences("rhremote.global",0);
         buttonVisible=!prefs.getBoolean("hideKeyboardButton",false);
         layer=new FrameLayout(context){
+            // Draw in the existing control layer, above children, without another input/window layer.
+            @Override protected void dispatchDraw(Canvas canvas){super.dispatchDraw(canvas);dragFeedback.draw(canvas);}
+            @Override protected boolean verifyDrawable(Drawable drawable){return drawable==dragFeedback||super.verifyDrawable(drawable);}
             @Override public boolean dispatchTouchEvent(MotionEvent event){
                 if(handleDraggableTouch(event))return true;
                 return super.dispatchTouchEvent(event);
             }
         };
         layer.setTag("floating-keyboard");layer.setClickable(false);layer.setFocusable(false);
+        dragFeedback=new RhDragFeedback(context.getResources().getDisplayMetrics().density);dragFeedback.setCallback(layer);
         simpleLayer=new FrameLayout(context);simpleLayer.setTag("simple-floating-keyboard");table=new FrameLayout(context);
         try{
             catalog=RhKeyboard.catalog(context);
@@ -179,12 +184,14 @@ final class RhFloatingKeyboard {
     void moveButton(String id,float rx,float ry){
         if(id==null||id.isEmpty()||id.length()>64||!Float.isFinite(rx)||!Float.isFinite(ry)||rx<0f||rx>1f||ry<0f||ry>1f)
             throw new IllegalArgumentException("invalid overlay coordinates");
+        cancelActiveTouch();
         long order=nextOrder();
         positions.put(id,new Pos(rx,ry,order));
         savePositions();
         refresh();
     }
     void resetPositions(){
+        cancelActiveTouch();
         positions.clear();
         for(Button b:draggableIds.keySet())b.setTranslationZ(0f);
         savePositions();
@@ -221,7 +228,7 @@ final class RhFloatingKeyboard {
         if(disposed||obscured)return false;
         int action=event.getActionMasked();
         if(action==MotionEvent.ACTION_DOWN){
-            activeTouchTarget=null;activePosKey=null;dragging=false;
+            cancelActiveTouch();
             List<Button> candidates=activeDraggableButtons();
             int x=Math.round(event.getX()),y=Math.round(event.getY());
             for(int i=candidates.size()-1;i>=0;i--){
@@ -248,12 +255,14 @@ final class RhFloatingKeyboard {
                 dragging=true;
                 activeTouchTarget.setTranslationZ(nextOrder());
                 activeTouchTarget.bringToFront();
+                dragFeedback.begin(bounds(activeTouchTarget));
             }
             if(dragging){
                 int w=activeTouchTarget.getWidth(),h=activeTouchTarget.getHeight();
                 int nx=Math.max(safeLeft,Math.min(Math.max(safeLeft,safeRight-w),Math.round(startLeft+dx)));
                 int ny=Math.max(safeTop,Math.min(Math.max(safeTop,safeBottom-h),Math.round(startTop+dy)));
                 place(activeTouchTarget,nx,ny,w,h);
+                dragFeedback.move(bounds(activeTouchTarget));
             }
             return true;
         }
@@ -261,6 +270,7 @@ final class RhFloatingKeyboard {
             Button target=activeTouchTarget;String posKey=activePosKey;
             activeTouchTarget=null;activePosKey=null;
             target.setPressed(false);
+            clearDragFeedback();
             if(dragging){
                 dragging=false;
                 if(posKey!=null){
@@ -278,12 +288,17 @@ final class RhFloatingKeyboard {
             return true;
         }
         if(action==MotionEvent.ACTION_CANCEL){
-            activeTouchTarget.setPressed(false);
-            activeTouchTarget=null;activePosKey=null;dragging=false;
+            cancelActiveTouch();layout();
             return true;
         }
         return true;
     }
+
+    private void cancelActiveTouch(){
+        if(activeTouchTarget!=null){activeTouchTarget.setPressed(false);activeTouchTarget.setTranslationZ(orderOf(activePosKey));}
+        activeTouchTarget=null;activePosKey=null;dragging=false;clearDragFeedback();
+    }
+    private void clearDragFeedback(){dragFeedback.clear();}
 
     private boolean canUse(View view){return !disposed&&ready&&!obscured&&view.isEnabled()&&RhViewOrigin.visibleWithin(parent,view)&&view.getLocalVisibleRect(new Rect());}
     private int dp(float value){return Math.round(value*layer.getResources().getDisplayMetrics().density);}
@@ -314,12 +329,12 @@ final class RhFloatingKeyboard {
     }
     boolean enabled(){return enabled;}boolean buttonVisible(){return buttonVisible;}String layoutName(){return simple?"simple":"full";}
     private void configureLayout(){for(Map.Entry<String,Button> entry:keys.entrySet()){Button key=entry.getValue();FrameLayout target=simple&&SIMPLE.contains(entry.getKey())?simpleLayer:table;if(key.getParent()!=target){((ViewGroup)key.getParent()).removeView(key);target.addView(key,new FrameLayout.LayoutParams(dp(40),dp(40)));}key.setVisibility(View.VISIBLE);key.setTranslationZ(simple?orderOf(entry.getKey()):0f);}}
-    void setLayout(String name){if(!name.equals("full")&&!name.equals("simple"))throw new IllegalArgumentException("layout must be full or simple");simple=name.equals("simple");configureLayout();layer.getContext().getSharedPreferences("rhremote.global",0).edit().putString("keyboardLayout",name).apply();refresh();}
-    void setEnabled(boolean value){enabled=value;refresh();}
-    void setButtonVisible(boolean value){buttonVisible=value;layer.getContext().getSharedPreferences("rhremote.global",0).edit().putBoolean("hideKeyboardButton",!value).apply();refresh();}
+    void setLayout(String name){if(!name.equals("full")&&!name.equals("simple"))throw new IllegalArgumentException("layout must be full or simple");cancelActiveTouch();simple=name.equals("simple");configureLayout();layer.getContext().getSharedPreferences("rhremote.global",0).edit().putString("keyboardLayout",name).apply();refresh();}
+    void setEnabled(boolean value){if(enabled!=value)cancelActiveTouch();enabled=value;refresh();}
+    void setButtonVisible(boolean value){if(buttonVisible!=value)cancelActiveTouch();buttonVisible=value;layer.getContext().getSharedPreferences("rhremote.global",0).edit().putBoolean("hideKeyboardButton",!value).apply();refresh();}
     void modifiers(Collection<String> selected){for(int i=0;i<catalog.length();i++){JSONObject key=catalog.optJSONObject(i);keys.get(key.optString("id")).setSelected(!key.optString("modifier").isEmpty()&&selected.contains(key.optString("modifier")));}}
     void update(boolean ready,boolean obscured){update(ready,obscured,false);}
-    void update(boolean ready,boolean obscured,boolean ime){this.ready=ready;this.obscured=obscured;this.ime=ime;refresh();}
+    void update(boolean ready,boolean obscured,boolean ime){if(this.ready!=ready||this.obscured!=obscured||this.ime!=ime)cancelActiveTouch();this.ready=ready;this.obscured=obscured;this.ime=ime;refresh();}
     private void refresh(){
         if(disposed)return;
         boolean fullKeyboard=enabled&&!ime&&!simple;
@@ -340,10 +355,13 @@ final class RhFloatingKeyboard {
             b.setEnabled(ready);b.setAlpha(ready?1f:.4f);
         }
         for(Button key:keys.values()){key.setEnabled(ready);key.setAlpha(ready?1f:.4f);}
+        if(activeTouchTarget!=null&&!canUse(activeTouchTarget))cancelActiveTouch();
         layout();
     }
     private void place(View view,int x,int y,int width,int height){FrameLayout.LayoutParams p=(FrameLayout.LayoutParams)view.getLayoutParams();if(p==null||p.leftMargin!=x||p.topMargin!=y||p.width!=width||p.height!=height){p=new FrameLayout.LayoutParams(width,height);p.leftMargin=x;p.topMargin=y;view.setLayoutParams(p);if(view.getWidth()==width&&view.getHeight()==height)view.layout(x,y,x+width,y+height);}}
     private void placeDraggable(View view,String posKey,int defX,int defY,int width,int height,boolean allowCustom){
+        // Session-state refreshes must not reset the live position before the finger lifts.
+        if(view==activeTouchTarget)return;
         if(allowCustom&&posKey!=null&&positions.containsKey(posKey)){
             Pos pos=positions.get(posKey);
             int spanX=Math.max(1,(safeRight-safeLeft)-width);
@@ -362,14 +380,16 @@ final class RhFloatingKeyboard {
     private void layout(Insets safe){
         lastInsets=safe;if(disposed||parent.getWidth()==0||parent.getHeight()==0)return;
         int left=safe.left+dp(12),right=parent.getWidth()-safe.right-dp(12),top=safe.top+dp(12),bottom=parent.getHeight()-safe.bottom-dp(12),width=Math.max(1,right-left);
+        int nextTop=Math.max(safe.top,Math.min(top,bottom-dp(48))),nextBottom=Math.max(nextTop+dp(48),bottom);
+        if(activeTouchTarget!=null&&(left!=safeLeft||right!=safeRight||nextTop!=safeTop||nextBottom!=safeBottom))cancelActiveTouch();
         safeLeft=left;safeRight=right;safeTop=Math.max(safe.top,Math.min(top,bottom-dp(48)));safeBottom=Math.max(safeTop+dp(48),bottom);
         boolean fullKeyboard=enabled&&!ime&&!simple;
         int toggleY=Math.max(safe.top,Math.min(top,bottom-dp(48)));
         int toggleW=Math.min(width,dp(72));
-        placeDraggable(toggle,"keyboard-toggle",Math.max(left,right-dp(72)),toggleY,toggleW,dp(48),!fullKeyboard);
+        placeDraggable(toggle,"keyboard-toggle",Math.max(left,right-dp(72)),toggleY,toggleW,dp(48),true);
         int imeW=Math.min(width,dp(72));
         int imeDefX=Math.max(left,right-dp(72)-dp(6)-imeW);
-        placeDraggable(imeToggle,"ime-toggle",imeDefX,toggleY,imeW,dp(48),!fullKeyboard);
+        placeDraggable(imeToggle,"ime-toggle",imeDefX,toggleY,imeW,dp(48),true);
         if(!fullKeyboard){
             int chipW=Math.min(width,dp(76)),chipH=dp(40),gap=dp(6);
             int colRight=right;
@@ -413,7 +433,7 @@ final class RhFloatingKeyboard {
     private Rect bounds(View view){Rect r=new Rect();view.getDrawingRect(r);layer.offsetDescendantRectToMyCoords(view,r);return r;}
     JSONObject state(){JSONArray positionsArr=new JSONArray();boolean visible=layer.getVisibility()==View.VISIBLE&&(simple?simpleLayer:vertical).getVisibility()==View.VISIBLE;
         for(Map.Entry<String,Button> entry:keys.entrySet()){Button key=entry.getValue();Rect r=bounds(key),clip=bounds(vertical);boolean showing=visible&&key.getVisibility()==View.VISIBLE&&(simple?SIMPLE.contains(entry.getKey()):Rect.intersects(r,clip));positionsArr.put(RhActions.obj("id",entry.getKey(),"visible",showing,"selected",key.isSelected(),"x",r.left,"y",r.top,"width",r.width(),"height",r.height()));}
-        Rect r=bounds(toggle),ir=bounds(imeToggle);return RhActions.obj("enabled",enabled,"layout",layoutName(),"visible",visible,"ready",ready,"buttonVisible",buttonVisible,"backgroundAlpha",80,"contrast","dual-outline","backgroundSampling",false,"presentation",presentation,"horizontalScrollable",table.getWidth()>horizontal.getWidth(),"scrollable",table.getHeight()>vertical.getHeight(),"toggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&toggle.getVisibility()==View.VISIBLE,"x",r.left,"y",r.top,"width",r.width(),"height",r.height()),"imeToggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&imeToggle.getVisibility()==View.VISIBLE,"x",ir.left,"y",ir.top,"width",ir.width(),"height",ir.height()),"pinnedShortcuts",new JSONArray(pinnedShortcuts),"buttonPositions",positionsJson(),"keys",positionsArr);
+        Rect r=bounds(toggle),ir=bounds(imeToggle);return RhActions.obj("dragFeedback",dragFeedback.state(),"enabled",enabled,"layout",layoutName(),"visible",visible,"ready",ready,"buttonVisible",buttonVisible,"backgroundAlpha",80,"contrast","dual-outline","backgroundSampling",false,"presentation",presentation,"horizontalScrollable",table.getWidth()>horizontal.getWidth(),"scrollable",table.getHeight()>vertical.getHeight(),"toggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&toggle.getVisibility()==View.VISIBLE,"x",r.left,"y",r.top,"width",r.width(),"height",r.height()),"imeToggle",RhActions.obj("visible",layer.getVisibility()==View.VISIBLE&&imeToggle.getVisibility()==View.VISIBLE,"x",ir.left,"y",ir.top,"width",ir.width(),"height",ir.height()),"pinnedShortcuts",new JSONArray(pinnedShortcuts),"buttonPositions",positionsJson(),"keys",positionsArr);
     }
-    void dispose(){if(disposed)return;disposed=true;activeTouchTarget=null;activePosKey=null;ViewCompat.setOnApplyWindowInsetsListener(layer,null);ViewCompat.setWindowInsetsAnimationCallback(layer,null);parent.removeOnLayoutChangeListener(layoutListener);parent.removeView(layer);}
+    void dispose(){if(disposed)return;cancelActiveTouch();disposed=true;dragFeedback.setCallback(null);ViewCompat.setOnApplyWindowInsetsListener(layer,null);ViewCompat.setWindowInsetsAnimationCallback(layer,null);parent.removeOnLayoutChangeListener(layoutListener);parent.removeView(layer);}
 }

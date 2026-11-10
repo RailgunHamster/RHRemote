@@ -92,6 +92,45 @@ public final class RhFloatingKeyboardTest {
             assertTrue(layer.dispatchTouchEvent(up));
         }finally{down.recycle();up.recycle();}
     }
+    private void touch(View layer,int action,float x,float y){
+        long t=android.os.SystemClock.uptimeMillis();MotionEvent event=MotionEvent.obtain(t,t,action,x,y,0);
+        try{assertTrue(layer.dispatchTouchEvent(event));}finally{event.recycle();}
+    }
+    @Test @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
+    public void draggingHasAVisibleTrailOnLightAndDarkFramesAndClearsItOnRelease()throws Exception{
+        java.io.File directory=new java.io.File("build/reports/rhremote-drag-feedback");assertTrue(directory.isDirectory()||directory.mkdirs());
+        for(int[] size:new int[][]{{840,560},{360,800}})for(int background:new int[]{Color.WHITE,0xff111722}){
+            setup(size[0],size[1]);keyboard.setEnabled(false);root.setBackgroundColor(background);layout();float endX=width*.4f,endY=height*.4f;
+            View layer=root.findViewWithTag("floating-keyboard"),button=root.findViewWithTag("floating-ime-toggle");Rect start=bounds(button);
+            touch(layer,MotionEvent.ACTION_DOWN,start.centerX(),start.centerY());assertFalse(keyboard.state().getJSONObject("dragFeedback").getBoolean("visible"));
+            touch(layer,MotionEvent.ACTION_MOVE,endX,endY);Rect moved=bounds(button);assertNotEquals(start,moved);
+            keyboard.update(true,false);layout();assertEquals("A state refresh snapped the live button back",moved,bounds(button));
+            assertFalse("Drag positions must commit only on release",keyboard.positionsJson().has("ime-toggle"));
+            JSONObject feedback=keyboard.state().getJSONObject("dragFeedback");assertTrue(feedback.getBoolean("visible"));assertTrue(feedback.getInt("pointCount")>=2);
+            int midX=(start.centerX()+moved.centerX())/2,midY=(start.centerY()+moved.centerY())/2;
+            Bitmap image=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);root.draw(new Canvas(image));
+            boolean blue=false,light=false,dark=false;
+            for(int y=midY-5;y<=midY+5;y++)for(int x=midX-5;x<=midX+5;x++){int pixel=image.getPixel(x,y);blue|=Color.blue(pixel)>180&&Color.red(pixel)<150&&Color.green(pixel)<170;light|=Color.red(pixel)>180&&Color.green(pixel)>180&&Color.blue(pixel)>180;dark|=Color.red(pixel)<60&&Color.green(pixel)<65&&Color.blue(pixel)<80;}
+            assertTrue("No rendered drag trail",blue);assertTrue("White edge missing",light);assertTrue("Dark edge missing",dark);
+            try(java.io.FileOutputStream output=new java.io.FileOutputStream(new java.io.File(directory,"drag-"+width+"x"+height+(background==Color.WHITE?"-light.png":"-dark.png")))){image.compress(Bitmap.CompressFormat.PNG,100,output);}image.recycle();
+            touch(layer,MotionEvent.ACTION_UP,endX,endY);layout();assertFalse(keyboard.state().getJSONObject("dragFeedback").getBoolean("visible"));assertTrue(keyboard.positionsJson().has("ime-toggle"));assertEquals(moved,bounds(button));assertTrue("Moving must not click or send remote input",actions.isEmpty());
+            image=Bitmap.createBitmap(width,height,Bitmap.Config.ARGB_8888);root.draw(new Canvas(image));assertEquals("Trail remained after release",background,image.getPixel(midX,midY));image.recycle();keyboard.dispose();
+        }
+    }
+    @Test public void cancellingOrChangingTheViewportClearsTheTrailWithoutSavingOrClicking()throws Exception{
+        setup(840,560);keyboard.setLayout("simple");layout();View layer=root.findViewWithTag("floating-keyboard"),button=key("tab");Rect start=bounds(button);
+        touch(layer,MotionEvent.ACTION_DOWN,start.centerX(),start.centerY());touch(layer,MotionEvent.ACTION_MOVE,360,200);
+        touch(layer,MotionEvent.ACTION_CANCEL,360,200);layout();assertEquals(start,bounds(button));assertFalse(keyboard.state().getJSONObject("dragFeedback").getBoolean("visible"));assertFalse(keyboard.positionsJson().has("tab"));
+        touch(layer,MotionEvent.ACTION_DOWN,start.centerX(),start.centerY());touch(layer,MotionEvent.ACTION_MOVE,360,200);keyboard.update(false,false);layout();assertFalse(keyboard.state().getJSONObject("dragFeedback").getBoolean("visible"));assertEquals(start,bounds(button));assertTrue(actions.isEmpty());
+        keyboard.update(true,false);touch(layer,MotionEvent.ACTION_DOWN,start.centerX(),start.centerY());touch(layer,MotionEvent.ACTION_MOVE,360,200);width=360;height=840;layout();assertFalse(keyboard.state().getJSONObject("dragFeedback").getBoolean("visible"));assertFalse(keyboard.positionsJson().has("tab"));assertTrue(actions.isEmpty());
+    }
+    @Test public void outerTogglesRemainDraggableInFullKeyboardAndLongTrailsAreBounded()throws Exception{
+        setup(840,560);View layer=root.findViewWithTag("floating-keyboard"),button=root.findViewWithTag("floating-ime-toggle");Rect start=bounds(button);
+        touch(layer,MotionEvent.ACTION_DOWN,start.centerX(),start.centerY());
+        for(int i=0;i<200;i++)touch(layer,MotionEvent.ACTION_MOVE,100+(i%10)*50,100+(i%7)*20);
+        assertEquals(32,keyboard.state().getJSONObject("dragFeedback").getInt("pointCount"));Rect moved=bounds(button);touch(layer,MotionEvent.ACTION_UP,moved.centerX(),moved.centerY());layout();assertEquals(moved,bounds(button));keyboard.update(true,false);layout();assertEquals(moved,bounds(button));assertTrue(actions.isEmpty());
+        keyboard.dispose();create();layout();assertEquals(moved,bounds(root.findViewWithTag("floating-ime-toggle")));assertFalse(keyboard.state().getJSONObject("dragFeedback").getBoolean("visible"));
+    }
     @Test public void outerMobileKeyboardPinnedShortcutsAndDraggableOverlapOrderPersistAndReset()throws Exception{
         setup(840,560);keyboard.setEnabled(false);layout();
         View layer=root.findViewWithTag("floating-keyboard");
