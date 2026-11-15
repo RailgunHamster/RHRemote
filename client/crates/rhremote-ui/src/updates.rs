@@ -312,7 +312,7 @@ impl Updates {
         if id=="updates.state" {return Ok(self.state());}
         self.live.lock().unwrap()["failedAction"]=json!("");
         let result:Result<(),String>=(||{
-            if self.manager.is_none(){return Err("当前是开发版，请使用 Velopack 安装包启用自动更新".into());}
+            if self.manager.is_none(){return Err("当前安装包未启用应用内更新".into());}
             match id {
                 "updates.check"=>self.check()?,
                 "updates.download"=>self.download()?,

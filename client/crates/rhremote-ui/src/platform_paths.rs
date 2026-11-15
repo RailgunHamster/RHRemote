@@ -1,13 +1,20 @@
-//! Desktop identity and configuration locations; never fall back to the launch directory on Linux.
+//! Desktop identity, private configuration locations, and packaged engine paths.
 use std::{ffi::OsString, path::{Path, PathBuf}};
 
-pub(crate) const PLATFORM: &str = if cfg!(target_os = "linux") { "linux" } else { "windows" };
+pub(crate) const PLATFORM: &str = std::env::consts::OS;
+#[cfg(not(target_os = "macos"))]
 pub(crate) const ENGINE_NAME: &str = if cfg!(windows) { "RHRemote.exe" } else { "RHRemote" };
 
 pub(crate) fn default_data() -> Result<PathBuf, String> {
     #[cfg(target_os = "linux")]
     { linux_data(|key| std::env::var_os(key)) }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from).filter(|path| path.is_absolute())
+            .ok_or("An absolute HOME is required on macOS")?;
+        Ok(home.join("Library/Application Support/RHRemote"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     { Ok(PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("RHRemote")) }
 }
 
@@ -20,7 +27,11 @@ fn linux_data(get: impl Fn(&str) -> Option<OsString>) -> Result<PathBuf, String>
 }
 
 pub(crate) fn packaged_engine(executable: &Path) -> PathBuf {
-    executable.parent().unwrap_or(Path::new(".")).join("engine").join(ENGINE_NAME)
+    let directory = executable.parent().unwrap_or(Path::new("."));
+    #[cfg(target_os = "macos")]
+    { directory.join("../Helpers/Moonlight.app/Contents/MacOS/Moonlight") }
+    #[cfg(not(target_os = "macos"))]
+    { directory.join("engine").join(ENGINE_NAME) }
 }
 
 pub(crate) fn prepare_data(path: &Path) -> Result<(), std::io::Error> {
@@ -33,6 +44,7 @@ pub(crate) fn prepare_data(path: &Path) -> Result<(), std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn packaged_engine_uses_the_native_executable_name() {
         let parent = std::env::temp_dir().join("rhremote-path-layout-test");

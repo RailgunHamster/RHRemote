@@ -22,6 +22,10 @@ foreach($asset in $plan.artifacts){
  Assert-RHRemoteCnbFile (Get-Item -LiteralPath (Join-Path $candidate $asset.fileName)) $asset.size $asset.sha256
 }
 foreach($required in @('releases.win.json','releases.android.json','RELEASE-NOTES.md')){if(-not $names.ContainsKey($required)){throw 'Stable publication must include both platform feeds and notes'}}
+if(@($plan.artifacts|Where-Object {$_.fileName -match '(^releases\.osx-arm64\.json$|^RHRemote-Moonlight-.*osx-arm64)'}).Count){
+ . (Join-Path $PSScriptRoot 'macos-release.ps1')
+ Assert-RHRemoteMacPublishPlan $candidate $plan
+}
 if([version]$plan.version-ge[version]'0.2.23'){
  . (Join-Path $PSScriptRoot 'server-update-signing.ps1')
  $serverFeed=Test-RHRServerUpdateManifest -Manifest (Join-Path $candidate 'releases.server.win.json') -Signature (Join-Path $candidate 'releases.server.win.json.sig')
@@ -83,6 +87,7 @@ try {
  if($latest -and $latest.tag_name -match '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -gt [version]$plan.version){throw 'A newer stable CNB release exists; refusing rollback'}
  $null=Invoke-RHRemoteCnbApi $client $token "/$repository/-/releases/$($release.id)" PATCH @{prerelease=$false;draft=$false;make_latest='true'}
  $feeds=@('releases.win.json','releases.android.json');if($names.ContainsKey('releases.history.json')){$feeds+='releases.history.json'}
+ if($names.ContainsKey('releases.osx-arm64.json')){$feeds+='releases.osx-arm64.json'}
  if($names.ContainsKey('releases.server.win.json')){$feeds+=@('releases.server.win.json','releases.server.win.json.sig')}
  foreach($name in $feeds){
   $asset=$plan.artifacts|Where-Object fileName -ceq $name

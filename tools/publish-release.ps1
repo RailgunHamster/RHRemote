@@ -28,6 +28,10 @@ foreach($asset in $plan.artifacts){
  $file=Join-Path $candidate $asset.fileName
  if((Get-Item -LiteralPath $file).Length -ne $asset.size -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $asset.sha256){throw ('Asset changed: '+$asset.fileName)}
 }
+if(-not $Preview -and -not $SourceOnly -and @($plan.artifacts|Where-Object {$_.fileName -match '(^releases\.osx-arm64\.json$|^RHRemote-Moonlight-.*osx-arm64)'}).Count){
+ . (Join-Path $PSScriptRoot 'macos-release.ps1')
+ Assert-RHRemoteMacPublishPlan $candidate $plan
+}
 function Test-ReleaseCurlRetry([string]$Provider,[int]$Status,[string]$Body){
  if($Provider-ne'gitee'-or$Status-ne400-or$Body.Length-gt8192){return $false}
  try{$reply=$Body|ConvertFrom-Json;foreach($key in @('message','error')){if($reply.$key-is[string]-and$reply.$key.Contains('AttachFile::upload_attach_file')-and$reply.$key.Contains('File upload error')){return $true}}}catch{}

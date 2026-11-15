@@ -14,7 +14,7 @@
 
 同一操作也可通过动作接口调用：`updates.source.set`，参数 `{"source":"github"}` 或 `{"source":"cnb"}`；`updates.state` 返回 `preferredSource`。切换后点击“检查更新”；已经校验的安装包继续保留。
 
-- 最新信息：`https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/releases.win.json`、`releases.android.json`。
+- 最新信息：`https://cnb.cool/railgunhamster/RHRemote/-/releases/latest/download/` 下的 `releases.win.json`、`releases.android.json` 和 `releases.osx-arm64.json`。
 - 安装包固定到元数据对应的版本，例如 `.../-/releases/download/v0.2.12/RHRemote-0.2.12-full.nupkg`；下载后仍校验大小、SHA-256，Android 同时校验包名、版本和签名。
 - 更新页面保留单个主按钮：检查更新 → 下载并安装 → 重启并安装（Windows）／系统安装确认（Android）。
 - 客户端匿名访问；发布令牌不写入应用、更新信息、Git 或命令行。
@@ -28,9 +28,21 @@
 ./tools/publish-cnb.ps1 -CandidateDirectory <已审核发布目录> -Commit <精确提交> -BundlePath <公开源码bundle>
 ```
 
-默认读取当前用户 `LocalAppData/RHFiles-Publishing/cnb-token.xml` 的 DPAPI 凭据。可通过 `-TokenFile` 指定另一份当前用户的加密文件。首次发布会创建公开的 `railgunhamster/RHRemote` 仓库。先上传并匿名校验不可变附件，全部通过后才提升为最新版本，再核对两个平台的 latest 信息。已有同名附件不会覆盖。GitHub 备用仍使用 `publish-release.ps1 -Provider github`；旧 Gitee 发布脚本仅保留历史兼容，不再用于新版本的更新发布。
+默认读取当前用户 `LocalAppData/RHFiles-Publishing/cnb-token.xml` 的 DPAPI 凭据。可通过 `-TokenFile` 指定另一份当前用户的加密文件。首次发布会创建公开的 `railgunhamster/RHRemote` 仓库。先上传并匿名校验不可变附件，全部通过后才提升为最新版本，再核对各平台的 latest 信息。已有同名附件不会覆盖。GitHub 备用仍使用 `publish-release.ps1 -Provider github`；旧 Gitee 发布脚本仅保留历史兼容，不再用于新版本的更新发布。
 
 测试：`python tools/test_cnb_release.py`；Rust `updates::tests`；Android `RhUpdateInstallTest`、`RhUpdatesTest`。
+
+## macOS arm64 客户端更新
+
+在 Apple 芯片 Mac 上准备同一次发布的 Rust 界面可执行文件，以及已用 `macdeployqt` 打包的原生 `Moonlight.app`。用 Velopack CLI 1.2.110-ge826545 生成安装和更新资源。
+
+```bash
+bash tools/package-macos-velopack.sh "$version" "$ui_binary" "$moonlight_app" "$release_notes" "$output_directory"
+```
+
+公开安装包由 Mac 发布机通过 Keychain 中的 Developer ID Application 与 Installer 证书签名，并使用 notarytool 的 Keychain 配置公证。将身份名称与配置名称分别放在 `VPK_SIGN_APP_IDENTITY`、`VPK_SIGN_INSTALL_IDENTITY`、`VPK_NOTARY_PROFILE`。个人使用时通过 `--local` 创建本机签名的应用和更新包，从可信的构建机器部署一次，发行附件只包含应用内更新资源。
+
+将输出目录传给 `prepare-release-candidate.ps1 -MacOSDirectory`。Mac 更新使用独立的 `osx-arm64` 频道，首次发行后随每个正式版本一起发布。旧的手工安装版需覆盖安装一次。配对和客户端设置存储在 `~/Library/Application Support/RHRemote`，更新会替换应用包。
 
 ## Windows 服务端自动更新（0.2.23 起）
 

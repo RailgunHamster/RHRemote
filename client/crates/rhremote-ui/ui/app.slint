@@ -1386,7 +1386,7 @@ export component MainWindow inherits Window {
                                 update-source:=ComboBox{model:["CNB","GitHub"];current-index <=> root.update-source-index;preferred-width:180px;horizontal-stretch:0;enabled:!root.updates-busy;accessible-label:"首选更新源";selected(value)=>{Commands.trigger("updates.source.set","source="+(self.current-index==1?"github":"cnb"));}}
                                 Rectangle{horizontal-stretch:1;}
                             }
-                            Text{text:root.updates-managed ? "首选源不可用时自动尝试另一来源。" : "当前为开发预览版，应用内更新仅在正式安装版中可用。";color:Palette.muted;wrap:word-wrap;}
+                            Text{text:root.updates-managed ? "首选源不可用时自动尝试另一来源。" : "当前安装包未启用应用内更新。";color:Palette.muted;wrap:word-wrap;}
                             if root.updates-available: Text{text:"可用版本："+root.update-version;color:Palette.ink;}
                             if root.update-notes!="":ReleaseNotes{blocks:root.update-note-blocks;}
                             if root.updates-busy: Rectangle {height:4px;background:Palette.line;border-radius:2px;
@@ -1512,7 +1512,7 @@ export component MainWindow inherits Window {
             if root.page=="global-settings" && root.settings-tab=="updates":Rectangle{background:Palette.surface;vertical-stretch:0;preferred-height:update-footer.preferred-height;
                 Rectangle{x:0px;y:0px;width:parent.width;height:1px;background:Palette.line;}
                 update-footer:=HorizontalLayout{padding:16px;padding-left:root.form-inset;padding-right:root.form-inset;spacing:10px;
-                    Text{text:!root.updates-managed ? "此启动方式不支持更新，请使用安装版或便携版。" : root.update-primary-installs ? root.update-install-hint : "";color:Palette.muted;font-size:12px;wrap:word-wrap;min-width:0px;preferred-width:0px;horizontal-stretch:1;vertical-alignment:center;}
+                    Text{text:!root.updates-managed ? "请使用支持更新的安装包。" : root.update-primary-installs ? root.update-install-hint : "";color:Palette.muted;font-size:12px;wrap:word-wrap;min-width:0px;preferred-width:0px;horizontal-stretch:1;vertical-alignment:center;}
                     ActionButton{text:root.update-primary-text;action-id:"updates.primary";argument:root.update-intent;primary:true;disabled:root.updates-busy || !root.updates-managed || (root.update-primary-installs && (root.streaming || root.connecting || root.update-install-hint!=""));}
                     if root.update-can-cancel || root.update-cancelling:ActionButton{text:"取消";action-id:"updates.cancel";argument:root.update-operation;disabled:root.update-cancelling;}
                 }

@@ -16,6 +16,7 @@ class ReleaseCandidateTests(unittest.TestCase):
         self.tool = self.root / "tools/prepare-release-candidate.ps1"
         self.tool.parent.mkdir()
         shutil.copyfile(Path(__file__).with_name(self.tool.name), self.tool)
+        shutil.copyfile(Path(__file__).with_name("macos-release.ps1"), self.tool.parent / "macos-release.ps1")
         self.cargo = self.root / "client/crates/rhremote-ui/Cargo.toml"
         self.cargo.parent.mkdir(parents=True)
         self.cargo.write_text('[package]\nname="rhremote-ui"\nversion = "0.2.7"\n', encoding="utf-8")
@@ -32,11 +33,14 @@ class ReleaseCandidateTests(unittest.TestCase):
                       "Size": self.package.stat().st_size,
                       "SHA256": hashlib.sha256(self.package.read_bytes()).hexdigest()}
 
-    def run_candidate(self, assets=None):
+    def run_candidate(self, assets=None, macos=None):
         (self.windows / "releases.win.json").write_text(
             json.dumps({"Assets": assets if assets is not None else [self.asset]}), encoding="utf-8")
-        return subprocess.run([shutil.which("pwsh") or "powershell", "-NoProfile", "-NonInteractive",
-                               "-File", str(self.tool), "-WindowsDirectory", str(self.windows)],
+        arguments = [shutil.which("pwsh") or "powershell", "-NoProfile", "-NonInteractive",
+                     "-File", str(self.tool), "-WindowsDirectory", str(self.windows)]
+        if macos:
+            arguments.extend(["-MacOSDirectory", str(macos)])
+        return subprocess.run(arguments,
                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
 
     def rejected(self, result, reason):
@@ -67,6 +71,16 @@ class ReleaseCandidateTests(unittest.TestCase):
 
     def test_multiple_full_packages_are_ambiguous(self):
         self.rejected(self.run_candidate([self.asset, self.asset]), "Unexpected Windows release feed")
+
+    def test_macos_package_must_match_the_channel_feed(self):
+        macos = self.root / "dist/macos"
+        macos.mkdir()
+        package = macos / "RHRemote-Moonlight-0.2.7-osx-arm64-full.nupkg"
+        package.write_bytes(b"macos-arm64")
+        asset = {"PackageId": "RHRemote-Moonlight", "Version": "0.2.7", "Type": "Full",
+                 "FileName": package.name, "Size": package.stat().st_size, "SHA256": "0" * 64}
+        (macos / "releases.osx-arm64.json").write_text(json.dumps({"Assets": [asset]}), encoding="utf-8")
+        self.rejected(self.run_candidate(macos=macos), "macOS update package checksum mismatch")
 
 
 if __name__ == "__main__":

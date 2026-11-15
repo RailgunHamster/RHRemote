@@ -613,7 +613,13 @@ mod tests {
     #[test]
     fn empty_native_engine_override_uses_packaged_engine() {
         let exe = std::path::PathBuf::from("C:/RHRemote/current/RHRemote.exe");
-        let expected = exe.parent().unwrap().join(if cfg!(windows){"engine/RHRemote.exe"}else{"engine/RHRemote"});
+        let expected = exe.parent().unwrap().join(if cfg!(windows) {
+            "engine/RHRemote.exe"
+        } else if cfg!(target_os = "macos") {
+            "../Helpers/Moonlight.app/Contents/MacOS/Moonlight"
+        } else {
+            "engine/RHRemote"
+        });
         assert_eq!(super::native_engine_path(None, exe.clone()), expected);
         assert_eq!(
             super::native_engine_path(Some(std::ffi::OsString::new()), exe.clone()),

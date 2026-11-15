@@ -6,6 +6,7 @@ param(
  [string]$ServerAssetsDirectory='',
  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ServerVersion='0.2.11',
  [string]$LinuxDirectory='',
+ [string]$MacOSDirectory='',
  [DateTimeOffset]$PublishedAt=[DateTimeOffset]::UtcNow,
  [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSignerSha256='2f6464fe50d23ef17e4fdab8c1dcc7b6ec4171b890158738653c51854031dadc'
 )
@@ -31,6 +32,10 @@ $packageName=[string]$feed.Assets[0].FileName
 if($packageName-notmatch'^[A-Za-z0-9._-]+\.nupkg$'-or$packageName.Contains('..')){throw 'Unsafe Windows package filename'}
 $package=Get-Item -LiteralPath (Join-Path $WindowsDirectory $packageName)
 if($package.Length-ne$feed.Assets[0].Size-or(Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash-ine$feed.Assets[0].SHA256){throw 'Windows package checksum mismatch'}
+if($MacOSDirectory){
+ . (Join-Path $PSScriptRoot 'macos-release.ps1')
+ $mac=Get-RHRemoteMacRelease $MacOSDirectory $Version
+}
 $apk=Get-Item -LiteralPath (Join-Path $repo "dist/android/RHRemote-v$Version.apk")
 $buildTools=Join-Path $env:LOCALAPPDATA 'Android/Sdk/build-tools/37.0.0'
 $badgingLines=@(& (Join-Path $buildTools 'aapt.exe') dump badging $apk.FullName)
@@ -58,6 +63,12 @@ $out=Join-Path $repo ('dist/release-candidates/'+$Version+'-'+[guid]::NewGuid().
 New-Item -ItemType Directory -Path $out|Out-Null
 foreach($name in @('RHRemote-win-Setup.exe','RHRemote-win-Portable.zip','releases.win.json','RELEASES',$packageName)){Copy-Item -LiteralPath (Join-Path $WindowsDirectory $name) -Destination $out}
 [IO.File]::WriteAllText((Join-Path $out 'releases.win.json'),($feed|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+if($MacOSDirectory){
+ foreach($name in $mac.fileNames){Copy-Item -LiteralPath (Join-Path $MacOSDirectory $name) -Destination $out}
+ $mac.feed.Assets[0]|Add-Member -NotePropertyName NotesMarkdown -NotePropertyValue $releaseNotes.notes -Force
+ $mac.feed|Add-Member -NotePropertyName PublishedAt -NotePropertyValue $releaseNotes.publishedAt -Force
+ [IO.File]::WriteAllText((Join-Path $out $mac.feedName),($mac.feed|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+}
 $apkName="RHRemote-Android-$Version-arm64-v8a.apk"
 Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $out $apkName)
 Copy-Item -LiteralPath $historyPath -Destination (Join-Path $out 'releases.history.json')
@@ -88,6 +99,7 @@ $metadata=[ordered]@{publishedAt=$releaseNotes.publishedAt;channel='stable';sour
 $metadata.serverVersion=if($ServerArchive){$ServerVersion}else{$null}
 $metadata.linuxIncluded=[bool]$LinuxDirectory
 if($LinuxDirectory){$metadata.linuxPlatform='ubuntu24.04-x11-amd64';$metadata.linuxBuildType='release';$metadata.linuxServerVersion=$Version;$metadata.linuxUpdateMethod='manual-deb'}
+if($MacOSDirectory){$metadata.macOSVersion=$Version;$metadata.macOSPlatform='osx-arm64'}
 [IO.File]::WriteAllText((Join-Path $out 'build.json'),($metadata|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $source=Join-Path $out "RHRemote-$Version-source.zip"
 & git -C $repo archive --format=zip --output=$source $commit

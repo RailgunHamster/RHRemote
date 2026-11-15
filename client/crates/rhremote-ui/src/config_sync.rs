@@ -264,7 +264,7 @@ impl ConfigSync {
         })
     }
     fn credential(id: &str) -> Result<keyring::Entry, String> {
-        keyring::Entry::new("RHRemote.WebDAV", id).map_err(|_| "无法访问 Windows 凭据管理器".into())
+        keyring::Entry::new("RHRemote.WebDAV", id).map_err(|_| "无法访问本机凭据存储".into())
     }
     pub fn state(&self) -> Value {
         let conflicts = self

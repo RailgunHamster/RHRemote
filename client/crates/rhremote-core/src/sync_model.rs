@@ -422,15 +422,17 @@ impl Saved {
         self.clients
             .entry(self.client_id.clone())
             .or_insert_with(|| ClientInfo {
-                name: if platform=="linux"{std::env::var("HOSTNAME").unwrap_or_else(|_|"Linux".into())}else{std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into())},
-                platform: if platform == "android" {
-                    "android"
-                } else if platform == "linux" {
-                    "linux"
-                } else {
-                    "windows"
-                }
-                .into(),
+                name: match platform {
+                    "linux" => std::env::var("HOSTNAME").unwrap_or_else(|_| "Linux".into()),
+                    "macos" => std::env::var("HOSTNAME").unwrap_or_else(|_| "Mac".into()),
+                    _ => std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows".into()),
+                },
+                platform: match platform {
+                    "android" | "linux" => platform,
+                    // Earlier Windows and Android clients reject unknown sync platform IDs.
+                    "macos" => "legacy",
+                    _ => "windows",
+                }.into(),
             });
         if self.profile_schema_version < 2 {
             for d in &mut self.devices {
