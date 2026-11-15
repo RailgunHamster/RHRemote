@@ -55,7 +55,8 @@ pub fn launch(from: &str, to: &str, root: &Path, packages: &Path) -> Option<Tran
     command
         .arg(&root)
         .arg(packages.join("VelopackTemp"))
-        .args([&std::process::id().to_string(), from, to, if dark { "dark" } else { "light" }])
+        .arg(std::process::id().to_string())
+        .args([from, to, if dark { "dark" } else { "light" }])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
