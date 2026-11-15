@@ -32,6 +32,24 @@ fn main() {
             .manifest_optional()
             .expect("embed RHRemote icon");
     }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed=src/RHRemoteUpdateSplash.swift");
+        let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+            "aarch64" => "arm64",
+            "x86_64" => "x86_64",
+            other => panic!("Unsupported macOS architecture: {other}"),
+        };
+        let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap())
+            .join("RHRemote.UpdateSplash");
+        let result = std::process::Command::new("xcrun")
+            .args(["swiftc", "-O", "-target", &format!("{arch}-apple-macos14.4")])
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/RHRemoteUpdateSplash.swift"))
+            .arg("-o")
+            .arg(output)
+            .output()
+            .expect("run Swift compiler for the macOS update window");
+        assert!(result.status.success(), "macOS update window: {}", String::from_utf8_lossy(&result.stderr));
+    }
     let config = slint_build::CompilerConfiguration::new()
         .with_debug_info(std::env::var("PROFILE").as_deref() != Ok("release") || std::env::var("SLINT_EMIT_DEBUG_INFO").as_deref()==Ok("1"));
     slint_build::compile_with_config("ui/app.slint", config).expect("compile RHRemote UI");

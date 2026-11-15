@@ -336,10 +336,20 @@ impl Updates {
                     #[cfg(windows)]
                     let transition=velopack::locator::auto_locate_app_manifest(velopack::locator::LocationContext::FromCurrentExe).ok()
                         .and_then(|locator|crate::update_splash::launch(&manager.get_current_version_as_string(),&pending.Version,&locator.get_root_dir()));
+                    #[cfg(target_os = "macos")]
+                    let transition = velopack::locator::auto_locate_app_manifest(velopack::locator::LocationContext::FromCurrentExe)
+                        .ok()
+                        .and_then(|locator| crate::update_splash::launch(
+                            &manager.get_current_version_as_string(),
+                            &pending.Version,
+                            &locator.get_root_dir(),
+                            &locator.get_packages_dir(),
+                        ));
                     #[cfg(windows)]let silent=transition.is_some();
                     #[cfg(not(windows))]let silent=false;
                     manager.wait_exit_then_apply_updates(pending,silent,true,Vec::<String>::new()).map_err(|e|e.to_string())?;
-                    #[cfg(windows)]if let Some(transition)=transition{transition.commit();}
+                    #[cfg(any(windows, target_os = "macos"))]
+                    if let Some(transition) = transition { transition.commit(); }
                 },
                 _=>return Err("unknown update action".into()),
             }

@@ -51,6 +51,9 @@ mod proxy;
 mod update_cancel;
 #[cfg(windows)]
 mod update_splash;
+#[cfg(target_os = "macos")]
+#[path = "update_splash_macos.rs"]
+mod update_splash;
 mod ui_rendering;
 mod floating_keyboard;
 #[cfg(target_os = "linux")]

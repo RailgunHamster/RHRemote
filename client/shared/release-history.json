@@ -2,8 +2,13 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.2.28",
+      "publishedAt": "2026-11-15T07:13:34.7168239+00:00",
+      "notes": "发布时间：2026-11-15 15:13 UTC+08:00\n\n# RHRemote 0.2.28\n\n## macOS（Apple 芯片）\n\n- 更新安装阶段显示与 Windows 同样布局的过渡窗口，支持浅色和深色主题。\n- 过渡窗口在旧客户端退出后继续显示，在新版主窗口可见后自动关闭。\n- 过渡窗口由发起更新的版本启动。从 0.2.28 开始安装后续更新时可见。\n\nWindows 客户端沿用现有更新窗口，Android 沿用系统安装确认。Windows 服务端仍为 0.2.25。\n"
+    },
+    {
       "version": "0.2.27",
-      "publishedAt": "2026-11-15T06:45:42.4797021+00:00",
+      "publishedAt": "2026-11-15T14:45:42.4797021+08:00",
       "notes": "发布时间：2026-11-15 14:45 UTC+08:00\n\n# RHRemote 0.2.27\n\n## macOS（Apple 芯片）\n\n- 为 RHRemote-Moonlight 接入应用内更新，默认从 CNB 检查，失败时自动尝试 GitHub。\n- 此次 macOS 附件用于已部署的个人安装。原先直接复制的应用需覆盖安装一次，设备与配对配置保存在应用包之外。\n\n## Windows / Android\n\n- Windows 更新页明确显示当前安装包是否支持应用内更新。\n- Windows 和 Android 沿用现有更新入口。Windows RHRemote-Sunshine 仍为 0.2.25。\n"
     },
     {
