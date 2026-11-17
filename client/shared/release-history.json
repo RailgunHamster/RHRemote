@@ -2,8 +2,13 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.2.30",
+      "publishedAt": "2026-11-17T17:28:52.8356270+00:00",
+      "notes": "发布时间：2026-11-18 01:28 UTC+08:00\n\n# RHRemote 0.2.30\n\n## Windows\n\n- 远端按 Ctrl+C 后，从「快捷键」或「外置快捷键」选择「取回远端文本」，再在本机按 Ctrl+V。需要本版 Windows 客户端与 RHRemote-Sunshine 0.2.26。\n- 仅在主动取回时读取当前串流的远端文本，支持 Unicode 和多行文字。\n\nAndroid 更新版本号。macOS 更新源继续提供 0.2.28。\n"
+    },
+    {
       "version": "0.2.29",
-      "publishedAt": "2026-11-17T16:36:01.3314769+00:00",
+      "publishedAt": "2026-11-18T00:36:01.3314769+08:00",
       "notes": "发布时间：2026-11-18 00:36 UTC+08:00\n\n# RHRemote 0.2.29\n\n## Windows\n\n- 串流期间，展开画面上方的「控制」即可切换「全屏」和「退出全屏」。按钮随窗口的实际状态更新，支持通过控制接口操作当前会话。\n- 在远程画面内仍可按 `Ctrl+Alt+Shift+X` 切换全屏。\n- 「快捷键」和「外置快捷键」新增「粘贴本机文本 · Ctrl+Alt+Shift+V」，可把本机剪贴板的纯文本输入远端。\n\nAndroid 随本次发布更新版本号。macOS 更新源继续提供 0.2.28，Windows 服务端继续使用 0.2.25。\n"
     },
     {
