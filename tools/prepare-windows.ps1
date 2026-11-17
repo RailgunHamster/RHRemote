@@ -425,6 +425,9 @@ bool Session::populateDecoderProperties(SDL_Window* window)
     $s=Replace-Once $s '    emit connectionStarted();' @'
     { auto& runtime=RhRuntime::get();QMutexLocker lock(&runtime.mutex);
       runtime.hostAddress=m_Computer->activeAddress.address();runtime.hostCert=m_Computer->serverCert;
+#ifdef Q_OS_WIN32
+      runtime.gameStreamHttpsPort=m_Computer->activeHttpsPort;
+#endif
       runtime.profile={{"width",m_Preferences->width},{"height",m_Preferences->height},{"swapButtons",m_Preferences->swapMouseButtons}}; }
     const auto rhFailure=qEnvironmentVariable("RHREMOTE_TEST_INITIAL_FAILURE");
     if(qEnvironmentVariable("RHREMOTE_TEST_MODE")=="1"&&!rhFailure.isEmpty()){

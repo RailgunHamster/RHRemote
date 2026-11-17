@@ -45,6 +45,7 @@ mod tests {
             Ok(match id {
                 "stream.audio.toggle" => json!({"enabled":true}),
                 "stream.fullscreen.toggle" => json!({"accepted":true}),
+                "stream.shortcut" if args["shortcut"] == "copy-remote-text" => json!({"clipboardCopied":true}),
                 _ => json!({}),
             })
         }
@@ -324,6 +325,20 @@ mod tests {
         let _ = std::fs::remove_file(&c.storage);
     }
     #[test]
+    #[cfg(windows)]
+    fn remote_text_copy_uses_the_normal_shortcut_and_reports_the_local_write() {
+        let c = fixture(Arc::new(Host { pending: None, fail: false.into() }));
+        let list = c.dispatch("stream.shortcuts.list", json!({}));
+        assert_eq!(list["result"][1]["id"], "copy-remote-text");
+        assert_eq!(c.dispatch("stream.shortcut.pin.set", json!({"shortcut":"copy-remote-text"}))["ok"], true);
+        let copy = || c.dispatch("stream.shortcut", json!({"shortcut":"copy-remote-text"}));
+        assert_eq!(copy()["result"], json!({"clipboardCopied":true}));
+        assert_eq!(c.state()["controlAction"]["message"], "已复制到本机剪贴板");
+        c.stream_state(false, json!({"phase":"disconnected","nativeCleanupPending":false}));
+        assert_eq!(copy()["ok"], false);
+        let _ = std::fs::remove_file(&c.storage);
+    }
+    #[test]
     fn slow_session_http_control_keeps_state_tabs_and_disconnect_responsive() {
         use std::{io::{Read,Write},net::{TcpListener,TcpStream}};
         fn request(port:u16,token:&str,body:Option<&str>,timeout:Duration)->std::io::Result<String>{
@@ -513,6 +528,7 @@ impl Controller {
                 s.control_action.message = match id {
                     "stream.displays.refresh" => "屏幕列表已刷新".into(),
                     "stream.display.select" => "已发送屏幕切换".into(),
+                    "stream.shortcut" if value["clipboardCopied"] == true => "已复制到本机剪贴板".into(),
                     "stream.shortcut" | "stream.window.move" => "已发送快捷键".into(),
                     "stream.keyboard.press" => "已发送按键".into(),
                     "stream.stats.toggle" => {

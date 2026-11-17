@@ -89,6 +89,9 @@ namespace rtsp_stream {
    */
   int session_count();
 
+  /** @brief Check live stream ownership. @param certificate Canonical paired client certificate. @return True only for a running stream of that client. */
+  bool has_running_session(std::string_view certificate);
+
   /** @brief Check whether another HTTP launch still owns the RTSP handshake slot. @return Whether a launch is pending. */
   bool launch_pending();
 

@@ -51,11 +51,10 @@ pub fn catalog() -> Value {
 pub fn shortcuts() -> Value {
     let mut shortcuts: Value = serde_json::from_str(include_str!("../../../shared/shortcuts.json")).unwrap();
     if cfg!(windows) {
-        shortcuts.as_array_mut().unwrap().insert(0, json!({
-            "id": "paste-local-text",
-            "label": "粘贴本机文本 · Ctrl+Alt+Shift+V",
-            "keys": []
-        }));
+        shortcuts.as_array_mut().unwrap().splice(0..0, [
+            json!({"id":"paste-local-text","label":"粘贴本机文本 · Ctrl+Alt+Shift+V","keys":[]}),
+            json!({"id":"copy-remote-text","label":"取回远端文本","keys":[]}),
+        ]);
     }
     shortcuts
 }

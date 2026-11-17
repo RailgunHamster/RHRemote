@@ -1,5 +1,6 @@
 #pragma once
 #include "rhkeyboard.h"
+#include "rhclipboard.h"
 #include <QObject>
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -48,6 +49,7 @@ struct RhRuntime {
     static constexpr int FullscreenToggleEvent = 0x52480003;
     static constexpr int ClipboardPasteEvent = 0x52480004;
     std::atomic<bool> fullscreen{false};
+    quint16 gameStreamHttpsPort = 0;
 #endif
     std::atomic<bool> localDisconnect{false},retryEligible{false},recoveryAdmissionBusy{false},routeRetryEligible{false},routeFatal{false},transportReleased{false};
     std::atomic<int> terminationCode{0};
@@ -200,6 +202,41 @@ class RhControl : public QObject {
             return {{"ok",true},{"accepted",true}};
         }
 #ifdef Q_OS_WIN32
+        if (path == "/v1/shortcut" && body["shortcut"] == "copy-remote-text") {
+            const auto window = r.streamWindow.load();
+            if (!streaming || !r.firstFrame.load() || !window || r.localDisconnect.load()) {
+                status = 409;
+                return {{"ok", false}, {"error", "没有可操作的远程窗口"}};
+            }
+            QString address;
+            QSslCertificate certificate;
+            quint16 port;
+            {
+                QMutexLocker lock(&r.mutex);
+                address = r.hostAddress;
+                certificate = r.hostCert;
+                port = r.gameStreamHttpsPort;
+            }
+            if (!port) {
+                status = 409;
+                return {{"ok", false}, {"error", "缺少远端串流地址"}};
+            }
+            const auto result = RhHost::request(address, certificate, "/rhremote/clipboard/text", {{"version", 1}}, port);
+            if (!result["ok"].toBool()) {
+                status = 409;
+                return {{"ok", false}, {"error", result["error"].toString("无法读取远端剪贴板，请检查 Sunshine 版本")}};
+            }
+            if (r.streamWindow.load() != window || r.localDisconnect.load()) {
+                status = 409;
+                return {{"ok", false}, {"error", "远程窗口已结束"}};
+            }
+            const auto text = result["result"].toObject()["text"].toString();
+            if (!RhClipboard::writeText(window, text)) {
+                status = 409;
+                return {{"ok", false}, {"error", "写入本机剪贴板失败，请重试"}};
+            }
+            return {{"ok", true}, {"clipboardCopied", true}};
+        }
         const bool pasteLocalText = path == "/v1/shortcut" && body["shortcut"] == "paste-local-text";
         if (path == "/v1/fullscreen-toggle" || pasteLocalText) {
             if (!streaming || !r.firstFrame.load() || r.streamWindow.load() == 0 || r.localDisconnect.load()) {

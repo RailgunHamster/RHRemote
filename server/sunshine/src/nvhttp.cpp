@@ -39,6 +39,7 @@
 #include "rhremote_server_update.h"
 #include "rhremote_window_capture.h"
 #ifdef _WIN32
+  #include "platform/windows/clipboard_text.h"
   #include "platform/windows/window_capture.h"
 #endif
 #include "rhremote_launch_http.h"
@@ -1444,6 +1445,25 @@ namespace nvhttp {
     return cert && !verify_client_certificate(cert.get());
   }
 
+#ifdef _WIN32
+  /** @brief Write a clipboard response without caching it. @param response HTTPS reply. @param payload Sanitized diagnostic or requested text. */
+  void write_clipboard_result(const resp_https_t &response, const nlohmann::json &payload) {
+    response->write(SimpleWeb::StatusCode::success_ok, payload.dump(), {{"Content-Type", "application/json"}, {"Cache-Control", "no-store"}});
+    response->close_connection_after_response = true;
+  }
+
+  /** @brief Permit clipboard reads only for the paired owner of a running stream. @param peer Actual HTTPS certificate. @return Whether it can read now. */
+  bool clipboard_allowed(const rhremote::launch_peer &peer) {
+    {
+      std::lock_guard lock {client_auth_mutex()};
+      if (!launch_peer_authorized_locked(peer)) {
+        return false;
+      }
+    }
+    return rtsp_stream::has_running_session(peer.certificate);
+  }
+#endif
+
   /** @brief Stop cancelled preparations at real side-effect boundaries. @param ownership Original request handle. @param tree Rejection result. @return Whether preparation may continue. */
   bool launch_checkpoint(const std::shared_ptr<rhremote::launch_ticket> &ownership, pt::ptree &tree) {
     if (rtsp_stream::launch_request_preparing(ownership)) {
@@ -1952,6 +1972,11 @@ namespace nvhttp {
     rhremote::launch_worker window_worker(2, [] {
       BOOST_LOG(error) << "Window enumeration raised an exception"sv;
     });
+#ifdef _WIN32
+    rhremote::launch_worker clipboard_worker(1, [] {
+      BOOST_LOG(error) << "Clipboard snapshot raised an exception"sv;
+    });
+#endif
 
     // Verify certificates after establishing connection
     https_server.verify = [](SSL *ssl) -> std::optional<rhremote::launch_peer> {
@@ -2094,6 +2119,38 @@ namespace nvhttp {
       }
     };
 
+#ifdef _WIN32
+    https_server.resource["^/rhremote/clipboard/text$"]["POST"] = [&https_server, &clipboard_worker](auto resp, auto req) {
+      const auto peer = https_server.verified_requests.peer(req);
+      if (!peer || req->header.contains("Origin") || req->header.contains("Referer")) {
+        write_clipboard_result(resp, {{"ok", false}, {"error", "A paired stream is required"}});
+        return;
+      }
+      if (req->content.size() > 64 ||
+          nlohmann::json::parse(req->content.string(), nullptr, false) != nlohmann::json {{"version", 1}}) {
+        write_clipboard_result(resp, {{"ok", false}, {"error", "Unsupported clipboard request"}});
+        return;
+      }
+      if (!clipboard_worker.submit([resp, peer] {
+            if (!clipboard_allowed(*peer)) {
+              write_clipboard_result(resp, {{"ok", false}, {"error", "A paired stream is required"}});
+              return;
+            }
+            const auto snapshot = platf::clipboard::read_text();
+            if (!snapshot.error.empty()) {
+              write_clipboard_result(resp, {{"ok", false}, {"error", snapshot.error}});
+              return;
+            }
+            if (!clipboard_allowed(*peer) || !platf::clipboard::desktop_available()) {
+              write_clipboard_result(resp, {{"ok", false}, {"error", "Remote desktop or stream changed"}});
+              return;
+            }
+            write_clipboard_result(resp, {{"ok", true}, {"result", {{"text", snapshot.text}}}});
+          })) {
+        write_clipboard_result(resp, {{"ok", false}, {"error", "Remote clipboard is busy; try again"}});
+      }
+    };
+#endif
     https_server.config.reuse_address = true;
     https_server.config.address = net::get_bind_address(address_family);
     https_server.config.port = port_https;
@@ -2134,6 +2191,9 @@ namespace nvhttp {
 
     rtsp_stream::launch_requests_close();
     worker.close();
+#ifdef _WIN32
+    clipboard_worker.close();
+#endif
     https_server.stop();
     http_server.stop();
 

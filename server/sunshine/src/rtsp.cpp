@@ -10,6 +10,7 @@ extern "C" {
 }
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <format>
@@ -614,6 +615,15 @@ namespace rtsp_stream {
       return (int) _session_slots->size();
     }
 
+    /** @brief Check a client's live stream under the session lock. @param certificate Canonical paired certificate. @return Whether a matching stream is running. */
+    bool has_running_session(std::string_view certificate) {
+      auto lock = _session_slots.lock();
+      return std::any_of(_session_slots->begin(), _session_slots->end(), [&](const auto &session) {
+        return stream::session::state(*session) == stream::session::state_e::RUNNING &&
+               stream::session::client_cert(*session) == certificate;
+      });
+    }
+
     rhremote::pending_launches<launch_session_t> pending_launches;  ///< Atomic pending-slot ownership and bounded cancellation history.
 
     /**
@@ -765,6 +775,10 @@ namespace rtsp_stream {
     server.clear(false);
 
     return server.session_count();
+  }
+
+  bool has_running_session(std::string_view certificate) {
+    return !certificate.empty() && server.has_running_session(certificate);
   }
 
   bool launch_pending() {
