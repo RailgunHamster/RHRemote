@@ -37,6 +37,7 @@ mod frame_milestone_tests;
 struct FirstFrameState {
     pid: u32,
     stream_window: Option<String>,
+    fullscreen: Option<bool>,
     audio_enabled: Option<bool>,
     volume: Option<u64>,
 }
@@ -47,6 +48,7 @@ impl FirstFrameState {
             pid,
             stream_window: value["streamWindow"].as_str().filter(|value| value.parse::<usize>().is_ok()).map(str::to_owned)
                 .or_else(|| previous.and_then(|state| state.stream_window.clone())),
+            fullscreen: value["fullscreen"].as_bool().or_else(|| previous.and_then(|state| state.fullscreen)),
             audio_enabled: value["audioEnabled"].as_bool().or_else(|| previous.and_then(|state| state.audio_enabled)),
             volume: value["volume"].as_u64().filter(|value| *value <= 100).or_else(|| previous.and_then(|state| state.volume)),
         }
@@ -55,6 +57,7 @@ impl FirstFrameState {
         value["firstFrame"] = json!(true);
         value["firstFrameFromMilestone"] = json!(true);
         if value["streamWindow"].is_null() { if let Some(window) = &self.stream_window { value["streamWindow"] = json!(window); } }
+        if value["fullscreen"].is_null() { if let Some(fullscreen) = self.fullscreen { value["fullscreen"] = json!(fullscreen); } }
         if value["audioEnabled"].is_null() { if let Some(enabled) = self.audio_enabled { value["audioEnabled"] = json!(enabled); } }
         if value["volume"].is_null() { if let Some(volume) = self.volume { value["volume"] = json!(volume); } }
     }
@@ -1821,6 +1824,8 @@ impl Platform for NativePlatform {
             "stream.keyboard.press" => self.control("keyboard", args),
             "stream.window.move" => self.control("shortcut", &json!({"shortcut": if args["direction"] == "left" {"win-shift-left"} else {"win-shift-right"}})),
             "stream.stats.toggle" => self.control("stats-toggle", &json!({})),
+            #[cfg(windows)]
+            "stream.fullscreen.toggle" => self.control("fullscreen-toggle", &json!({})),
             "stream.audio.toggle" => {
                 let state = self.state()?;
                 self.audio_control(&json!({"enabled":state["audioEnabled"]!=true}))

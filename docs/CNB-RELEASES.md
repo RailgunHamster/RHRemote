@@ -44,6 +44,8 @@ bash tools/package-macos-velopack.sh "$version" "$ui_binary" "$moonlight_app" "$
 
 将输出目录传给 `prepare-release-candidate.ps1 -MacOSDirectory`。Mac 更新使用独立的 `osx-arm64` 频道，首次发行后随每个正式版本一起发布。旧的手工安装版需覆盖安装一次。配对和客户端设置存储在 `~/Library/Application Support/RHRemote`，更新会替换应用包。
 
+仅更新其他平台时，可传入上一版已验证的 macOS 资源目录和 `-MacOSVersion <已发布版本>`，沿用该版本的更新包与说明。
+
 ## Windows 服务端自动更新（0.2.23 起）
 
 服务端在 Sunshine 网页首页提供更新面板，管理接口为 `GET/POST /api/rhremote/updates`、`POST /api/rhremote/updates/action`（`{"action":"check"}` 或 `{"action":"install"}`），沿用管理员认证和 CSRF 校验。默认 CNB、GitHub 备用，检查间隔支持 5/15/30/60 分钟。启用后等待空闲安装；设置保存在 `%ProgramData%/RHRemoteHost/updates/settings.json`，不参与客户端 WebDAV 同步。

@@ -356,6 +356,40 @@ fn session_tabs_keep_disconnect_reachable_and_pending_commands_do_not_send_twice
 }
 
 #[test]
+fn fullscreen_button_follows_the_stream_window_and_fits_in_the_toolbar() {
+    i_slint_backend_testing::init_no_event_loop();
+    let ui = crate::StreamToolbar::new().unwrap();
+    ui.set_device_name("winserver".into());
+    let received = Rc::new(RefCell::new(Vec::new()));
+    let calls = received.clone();
+    ui.global::<Commands>().on_trigger(move |id, _| calls.borrow_mut().push(id.to_string()));
+    ui.show().unwrap();
+    assert!(ElementHandle::find_by_accessible_label(&ui, "全屏").next().is_none());
+    ui.set_fullscreen_available(true);
+    for width in [320., 560.] {
+        ui.window().set_size(LogicalSize::new(width, 292.));
+        for (fullscreen, label) in [(false, "全屏"), (true, "退出全屏")] {
+            ui.set_fullscreen(fullscreen);
+            for label in [label, "断开"] {
+                let button = ElementHandle::find_by_accessible_label(&ui, label).next().unwrap();
+                let position = button.absolute_position();
+                assert!(position.x >= 0. && position.x + button.size().width <= width);
+                assert!(position.y >= 28. && position.y + button.size().height <= 88.);
+            }
+            received.borrow_mut().clear();
+            click(&ui, label);
+            assert_eq!(&*received.borrow(), &["stream.fullscreen.toggle"]);
+            ui.set_busy(true);
+            received.borrow_mut().clear();
+            click(&ui, label);
+            assert!(received.borrow().is_empty());
+            ui.set_busy(false);
+        }
+    }
+    ui.hide().unwrap();
+}
+
+#[test]
 fn floating_keyboard_switch_stays_visible_above_every_control_tab(){
     use i_slint_backend_testing::{TestingBackend,TestingBackendOptions};
     slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions{mock_time:true,threading:false,renderer_name:Some("software".into())}))).unwrap();

@@ -325,7 +325,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             toolbar_queue.message("操作队列已满".into());
         }
-        if matches!(id.as_str(),"stream.shortcut"|"stream.window.move"|"stream.display.select") {
+        if matches!(id.as_str(),"stream.shortcut"|"stream.window.move"|"stream.display.select"|"stream.fullscreen.toggle") {
             overlay::focus_stream(&toolbar_queue.state());
         }
     });
@@ -451,6 +451,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             toolbar.set_pending_cancel_label(if canceling {"正在断开…"}else if state["connection"]["phase"]=="reconnecting" {"取消恢复"}else{"取消连接"}.into());
             toolbar.set_audio_enabled(state["audioEnabled"]==true);toolbar.set_audio_volume(state["volume"].as_i64().unwrap_or(100) as i32);
             toolbar.set_device_name(ui.get_selected_name());toolbar.set_stats_enabled(state["showStats"]==true);
+            let fullscreen=state["statistics"]["fullscreen"].as_bool();
+            toolbar.set_fullscreen_available(fullscreen.is_some());
+            toolbar.set_fullscreen(fullscreen.unwrap_or(false));
             let controls_tab=state["controlsTab"].as_str().unwrap_or("input");let feedback=&state["controlAction"];let feedback_visible=feedback["group"]==controls_tab;
             toolbar.set_controls_tab(controls_tab.into());toolbar.set_busy(feedback["busy"]==true || state["streaming"]!=true || canceling);toolbar.set_failed(feedback_visible && feedback["error"].as_str().is_some_and(|s|!s.is_empty()));
             toolbar.set_status(if state["connecting"]==true {state["status"].as_str().unwrap_or("")}else if feedback_visible {feedback["message"].as_str().unwrap_or("")}else{""}.into());

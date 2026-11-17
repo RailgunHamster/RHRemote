@@ -300,6 +300,8 @@ Edit-Source 'app/streaming/session.h' {param($s)
     return (Replace-Once $s '    void execInternal();' "    std::future<QJsonObject> m_RhDisplayPreparation;`n    using RhProbeKey=std::tuple<SDL_Window*,int,int,int,int,int>;`n    RhProbeCache<RhProbeKey,IVideoDecoder> m_RhProbeCache;`n    RhWindowBridge m_RhWindowBridge;`n    int m_RhAudioProbeConfig=-1;`n    bool m_RhAudioProbeOk=false;`n    void execInternal();")
 }
 Edit-Source 'app/streaming/session.cpp' {param($s)
+    # Older local baselines already include a placement override. Replace it with the current one.
+    $s=[regex]::Replace($s,'(?ms)^    // Explicit placement for secondary-screen tests\. Do not depend on Qt window\r?\n.*?(?=^    SDL_Rect usableBounds;)','')
     $s=Replace-Once $s '    SDL_Rect usableBounds;' @'
     // The Rust UI and SDL select displays independently. An explicit test
     // monitor must never silently fall back to the user's primary display.
@@ -456,6 +458,18 @@ bool Session::populateDecoderProperties(SDL_Window* window)
 '@
     $s=Replace-Once $s '    SDL_DestroyWindow(m_Window);' '    RhRuntime::get().streamWindow=0;
     SDL_DestroyWindow(m_Window);'
+    $s=Replace-Once $s '    SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);' @'
+    SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);
+#ifdef Q_OS_WIN32
+    RhRuntime::get().fullscreen = (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN) != 0;
+#endif
+'@
+    $s=Replace-Once $s '    bool needsFirstEnterCapture = false;' @'
+#ifdef Q_OS_WIN32
+    RhRuntime::get().fullscreen = (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_FULLSCREEN) != 0;
+#endif
+    bool needsFirstEnterCapture = false;
+'@
     $s=Replace-Once $s '            case SDL_CODE_FRAME_READY:' @'
             case 0x52480001:
                 m_OverlayManager.setOverlayState(Overlay::OverlayDebug,!m_OverlayManager.isOverlayEnabled(Overlay::OverlayDebug));
@@ -463,6 +477,15 @@ bool Session::populateDecoderProperties(SDL_Window* window)
             case 0x52480002:
                 clConnectionTerminated(ML_ERROR_UNEXPECTED_EARLY_TERMINATION);
                 break;
+#ifdef Q_OS_WIN32
+            case RhRuntime::FullscreenToggleEvent:
+                toggleFullscreen();
+                m_InputHandler->raiseAllKeys();
+                break;
+            case RhRuntime::ClipboardPasteEvent:
+                m_InputHandler->pasteClipboardText();
+                break;
+#endif
             case SDL_CODE_FRAME_READY:
 '@
     return (Replace-Once $s 'QSvgRenderer svgIconRenderer(QString(":/res/moonlight.svg"));' 'QSvgRenderer svgIconRenderer(QString(":/res/rhremote.svg"));')
@@ -490,6 +513,14 @@ Edit-Source 'app/streaming/video/ffmpeg-renderers/renderer.h' {param($s)
     virtual void finishTrialDecode() {}
 
     // NOTE: This can be called BEFORE initialize()!
+'@)
+}
+Edit-Source 'app/streaming/input/input.h' {param($s)
+    return (Replace-Once $s '    void raiseAllKeys();' @'
+    void raiseAllKeys();
+#ifdef Q_OS_WIN32
+    void pasteClipboardText() { performSpecialKeyCombo(KeyComboPasteText); }
+#endif
 '@)
 }
 Edit-Source 'app/streaming/input/gamepad.cpp' {param($s)

@@ -32,7 +32,11 @@ function Get-RHRemoteMacRelease([string]$Directory,[string]$Version) {
 function Assert-RHRemoteMacPublishPlan([string]$Directory,$Plan) {
     $macFiles = @($Plan.artifacts | Where-Object {$_.fileName -match '(^releases\.osx-arm64\.json$|^RHRemote-Moonlight-.*osx-arm64)'})
     if ($macFiles.Count -eq 0) { return }
-    $release = Get-RHRemoteMacRelease $Directory $Plan.version
+    $macVersion = if ($Plan.macOSVersion) { [string]$Plan.macOSVersion } else { [string]$Plan.version }
+    if ($macVersion -notmatch '^\d+\.\d+\.\d+$' -or [version]$macVersion -gt [version]$Plan.version) {
+        throw 'Unexpected macOS version in the publication plan'
+    }
+    $release = Get-RHRemoteMacRelease $Directory $macVersion
     if ($macFiles.Count -ne $release.fileNames.Count) { throw 'Unexpected macOS release assets' }
     foreach ($name in $release.fileNames) {
         if (@($macFiles | Where-Object fileName -ceq $name).Count -ne 1) {

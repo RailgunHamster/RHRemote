@@ -7,6 +7,7 @@ param(
  [ValidatePattern('^\d+\.\d+\.\d+$')][string]$ServerVersion='0.2.11',
  [string]$LinuxDirectory='',
  [string]$MacOSDirectory='',
+ [ValidatePattern('^\d+\.\d+\.\d+$')][string]$MacOSVersion,
  [DateTimeOffset]$PublishedAt=[DateTimeOffset]::UtcNow,
  [ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedSignerSha256='2f6464fe50d23ef17e4fdab8c1dcc7b6ec4171b890158738653c51854031dadc'
 )
@@ -34,7 +35,11 @@ $package=Get-Item -LiteralPath (Join-Path $WindowsDirectory $packageName)
 if($package.Length-ne$feed.Assets[0].Size-or(Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash-ine$feed.Assets[0].SHA256){throw 'Windows package checksum mismatch'}
 if($MacOSDirectory){
  . (Join-Path $PSScriptRoot 'macos-release.ps1')
- $mac=Get-RHRemoteMacRelease $MacOSDirectory $Version
+ if(-not $MacOSVersion){$MacOSVersion=$Version}
+ if([version]$MacOSVersion -gt [version]$Version){throw 'macOS version exceeds the candidate version'}
+ $mac=Get-RHRemoteMacRelease $MacOSDirectory $MacOSVersion
+}elseif($MacOSVersion){
+ throw 'MacOSVersion requires MacOSDirectory'
 }
 $apk=Get-Item -LiteralPath (Join-Path $repo "dist/android/RHRemote-v$Version.apk")
 $buildTools=Join-Path $env:LOCALAPPDATA 'Android/Sdk/build-tools/37.0.0'
@@ -65,9 +70,11 @@ foreach($name in @('RHRemote-win-Setup.exe','RHRemote-win-Portable.zip','release
 [IO.File]::WriteAllText((Join-Path $out 'releases.win.json'),($feed|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 if($MacOSDirectory){
  foreach($name in $mac.fileNames){Copy-Item -LiteralPath (Join-Path $MacOSDirectory $name) -Destination $out}
- $mac.feed.Assets[0]|Add-Member -NotePropertyName NotesMarkdown -NotePropertyValue $releaseNotes.notes -Force
- $mac.feed|Add-Member -NotePropertyName PublishedAt -NotePropertyValue $releaseNotes.publishedAt -Force
- [IO.File]::WriteAllText((Join-Path $out $mac.feedName),($mac.feed|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+ if($MacOSVersion -ceq $Version){
+  $mac.feed.Assets[0]|Add-Member -NotePropertyName NotesMarkdown -NotePropertyValue $releaseNotes.notes -Force
+  $mac.feed|Add-Member -NotePropertyName PublishedAt -NotePropertyValue $releaseNotes.publishedAt -Force
+  [IO.File]::WriteAllText((Join-Path $out $mac.feedName),($mac.feed|ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+ }
 }
 $apkName="RHRemote-Android-$Version-arm64-v8a.apk"
 Copy-Item -LiteralPath $apk.FullName -Destination (Join-Path $out $apkName)
@@ -99,7 +106,7 @@ $metadata=[ordered]@{publishedAt=$releaseNotes.publishedAt;channel='stable';sour
 $metadata.serverVersion=if($ServerArchive){$ServerVersion}else{$null}
 $metadata.linuxIncluded=[bool]$LinuxDirectory
 if($LinuxDirectory){$metadata.linuxPlatform='ubuntu24.04-x11-amd64';$metadata.linuxBuildType='release';$metadata.linuxServerVersion=$Version;$metadata.linuxUpdateMethod='manual-deb'}
-if($MacOSDirectory){$metadata.macOSVersion=$Version;$metadata.macOSPlatform='osx-arm64'}
+if($MacOSDirectory){$metadata.macOSVersion=$MacOSVersion;$metadata.macOSPlatform='osx-arm64'}
 [IO.File]::WriteAllText((Join-Path $out 'build.json'),($metadata|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
 $source=Join-Path $out "RHRemote-$Version-source.zip"
 & git -C $repo archive --format=zip --output=$source $commit
@@ -109,5 +116,6 @@ $checksums=@(Get-ChildItem -LiteralPath $out -File|Sort-Object Name|ForEach-Obje
 [IO.File]::WriteAllLines((Join-Path $out 'SHA256SUMS.txt'),$checksums,[Text.UTF8Encoding]::new($false))
 $artifacts=@(Get-ChildItem -LiteralPath $out -File|Sort-Object Name|ForEach-Object{[ordered]@{fileName=$_.Name;size=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}})
 $plan=[ordered]@{version=$Version;tag="v$Version";preview=$false;commit=$commit;developmentBuild=$false;artifacts=$artifacts}
+if($MacOSDirectory){$plan.macOSVersion=$MacOSVersion}
 [IO.File]::WriteAllText((Join-Path $out 'publish-plan.json'),($plan|ConvertTo-Json -Depth 7),[Text.UTF8Encoding]::new($false))
 [pscustomobject]@{directory=$out;commit=$commit;tag=$plan.tag;artifacts=$artifacts.Count;apkSha256=$apkHash;signerSha256=$digests[0];windowsVersion=$Version;androidVersionCode=$AndroidVersionCode}

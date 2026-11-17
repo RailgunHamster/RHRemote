@@ -49,7 +49,15 @@ pub fn catalog() -> Value {
     let mut catalog=serde_json::from_str(ACTIONS).expect("compiled action catalog");desktop_catalog::extend(&mut catalog);desktop_catalog::extend_actions(&mut catalog);catalog
 }
 pub fn shortcuts() -> Value {
-    serde_json::from_str(include_str!("../../../shared/shortcuts.json")).unwrap()
+    let mut shortcuts: Value = serde_json::from_str(include_str!("../../../shared/shortcuts.json")).unwrap();
+    if cfg!(windows) {
+        shortcuts.as_array_mut().unwrap().insert(0, json!({
+            "id": "paste-local-text",
+            "label": "粘贴本机文本 · Ctrl+Alt+Shift+V",
+            "keys": []
+        }));
+    }
+    shortcuts
 }
 pub fn now_ms() -> u64 {
     SystemTime::now()

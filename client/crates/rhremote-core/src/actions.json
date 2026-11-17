@@ -573,6 +573,14 @@
     "args": {}
   },
   {
+    "id": "stream.fullscreen.toggle",
+    "label": "切换串流窗口全屏",
+    "args": {},
+    "platforms": [
+      "windows"
+    ]
+  },
+  {
     "id": "stream.stats.toggle",
     "label": "统计",
     "args": {}

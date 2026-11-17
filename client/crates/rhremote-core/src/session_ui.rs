@@ -44,6 +44,7 @@ mod tests {
             }
             Ok(match id {
                 "stream.audio.toggle" => json!({"enabled":true}),
+                "stream.fullscreen.toggle" => json!({"accepted":true}),
                 _ => json!({}),
             })
         }
@@ -297,6 +298,32 @@ mod tests {
     }
 
     #[test]
+    fn fullscreen_control_only_dispatches_for_a_live_stream() {
+        let c = fixture(Arc::new(Host { pending: None, fail: false.into() }));
+        c.stream_state(true, json!({"phase":"connected","firstFrame":true,"fullscreen":false}));
+        let response = c.dispatch("stream.fullscreen.toggle", json!({}));
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["result"]["accepted"], true);
+        assert_eq!(c.state()["statistics"]["fullscreen"], false);
+        c.stream_state(true, json!({"phase":"connected","firstFrame":true,"fullscreen":true}));
+        assert_eq!(c.state()["statistics"]["fullscreen"], true);
+        c.stream_state(false, json!({"phase":"disconnected","nativeCleanupPending":false}));
+        assert_eq!(c.dispatch("stream.fullscreen.toggle", json!({}))["ok"], false);
+        let _ = std::fs::remove_file(&c.storage);
+    }
+    #[test]
+    #[cfg(windows)]
+    fn local_text_paste_is_listed_and_can_be_pinned_through_existing_shortcuts() {
+        let c = fixture(Arc::new(Host { pending: None, fail: false.into() }));
+        let list = c.dispatch("stream.shortcuts.list", json!({}));
+        assert_eq!(list["result"][0]["id"], "paste-local-text");
+        assert_eq!(list["result"][0]["label"], "粘贴本机文本 · Ctrl+Alt+Shift+V");
+        assert_eq!(c.dispatch("stream.shortcut.pin.set", json!({"shortcut":"paste-local-text"}))["ok"], true);
+        assert!(c.state()["saved"]["pinnedShortcuts"].as_array().unwrap().contains(&json!("paste-local-text")));
+        assert_eq!(c.dispatch("stream.shortcut", json!({"shortcut":"paste-local-text"}))["ok"], true);
+        let _ = std::fs::remove_file(&c.storage);
+    }
+    #[test]
     fn slow_session_http_control_keeps_state_tabs_and_disconnect_responsive() {
         use std::{io::{Read,Write},net::{TcpListener,TcpStream}};
         fn request(port:u16,token:&str,body:Option<&str>,timeout:Duration)->std::io::Result<String>{
@@ -337,6 +364,7 @@ pub fn is_control_action(id: &str) -> bool {
             | "stream.shortcut"
             | "stream.keyboard.press"
             | "stream.window.move"
+            | "stream.fullscreen.toggle"
             | "stream.stats.toggle"
             | "stream.audio.toggle"
             | "stream.audio.volume"
@@ -383,6 +411,7 @@ fn waiting(id: &str) -> &'static str {
         "stream.displays.refresh" => "正在读取屏幕…",
         "stream.display.select" => "正在切换屏幕…",
         "stream.shortcut" | "stream.window.move" => "正在发送快捷键…",
+        "stream.fullscreen.toggle" => "正在切换全屏…",
         "stream.keyboard.press" => "正在发送按键…",
         "stream.stats.toggle" => "正在设置统计…",
         _ => "正在设置声音…",
@@ -394,6 +423,7 @@ fn failed(id: &str) -> &'static str {
         "stream.display.select" => "屏幕切换失败",
         "stream.window.move" => "窗口移动失败",
         "stream.shortcut" => "快捷键发送失败",
+        "stream.fullscreen.toggle" => "切换全屏失败",
         "stream.keyboard.press" => "按键发送失败",
         "stream.stats.toggle" => "统计设置失败",
         _ => "声音设置失败",

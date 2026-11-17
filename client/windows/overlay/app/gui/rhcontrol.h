@@ -44,6 +44,11 @@ struct RhRuntime {
     std::atomic<bool> ownerExited{false},ownerMonitorEnabled{false},sessionActive{false};
     std::atomic<bool> protocolStarted{false};
     std::atomic<quintptr> streamWindow{0};
+#ifdef Q_OS_WIN32
+    static constexpr int FullscreenToggleEvent = 0x52480003;
+    static constexpr int ClipboardPasteEvent = 0x52480004;
+    std::atomic<bool> fullscreen{false};
+#endif
     std::atomic<bool> localDisconnect{false},retryEligible{false},recoveryAdmissionBusy{false},routeRetryEligible{false},routeFatal{false},transportReleased{false};
     std::atomic<int> terminationCode{0};
     std::shared_ptr<RhLaunchAttempt> pendingLaunch;
@@ -158,6 +163,11 @@ class RhControl : public QObject {
         if(method=="GET"&&(path=="/v1/state"||path=="/v1/stats")){
             QMutexLocker lock(&r.mutex);auto result=path=="/v1/state"?r.home:QJsonObject();
             result["ownerMonitorEnabled"]=r.ownerMonitorEnabled.load();result["ownerExited"]=r.ownerExited.load();
+#ifdef Q_OS_WIN32
+            if (r.streamWindow.load() != 0) {
+                result["fullscreen"] = r.fullscreen.load();
+            }
+#endif
             result["processId"]=QCoreApplication::applicationPid();result["launchCleanupStatus"]=r.launchCleanupStatus;result["ok"]=true;result["streaming"]=r.streaming;result["activeProfile"]=r.profile;
             result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["recoveryAdmissionBusy"]=r.recoveryAdmissionBusy.load();result["routeRetryEligible"]=r.routeRetryEligible.load();result["routeFatal"]=r.routeFatal.load();result["terminationCode"]=r.terminationCode.load();result["transportReleased"]=r.transportReleased.load();return result;
         }
@@ -189,6 +199,23 @@ class RhControl : public QObject {
             if(SDL_PushEvent(&event)<0){status=503;return {{"ok",false},{"error","command queue failed"}};}
             return {{"ok",true},{"accepted",true}};
         }
+#ifdef Q_OS_WIN32
+        const bool pasteLocalText = path == "/v1/shortcut" && body["shortcut"] == "paste-local-text";
+        if (path == "/v1/fullscreen-toggle" || pasteLocalText) {
+            if (!streaming || !r.firstFrame.load() || r.streamWindow.load() == 0 || r.localDisconnect.load()) {
+                status = 409;
+                return {{"ok", false}, {"error", "no active stream window"}};
+            }
+            SDL_Event event{};
+            event.type = SDL_USEREVENT;
+            event.user.code = pasteLocalText ? RhRuntime::ClipboardPasteEvent : RhRuntime::FullscreenToggleEvent;
+            if (SDL_PushEvent(&event) != 1) {
+                status = 503;
+                return {{"ok", false}, {"error", "command queue failed"}};
+            }
+            return {{"ok", true}, {"accepted", true}};
+        }
+#endif
         if(path=="/v1/audio"){
             if(!streaming){status=409;return {{"ok",false},{"error","no active stream"}};}
             bool enabled=r.audioEnabled.load();int volume=r.volume.load();

@@ -598,6 +598,8 @@ export component StreamToolbar inherits Window {
     in property <bool> audio-enabled;
     in-out property <int> audio-volume:100;
     in property <bool> stats-enabled;
+    in property <bool> fullscreen-available;
+    in property <bool> fullscreen;
     in property <bool> busy;
     in property <bool> failed;
     in property <string> controls-tab:"input";
@@ -682,6 +684,7 @@ export component StreamToolbar inherits Window {
                 Rectangle {width:7px;height:7px;border-radius:3.5px;background:root.failed ? Palette.failure : Palette.success;y:(parent.height - self.height)/2;}
                 Text{text:root.device-name;color:Palette.ink;font-size:13px;font-weight:600;vertical-alignment:center;overflow:elide;min-width:0px;preferred-width:0px;horizontal-stretch:1;}
                 ActionButton{text:root.floating-keyboard-error!="" ? "关闭悬浮键盘" : root.floating-keyboard ? "悬浮键盘：开" : "悬浮键盘：关";action-id:"stream.keyboard.floating.set";argument:root.floating-keyboard ? "false" : "true";chosen:root.floating-keyboard && root.floating-keyboard-error=="";disabled:root.busy || root.pending;}
+                if root.fullscreen-available:ActionButton{text:root.fullscreen ? "退出全屏" : "全屏";action-id:"stream.fullscreen.toggle";chosen:root.fullscreen;disabled:root.busy || root.pending;}
                 ActionButton{text:root.pending ? root.pending-cancel-label : "断开";action-id:"stream.disconnect";disabled:root.canceling;}
             }
             HorizontalLayout {spacing:6px;
