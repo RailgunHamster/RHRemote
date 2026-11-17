@@ -24,8 +24,38 @@ inline QJsonObject request(const QString& host,const QSslCertificate& pinned,con
     if(socket.peerCertificate()!=pinned){socket.abort();return {{"ok",false},{"error","主机证书与配对记录不一致"}};}
     const auto payload=body.isEmpty()?QByteArray():QJsonDocument(body).toJson(QJsonDocument::Compact);
     socket.write((payload.isEmpty()?"GET ":"POST ")+path.toUtf8()+" HTTP/1.1\r\nHost: RHRemoteHost\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: "+QByteArray::number(payload.size())+"\r\n\r\n"+payload);
-    QByteArray data;QElapsedTimer timer;timer.start();
-    while(timer.elapsed()<15000){if(!socket.bytesAvailable()&&!socket.waitForReadyRead(qMin(1000,int(15000-timer.elapsed())))){if(socket.state()==QAbstractSocket::UnconnectedState)break;continue;}data+=socket.readAll();if(data.size()>131072)return {{"ok",false},{"error","主机响应过大"}};}
+    QByteArray data;
+    QElapsedTimer timer;
+    timer.start();
+    const int readTimeout = gameStreamPort ? 6000 : 15000;
+    constexpr qsizetype maxResponseBytes = 131072;
+    qsizetype expectedBytes = -1;
+    for (;;) {
+        const auto remaining = readTimeout - timer.elapsed();
+        if (remaining <= 0) break;
+        if (!socket.bytesAvailable() && !socket.waitForReadyRead(int(qMin<qint64>(1000, remaining)))) {
+            if (socket.state() == QAbstractSocket::UnconnectedState) break;
+            continue;
+        }
+        data += socket.readAll();
+        if (data.size() > maxResponseBytes) return {{"ok", false}, {"error", "主机响应过大"}};
+        if (gameStreamPort && expectedBytes < 0) {
+            const auto headerEnd = data.indexOf("\r\n\r\n");
+            if (headerEnd >= 0) {
+                for (const auto& header : data.left(headerEnd).toLower().split('\n')) {
+                    if (!header.startsWith("content-length:")) continue;
+                    bool valid;
+                    const auto size = header.mid(sizeof("content-length:") - 1).trimmed().toLongLong(&valid);
+                    if (valid && size >= 0 && size <= maxResponseBytes - headerEnd - 4) {
+                        expectedBytes = headerEnd + 4 + size;
+                    }
+                    break;
+                }
+            }
+        }
+        if (expectedBytes >= 0 && data.size() >= expectedBytes) break;
+    }
+    if (expectedBytes >= 0 && data.size() != expectedBytes) return {{"ok", false}, {"error", "主机响应不完整"}};
     const int split=data.indexOf("\r\n\r\n");if(split<0)return {{"ok",false},{"error","主机响应不完整"}};
     QJsonParseError error;const auto reply=QJsonDocument::fromJson(data.mid(split+4),&error);
     if(error.error!=QJsonParseError::NoError||!reply.isObject())return {{"ok",false},{"error","主机响应格式错误"}};
