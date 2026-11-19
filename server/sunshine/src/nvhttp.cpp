@@ -39,6 +39,7 @@
 #include "rhremote_server_update.h"
 #include "rhremote_window_capture.h"
 #ifdef _WIN32
+  #include "platform/windows/clipboard_sync.h"
   #include "platform/windows/clipboard_text.h"
   #include "platform/windows/window_capture.h"
 #endif
@@ -1462,6 +1463,28 @@ namespace nvhttp {
     }
     return rtsp_stream::has_running_session(peer.certificate);
   }
+
+  /** @brief Write a clipboard synchronization reply with an explicit status. @param response HTTPS reply. @param status HTTP status. @param payload Diagnostic or result without clipboard content. */
+  void write_clipboard_status(const resp_https_t &response, int status, const nlohmann::json &payload) {
+    response->write(static_cast<SimpleWeb::StatusCode>(status), payload.dump(), {{"Content-Type", "application/json"}, {"Cache-Control", "no-store"}});
+    response->close_connection_after_response = true;
+  }
+
+  /** @brief Parse one unsigned decimal query value. @param query Parsed query. @param key Name. @return Value, or empty when absent or malformed. */
+  std::optional<std::uint64_t> clipboard_query(const SimpleWeb::CaseInsensitiveMultimap &query, const std::string &key) {
+    const auto found = query.find(key);
+    if (found == query.end() || found->second.empty() || found->second.size() > 20 ||
+        !std::all_of(found->second.begin(), found->second.end(), [](char c) {
+          return c >= '0' && c <= '9';
+        })) {
+      return std::nullopt;
+    }
+    try {
+      return std::stoull(found->second);
+    } catch (const std::exception &) {
+      return std::nullopt;
+    }
+  }
 #endif
 
   /** @brief Stop cancelled preparations at real side-effect boundaries. @param ownership Original request handle. @param tree Rejection result. @return Whether preparation may continue. */
@@ -1976,6 +1999,25 @@ namespace nvhttp {
     rhremote::launch_worker clipboard_worker(1, [] {
       BOOST_LOG(error) << "Clipboard snapshot raised an exception"sv;
     });
+    rhremote::launch_worker clipboard_data_worker(8, [] {
+      BOOST_LOG(error) << "Clipboard synchronization raised an exception"sv;
+    });
+    rhremote::clipboard::broker clipboard_broker {
+      [](const std::string &certificate) {
+        return rtsp_stream::has_running_session(certificate);
+      },
+      &platf::clipboard_sync::host::memory_budget
+    };
+    platf::clipboard_sync::host clipboard_host {clipboard_broker};
+    clipboard_broker.set_callbacks(
+      [&clipboard_host](std::uint64_t request, std::vector<std::uint8_t> data) {
+        clipboard_host.late_ready(request, std::move(data));
+      },
+      [&clipboard_host](const std::string &peer) {
+        clipboard_host.peer_gone(peer);
+      }
+    );
+    clipboard_broker.start();
 #endif
 
     // Verify certificates after establishing connection
@@ -2150,6 +2192,155 @@ namespace nvhttp {
         write_clipboard_result(resp, {{"ok", false}, {"error", "Remote clipboard is busy; try again"}});
       }
     };
+
+    // Two-way clipboard synchronization: format announcements, delayed rendering and chunked transfers.
+    const auto clipboard_peer = [&https_server](const req_https_t &req) -> std::optional<rhremote::launch_peer> {
+      auto peer = https_server.verified_requests.peer(req);
+      if (!peer || req->header.contains("Origin") || req->header.contains("Referer") || !clipboard_allowed(*peer)) {
+        return std::nullopt;
+      }
+      return peer;
+    };
+    const nlohmann::json clipboard_denied {{"ok", false}, {"error", "A paired stream is required"}};
+    const nlohmann::json clipboard_invalid {{"ok", false}, {"error", "Unsupported clipboard request"}};
+    const nlohmann::json clipboard_busy {{"ok", false}, {"error", "Remote clipboard is busy; try again"}};
+
+    https_server.resource["^/rhremote/clipboard/events$"]["GET"] = [&, clipboard_peer, clipboard_denied, clipboard_invalid](auto resp, auto req) {
+      const auto peer = clipboard_peer(req);
+      if (!peer) {
+        write_clipboard_status(resp, 403, clipboard_denied);
+        return;
+      }
+      const auto query = req->parse_query_string();
+      if (clipboard_query(query, "v") != rhremote::clipboard::protocol_version) {
+        write_clipboard_status(resp, 400, clipboard_invalid);
+        return;
+      }
+      if (!clipboard_host.start()) {
+        write_clipboard_status(resp, 503, {{"ok", false}, {"error", "Remote clipboard is unavailable"}});
+        return;
+      }
+      const auto wait = std::min<std::uint64_t>(clipboard_query(query, "wait").value_or(0), 25000);
+      clipboard_broker.poll(peer->certificate, clipboard_query(query, "epoch").value_or(0), clipboard_query(query, "cursor").value_or(0), std::chrono::milliseconds(wait), [resp](nlohmann::json reply) {
+        write_clipboard_status(resp, 200, reply);
+      });
+    };
+
+    https_server.resource["^/rhremote/clipboard/formats$"]["POST"] = [&, clipboard_peer, clipboard_denied, clipboard_invalid, clipboard_busy](auto resp, auto req) {
+      const auto peer = clipboard_peer(req);
+      if (!peer) {
+        write_clipboard_status(resp, 403, clipboard_denied);
+        return;
+      }
+      if (req->content.size() > 65536) {
+        write_clipboard_status(resp, 413, clipboard_invalid);
+        return;
+      }
+      const auto body = nlohmann::json::parse(req->content.string(), nullptr, false);
+      if (!body.is_object() || !body.contains("version") || body["version"] != rhremote::clipboard::protocol_version || !body.contains("formats")) {
+        write_clipboard_status(resp, 400, clipboard_invalid);
+        return;
+      }
+      auto formats = rhremote::clipboard::parse_formats(body["formats"]);
+      if (!formats) {
+        write_clipboard_status(resp, 400, clipboard_invalid);
+        return;
+      }
+      if (!clipboard_data_worker.submit([resp, certificate = peer->certificate, formats = std::move(*formats), &clipboard_host] {
+            const auto error = clipboard_host.announce(certificate, formats);
+            if (error.empty()) {
+              write_clipboard_status(resp, 200, {{"ok", true}});
+            } else {
+              write_clipboard_status(resp, 409, {{"ok", false}, {"error", error}});
+            }
+          })) {
+        write_clipboard_status(resp, 503, clipboard_busy);
+      }
+    };
+
+    https_server.resource["^/rhremote/clipboard/data$"]["GET"] = [&, clipboard_peer, clipboard_denied, clipboard_invalid, clipboard_busy](auto resp, auto req) {
+      const auto peer = clipboard_peer(req);
+      if (!peer) {
+        write_clipboard_status(resp, 403, clipboard_denied);
+        return;
+      }
+      const auto query = req->parse_query_string();
+      const auto seq = clipboard_query(query, "seq");
+      const auto format = clipboard_query(query, "format");
+      const auto offset = clipboard_query(query, "offset").value_or(0);
+      if (clipboard_query(query, "v") != rhremote::clipboard::protocol_version || !seq || !format || *format == 0 || *format > 0xFFFF) {
+        write_clipboard_status(resp, 400, clipboard_invalid);
+        return;
+      }
+      if (!clipboard_data_worker.submit([resp, seq = *seq, format = static_cast<std::uint32_t>(*format), offset, &clipboard_host] {
+            const auto result = clipboard_host.read(seq, format);
+            if (!result.data) {
+              write_clipboard_status(resp, result.status, {{"ok", false}, {"error", result.error}});
+              return;
+            }
+            const auto total = result.data->size();
+            if (offset > total) {
+              write_clipboard_status(resp, 416, {{"ok", false}, {"error", "Offset beyond clipboard data"}});
+              return;
+            }
+            const auto length = std::min<std::size_t>(rhremote::clipboard::chunk_size, total - offset);
+            resp->write(
+              SimpleWeb::StatusCode::success_ok,
+              std::string_view(reinterpret_cast<const char *>(result.data->data()) + offset, length),
+              {{"Content-Type", "application/octet-stream"},
+               {"Cache-Control", "no-store"},
+               {"X-RHRemote-Total", std::to_string(total)},
+               {"X-RHRemote-Offset", std::to_string(offset)}}
+            );
+            resp->close_connection_after_response = true;
+          })) {
+        write_clipboard_status(resp, 503, clipboard_busy);
+      }
+    };
+
+    https_server.resource["^/rhremote/clipboard/render$"]["POST"] = [&, clipboard_peer, clipboard_denied, clipboard_invalid](auto resp, auto req) {
+      const auto peer = clipboard_peer(req);
+      if (!peer) {
+        write_clipboard_status(resp, 403, clipboard_denied);
+        return;
+      }
+      const auto query = req->parse_query_string();
+      const auto request = clipboard_query(query, "request");
+      if (clipboard_query(query, "v") != rhremote::clipboard::protocol_version || !request) {
+        write_clipboard_status(resp, 400, clipboard_invalid);
+        return;
+      }
+      if (query.find("error") != query.end()) {
+        clipboard_broker.fail_render(peer->certificate, *request);
+        write_clipboard_status(resp, 200, {{"ok", true}});
+        return;
+      }
+      const auto offset = clipboard_query(query, "offset");
+      const auto total = clipboard_query(query, "total");
+      if (!offset || !total || req->content.size() > rhremote::clipboard::chunk_size) {
+        write_clipboard_status(resp, 400, clipboard_invalid);
+        return;
+      }
+      const auto data = req->content.string();
+      using rhremote::clipboard::chunk_result;
+      switch (clipboard_broker.accept_chunk(peer->certificate, *request, *offset, *total, data)) {
+        case chunk_result::accepted:
+          write_clipboard_status(resp, 200, {{"ok", true}, {"complete", false}});
+          break;
+        case chunk_result::completed:
+          write_clipboard_status(resp, 200, {{"ok", true}, {"complete", true}});
+          break;
+        case chunk_result::cancelled:
+          write_clipboard_status(resp, 410, {{"ok", false}, {"cancelled", true}, {"error", "The remote paste was cancelled"}});
+          break;
+        case chunk_result::too_large:
+          write_clipboard_status(resp, 507, {{"ok", false}, {"error", "Not enough memory on the remote host"}});
+          break;
+        case chunk_result::invalid:
+          write_clipboard_status(resp, 400, clipboard_invalid);
+          break;
+      }
+    };
 #endif
     https_server.config.reuse_address = true;
     https_server.config.address = net::get_bind_address(address_family);
@@ -2193,6 +2384,10 @@ namespace nvhttp {
     worker.close();
 #ifdef _WIN32
     clipboard_worker.close();
+    // Finish queued reads first, then answer held polls and fail transfers before the clipboard thread and HTTPS server stop.
+    clipboard_data_worker.close();
+    clipboard_broker.stop();
+    clipboard_host.stop();
 #endif
     https_server.stop();
     http_server.stop();

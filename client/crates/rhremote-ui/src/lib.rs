@@ -2,6 +2,43 @@ use rhremote_core::{Controller,Platform};
 use serde_json::{Value, json};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::{path::PathBuf, sync::Arc, time::Duration};
+
+/// Toolbar text for the native clipboard sync: live transfer progress, else a recent notice.
+fn clipboard_status(clipboard: &Value, now_ms: u64) -> String {
+    let total = clipboard["total"].as_f64().unwrap_or(0.0);
+    let direction = match clipboard["phase"].as_str() {
+        Some("toLocal") => Some("接收远端剪贴板"),
+        Some("toRemote") => Some("发送剪贴板到远端"),
+        _ => None,
+    };
+    if let (Some(direction), true) = (direction, total > 0.0) {
+        let bytes = clipboard["bytes"].as_f64().unwrap_or(0.0).clamp(0.0, total);
+        let mib = |value: f64| value / 1048576.0;
+        let background = if clipboard["background"] == true { "（后台）" } else { "" };
+        return format!("{direction}{background} {:.0}% · {:.1}/{:.1} MB", bytes * 100.0 / total, mib(bytes), mib(total));
+    }
+    let at = clipboard["atMs"].as_f64().unwrap_or(0.0) as u64;
+    if at == 0 || now_ms.saturating_sub(at) > 6000 {
+        return String::new();
+    }
+    let error = clipboard["error"].as_str().unwrap_or("");
+    if !error.is_empty() { error.into() } else { clipboard["message"].as_str().unwrap_or("").into() }
+}
+#[cfg(test)]
+mod clipboard_status_tests {
+    use super::*;
+    #[test]
+    fn shows_progress_then_recent_notices_only() {
+        let live = json!({"phase":"toLocal","bytes":5242880.0,"total":10485760.0,"background":true});
+        assert_eq!(clipboard_status(&live, 0), "接收远端剪贴板（后台） 50% · 5.0/10.0 MB");
+        let notice = json!({"phase":"idle","message":"已同步远端剪贴板","error":"","atMs":1000.0});
+        assert_eq!(clipboard_status(&notice, 3000), "已同步远端剪贴板");
+        assert_eq!(clipboard_status(&notice, 8000), "");
+        let failed = json!({"phase":"idle","message":"","error":"本机内存不足","atMs":1000.0});
+        assert_eq!(clipboard_status(&failed, 1500), "本机内存不足");
+        assert_eq!(clipboard_status(&Value::Null, 1500), "");
+    }
+}
 mod config_sync;
 mod devices;
 mod device_bootstrap;
@@ -456,7 +493,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             toolbar.set_fullscreen(fullscreen.unwrap_or(false));
             let controls_tab=state["controlsTab"].as_str().unwrap_or("input");let feedback=&state["controlAction"];let feedback_visible=feedback["group"]==controls_tab;
             toolbar.set_controls_tab(controls_tab.into());toolbar.set_busy(feedback["busy"]==true || state["streaming"]!=true || canceling);toolbar.set_failed(feedback_visible && feedback["error"].as_str().is_some_and(|s|!s.is_empty()));
-            toolbar.set_status(if state["connecting"]==true {state["status"].as_str().unwrap_or("")}else if feedback_visible {feedback["message"].as_str().unwrap_or("")}else{""}.into());
+            let clipboard_status=clipboard_status(&state["statistics"]["clipboard"],rhremote_core::now_ms());
+            toolbar.set_status(if state["connecting"]==true {state["status"].as_str().unwrap_or("").to_owned()}else if feedback_visible && feedback["message"].as_str().is_some_and(|s|!s.is_empty()) {feedback["message"].as_str().unwrap_or("").to_owned()}else{clipboard_status}.into());
             toolbar.global::<Palette>().set_dark(state["saved"]["dark"]==true);
             let display_fingerprint=format!("{}:{}",state["statistics"]["displays"],state["statistics"]["selectedDisplay"]["id"]);
             if display_fingerprint!=toolbar_display_fingerprint {

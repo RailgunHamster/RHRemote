@@ -1,5 +1,7 @@
 # 控制接口与配置同步
 
+双向剪贴板同步（Windows 客户端 ⇄ Windows 主机）新增连接设置 `clipboardSync`（默认开启，只在关闭时写入配置），原生进程 `/v1/state.clipboard` 运行时状态与 `POST /v1/clipboard/cancel`；主机在已配对 HTTPS 47984 上提供 `/rhremote/clipboard/{events,formats,data,render}`，只服务当前持有串流的客户端。协议、格式范围与验证边界见[剪贴板同步](CLIPBOARD-SYNC-20261119.md)。
+
 0.2.11 新增 Windows / Android `device.windows.open {uuid}`、`device.windows.close`、`device.window.connect {uuid, source}`；窗口列表是运行时状态，不能同步。已配对 HTTPS `GET /rhremote/windows` 返回短期、证书绑定的窗口源，不导出 HWND。旧服务端不支持时明确提示，连接不能回退到桌面。Android 新增 `stream.click-scroll.set {enabled}`：轻点点击、单指横纵滚动、双指平行拖动，捏合保留缩放。详见[功能与验证边界](WINDOW-STREAMING-AND-CLICK-SCROLL.md)。
 
 正常结束且已显示画面的连接进入 `ended`，清空错误；首帧前异常结束与明确的终止错误仍为 `failed`，意外断线恢复仍使用原 `reconnecting` 流程。

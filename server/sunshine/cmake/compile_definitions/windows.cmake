@@ -74,6 +74,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/display_wgc.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/window_capture.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/window_capture_worker.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/clipboard_sync.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/windows/clipboard_sync.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"

@@ -106,6 +106,12 @@ pub struct Profile {
     pub gamepad_enabled: bool,
     pub full_range: bool,
     pub display_mode: String,
+    /// Two-way clipboard sync during a stream. Written only when disabled so older clients keep reading shared profiles.
+    #[serde(skip_serializing_if = "is_true")]
+    pub clipboard_sync: bool,
+}
+fn is_true(value: &bool) -> bool {
+    *value
 }
 impl Default for Profile {
     fn default() -> Self {
@@ -142,6 +148,7 @@ impl Default for Profile {
             gamepad_enabled: false,
             full_range: false,
             display_mode: "auto".into(),
+            clipboard_sync: true,
         }
     }
 }
@@ -1479,6 +1486,17 @@ mod tests {
         let profile = serde_json::from_value::<Profile>(value).unwrap();
         assert!(profile.gamepad_enabled);
         assert_eq!(serde_json::to_value(profile).unwrap()["gamepadEnabled"], true);
+    }
+    #[test]
+    fn clipboard_sync_defaults_on_and_is_only_written_when_disabled() {
+        let value = serde_json::to_value(Profile::default()).unwrap();
+        assert!(value.get("clipboardSync").is_none());
+        assert!(serde_json::from_value::<Profile>(value.clone()).unwrap().clipboard_sync);
+        let mut disabled = value;
+        disabled["clipboardSync"] = json!(false);
+        let profile = serde_json::from_value::<Profile>(disabled).unwrap();
+        assert!(!profile.clipboard_sync);
+        assert_eq!(serde_json::to_value(profile).unwrap()["clipboardSync"], false);
     }
     struct Stub;
     struct CloseTransport { fail: bool }

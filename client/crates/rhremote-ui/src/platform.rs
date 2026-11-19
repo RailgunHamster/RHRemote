@@ -2057,6 +2057,10 @@ impl LaunchContext {
                 },
             )
             .env(
+                "RHREMOTE_CLIPBOARD_SYNC",
+                if p["clipboardSync"].as_bool().unwrap_or(true) { "1" } else { "0" },
+            )
+            .env(
                 "RHREMOTE_AUDIO_VOLUME",
                 p["volume"].as_u64().unwrap_or(100).to_string(),
             )

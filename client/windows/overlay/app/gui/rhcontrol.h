@@ -1,6 +1,7 @@
 #pragma once
 #include "rhkeyboard.h"
 #include "rhclipboard.h"
+#include "rhclipboardsync.h"
 #include <QObject>
 #include <QCoreApplication>
 #include <QJsonObject>
@@ -81,7 +82,13 @@ struct RhRuntime {
     }
     static void terminated(int code){cancelLaunch();auto& r=get();r.terminationCode=code;r.routeFatal=code==ML_ERROR_PROTECTED_CONTENT||code==ML_ERROR_FRAME_CONVERSION;r.retryEligible=r.firstFrame.load()&&!r.localDisconnect.load()&&!r.routeFatal.load();r.routeRetryEligible=!r.firstFrame.load()&&!r.localDisconnect.load()&&(code==ML_ERROR_NO_VIDEO_TRAFFIC||code==ML_ERROR_NO_VIDEO_FRAME||code==ML_ERROR_UNEXPECTED_EARLY_TERMINATION);status("interrupted",QString("串流中断 (%1)").arg(code));}
     static void stageFailed(int stage,int code){cancelLaunch();auto& r=get();r.routeRetryEligible=!r.firstFrame.load()&&!r.localDisconnect.load()&&(stage==STAGE_RTSP_HANDSHAKE||stage==STAGE_CONTROL_STREAM_START||stage==STAGE_VIDEO_STREAM_START||stage==STAGE_AUDIO_STREAM_START||stage==STAGE_INPUT_STREAM_START);status("error",QString("%1 (%2)").arg(QString::fromLocal8Bit(LiGetStageName(stage))).arg(code));}
-    static void stream(bool value){auto& r=get();std::shared_ptr<RhLaunchAttempt> launch;{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;launch=r.pendingLaunch;}}if(launch)launch->handedOff();if(value)status("connected");else{QString error;{QMutexLocker lock(&r.mutex);error=r.error;}status(error.isEmpty()?"disconnected":"error",error);}}
+    static void stream(bool value){auto& r=get();std::shared_ptr<RhLaunchAttempt> launch;{QMutexLocker lock(&r.mutex);r.streaming=value;if(value){r.stats.clear();r.statsAt=0;launch=r.pendingLaunch;}}if(launch)launch->handedOff();
+#ifdef Q_OS_WIN32
+        // Two-way clipboard sync lives exactly as long as the stream; the host verifies the paired certificate and running session.
+        if(value){QString address;QSslCertificate certificate;quint16 port;{QMutexLocker lock(&r.mutex);address=r.hostAddress;certificate=r.hostCert;port=r.gameStreamHttpsPort;}RhClipboardSync::get().start(address,certificate,port);}
+        else RhClipboardSync::get().stop();
+#endif
+        if(value)status("connected");else{QString error;{QMutexLocker lock(&r.mutex);error=r.error;}status(error.isEmpty()?"disconnected":"error",error);}}
     static void performance(const QString& text){auto& r=get();QMutexLocker lock(&r.mutex);r.stats=text;r.statsAt=QDateTime::currentMSecsSinceEpoch();}
 };
 
@@ -169,6 +176,7 @@ class RhControl : public QObject {
             if (r.streamWindow.load() != 0) {
                 result["fullscreen"] = r.fullscreen.load();
             }
+            result["clipboard"] = RhClipboardSync::get().state();
 #endif
             result["processId"]=QCoreApplication::applicationPid();result["launchCleanupStatus"]=r.launchCleanupStatus;result["ok"]=true;result["streaming"]=r.streaming;result["activeProfile"]=r.profile;
             result["audioEnabled"]=r.audioEnabled.load();result["volume"]=r.volume.load();result["audioPackets"]=double(r.audioPackets.load());result["phase"]=r.phase;result["error"]=r.error;result["statistics"]=r.stats;result["statisticsAtMs"]=r.statsAt;result["lastCommand"]=r.lastCommand;result["firstFrame"]=r.firstFrame.load();result["displays"]=r.displays;result["selectedDisplay"]=r.selectedDisplay;result["displayError"]=r.displayError;result["streamWindow"]=QString::number(r.streamWindow.load());result["retryEligible"]=r.retryEligible.load();result["recoveryAdmissionBusy"]=r.recoveryAdmissionBusy.load();result["routeRetryEligible"]=r.routeRetryEligible.load();result["routeFatal"]=r.routeFatal.load();result["terminationCode"]=r.terminationCode.load();result["transportReleased"]=r.transportReleased.load();return result;
@@ -202,6 +210,13 @@ class RhControl : public QObject {
             return {{"ok",true},{"accepted",true}};
         }
 #ifdef Q_OS_WIN32
+        if (path == "/v1/clipboard/cancel") {
+            if (!streaming) {
+                status = 409;
+                return {{"ok", false}, {"error", "no active stream"}};
+            }
+            return {{"ok", RhClipboardSync::get().cancelTransfers()}, {"clipboard", RhClipboardSync::get().state()}};
+        }
         if (path == "/v1/shortcut" && body["shortcut"] == "copy-remote-text") {
             const auto window = r.streamWindow.load();
             if (!streaming || !r.firstFrame.load() || !window || r.localDisconnect.load()) {
