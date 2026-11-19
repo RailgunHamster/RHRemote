@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -66,11 +67,18 @@ namespace platf::clipboard {
     return {std::move(text), {}};
   }
 
+  /** @brief Process-wide mutex serializing Win32 OpenClipboard..CloseClipboard calls across threads. */
+  inline std::mutex &api_mutex() {
+    static std::mutex mutex;
+    return mutex;
+  }
+
   /** @brief Read the interactive window station's current Unicode text once. @return The text or a diagnostic. */
   inline snapshot_t read_text() {
     if (!desktop_available()) {
       return {{}, "Unlock the remote desktop to copy its clipboard text"};
     }
+    std::lock_guard clipboard_lock {api_mutex()};
     if (!OpenClipboard(nullptr)) {
       return {{}, "Remote clipboard is in use; try again"};
     }

@@ -352,6 +352,7 @@ private:
     std::atomic<bool> supported{false};
 
     std::mutex workersMutex;
+    std::mutex clipboardMutex;
     std::vector<std::unique_ptr<QThread>> workers;
     std::map<quint64, std::shared_ptr<std::atomic<bool>>> uploads;  // Host render requests in progress.
 
@@ -445,11 +446,16 @@ private:
             return 0;
         case msgLate: {
             std::unique_ptr<LateData> late(reinterpret_cast<LateData*>(lparam));
-            if (late->generation == generation && GetClipboardOwner() == window && RhClipboardWire::openClipboard(window)) {
-                if (const auto memory = RhClipboardWire::toGlobal(late->data); memory && !SetClipboardData(late->format, memory)) GlobalFree(memory);
-                CloseClipboard();
-                notice("远端剪贴板内容已就绪，请再次粘贴");
+            bool placed = false;
+            {
+                std::lock_guard<std::mutex> lock(clipboardMutex);
+                if (late->generation == generation && GetClipboardOwner() == window && RhClipboardWire::openClipboard(window)) {
+                    if (const auto memory = RhClipboardWire::toGlobal(late->data); memory && !SetClipboardData(late->format, memory)) GlobalFree(memory);
+                    CloseClipboard();
+                    placed = true;
+                }
             }
+            if (placed) notice("远端剪贴板内容已就绪，请再次粘贴");
             return 0;
         }
         case msgQuit:
@@ -461,12 +467,15 @@ private:
     }
 
     void collectLocal(HWND window) {
-        if (!RhClipboardWire::openClipboard(window)) { SetTimer(window, announceTimer, 500, nullptr); return; }
         QVector<RhClipboardWire::Format> available;
-        for (UINT format = EnumClipboardFormats(0); format; format = EnumClipboardFormats(format)) {
-            available.push_back({format, RhClipboardWire::formatName(format)});
+        {
+            std::lock_guard<std::mutex> lock(clipboardMutex);
+            if (!RhClipboardWire::openClipboard(window)) { SetTimer(window, announceTimer, 500, nullptr); return; }
+            for (UINT format = EnumClipboardFormats(0); format; format = EnumClipboardFormats(format)) {
+                available.push_back({format, RhClipboardWire::formatName(format)});
+            }
+            CloseClipboard();
         }
-        CloseClipboard();
         auto selected = RhClipboardWire::select(available);
         if (selected.isEmpty()) return;  // Never wipe the remote clipboard just because nothing transferable is here.
         {
@@ -477,18 +486,28 @@ private:
     }
 
     void mirrorRemote(HWND window, const RemoteFormats& remote) {
-        if (!RhClipboardWire::openClipboard(window)) { notice(QString(), "本机剪贴板被占用，未能同步远端内容"); return; }
-        if (!EmptyClipboard()) { CloseClipboard(); return; }  // Clears any previous mirror through WM_DESTROYCLIPBOARD.
-        generation++;
-        mapping.clear();
-        remoteSeq = remote.seq;
-        for (const auto& format : remote.formats) {
-            const UINT local = format.name.isEmpty() ? format.id : RegisterClipboardFormatW(reinterpret_cast<const wchar_t*>(format.name.utf16()));
-            if (!local || mapping.count(local)) continue;
-            SetLastError(ERROR_SUCCESS);
-            if (SetClipboardData(local, nullptr) || GetLastError() == ERROR_SUCCESS) mapping[local] = format.id;
+        bool opened = false, replaced = false;
+        {
+            std::lock_guard<std::mutex> lock(clipboardMutex);
+            opened = RhClipboardWire::openClipboard(window);
+            if (opened) {
+                replaced = EmptyClipboard();  // Clears any previous mirror through WM_DESTROYCLIPBOARD.
+                if (replaced) {
+                    generation++;
+                    mapping.clear();
+                    remoteSeq = remote.seq;
+                    for (const auto& format : remote.formats) {
+                        const UINT local = format.name.isEmpty() ? format.id : RegisterClipboardFormatW(reinterpret_cast<const wchar_t*>(format.name.utf16()));
+                        if (!local || mapping.count(local)) continue;
+                        SetLastError(ERROR_SUCCESS);
+                        if (SetClipboardData(local, nullptr) || GetLastError() == ERROR_SUCCESS) mapping[local] = format.id;
+                    }
+                }
+                CloseClipboard();
+            }
         }
-        CloseClipboard();
+        if (!opened) { notice(QString(), "本机剪贴板被占用，未能同步远端内容"); return; }
+        if (!replaced) return;
         setState("lastDirection", "toLocal");
         notice("已同步远端剪贴板");
     }
@@ -666,18 +685,20 @@ private:
         QByteArray data;
         bool readable = false;
         const HWND own = hwnd.load();
-        if (RhClipboardWire::transferable({format, RhClipboardWire::formatName(format)}) && GetClipboardOwner() != own &&
-            RhClipboardWire::openClipboard(nullptr)) {
-            if (const auto memory = GetClipboardData(format)) {
-                const SIZE_T size = GlobalSize(memory);
-                const auto* source = static_cast<const char*>(GlobalLock(memory));
-                if ((source || !size) && quint64(size) <= RhClipboardWire::maxTotal) {
-                    data = QByteArray(source, int(qMin<SIZE_T>(size, SIZE_T((std::numeric_limits<int>::max)()))));
-                    readable = data.size() == qint64(size);
+        if (RhClipboardWire::transferable({format, RhClipboardWire::formatName(format)})) {
+            std::lock_guard<std::mutex> lock(clipboardMutex);
+            if (GetClipboardOwner() != own && RhClipboardWire::openClipboard(nullptr)) {
+                if (const auto memory = GetClipboardData(format)) {
+                    const SIZE_T size = GlobalSize(memory);
+                    const auto* source = static_cast<const char*>(GlobalLock(memory));
+                    if ((source || !size) && quint64(size) <= RhClipboardWire::maxTotal) {
+                        data = QByteArray(source, int(qMin<SIZE_T>(size, SIZE_T((std::numeric_limits<int>::max)()))));
+                        readable = data.size() == qint64(size);
+                    }
+                    if (source) GlobalUnlock(memory);
                 }
-                if (source) GlobalUnlock(memory);
+                CloseClipboard();
             }
-            CloseClipboard();
         }
         if (!readable) {
             http.exchange("POST", base + "&error=1", {}, {}, 15000, abort, 65536);

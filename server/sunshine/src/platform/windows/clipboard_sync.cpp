@@ -200,9 +200,12 @@ namespace platf::clipboard_sync {
         case msg_peer_gone:
           {
             std::unique_ptr<std::string> peer {reinterpret_cast<std::string *>(lparam)};
-            if (!owner_peer.empty() && owner_peer == *peer && GetClipboardOwner() == window && open_clipboard(window)) {
-              EmptyClipboard();
-              CloseClipboard();
+            if (!owner_peer.empty() && owner_peer == *peer) {
+              std::lock_guard clipboard_lock {platf::clipboard::api_mutex()};
+              if (GetClipboardOwner() == window && open_clipboard(window)) {
+                EmptyClipboard();
+                CloseClipboard();
+              }
             }
             if (owner_peer == *peer) {
               release_ownership();
@@ -227,14 +230,17 @@ namespace platf::clipboard_sync {
         publish_pending = false;
         return;
       }
-      if (!open_clipboard(window)) {
-        return;  // Busy: the timer retries.
-      }
       std::vector<cb::format_t> available;
-      for (UINT format = EnumClipboardFormats(0); format; format = EnumClipboardFormats(format)) {
-        available.push_back({format, format_name(format)});
+      {
+        std::lock_guard clipboard_lock {platf::clipboard::api_mutex()};
+        if (!open_clipboard(window)) {
+          return;  // Busy: the timer retries.
+        }
+        for (UINT format = EnumClipboardFormats(0); format; format = EnumClipboardFormats(format)) {
+          available.push_back({format, format_name(format)});
+        }
+        CloseClipboard();
       }
-      CloseClipboard();
       last_published = seq;
       publish_pending = false;
       cache.clear();
@@ -245,31 +251,34 @@ namespace platf::clipboard_sync {
 
     /** @brief Empty the host clipboard and register delayed formats for a client. */
     std::string take_ownership(HWND window, const std::string &peer, const std::vector<cb::format_t> &formats) {
-      if (!open_clipboard(window)) {
-        return "Remote clipboard is in use; try again";
-      }
-      if (!EmptyClipboard()) {  // Notifies the previous owner, possibly this window, through WM_DESTROYCLIPBOARD.
-        CloseClipboard();
-        return "Remote clipboard could not be replaced";
-      }
-      if (!owner_peer.empty()) {
-        release_ownership();
-      }
-      owner_peer = peer;
       std::vector<cb::format_t> mirrored;
-      for (const auto &format : formats) {
-        const UINT local = format.name.empty() ? format.id : RegisterClipboardFormatW(utf_utils::from_utf8(format.name).c_str());
-        if (!local || mapping.contains(local)) {
-          continue;
+      {
+        std::lock_guard clipboard_lock {platf::clipboard::api_mutex()};
+        if (!open_clipboard(window)) {
+          return "Remote clipboard is in use; try again";
         }
-        // Delayed rendering returns NULL on success, so success is distinguished through the last error.
-        SetLastError(ERROR_SUCCESS);
-        if (SetClipboardData(local, nullptr) || GetLastError() == ERROR_SUCCESS) {
-          mapping[local] = format.id;
-          mirrored.push_back({local, format.name});
+        if (!EmptyClipboard()) {  // Notifies the previous owner, possibly this window, through WM_DESTROYCLIPBOARD.
+          CloseClipboard();
+          return "Remote clipboard could not be replaced";
         }
+        if (!owner_peer.empty()) {
+          release_ownership();
+        }
+        owner_peer = peer;
+        for (const auto &format : formats) {
+          const UINT local = format.name.empty() ? format.id : RegisterClipboardFormatW(utf_utils::from_utf8(format.name).c_str());
+          if (!local || mapping.contains(local)) {
+            continue;
+          }
+          // Delayed rendering returns NULL on success, so success is distinguished through the last error.
+          SetLastError(ERROR_SUCCESS);
+          if (SetClipboardData(local, nullptr) || GetLastError() == ERROR_SUCCESS) {
+            mapping[local] = format.id;
+            mirrored.push_back({local, format.name});
+          }
+        }
+        CloseClipboard();
       }
-      CloseClipboard();
       cache.clear();
       // Another connected client can read this content through the host, which renders it from the owner.
       broker.publish_formats(GetClipboardSequenceNumber(), mirrored, peer);
@@ -338,13 +347,16 @@ namespace platf::clipboard_sync {
       }
       const auto target = pending->second;
       late.erase(pending);
-      if (target.generation != generation || GetClipboardOwner() != window || !open_clipboard(window)) {
-        return;
+      {
+        std::lock_guard clipboard_lock {platf::clipboard::api_mutex()};
+        if (target.generation != generation || GetClipboardOwner() != window || !open_clipboard(window)) {
+          return;
+        }
+        if (const auto memory = to_global(data); memory && !SetClipboardData(target.format, memory)) {
+          GlobalFree(memory);
+        }
+        CloseClipboard();
       }
-      if (const auto memory = to_global(data); memory && !SetClipboardData(target.format, memory)) {
-        GlobalFree(memory);
-      }
-      CloseClipboard();
       BOOST_LOG(info) << "RHREMOTE_CLIPBOARD late render placed request=" << request << " bytes=" << data.size();
     }
 
@@ -413,28 +425,31 @@ namespace platf::clipboard_sync {
     if (GetClipboardSequenceNumber() != seq) {
       return {nullptr, "Remote clipboard changed", 410};
     }
-    if (!open_clipboard(nullptr)) {
-      return {nullptr, "Remote clipboard is in use; try again", 503};
-    }
     std::shared_ptr<std::vector<std::uint8_t>> data;
     read_result failure;
-    if (const auto memory = GetClipboardData(format); !memory) {
-      failure = {nullptr, "Format is no longer on the remote clipboard", 404};
-    } else if (const auto size = GlobalSize(memory); size > cb::max_total) {
-      failure = {nullptr, "Remote clipboard data is too large", 413};
-    } else if (const auto *source = static_cast<const std::uint8_t *>(GlobalLock(memory)); !source && size) {
-      failure = {nullptr, "Remote clipboard data is unavailable", 404};
-    } else {
-      try {
-        data = std::make_shared<std::vector<std::uint8_t>>(source, source + size);
-      } catch (const std::bad_alloc &) {
-        failure = {nullptr, "Remote host is out of memory", 507};
+    {
+      std::lock_guard clipboard_lock {platf::clipboard::api_mutex()};
+      if (!open_clipboard(nullptr)) {
+        return {nullptr, "Remote clipboard is in use; try again", 503};
       }
-      if (source) {
-        GlobalUnlock(memory);
+      if (const auto memory = GetClipboardData(format); !memory) {
+        failure = {nullptr, "Format is no longer on the remote clipboard", 404};
+      } else if (const auto size = GlobalSize(memory); size > cb::max_total) {
+        failure = {nullptr, "Remote clipboard data is too large", 413};
+      } else if (const auto *source = static_cast<const std::uint8_t *>(GlobalLock(memory)); !source && size) {
+        failure = {nullptr, "Remote clipboard data is unavailable", 404};
+      } else {
+        try {
+          data = std::make_shared<std::vector<std::uint8_t>>(source, source + size);
+        } catch (const std::bad_alloc &) {
+          failure = {nullptr, "Remote host is out of memory", 507};
+        }
+        if (source) {
+          GlobalUnlock(memory);
+        }
       }
+      CloseClipboard();
     }
-    CloseClipboard();
     if (!data) {
       return failure;
     }
