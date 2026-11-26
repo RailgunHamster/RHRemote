@@ -235,6 +235,13 @@ namespace rhremote::clipboard {
     failed,  ///< The peer failed, went away or stopped making progress.
   };
 
+  /** @brief Generate a non-zero 52-bit random epoch that round-trips cleanly through JSON/IEEE-754 double clients. */
+  inline std::uint64_t make_epoch() {
+    constexpr std::uint64_t mask = (std::uint64_t {1} << 52) - 1;
+    const auto raw = (std::uint64_t {std::random_device {}()} | (std::uint64_t {std::random_device {}()} << 32)) & mask;
+    return raw ? raw : 1;
+  }
+
   /**
    * @brief Per-peer event queues, long-poll waiters and render transfers.
    *
@@ -256,7 +263,7 @@ namespace rhremote::clipboard {
     broker(std::function<bool(const std::string &)> alive, std::function<std::uint64_t()> memory_budget):
         alive_(std::move(alive)),
         memory_budget_(std::move(memory_budget)),
-        epoch_(std::random_device {}() | (std::uint64_t(std::random_device {}()) << 32)) {}
+        epoch_(make_epoch()) {}
 
     ~broker() {
       stop();
@@ -434,6 +441,9 @@ namespace rhremote::clipboard {
           return;
         }
         peer = found->second.peer;
+        if (const auto peer_it = peers_.find(peer); peer_it != peers_.end()) {
+          erase_render_event(peer_it->second, request);
+        }
         renders_.erase(found);
       }
       changed_.notify_all();
@@ -466,6 +476,9 @@ namespace rhremote::clipboard {
         if (offset == 0 && render.received == 0 && !render.total) {
           if (total > max_total || total > memory_budget()) {
             render.state = render_state::failed;
+            if (const auto peer_it = peers_.find(peer); peer_it != peers_.end()) {
+              erase_render_event(peer_it->second, request);
+            }
             changed_.notify_all();
             return chunk_result::too_large;
           }
@@ -483,6 +496,9 @@ namespace rhremote::clipboard {
           return chunk_result::accepted;
         }
         render.state = render_state::completed;
+        if (const auto peer_it = peers_.find(peer); peer_it != peers_.end()) {
+          erase_render_event(peer_it->second, request);
+        }
         result = chunk_result::completed;
         if (render.detached) {
           late = late_;
@@ -508,6 +524,9 @@ namespace rhremote::clipboard {
         const auto found = renders_.find(request);
         if (found == renders_.end() || found->second.peer != peer) {
           return;
+        }
+        if (const auto peer_it = peers_.find(peer); peer_it != peers_.end()) {
+          erase_render_event(peer_it->second, request);
         }
         if (found->second.detached) {
           renders_.erase(found);
@@ -545,6 +564,9 @@ namespace rhremote::clipboard {
         for (auto it = renders_.begin(); it != renders_.end();) {
           if (it->second.state != render_state::completed && now - it->second.last_progress > transfer_idle) {
             cancelled.emplace_back(it->second.peer, it->first);
+            if (const auto peer_it = peers_.find(it->second.peer); peer_it != peers_.end()) {
+              erase_render_event(peer_it->second, it->first);
+            }
             if (it->second.detached) {
               it = renders_.erase(it);
               continue;
@@ -681,6 +703,12 @@ namespace rhremote::clipboard {
       for (auto &[waiter, reply] : ready) {
         waiter(std::move(reply));
       }
+    }
+
+    static void erase_render_event(peer_t &state, std::uint64_t request) {
+      std::erase_if(state.events, [request](const auto &entry) {
+        return entry.second.value("type", "") == "render" && entry.second.value("request", std::uint64_t {0}) == request;
+      });
     }
 
     static void enqueue(peer_t &state, nlohmann::json event) {

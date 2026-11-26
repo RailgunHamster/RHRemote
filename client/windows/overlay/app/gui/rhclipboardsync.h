@@ -27,14 +27,17 @@
 #include <QThread>
 #include <QVector>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <windows.h>
 
 namespace RhClipboardWire {
@@ -46,6 +49,112 @@ constexpr int maxFormatName = 255;
 constexpr int renderBudgetMs = 10000;  // How long a pasting application may wait before the transfer moves to the background.
 constexpr int idleMs = 15000;          // A transfer without progress for this long fails.
 constexpr int pollWaitMs = 25000;
+constexpr int pollIdleMs = pollWaitMs + 10000;  // Must exceed pollWaitMs so idle long-polls do not self-timeout.
+constexpr std::size_t maxWorkers = 8;
+constexpr std::size_t maxHandledRenders = 256;
+
+inline std::optional<quint64> parseUint64Value(const QJsonValue& value) {
+    if (value.isString()) {
+        const QString text = value.toString().trimmed();
+        if (text.isEmpty() || text.size() > 20) return std::nullopt;
+        for (const QChar ch : text) {
+            if (ch < '0' || ch > '9') return std::nullopt;
+        }
+        bool ok = false;
+        const quint64 parsed = text.toULongLong(&ok, 10);
+        return ok ? std::optional<quint64>(parsed) : std::nullopt;
+    }
+    if (!value.isDouble()) return std::nullopt;
+    const double number = value.toDouble(-1.0);
+    if (number < 0.0 || !std::isfinite(number) || std::floor(number) != number) return std::nullopt;
+    const qint64 integer = value.toInteger(-1);
+    return integer >= 0 ? std::optional<quint64>(quint64(integer)) : std::nullopt;
+}
+
+// Extracts an exact top-level unsigned 64-bit integer from raw JSON bytes without IEEE-754 double loss.
+// Needed because Qt's QJsonDocument parses JSON integers > INT64_MAX into double, truncating 64-bit epochs
+// from older servers that generate full 64-bit random epochs.
+inline std::optional<quint64> extractTopLevelUint64(const QByteArray& raw, const QByteArray& key) {
+    const int n = raw.size();
+    int i = 0;
+    const auto skipWs = [&] {
+        while (i < n && (raw[i] == ' ' || raw[i] == '\t' || raw[i] == '\r' || raw[i] == '\n')) ++i;
+    };
+    const auto skipString = [&](QByteArray* plain = nullptr) -> bool {
+        if (i >= n || raw[i] != '"') return false;
+        ++i;
+        const int start = i;
+        bool escaped = false;
+        while (i < n) {
+            const char c = raw[i++];
+            if (c == '\\') {
+                if (i >= n) return false;
+                escaped = true;
+                ++i;
+            } else if (c == '"') {
+                if (plain) {
+                    if (!escaped) *plain = raw.mid(start, i - 1 - start);
+                    else plain->clear();
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+    skipWs();
+    if (i >= n || raw[i] != '{') return std::nullopt;
+    int depth = 0;
+    while (i < n) {
+        skipWs();
+        if (i >= n) break;
+        const char c = raw[i];
+        if (c == '{' || c == '[') {
+            ++depth;
+            ++i;
+            continue;
+        }
+        if (c == '}' || c == ']') {
+            --depth;
+            ++i;
+            if (depth <= 0) break;
+            continue;
+        }
+        if (c == '"') {
+            QByteArray token;
+            const bool topLevel = (depth == 1);
+            if (!skipString(topLevel ? &token : nullptr)) return std::nullopt;
+            if (!topLevel) continue;
+            skipWs();
+            if (i >= n || raw[i] != ':') continue;
+            ++i;
+            skipWs();
+            if (token != key) continue;
+            if (i >= n) return std::nullopt;
+            bool quoted = false;
+            if (raw[i] == '"') {
+                quoted = true;
+                ++i;
+            }
+            const int digitsStart = i;
+            while (i < n && raw[i] >= '0' && raw[i] <= '9') ++i;
+            const int digitsLen = i - digitsStart;
+            if (digitsLen == 0 || digitsLen > 20) return std::nullopt;
+            if (quoted) {
+                if (i >= n || raw[i] != '"') return std::nullopt;
+                ++i;
+            } else if (i < n && (raw[i] == '.' || raw[i] == 'e' || raw[i] == 'E' || raw[i] == '+' || raw[i] == '-')) {
+                return std::nullopt;
+            }
+            skipWs();
+            if (i < n && raw[i] != ',' && raw[i] != '}') return std::nullopt;
+            bool ok = false;
+            const quint64 value = raw.mid(digitsStart, digitsLen).toULongLong(&ok, 10);
+            return ok ? std::optional<quint64>(value) : std::nullopt;
+        }
+        ++i;
+    }
+    return std::nullopt;
+}
 
 struct Format {
     quint32 id = 0;
@@ -171,7 +280,7 @@ struct RhClipboardHttp {
 
     RhClipboardReply exchange(const QByteArray& method, const QByteArray& target, const QByteArray& body, const QByteArray& contentType,
                               int totalMs, const std::atomic<bool>& abort, qint64 maxBody,
-                              const std::function<void(qint64)>& sent = {}) const {
+                              const std::function<void(qint64)>& sent = {}, int idleLimitMs = RhClipboardWire::idleMs) const {
         RhClipboardReply reply;
         if (host.isEmpty() || pinned.isNull() || port <= 0) { reply.error = "缺少主机配对信息"; return reply; }
         QSslSocket socket;
@@ -182,7 +291,7 @@ struct RhClipboardHttp {
         });
         QElapsedTimer total, idle;
         total.start(); idle.start();
-        const auto expired = [&] { return abort.load() || total.elapsed() > totalMs || idle.elapsed() > RhClipboardWire::idleMs; };
+        const auto expired = [&] { return abort.load() || total.elapsed() > totalMs || idle.elapsed() > idleLimitMs; };
         socket.connectToHostEncrypted(host, quint16(port));
         while (!socket.isEncrypted()) {
             if (expired() || idle.elapsed() > 8000 || socket.state() == QAbstractSocket::UnconnectedState) {
@@ -272,6 +381,14 @@ public:
         abort = false;
         running = true;
         epoch = 0; cursor = 0;
+        lastMirroredSeq = 0;
+        hasMirroredSeq = false;
+        {
+            std::lock_guard<std::mutex> lock(workersMutex);
+            handledRenders.clear();
+            handledRenderOrder.clear();
+            uploads.clear();
+        }
         windowReady = false;
         windowThread.reset(QThread::create([this] { windowMain(); }));
         windowThread->start();
@@ -306,8 +423,12 @@ public:
             std::lock_guard<std::mutex> lock(workersMutex);
             finished.swap(workers);
             uploads.clear();
+            handledRenders.clear();
+            handledRenderOrder.clear();
         }
         for (auto& worker : finished) join(worker);
+        lastMirroredSeq = 0;
+        hasMirroredSeq = false;
         running = false;
     }
 
@@ -355,6 +476,8 @@ private:
     std::mutex clipboardMutex;
     std::vector<std::unique_ptr<QThread>> workers;
     std::map<quint64, std::shared_ptr<std::atomic<bool>>> uploads;  // Host render requests in progress.
+    std::set<quint64> handledRenders;
+    std::deque<quint64> handledRenderOrder;
 
     // Window-thread state.
     std::map<UINT, quint32> mapping;  // Local delayed format -> host format.
@@ -362,6 +485,8 @@ private:
     quint64 generation = 0;
 
     quint64 epoch = 0, cursor = 0;
+    quint64 lastMirroredSeq = 0;
+    bool hasMirroredSeq = false;
 
     QMutex stateMutex;
     QJsonObject status;
@@ -531,18 +656,21 @@ private:
         if (outcome != Download::Budget) { setPhase("idle", 0, 0, false); return; }
         notice("远端内容较大，正在后台传输，完成后可再次粘贴");
         auto partial = std::make_shared<QByteArray>(std::move(data));
-        spawn([this, seq, remote, format, gen, cancelAt, partial, total]() mutable {
-            QByteArray buffer = std::move(*partial);
-            qint64 size = total;
-            if (download(seq, remote, buffer, size, cancelAt, [] { return qint64(1) << 40; }) != Download::Complete) {
+        if (!spawn([this, seq, remote, format, gen, cancelAt, partial, total]() mutable {
+                QByteArray buffer = std::move(*partial);
+                qint64 size = total;
+                if (download(seq, remote, buffer, size, cancelAt, [] { return qint64(1) << 40; }) != Download::Complete) {
+                    setPhase("idle", 0, 0, false);
+                    return;
+                }
                 setPhase("idle", 0, 0, false);
-                return;
-            }
+                auto late = std::make_unique<LateData>(LateData{gen, format, std::move(buffer)});
+                const HWND window = hwnd.load();
+                if (window && PostMessageW(window, msgLate, 0, LPARAM(late.get()))) late.release();
+            })) {
             setPhase("idle", 0, 0, false);
-            auto late = std::make_unique<LateData>(LateData{gen, format, std::move(buffer)});
-            const HWND window = hwnd.load();
-            if (window && PostMessageW(window, msgLate, 0, LPARAM(late.get()))) late.release();
-        });
+            notice(QString(), "剪贴板后台传输队列已满，请稍后再试");
+        }
     }
 
     enum class Download { Complete, Budget, Failed };
@@ -578,14 +706,26 @@ private:
         return Download::Complete;
     }
 
-    void spawn(std::function<void()> work) {
+    bool spawn(std::function<void()> work) {
         std::lock_guard<std::mutex> lock(workersMutex);
         for (auto it = workers.begin(); it != workers.end();) {
-            if ((*it)->isFinished()) it = workers.erase(it); else ++it;
+            if ((*it)->isFinished()) {
+                (*it)->wait();
+                it = workers.erase(it);
+            } else {
+                ++it;
+            }
         }
-        if (abort.load()) return;
+        if (abort.load() || workers.size() >= RhClipboardWire::maxWorkers) return false;
         workers.emplace_back(QThread::create(std::move(work)));
         workers.back()->start();
+        return true;
+    }
+
+    void sleepInterruptible(int totalMs) const {
+        for (int remaining = totalMs; remaining > 0 && !abort.load(); remaining -= 50) {
+            QThread::msleep(qMin(remaining, 50));
+        }
     }
 
     // ---- network: announcements --------------------------------------------------------------------
@@ -620,10 +760,16 @@ private:
     // ---- network: host events ----------------------------------------------------------------------
     void pollMain() {
         int backoff = 500;
+        int fastPolls = 0;
         while (!abort.load()) {
-            const QByteArray target = "/rhremote/clipboard/events?v=1&epoch=" + QByteArray::number(epoch) + "&cursor=" + QByteArray::number(cursor) +
-                                      "&wait=" + QByteArray::number(supported.load() ? RhClipboardWire::pollWaitMs : 0);
-            const auto reply = http.exchange("GET", target, {}, {}, RhClipboardWire::pollWaitMs + 15000, abort, 1 << 20);
+            const int waitMs = supported.load() ? RhClipboardWire::pollWaitMs : 0;
+            const quint64 sentEpoch = epoch;
+            const quint64 sentCursor = cursor;
+            const QByteArray target = "/rhremote/clipboard/events?v=1&epoch=" + QByteArray::number(sentEpoch) + "&cursor=" + QByteArray::number(sentCursor) +
+                                      "&wait=" + QByteArray::number(waitMs);
+            QElapsedTimer pollElapsed;
+            pollElapsed.start();
+            const auto reply = http.exchange("GET", target, {}, {}, RhClipboardWire::pollWaitMs + 15000, abort, 1 << 20, {}, RhClipboardWire::pollIdleMs);
             if (abort.load()) return;
             if (reply.status == 404 || (reply.ok() && !reply.contentType.startsWith("application/json"))) {
                 setState("supported", "no");
@@ -631,45 +777,92 @@ private:
                 return;  // Older host: the manual paste shortcuts remain available.
             }
             if (!reply.ok()) {
-                QThread::msleep(backoff);
+                sleepInterruptible(backoff);
+                backoff = qMin(backoff * 2, 5000);
+                continue;
+            }
+            const auto object = reply.json();
+            auto replyEpoch = RhClipboardWire::extractTopLevelUint64(reply.body, "epoch");
+            if (!replyEpoch) replyEpoch = RhClipboardWire::parseUint64Value(object.value("epoch"));
+            if (!replyEpoch || *replyEpoch == 0) {
+                sleepInterruptible(backoff);
                 backoff = qMin(backoff * 2, 5000);
                 continue;
             }
             backoff = 500;
-            const auto object = reply.json();
             if (!supported.exchange(true)) {
                 setState("supported", "yes");
                 const HWND window = hwnd.load();
                 if (window) PostMessageW(window, msgAnnounceNow, 0, 0);  // Local clipboard wins when the stream starts.
                 announceCv.notify_all();
             }
-            const quint64 replyEpoch = quint64(object.value("epoch").toDouble());
-            if (replyEpoch != epoch) { epoch = replyEpoch; cursor = 0; }
-            if (object.contains("cursor")) cursor = quint64(object.value("cursor").toDouble());
-            for (const auto& item : object.value("events").toArray()) handleEvent(item.toObject());
+            if (*replyEpoch != epoch) {
+                epoch = *replyEpoch;
+                cursor = 0;
+                lastMirroredSeq = 0;
+                hasMirroredSeq = false;
+                std::lock_guard<std::mutex> lock(workersMutex);
+                handledRenders.clear();
+                handledRenderOrder.clear();
+            }
+            auto replyCursor = RhClipboardWire::extractTopLevelUint64(reply.body, "cursor");
+            if (!replyCursor && object.contains("cursor")) replyCursor = RhClipboardWire::parseUint64Value(object.value("cursor"));
+            if (replyCursor) cursor = *replyCursor;
+            const auto events = object.value("events").toArray();
+            for (const auto& item : events) handleEvent(item.toObject());
+            if (waitMs > 0 && pollElapsed.elapsed() < 50) {
+                const bool stalled = events.isEmpty() || (epoch == sentEpoch && cursor == sentCursor);
+                ++fastPolls;
+                if (stalled && fastPolls >= 2) {
+                    sleepInterruptible(qMin(50 * fastPolls, 500));
+                } else if (fastPolls >= 16) {
+                    sleepInterruptible(50);
+                }
+            } else {
+                fastPolls = 0;
+            }
         }
     }
 
     void handleEvent(const QJsonObject& event) {
         const auto type = event.value("type").toString();
         if (type == "formats") {
+            const auto seq = RhClipboardWire::parseUint64Value(event.value("seq"));
             auto formats = RhClipboardWire::parse(event.value("formats"));
             const HWND window = hwnd.load();
-            if (!formats || formats->isEmpty() || !window) return;
-            auto remote = std::make_unique<RemoteFormats>(RemoteFormats{quint64(event.value("seq").toDouble()), *formats});
+            if (!seq || !formats || formats->isEmpty() || !window) return;
+            if (hasMirroredSeq && *seq == lastMirroredSeq) return;
+            lastMirroredSeq = *seq;
+            hasMirroredSeq = true;
+            auto remote = std::make_unique<RemoteFormats>(RemoteFormats{*seq, *formats});
             if (PostMessageW(window, msgRemoteFormats, 0, LPARAM(remote.get()))) remote.release();
         } else if (type == "render") {
-            const quint64 request = quint64(event.value("request").toDouble());
-            const quint32 format = quint32(event.value("format").toDouble());
+            const auto requestOpt = RhClipboardWire::parseUint64Value(event.value("request"));
+            const auto formatOpt = RhClipboardWire::parseUint64Value(event.value("format"));
+            if (!requestOpt || !formatOpt || *requestOpt == 0 || *formatOpt == 0 || *formatOpt > 0xFFFF) return;
+            const quint64 request = *requestOpt;
+            const quint32 format = quint32(*formatOpt);
             auto cancelled = std::make_shared<std::atomic<bool>>(false);
             {
                 std::lock_guard<std::mutex> lock(workersMutex);
+                if (uploads.count(request) || handledRenders.count(request)) return;
+                handledRenders.insert(request);
+                handledRenderOrder.push_back(request);
+                while (handledRenderOrder.size() > RhClipboardWire::maxHandledRenders) {
+                    handledRenders.erase(handledRenderOrder.front());
+                    handledRenderOrder.pop_front();
+                }
                 uploads[request] = cancelled;
             }
-            spawn([this, request, format, cancelled] { upload(request, format, *cancelled); });
+            if (!spawn([this, request, format, cancelled] { upload(request, format, *cancelled); })) {
+                std::lock_guard<std::mutex> lock(workersMutex);
+                uploads.erase(request);
+            }
         } else if (type == "cancel") {
+            const auto requestOpt = RhClipboardWire::parseUint64Value(event.value("request"));
+            if (!requestOpt) return;
             std::lock_guard<std::mutex> lock(workersMutex);
-            const auto found = uploads.find(quint64(event.value("request").toDouble()));
+            const auto found = uploads.find(*requestOpt);
             if (found != uploads.end()) *found->second = true;
         }
     }

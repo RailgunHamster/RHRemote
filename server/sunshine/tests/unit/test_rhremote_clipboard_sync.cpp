@@ -300,3 +300,47 @@ TEST(RhRemoteClipboardSync, SnapshotCacheMatchesSequenceAndFormat) {
   cache.clear();
   EXPECT_FALSE(cache.find(5, 13));
 }
+
+TEST(RhRemoteClipboardSync, EpochRoundTripsThroughDoublePrecisionJson) {
+  for (int i = 0; i < 64; ++i) {
+    fixture f;
+    const auto epoch = f.broker.epoch();
+    EXPECT_NE(epoch, 0u);
+    EXPECT_LT(epoch, std::uint64_t {1} << 52);
+    EXPECT_EQ(static_cast<std::uint64_t>(static_cast<double>(epoch)), epoch);
+  }
+}
+
+TEST(RhRemoteClipboardSync, FinishedAndCancelledRenderEventsAreNotReplayedOnEpochReset) {
+  fixture f;
+  f.touch("a");
+
+  const auto completed = f.broker.begin_render("a", 13);
+  EXPECT_EQ(f.broker.accept_chunk("a", completed, 0, 2, "ok"), cb::chunk_result::completed);
+
+  const auto failed = f.broker.begin_render("a", 13);
+  f.broker.fail_render("a", failed);
+
+  const auto cancelled = f.broker.begin_render("a", 13);
+  f.broker.cancel_render(cancelled);
+
+  const auto expired = f.broker.begin_render("a", 13);
+  f.broker.tick(cb::broker::clock::now() + cb::transfer_idle + 1s, false);
+
+  const auto active = f.broker.begin_render("a", 13);
+
+  captured_poll poll;
+  f.broker.poll("a", f.broker.epoch() + 1, 999, 0ms, poll.responder());
+  const auto reply = poll.future.get();
+  std::vector<std::uint64_t> replayed_renders;
+  for (const auto &event : reply["events"]) {
+    if (event.value("type", "") == "render") {
+      replayed_renders.push_back(event.value("request", std::uint64_t {0}));
+    }
+  }
+  EXPECT_EQ(replayed_renders, std::vector<std::uint64_t> {active});
+  EXPECT_NE(completed, active);
+  EXPECT_NE(failed, active);
+  EXPECT_NE(cancelled, active);
+  EXPECT_NE(expired, active);
+}
